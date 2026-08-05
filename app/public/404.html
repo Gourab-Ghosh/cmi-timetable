@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>CMI Timetable Planner</title>
+  <script>
+    // GitHub Pages serves this for any unknown path. Deep links are safe
+    // because the app uses hash routing — everything after # never reaches
+    // the server — so we only need to bounce back to index.html while
+    // preserving the query string (?c=...) and the hash (#/...).
+    //
+    // For a *project* page (https://user.github.io/<repo>/) the app lives
+    // under the first path segment. For a *user/organization* page
+    // (https://user.github.io/) change `base` to "/".
+    (function () {
+      var segments = window.location.pathname.split("/");
+      var base = segments.length > 1 && segments[1] ? "/" + segments[1] + "/" : "/";
+      window.location.replace(
+        base + window.location.search + window.location.hash
+      );
+    })();
+  </script>
+</head>
+<body>
+  <p>Redirecting to the <a href="/">CMI Timetable Planner</a>…</p>
+</body>
+</html>

@@ -72,6 +72,7 @@ pub fn parse_and_validate(
             courses: joined.courses,
             halls: joined.halls,
             slot_grid: joined.slot_grid,
+            hall_bookings: joined.hall_bookings,
             raw_html_gz: meta.raw_html.map(|(tt_html, halls_html)| RawHtml {
                 timetable_b64: crate::rawhtml::compress_to_b64(&tt_html),
                 lecturehalls_b64: crate::rawhtml::compress_to_b64(&halls_html),

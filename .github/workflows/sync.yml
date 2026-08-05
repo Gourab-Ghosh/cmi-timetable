@@ -1,0 +1,60 @@
+# Optional but recommended: refresh the same-origin data mirror (§2.3 tier 3)
+# every six hours. The app works fine without this workflow — it falls back
+# to direct/proxy fetching and the bundled snapshot.
+#
+# The /sync binary fetches both CMI pages natively (no CORS server-side),
+# runs the SAME parser and validation gate as the app, and exits non-zero on
+# any failure — a red run means the last good mirror stayed in place.
+
+name: Sync CMI data mirror
+
+on:
+  schedule:
+    - cron: "23 */6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    outputs:
+      changed: ${{ steps.commit.outputs.changed }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Fetch, parse and gate
+        run: cargo run --release -p cmi-timetable-sync -- app/public/data
+
+      - name: Commit the mirror if it changed
+        id: commit
+        run: |
+          git add app/public/data
+          if git diff --cached --quiet; then
+            echo "mirror unchanged — skipping commit"
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            git -c user.name="cmi-timetable-sync" \
+                -c user.email="actions@users.noreply.github.com" \
+                commit -m "data: refresh CMI mirror"
+            git push
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  # GITHUB_TOKEN pushes don't trigger the deploy workflow's `push` event, so
+  # call it explicitly when the mirror changed.
+  redeploy:
+    needs: sync
+    if: needs.sync.outputs.changed == 'true'
+    uses: ./.github/workflows/deploy.yml
+    permissions:
+      contents: read
+      pages: write
+      id-token: write

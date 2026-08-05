@@ -2,6 +2,7 @@
 name = "cmi-timetable-app"
 version.workspace = true
 edition.workspace = true
+build = "build.rs"
 
 [[bin]]
 name = "cmi-timetable-app"
@@ -9,8 +10,56 @@ path = "src/main.rs"
 
 [dependencies]
 ttcore = { path = "../core", package = "cmi-timetable-core" }
+leptos = { version = "0.8", features = ["csr"] }
+console_error_panic_hook = "0.1"
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+js-sys = "0.3"
 serde.workspace = true
 serde_json.workspace = true
+gloo-net = { version = "0.7", default-features = false, features = ["http"] }
+gloo-timers = { version = "0.4", features = ["futures"] }
+futures = "0.3"
+
+[dependencies.web-sys]
+version = "0.3"
+features = [
+  "AbortController",
+  "AbortSignal",
+  "Blob",
+  "BlobPropertyBag",
+  "Clipboard",
+  "CssStyleDeclaration",
+  "Document",
+  "DomParser",
+  "DomRect",
+  "Element",
+  "Event",
+  "EventTarget",
+  "File",
+  "FileList",
+  "History",
+  "HtmlAnchorElement",
+  "HtmlElement",
+  "HtmlInputElement",
+  "HtmlSelectElement",
+  "HtmlTextAreaElement",
+  "KeyboardEvent",
+  "Location",
+  "MediaQueryList",
+  "MediaQueryListEvent",
+  "Navigator",
+  "NodeList",
+  "PointerEvent",
+  "ScrollBehavior",
+  "ScrollToOptions",
+  "Storage",
+  "SupportedType",
+  "Url",
+  "UrlSearchParams",
+  "Window",
+]
 
 [build-dependencies]
 ttcore = { path = "../core", package = "cmi-timetable-core", features = ["html"] }
+serde_json.workspace = true

@@ -231,6 +231,20 @@ pub struct RawHtml {
     pub lecturehalls_b64: String,
 }
 
+/// One cell of the hall-allocation grid, kept verbatim in the snapshot so
+/// the Halls view and the free-hall finder reflect CMI's official
+/// allocation — including `TMP*` bookings with no course code and bookings
+/// that match no branch grid.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HallBooking {
+    pub hall: String,
+    pub day: Day,
+    pub slot: Slot,
+    pub codes: Vec<String>,
+    #[serde(default)]
+    pub temp: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Snapshot {
     /// Verbatim, e.g. "August--November 2026".
@@ -246,6 +260,9 @@ pub struct Snapshot {
     pub halls: Vec<String>,
     /// Canonical slot columns, in header order.
     pub slot_grid: Vec<Slot>,
+    /// The hall-allocation grid, verbatim.
+    #[serde(default)]
+    pub hall_bookings: Vec<HallBooking>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub raw_html_gz: Option<RawHtml>,
 }

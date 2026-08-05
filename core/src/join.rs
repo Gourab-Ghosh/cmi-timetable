@@ -81,6 +81,7 @@ pub struct Joined {
     pub courses: Vec<Course>,
     pub halls: Vec<String>,
     pub slot_grid: Vec<Slot>,
+    pub hall_bookings: Vec<crate::model::HallBooking>,
     pub stats: ParseStats,
     pub warnings: Vec<String>,
 }
@@ -343,6 +344,17 @@ pub fn join_pages(tt: &TimetablePage, hp: &HallsPage) -> Joined {
         courses,
         halls: hp.halls.clone(),
         slot_grid,
+        hall_bookings: hp
+            .entries
+            .iter()
+            .map(|e| crate::model::HallBooking {
+                hall: e.hall.clone(),
+                day: e.day,
+                slot: e.slot,
+                codes: e.codes.clone(),
+                temp: e.temp,
+            })
+            .collect(),
         stats,
         warnings,
     }

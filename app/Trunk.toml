@@ -1,0 +1,14 @@
+# Trunk configuration for the CSR app. Run `trunk serve` / `trunk build`
+# from this directory.
+#
+# public_url is "/" for local development. The GitHub Pages deploy workflow
+# overrides it with `--public-url "/<repo-name>/"` because project pages are
+# served from a sub-path. For a user/organization page
+# (<user>.github.io repository) keep "/" in CI as well.
+
+[build]
+target = "index.html"
+public_url = "/"
+
+[serve]
+open = false

@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="description" content="Plan your CMI semester timetable. Everything is saved in your browser." />
+  <title>CMI Timetable Planner</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%233b5bcc'/%3E%3Cpath d='M3 5h10M3 8h10M3 11h10M5.5 3v10M10.5 3v10' stroke='%23fff' stroke-width='1.1'/%3E%3C/svg%3E" />
+  <script>
+    // Set the theme before first paint to avoid a flash. The app keeps
+    // document.documentElement.dataset.theme in sync afterwards.
+    (function () {
+      var theme = "auto";
+      try {
+        var prefs = JSON.parse(localStorage.getItem("cmitt.v1.prefs") || "{}");
+        if (prefs && prefs.theme) theme = prefs.theme;
+      } catch (e) { /* corrupt prefs are handled by the app */ }
+      if (theme !== "light" && theme !== "dark") {
+        theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+      }
+      document.documentElement.dataset.theme = theme;
+    })();
+  </script>
+  <link data-trunk rel="css" href="styles.css" />
+  <link data-trunk rel="copy-file" href="public/404.html" />
+  <link data-trunk rel="copy-dir" href="public/data" />
+  <!-- The --enable-* flags match the wasm features rustc emits by default
+       (bulk memory, sign-ext, etc.); older wasm-opt builds reject the module
+       without them. -->
+  <link data-trunk rel="rust" data-bin="cmi-timetable-app" data-wasm-opt="z"
+        data-wasm-opt-params="--enable-bulk-memory --enable-sign-ext --enable-mutable-globals --enable-nontrapping-float-to-int --enable-reference-types --enable-multivalue" />
+</head>
+<body></body>
+</html>

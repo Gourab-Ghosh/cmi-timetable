@@ -44,6 +44,7 @@ fn snap(courses: Vec<Course>) -> Snapshot {
         courses,
         halls: vec![],
         slot_grid: vec![],
+        hall_bookings: vec![],
         raw_html_gz: None,
     }
 }
