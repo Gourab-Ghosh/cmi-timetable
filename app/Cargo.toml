@@ -1,0 +1,16 @@
+[package]
+name = "cmi-timetable-app"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "cmi-timetable-app"
+path = "src/main.rs"
+
+[dependencies]
+ttcore = { path = "../core", package = "cmi-timetable-core" }
+serde.workspace = true
+serde_json.workspace = true
+
+[build-dependencies]
+ttcore = { path = "../core", package = "cmi-timetable-core", features = ["html"] }

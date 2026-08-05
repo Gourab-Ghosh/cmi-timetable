@@ -1,0 +1,28 @@
+[package]
+name = "cmi-timetable-core"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+name = "cmi_timetable_core"
+
+[features]
+default = []
+# Native HTML extraction (scraper). Enabled by /sync, by /app's build script and
+# by this crate's own tests — never by the wasm app, which extracts <pre> blocks
+# with the browser's DOMParser instead.
+html = ["dep:scraper"]
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+regex-lite.workspace = true
+lz-str.workspace = true
+miniz_oxide.workspace = true
+base64.workspace = true
+scraper = { workspace = true, optional = true }
+
+[dev-dependencies]
+# Self dev-dependency: turns the `html` feature on for unit/integration tests
+# regardless of how the library itself is being built.
+cmi-timetable-core = { path = ".", features = ["html"] }
