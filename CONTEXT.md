@@ -28,7 +28,7 @@ and no committed mirror (fixtures exist only for tests/e2e seed).
 
 ## 3. Layout & key files
 
-```
+```text
 /core   parsers, model, validate (gate), merge (3-way), diff, ics, share,
         date; feature `html` = native scraper path (sync/tests/e2e seed).
         core/examples/snapshot_json.rs → fixtures → latest.json (e2e seed).
@@ -86,16 +86,19 @@ cd e2e && DIST_DIR=../app/dist-e2e <venv>/bin/python test_app.py
 ```
 
 Dev server: background task `trunk serve --release` at
-http://127.0.0.1:8080/ (auto-rebuilds ~30 s after source changes).
+`http://127.0.0.1:8080/` (auto-rebuilds ~30 s after source changes).
 Scratchpad venv has selenium. `UPDATE_GOLDEN=1 cargo test -p
 cmi-timetable-core --test ics_tests` regenerates the .ics golden.
 
 ## 6. Current state
 
-- Tests: 47 native + 28/28 e2e green. Last commit: see `git log` (this
-  round's commit adds: no-bundled-data boot, welcome screen, halls DnD
-  render fix, filters undo/redo, Course facet + per-menu search + All/None,
-  My data redesign, spacing fixes, e2e self-seeding).
+- Tests: 47 native + 28/28 e2e green. Print sheet (`@media print` block in
+  styles.css + `.print-masthead`/`.print-legend` DOM in views.rs
+  my_timetable) is a designed poster: accent-rule masthead, dark time band,
+  branch-colored chips filling cells, colorized legend. Header carries a
+  permanent "sync every few days" hint next to Sync now (own row ≤899px).
+  Note: headless Chrome clamps launch `--window-size` width to 500 — use
+  `set_window_size()` for true phone-width screenshots.
 - Fixture facts used by tests: TOC Tue+Thu 09:10–10:25 slot 550 LH803,
   credits unstated→4; RDBM 2 credits; SVA unscheduled; MFD Wed/Fri 840 LH6;
   RFLR Mon/Wed 630 LH5; QCOM Tue/Thu 930 LH803; slots
@@ -123,3 +126,10 @@ cmi-timetable-core --test ics_tests` regenerates the .ics golden.
   spacing fixes (mobile chip ellipsis, tighter phone header); "sync every
   few days" copy in welcome + My data; e2e reworked to self-seed from
   fixtures + network blackhole, t25–t28; CONTEXT.md introduced.
+- **R6 (visible sync reminder + print beauty):** standing "CMI keeps editing
+  the timetable — sync every few days" hint in the header next to Sync now
+  (full-width row on phones); print stylesheet redesigned (masthead with
+  accent rule + semester right, dark slate header band, chips fill cells in
+  branch pastels with corner ✎, colored code chips in legend, hairline
+  footnote); `domx::fmt_local_date` now hand-rolled "6 Aug 2026" (was
+  locale-numeric) — also improves failure banners.

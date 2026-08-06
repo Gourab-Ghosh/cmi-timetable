@@ -177,13 +177,14 @@ pub fn today_local() -> ttcore::date::CivilDate {
     )
 }
 
+const MONTHS: [&str; 12] = [
+    "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+    "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+];
+
 /// Exact local timestamp — unambiguous "6 Aug 2026, 15:19" (numeric d/m/y
 /// reads differently across locales, and seconds are log noise).
 pub fn fmt_local(ms: f64) -> String {
-    const MONTHS: [&str; 12] = [
-        "Jan", "Feb", "Mar", "Apr", "May", "Jun",
-        "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
-    ];
     let d = js_sys::Date::new(&wasm_bindgen::JsValue::from_f64(ms));
     format!(
         "{} {} {}, {:02}:{:02}",
@@ -195,12 +196,15 @@ pub fn fmt_local(ms: f64) -> String {
     )
 }
 
-/// Short local date ("5 Aug 2026") for user-facing failure copy.
+/// Short local date — "5 Aug 2026", never ambiguous numeric d/m/y.
 pub fn fmt_local_date(ms: f64) -> String {
     let d = js_sys::Date::new(&wasm_bindgen::JsValue::from_f64(ms));
-    d.to_locale_date_string("en-IN", &wasm_bindgen::JsValue::UNDEFINED)
-        .as_string()
-        .unwrap_or_default()
+    format!(
+        "{} {} {}",
+        d.get_date(),
+        MONTHS[(d.get_month() as usize).min(11)],
+        d.get_full_year(),
+    )
 }
 
 /// "just now" / "12 min ago" / "2 h ago" / "3 days ago".

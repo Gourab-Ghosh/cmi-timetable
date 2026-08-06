@@ -245,28 +245,44 @@ fn my_timetable(app: App) -> impl IntoView {
 
     view! {
         <section aria-label="My timetable">
-            <h2 class="print-title">
-                {move || format!(
-                    "My timetable — {}",
-                    app.snapshot.with(|s| s.semester_label_display()),
-                )}
-            </h2>
-            <span class="print-sub print-only">
-                {move || {
-                    let courses = app.selected_courses();
-                    let total: u32 = courses
-                        .iter()
-                        .map(|c| u32::from(app.course_credits(c)))
-                        .sum();
-                    format!(
-                        "{} course{} · {} credits · data from cmi.ac.in · \
-                         made with the CMI Timetable Planner",
-                        courses.len(),
-                        if courses.len() == 1 { "" } else { "s" },
-                        total,
-                    )
-                }}
-            </span>
+            // Print-only masthead: title + stats left, semester + provenance
+            // right, over one accent rule.
+            <div class="print-masthead print-only" aria-hidden="true">
+                <div class="pm-left">
+                    <span class="pm-title">"My timetable"</span>
+                    <span class="pm-stats">
+                        {move || {
+                            let courses = app.selected_courses();
+                            let total: u32 = courses
+                                .iter()
+                                .map(|c| u32::from(app.course_credits(c)))
+                                .sum();
+                            format!(
+                                "{} course{} · {} credits · made with the CMI \
+                                 Timetable Planner",
+                                courses.len(),
+                                if courses.len() == 1 { "" } else { "s" },
+                                total,
+                            )
+                        }}
+                    </span>
+                </div>
+                <div class="pm-right">
+                    <span class="pm-sem">
+                        {move || app.snapshot.with(|s| s.semester_label_display())}
+                    </span>
+                    <span class="pm-meta">
+                        {move || {
+                            format!(
+                                "cmi.ac.in · synced {}",
+                                crate::domx::fmt_local_date(
+                                    app.snapshot.with(|s| s.fetched_at),
+                                ),
+                            )
+                        }}
+                    </span>
+                </div>
+            </div>
             <div class="toolbar noprint">
                 <h2 style="margin:0">"My timetable"</h2>
                 <div class="grow"></div>
@@ -583,9 +599,17 @@ fn my_timetable(app: App) -> impl IntoView {
                                                         n.to_string()
                                                     }
                                                 };
+                                                let hue = crate::hues::course_hue(&course.branches);
                                                 view! {
                                                     <tr>
-                                                        <td class="code">{course.code.clone()}</td>
+                                                        <td class="code">
+                                                            <span
+                                                                class="code-chip"
+                                                                style=format!("--hue:{hue}")
+                                                            >
+                                                                {course.code.clone()}
+                                                            </span>
+                                                        </td>
                                                         <td>{course.name.clone()}</td>
                                                         <td>
                                                             {if course.instructors.is_empty() {

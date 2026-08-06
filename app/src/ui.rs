@@ -352,6 +352,11 @@ pub fn Header() -> impl IntoView {
             >
                 "Sync now"
             </button>
+            // Visible on every page: the data is only as fresh as the last
+            // sync, and CMI edits its timetable all semester long.
+            <span class="sync-hint">
+                "CMI keeps editing the timetable — sync every few days to stay current."
+            </span>
             <div class="spacer"></div>
             <button
                 class="btn"
