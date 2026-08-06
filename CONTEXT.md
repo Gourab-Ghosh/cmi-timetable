@@ -170,4 +170,9 @@ regenerates the .ics golden.
 - **R8 (publish):** created public repo `Gourab-Ghosh/cmi-timetable`, pushed
   main, enabled GitHub Pages with the Actions source; deploy.yml (already
   present) redeploys on every push. Added the live URL to README, fixed a
-  stale "bundled snapshot" comment in sync.yml.
+  stale "bundled snapshot" comment in sync.yml. Ran sync.yml once by hand:
+  mirror committed (76 courses, Aug–Nov 2026) and served at
+  `…/cmi-timetable/data/latest.json` (its Pages deploy job hit a transient
+  GitHub "Service Unavailable" — `gh run rerun --failed` fixed it). Live
+  first-run verified in a real browser: welcome → sync (proxy tier won) →
+  data pill; `#/developer` reachable.
