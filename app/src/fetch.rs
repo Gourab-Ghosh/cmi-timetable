@@ -13,8 +13,9 @@ use ttcore::validate::{parse_and_validate, ParseOutcome, SnapshotMeta};
 pub const CMI_TIMETABLE_URL: &str = "https://www.cmi.ac.in/practical/timetable.php";
 pub const CMI_HALLS_URL: &str = "https://www.cmi.ac.in/practical/lecturehalls.php";
 
-const DIRECT_TIMEOUT_MS: u32 = 5_000;
+const DIRECT_TIMEOUT_MS: u32 = 4_000;
 const PROXY_TIMEOUT_MS: u32 = 12_000;
+const MIRROR_TIMEOUT_MS: u32 = 8_000;
 const AUTO_UPDATE_INTERVAL_MS: f64 = 12.0 * 3600.0 * 1000.0;
 
 /// Public CORS relays, tried in order. To add a self-hosted relay (the most
@@ -244,35 +245,37 @@ struct MirrorFile {
 }
 
 enum TierResult {
-    Adopted,
+    /// A gate-passing snapshot ready to adopt.
+    Snapshot(Box<Snapshot>),
     GateFailed,
     Unreachable,
 }
 
-async fn try_pages_tier(
-    app: &App,
-    tier_name: &str,
-    tt_url: &str,
-    halls_url: &str,
+/// Fetch, sanity-check and parse one tier's page pair. Both pages are
+/// fetched **in parallel**, halving the tier's wall-clock time.
+async fn fetch_pages_tier(
+    app: App,
+    tier_name: String,
+    tt_url: String,
+    halls_url: String,
     timeout_ms: u32,
     source: SourceTier,
 ) -> TierResult {
-    let tt = fetch_text(tt_url, timeout_ms).await;
-    log(app, tier_name, tt_url, &tt);
-    let Ok(tt) = tt else {
-        return TierResult::Unreachable;
-    };
-    let halls = fetch_text(halls_url, timeout_ms).await;
-    log(app, tier_name, halls_url, &halls);
-    let Ok(halls) = halls else {
+    let (tt, halls) = futures::join!(
+        fetch_text(&tt_url, timeout_ms),
+        fetch_text(&halls_url, timeout_ms)
+    );
+    log(&app, &tier_name, &tt_url, &tt);
+    log(&app, &tier_name, &halls_url, &halls);
+    let (Ok(tt), Ok(halls)) = (tt, halls) else {
         return TierResult::Unreachable;
     };
 
     if !sane(&tt.text) || !sane(&halls.text) {
         log(
-            app,
-            tier_name,
-            tt_url,
+            &app,
+            &tier_name,
+            &tt_url,
             &Err("response failed the sanity check (not a CMI timetable page)".to_string()),
         );
         return TierResult::Unreachable;
@@ -280,33 +283,32 @@ async fn try_pages_tier(
 
     match parse_pair(&tt.text, &halls.text, domx::now_ms(), source) {
         Ok(outcome) => {
-            record_report(app, tier_name, outcome.report.clone());
+            record_report(&app, &tier_name, outcome.report.clone());
             match outcome.snapshot {
-                Some(snapshot) => {
-                    adopt(app, snapshot, true);
-                    TierResult::Adopted
-                }
+                Some(snapshot) => TierResult::Snapshot(Box::new(snapshot)),
                 None => TierResult::GateFailed,
             }
         }
         Err(e) => {
-            log(app, tier_name, tt_url, &Err(e));
+            log(&app, &tier_name, &tt_url, &Err(e));
             TierResult::Unreachable
         }
     }
 }
 
-async fn try_mirror(app: &App) -> TierResult {
-    let latest = fetch_text("data/latest.json", PROXY_TIMEOUT_MS).await;
-    log(app, "mirror", "data/latest.json", &latest);
+async fn try_mirror(app: App) -> TierResult {
+    // All three same-origin fetches in parallel.
+    let (latest, tt, halls) = futures::join!(
+        fetch_text("data/latest.json", MIRROR_TIMEOUT_MS),
+        fetch_text("data/timetable.php.html", MIRROR_TIMEOUT_MS),
+        fetch_text("data/lecturehalls.php.html", MIRROR_TIMEOUT_MS)
+    );
+    log(&app, "mirror", "data/latest.json", &latest);
+    log(&app, "mirror", "data/timetable.php.html", &tt);
+    log(&app, "mirror", "data/lecturehalls.php.html", &halls);
     let meta: Option<MirrorFile> = latest
         .ok()
         .and_then(|ok| serde_json::from_str(&ok.text).ok());
-
-    let tt = fetch_text("data/timetable.php.html", PROXY_TIMEOUT_MS).await;
-    log(app, "mirror", "data/timetable.php.html", &tt);
-    let halls = fetch_text("data/lecturehalls.php.html", PROXY_TIMEOUT_MS).await;
-    log(app, "mirror", "data/lecturehalls.php.html", &halls);
 
     if let (Ok(tt), Ok(halls)) = (&tt, &halls) {
         if sane(&tt.text) && sane(&halls.text) {
@@ -316,10 +318,9 @@ async fn try_mirror(app: &App) -> TierResult {
                 .unwrap_or_else(domx::now_ms);
             if let Ok(outcome) = parse_pair(&tt.text, &halls.text, fetched_at, SourceTier::Mirror)
             {
-                record_report(app, "mirror", outcome.report.clone());
+                record_report(&app, "mirror", outcome.report.clone());
                 if let Some(snapshot) = outcome.snapshot {
-                    adopt(app, snapshot, true);
-                    return TierResult::Adopted;
+                    return TierResult::Snapshot(Box::new(snapshot));
                 }
                 // Client parser rejected the mirror HTML — fall back to the
                 // CI-validated snapshot inside latest.json if present.
@@ -330,13 +331,12 @@ async fn try_mirror(app: &App) -> TierResult {
         let mut snapshot = meta.snapshot;
         snapshot.source = SourceTier::Mirror;
         snapshot.fetched_at = meta.generated_at;
-        adopt(app, snapshot, true);
-        return TierResult::Adopted;
+        return TierResult::Snapshot(Box::new(snapshot));
     }
     TierResult::Unreachable
 }
 
-/// The "Update now" flow (also used for throttled background updates).
+/// The "Sync now" flow (also used for throttled background syncs).
 pub async fn run_update(app: App, manual: bool) {
     if app.sync.with_untracked(|s| s.updating) {
         return;
@@ -361,21 +361,25 @@ pub async fn run_update(app: App, manual: bool) {
     let mut gate_failed_any = false;
     let mut adopted = false;
 
-    // Tier 1 — direct (kept cheap in case CMI ever enables CORS).
+    // Tier 1 — direct (both pages in parallel; kept cheap in case CMI ever
+    // enables CORS — a CORS rejection fails within one round trip).
     if force.is_none() || force.as_deref() == Some("direct") {
-        progress(&app, "trying cmi.ac.in directly…");
+        progress(&app, "syncing directly from cmi.ac.in…");
         routes_tried += 1;
-        match try_pages_tier(
-            &app,
-            "direct",
-            CMI_TIMETABLE_URL,
-            CMI_HALLS_URL,
+        match fetch_pages_tier(
+            app,
+            "direct".to_string(),
+            CMI_TIMETABLE_URL.to_string(),
+            CMI_HALLS_URL.to_string(),
             DIRECT_TIMEOUT_MS,
             SourceTier::Direct,
         )
         .await
         {
-            TierResult::Adopted => adopted = true,
+            TierResult::Snapshot(snapshot) => {
+                adopt(&app, *snapshot, true);
+                adopted = true;
+            }
             // Direct content is authoritative: a gate failure here means the
             // page format changed, and no proxy will see anything different.
             TierResult::GateFailed => {
@@ -386,29 +390,38 @@ pub async fn run_update(app: App, manual: bool) {
         }
     }
 
-    // Tier 2 — public CORS relays (each sanity-checked before trusting).
+    // Tier 2 — public CORS relays, raced in parallel (each response
+    // sanity-checked and gate-validated); the first valid one wins and the
+    // rest are dropped.
     if !adopted && !gate_failed_direct && (force.is_none() || force.as_deref() == Some("proxy")) {
-        for (i, proxy) in PROXIES.iter().enumerate() {
-            progress(
-                &app,
-                &format!("trying proxy {} of {} ({})…", i + 1, PROXIES.len(), proxy.name),
-            );
-            routes_tried += 1;
-            match try_pages_tier(
-                &app,
-                &format!("proxy:{}", proxy.name),
-                &(proxy.build)(CMI_TIMETABLE_URL),
-                &(proxy.build)(CMI_HALLS_URL),
-                PROXY_TIMEOUT_MS,
-                SourceTier::Proxy(proxy.name.to_string()),
-            )
-            .await
-            {
-                TierResult::Adopted => {
+        progress(
+            &app,
+            &format!("trying {} proxies in parallel…", PROXIES.len()),
+        );
+        routes_tried += PROXIES.len();
+        let mut pending: Vec<futures::future::LocalBoxFuture<'static, TierResult>> = PROXIES
+            .iter()
+            .map(|proxy| {
+                let fut = fetch_pages_tier(
+                    app,
+                    format!("proxy:{}", proxy.name),
+                    (proxy.build)(CMI_TIMETABLE_URL),
+                    (proxy.build)(CMI_HALLS_URL),
+                    PROXY_TIMEOUT_MS,
+                    SourceTier::Proxy(proxy.name.to_string()),
+                );
+                Box::pin(fut) as futures::future::LocalBoxFuture<'static, TierResult>
+            })
+            .collect();
+        while !pending.is_empty() && !adopted {
+            let (result, _index, rest) = futures::future::select_all(pending).await;
+            pending = rest;
+            match result {
+                TierResult::Snapshot(snapshot) => {
+                    adopt(&app, *snapshot, true);
                     adopted = true;
-                    break;
                 }
-                // A proxy may have mangled the content — try the next one
+                // A proxy may have mangled the content — wait for the others
                 // (and the mirror after that).
                 TierResult::GateFailed => gate_failed_any = true,
                 TierResult::Unreachable => {}
@@ -422,7 +435,8 @@ pub async fn run_update(app: App, manual: bool) {
     if !adopted && !gate_failed_direct && (force.is_none() || force.as_deref() == Some("mirror")) {
         progress(&app, "trying the data mirror…");
         routes_tried += 1;
-        if matches!(try_mirror(&app).await, TierResult::Adopted) {
+        if let TierResult::Snapshot(snapshot) = try_mirror(app).await {
+            adopt(&app, *snapshot, true);
             adopted = true;
         }
     }
@@ -452,7 +466,7 @@ pub async fn run_update(app: App, manual: bool) {
     } else if first_load {
         format!(
             "Couldn't reach CMI yet, so this is the timetable that shipped with the app \
-             ({saved_date}). Tap Update when you're online."
+             ({saved_date}). Tap Sync when you're online."
         )
     } else if !online {
         format!(
@@ -462,12 +476,12 @@ pub async fn run_update(app: App, manual: bool) {
     } else {
         format!(
             "The CMI website couldn't be reached right now (tried {routes_tried} routes). \
-             You're still seeing your saved timetable from {saved_date}. Try Update again later."
+             You're still seeing your saved timetable from {saved_date}. Try Sync again later."
         )
     };
     app.set_banner(BannerKind::Warn, text);
     if manual {
-        app.toast("Update didn't go through — details are in the banner.");
+        app.toast("Sync didn't go through — details are in the banner.");
     }
 }
 

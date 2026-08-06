@@ -65,7 +65,7 @@ fn simulators(app: App) -> impl IntoView {
         <div class="panel">
             <h3>"Simulators"</h3>
             <div class="row" style="display:flex;gap:0.5rem;flex-wrap:wrap;align-items:center">
-                <label for="force-tier" class="muted small">"Force tier on next update"</label>
+                <label for="force-tier" class="muted small">"Force tier on next sync"</label>
                 <select
                     id="force-tier"
                     on:change=move |ev| {
@@ -83,7 +83,7 @@ fn simulators(app: App) -> impl IntoView {
                         fetch::run_update(app, true).await;
                     });
                 }>
-                    "Run update"
+                    "Run sync"
                 </button>
                 <button class="btn small" on:click=move |_| fetch::load_bundled_fixture(app)>
                     "Load bundled fixture"

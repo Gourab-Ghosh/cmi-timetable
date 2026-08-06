@@ -111,6 +111,12 @@ fn t05_unscheduled_listed() {
         assert!(c.meetings.is_empty(), "{code} should have no meetings");
     }
     assert_eq!(SNAPSHOT.course("RDBM").unwrap().credits, Some(2));
+    assert_eq!(SNAPSHOT.course("RDBM").unwrap().effective_credits(), 2);
+    // Unstated credits default to 4 (but stay distinguishable as assumed).
+    let toc = SNAPSHOT.course("TOC").unwrap();
+    assert_eq!(toc.credits, None);
+    assert_eq!(toc.effective_credits(), 4);
+    assert!(toc.credits_assumed());
     // Branch membership still comes from the timetable legend.
     assert_eq!(SNAPSHOT.course("RDBM").unwrap().branches, ["MD1"]);
     assert_eq!(SNAPSHOT.course("SVA").unwrap().branches, ["OCS1"]);

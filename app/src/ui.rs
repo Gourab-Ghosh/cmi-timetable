@@ -4,7 +4,7 @@
 use crate::state::{
     App, BannerKind, Dialog, DragSpec, EffMeeting, Filters, Route, Tab, ThemePref,
 };
-use crate::{dnd, domx, fetch, hues};
+use crate::{dnd, domx, fetch, hues, storage};
 use leptos::prelude::*;
 use ttcore::model::{Course, Day, Meeting, ScheduleStatus, Slot, SourceTier};
 
@@ -33,11 +33,15 @@ pub struct ChipProps {
     /// The meeting this chip represents (grid cells); None for list chips.
     pub eff: Option<EffMeeting>,
     pub show_hall: bool,
+    /// Drag & keyboard-move eligible — only active while edit mode is on.
     pub draggable: bool,
     pub from_master: bool,
     pub click: ChipClick,
     /// Extra sub-label (e.g. actual time when it differs from the column).
     pub sublabel: Option<String>,
+    /// "⚠ would clash with your current timetable" marker (master grid,
+    /// unselected courses).
+    pub warn_wont_fit: bool,
 }
 
 impl ChipProps {
@@ -50,6 +54,7 @@ impl ChipProps {
             from_master: false,
             click: ChipClick::Details,
             sublabel: None,
+            warn_wont_fit: false,
         }
     }
 }
@@ -124,6 +129,9 @@ pub fn chip(app: App, p: ChipProps) -> impl IntoView {
     if !clash_with.is_empty() {
         aria.push_str(&format!(", clashes with {}", clash_with.join(", ")));
     }
+    if p.warn_wont_fit {
+        aria.push_str(", would clash with your current timetable");
+    }
 
     let spec = DragSpec {
         code: p.code.clone(),
@@ -161,10 +169,11 @@ pub fn chip(app: App, p: ChipProps) -> impl IntoView {
             class:selected=selected && p.from_master
             class:neutral=neutral
             style=format!("--hue:{hue}")
+            class:draggable=move || draggable && app.edit_mode.get()
             aria-label=aria.clone()
             title=aria
             on:pointerdown=move |ev| {
-                if draggable {
+                if draggable && app.edit_mode.get_untracked() {
                     dnd::chip_pointer_down(app, &ev, spec.clone());
                 }
             }
@@ -184,7 +193,7 @@ pub fn chip(app: App, p: ChipProps) -> impl IntoView {
             }
             on:keydown=move |ev| {
                 let key = ev.key();
-                if (key == "m" || key == "M") && draggable {
+                if (key == "m" || key == "M") && draggable && app.edit_mode.get_untracked() {
                     ev.prevent_default();
                     dnd::enter_move_mode(app, spec_kbd.clone(), move_from.clone());
                 } else if key == "i" || key == "I" {
@@ -193,6 +202,8 @@ pub fn chip(app: App, p: ChipProps) -> impl IntoView {
                 }
             }
         >
+            {p.warn_wont_fit
+                .then(|| view! { <span class="wontfit" aria-hidden="true">"⚠"</span> })}
             <span class="code">{p.code.clone()}</span>
             {sub.map(|s| view! { <span class="hall">{s}</span> })}
             {temp.then(|| view! { <span class="hall">"TMP"</span> })}
@@ -230,6 +241,33 @@ pub fn branch_chip_full(app: App, code: &str) -> impl IntoView {
         <span class="chip" style=format!("--hue:{hue}")>
             {label}
         </span>
+    }
+}
+
+/// The edit-mode toggle shown in grid toolbars: drag & drop (pointer and
+/// keyboard move mode) only works while this is on.
+pub fn edit_toggle(app: App) -> impl IntoView {
+    view! {
+        <button
+            class="btn"
+            class:primary=move || app.edit_mode.get()
+            aria-pressed=move || if app.edit_mode.get() { "true" } else { "false" }
+            title="While editing, drag chips between slots (or press M on a focused chip)"
+            on:click=move |_| {
+                let on = !app.edit_mode.get_untracked();
+                app.edit_mode.set(on);
+                if on {
+                    app.toast(
+                        "Edit layout is on — drag chips to move them (Esc cancels). \
+                         Press it again when you're done.",
+                    );
+                } else {
+                    app.move_mode.set(None);
+                }
+            }
+        >
+            {move || if app.edit_mode.get() { "✎ Done editing" } else { "✎ Edit layout" }}
+        </button>
     }
 }
 
@@ -295,7 +333,7 @@ pub fn Header() -> impl IntoView {
                     });
                 }
             >
-                "Update now"
+                "Sync now"
             </button>
             <div class="spacer"></div>
             <button
@@ -318,6 +356,13 @@ pub fn Header() -> impl IntoView {
             </button>
             <button class="btn" on:click=move |_| app.dialog.set(Some(Dialog::Share))>
                 "Share"
+            </button>
+            <button
+                class="btn"
+                title="Everything saved in your browser, with removal options"
+                on:click=move |_| app.dialog.set(Some(Dialog::MyData))
+            >
+                "My data"
             </button>
             <button
                 class="btn"
@@ -370,16 +415,8 @@ pub fn Tabs() -> impl IntoView {
                     }
                 })
                 .collect_view()}
-            <button
-                class="tab"
-                role="tab"
-                aria-selected=move || {
-                    if app.route.get() == Route::Developer { "true" } else { "false" }
-                }
-                on:click=move |_| app.goto_developer()
-            >
-                "Developer"
-            </button>
+            // Developer mode is deliberately NOT linked anywhere in the UI —
+            // it is reached only via its URL endpoint, #/developer.
         </nav>
     }
 }
@@ -435,9 +472,6 @@ pub fn BannerView() -> impl IntoView {
                             role="status"
                         >
                             <span>{banner.text.clone()}</span>
-                            <button class="btn small" on:click=move |_| app.goto_developer()>
-                                "Details"
-                            </button>
                             <button class="btn small" on:click=move |_| app.banner.set(None)>
                                 "Dismiss"
                             </button>
@@ -709,26 +743,21 @@ pub fn filter_bar(app: App, result_count: Signal<usize>) -> impl IntoView {
                 Box::new(move || app.filters().credits.len()),
                 view! {
                     {move || {
-                        let mut values: Vec<String> = snapshot()
+                        let mut values: Vec<u8> = snapshot()
                             .courses
                             .iter()
-                            .map(|c| {
-                                c.credits.map(|n| n.to_string()).unwrap_or_else(|| "?".to_string())
-                            })
+                            .map(|c| c.effective_credits())
                             .collect();
-                        values.sort();
+                        values.sort_unstable();
                         values.dedup();
                         values
                             .into_iter()
-                            .map(|value| {
+                            .map(|n| {
+                                let value = n.to_string();
                                 let v2 = value.clone();
                                 facet_checkbox(
                                     app,
-                                    if value == "?" {
-                                        "? (not stated)".to_string()
-                                    } else {
-                                        format!("{value} credits")
-                                    },
+                                    format!("{value} credits"),
                                     app.filters().credits.contains(&value),
                                     move |f, on| toggle_vec(&mut f.credits, v2.clone(), on),
                                 )
@@ -915,6 +944,7 @@ pub fn DialogHost() -> impl IntoView {
                 .map(|dialog| {
                     let body = match dialog {
                         Dialog::Details(code) => details_dialog(app, code).into_any(),
+                        Dialog::MyData => my_data_dialog(app).into_any(),
                         Dialog::EditMeeting { course, ov_id, base, init, create } => {
                             edit_meeting_dialog(app, course, ov_id, base, init, create).into_any()
                         }
@@ -1182,7 +1212,13 @@ fn details_dialog(app: App, code: String) -> impl IntoView {
                     }}
                 </dd>
                 <dt>"Credits"</dt>
-                <dd>{course.credits.map(|n| n.to_string()).unwrap_or_else(|| "?".to_string())}</dd>
+                <dd>
+                    {if course.credits_assumed() {
+                        format!("{} (assumed — CMI doesn't state it)", course.effective_credits())
+                    } else {
+                        course.effective_credits().to_string()
+                    }}
+                </dd>
                 {(!course_notes.is_empty())
                     .then(|| {
                         view! {
@@ -1280,6 +1316,193 @@ fn details_dialog(app: App, code: String) -> impl IntoView {
         </div>
     }
     .into_any()
+}
+
+// ---------------------------------------------------------------------------
+// "My data" — everything saved in the browser, with removal options
+// ---------------------------------------------------------------------------
+
+fn my_data_dialog(app: App) -> impl IntoView {
+    let clear_snapshot = move |_| {
+        storage::remove(storage::KEY_SNAPSHOT);
+        let bundled = crate::state::bundled_snapshot();
+        app.sync.update(|s| {
+            s.fetched_at = bundled.fetched_at;
+            s.source = bundled.source.clone();
+        });
+        app.snapshot.set(bundled);
+        app.what_changed.set(None);
+        app.conflicts.set(Vec::new());
+        app.toast("Cached timetable cleared — using the built-in copy. Sync to refresh.");
+    };
+
+    let delete_everything = move |_| {
+        let confirmed = domx::window()
+            .confirm_with_message(
+                "Delete everything this app saved in your browser (courses, custom \
+                 times, cached timetable, preferences)? This cannot be undone.",
+            )
+            .unwrap_or(false);
+        if confirmed {
+            for (key, _) in storage::all_entries() {
+                storage::remove(&key);
+            }
+            let _ = domx::window().location().reload();
+        }
+    };
+
+    view! {
+        <div>
+            <h2>"My data"</h2>
+            <p class="muted small">
+                "Everything below is saved in your browser only — nothing is ever \
+                 stored on a server."
+            </p>
+
+            // Custom times: exactly which CMI data the user's changes overwrite.
+            <h3>"Your custom times"</h3>
+            {move || {
+                let overrides = app.overrides.get();
+                if overrides.items.is_empty() {
+                    view! {
+                        <p class="muted small">
+                            "None. Meetings you move or create appear here, each showing \
+                             what CMI data it overwrites."
+                        </p>
+                    }
+                        .into_any()
+                } else {
+                    view! {
+                        <ul class="meetings">
+                            {overrides
+                                .items
+                                .iter()
+                                .map(|o| {
+                                    let id = o.id;
+                                    let course = o.course.clone();
+                                    let line = match &o.base {
+                                        Some(base) => format!(
+                                            "{} → {}",
+                                            base.describe(),
+                                            o.to.describe(),
+                                        ),
+                                        None => format!("created meeting: {}", o.to.describe()),
+                                    };
+                                    let selected = app.is_selected(&course);
+                                    view! {
+                                        <li>
+                                            <span class="chip mono" style="--hue:215">
+                                                {course.clone()}
+                                            </span>
+                                            <span class="when">{line}</span>
+                                            {(!selected)
+                                                .then(|| {
+                                                    view! {
+                                                        <span class="badge">"not currently selected"</span>
+                                                    }
+                                                })}
+                                            <button
+                                                class="btn small"
+                                                on:click=move |_| {
+                                                    app.reset_override(
+                                                        id,
+                                                        Some(format!("{course} back on CMI's time")),
+                                                    );
+                                                }
+                                            >
+                                                "Remove"
+                                            </button>
+                                        </li>
+                                    }
+                                })
+                                .collect_view()}
+                        </ul>
+                        <button
+                            class="btn small"
+                            on:click=move |_| {
+                                app.act("reset all custom times", |_, ovs| ovs.items.clear());
+                                app.toast_undo("All custom times removed");
+                            }
+                        >
+                            "Remove all custom times"
+                        </button>
+                    }
+                        .into_any()
+                }
+            }}
+
+            <h3 style="margin-top:0.9rem">"Your course selection"</h3>
+            <p class="small">
+                {move || {
+                    let n = app.selection.with(|s| s.len());
+                    if n == 0 {
+                        "No courses selected.".to_string()
+                    } else {
+                        format!(
+                            "{n} course{} selected: {}",
+                            if n == 1 { "" } else { "s" },
+                            app.selection.with(|s| s.join(", ")),
+                        )
+                    }
+                }}
+            </p>
+            {move || {
+                (!app.selection.with(|s| s.is_empty()))
+                    .then(|| {
+                        view! {
+                            <button
+                                class="btn small"
+                                on:click=move |_| {
+                                    app.act("clear selection", |sel, _| sel.clear());
+                                    app.toast_undo("Selection cleared");
+                                }
+                            >
+                                "Clear selection"
+                            </button>
+                        }
+                    })
+            }}
+
+            <h3 style="margin-top:0.9rem">"Cached timetable"</h3>
+            <p class="small">
+                {move || {
+                    app.snapshot
+                        .with(|s| {
+                            format!(
+                                "{} · fetched {} · {}",
+                                s.semester_label_display(),
+                                domx::fmt_local(s.fetched_at),
+                                s.source.label(),
+                            )
+                        })
+                }}
+            </p>
+            <button class="btn small" on:click=clear_snapshot>
+                "Clear cached timetable"
+            </button>
+
+            <h3 style="margin-top:0.9rem">"Preferences"</h3>
+            <p class="muted small">"Theme, density, filters and the current tab."</p>
+            <button
+                class="btn small"
+                on:click=move |_| {
+                    app.prefs.set(Default::default());
+                    app.persist_prefs();
+                    crate::apply_theme(app);
+                    app.toast("Preferences reset.");
+                }
+            >
+                "Reset preferences"
+            </button>
+
+            <h3 style="margin-top:0.9rem">"Everything"</h3>
+            <button class="btn small danger" on:click=delete_everything>
+                "Delete all app data"
+            </button>
+
+            <div class="actions">{close_button(app)}</div>
+        </div>
+    }
 }
 
 // ---------------------------------------------------------------------------

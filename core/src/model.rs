@@ -181,7 +181,9 @@ pub struct Course {
     pub instructors: Vec<String>,
     /// May be empty for `ScheduledNoBranch`.
     pub branches: Vec<BranchCode>,
-    /// From "(2 credits)".
+    /// From "(2 credits)"; `None` when CMI doesn't state it — display code
+    /// should use [`Course::effective_credits`], which assumes the campus
+    /// default of 4.
     pub credits: Option<u8>,
     /// From "(starts 12 Aug)" → `(12, "Aug")`.
     pub starts: Option<(u8, String)>,
@@ -192,6 +194,22 @@ pub struct Course {
     pub status: ScheduleStatus,
     /// Official (post-join) meetings, sorted by day then start time.
     pub meetings: Vec<Meeting>,
+}
+
+impl Course {
+    /// CMI states credits only exceptionally (e.g. "(2 credits)"); regular
+    /// courses default to 4.
+    pub const DEFAULT_CREDITS: u8 = 4;
+
+    /// The stated credits, or the campus default of 4.
+    pub fn effective_credits(&self) -> u8 {
+        self.credits.unwrap_or(Self::DEFAULT_CREDITS)
+    }
+
+    /// True when the credits are the assumed default rather than stated.
+    pub fn credits_assumed(&self) -> bool {
+        self.credits.is_none()
+    }
 }
 
 /// Where a snapshot's data came from.

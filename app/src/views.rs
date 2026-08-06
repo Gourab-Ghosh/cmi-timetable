@@ -2,7 +2,7 @@
 //! and days/halls run down the left column — never transposed.
 
 use crate::state::{App, Density, Dialog, EffMeeting, Tab};
-use crate::ui::{branch_chip, chip, filter_bar, ChipClick, ChipProps};
+use crate::ui::{branch_chip, chip, edit_toggle, filter_bar, ChipClick, ChipProps};
 use leptos::prelude::*;
 use ttcore::model::{Course, Day, Meeting, ScheduleStatus, Slot};
 
@@ -134,6 +134,7 @@ fn my_timetable(app: App) -> impl IntoView {
                                 from_master: false,
                                 click: ChipClick::Details,
                                 sublabel,
+                                warn_wont_fit: false,
                             },
                         )
                         .into_any()
@@ -192,6 +193,7 @@ fn my_timetable(app: App) -> impl IntoView {
                             .collect_view()
                     }}
                 </div>
+                {edit_toggle(app)}
                 <button
                     class="btn"
                     disabled=move || app.selection.with(|s| s.is_empty())
@@ -374,6 +376,7 @@ fn my_timetable(app: App) -> impl IntoView {
                                                             from_master: false,
                                                             click: ChipClick::Details,
                                                             sublabel: None,
+                                                            warn_wont_fit: false,
                                                         },
                                                     )}
                                                     <button
@@ -418,13 +421,21 @@ fn my_timetable(app: App) -> impl IntoView {
 fn my_courses(app: App) -> impl IntoView {
     let credits_line = move || {
         let courses = app.selected_courses();
-        let known: u32 = courses.iter().filter_map(|c| c.credits.map(u32::from)).sum();
-        let unknown = courses.iter().filter(|c| c.credits.is_none()).count();
-        match (known, unknown) {
-            (0, 0) => "No courses selected.".to_string(),
-            (k, 0) => format!("Total credits: {k}"),
-            (0, u) => format!("Total credits: {u} × ?"),
-            (k, u) => format!("Total credits: {k} + {u} × ?"),
+        if courses.is_empty() {
+            return "No courses selected.".to_string();
+        }
+        let total: u32 = courses
+            .iter()
+            .map(|c| u32::from(c.effective_credits()))
+            .sum();
+        let assumed = courses.iter().filter(|c| c.credits_assumed()).count();
+        if assumed == 0 {
+            format!("Total credits: {total}")
+        } else {
+            format!(
+                "Total credits: {total} (4 assumed for {assumed} course{} CMI doesn't state)",
+                if assumed == 1 { "" } else { "s" },
+            )
         }
     };
 
@@ -486,8 +497,8 @@ fn course_card(app: App, course: Course) -> impl IntoView {
                 <strong>{course.name.clone()}</strong>
                 <span class="muted">{course.instructors.join(" / ")}</span>
                 <div class="grow" style="flex:1"></div>
-                <span class="badge">
-                    {course.credits.map(|n| format!("{n} cr")).unwrap_or_else(|| "? cr".to_string())}
+                <span class="badge" title=if course.credits_assumed() { "assumed — CMI doesn't state it" } else { "" }>
+                    {format!("{} cr", course.effective_credits())}
                 </span>
             </div>
             <div class="row" style="margin-top:0.3rem">
@@ -561,6 +572,11 @@ fn master_grid(app: App) -> impl IntoView {
             .get()
             .into_iter()
             .flat_map(|course| {
+                // ⚠ marker on unselected courses that would clash with the
+                // current timetable (visible whether or not the
+                // "Fits my schedule" filter is on).
+                let warn_wont_fit =
+                    !app.is_selected(&course.code) && !app.fits_schedule(&course);
                 app.effective_meetings(&course)
                     .into_iter()
                     .filter(|e| {
@@ -568,18 +584,35 @@ fn master_grid(app: App) -> impl IntoView {
                             && column_for(&slot_grid, &e.meeting) == Some(slot.start_min)
                     })
                     .map(|e| {
-                        chip(
-                            app,
-                            ChipProps {
-                                code: course.code.clone(),
-                                eff: Some(e),
-                                show_hall: false,
-                                draggable: true,
-                                from_master: true,
-                                click: ChipClick::Toggle,
-                                sublabel: None,
-                            },
-                        )
+                        let info_code = course.code.clone();
+                        view! {
+                            <span class="chipwrap">
+                                {chip(
+                                    app,
+                                    ChipProps {
+                                        code: course.code.clone(),
+                                        eff: Some(e),
+                                        show_hall: false,
+                                        draggable: true,
+                                        from_master: true,
+                                        click: ChipClick::Toggle,
+                                        sublabel: None,
+                                        warn_wont_fit,
+                                    },
+                                )}
+                                <button
+                                    class="chip-info"
+                                    aria-label=format!("Details for {}", info_code)
+                                    title=format!("Details for {}", info_code)
+                                    on:click=move |_| {
+                                        app.dialog
+                                            .set(Some(Dialog::Details(info_code.clone())));
+                                    }
+                                >
+                                    "ⓘ"
+                                </button>
+                            </span>
+                        }
                         .into_any()
                     })
                     .collect::<Vec<_>>()
@@ -592,9 +625,11 @@ fn master_grid(app: App) -> impl IntoView {
             <div class="toolbar">
                 <h2 style="margin:0">"Master grid"</h2>
                 <span class="muted small">
-                    "Click adds or removes · drag to move · double-click or press I for details"
+                    "Click adds or removes · ⓘ shows details · ⚠ = would clash with your \
+                     timetable · turn on Edit layout to drag"
                 </span>
                 <div class="grow"></div>
+                {edit_toggle(app)}
                 <button
                     class="btn small"
                     on:click=move |_| {

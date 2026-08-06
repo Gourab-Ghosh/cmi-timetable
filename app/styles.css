@@ -58,6 +58,9 @@ html, body {
   padding: 0;
 }
 
+/* Keep focused/scrolled-to elements clear of the sticky header. */
+html { scroll-padding-top: 76px; }
+
 body {
   background: var(--bg);
   color: var(--text);
@@ -214,7 +217,10 @@ button {
     border-right: 1px solid var(--line);
     padding: 0.9rem 0.6rem;
     overflow: visible;
-    align-self: stretch;
+    /* Stay visible (and clickable) while long views scroll. */
+    align-self: start;
+    position: sticky;
+    top: 62px;
   }
   .tab { text-align: left; }
 }
@@ -297,6 +303,29 @@ button {
 .chip.overridden::after { content: "✎"; font-size: 0.75rem; opacity: 0.9; }
 
 .chip.ghost-src { opacity: 0.35; }
+.chip.draggable { cursor: grab; }
+.chip .wontfit { color: var(--warn); font-weight: 700; }
+
+/* Master grid: chip + its ⓘ details button */
+.chipwrap { display: inline-flex; align-items: center; gap: 2px; max-width: 100%; }
+.chip-info {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  min-height: 22px;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  font-size: 0.72rem;
+  color: var(--muted);
+  background: var(--surface);
+  flex: none;
+}
+.chip-info:hover { border-color: var(--accent); color: var(--accent); }
+@media (pointer: coarse) {
+  .chip-info { width: 34px; height: 34px; min-height: 34px; }
+}
 
 .badge {
   display: inline-flex;

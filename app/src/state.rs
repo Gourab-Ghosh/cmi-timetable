@@ -180,6 +180,8 @@ pub struct Banner {
 pub enum Dialog {
     /// Course details popover (any compact rendering opens this).
     Details(String),
+    /// "My data": everything saved in the browser, with removal options.
+    MyData,
     /// Create/edit a meeting override. `create` = "Give it a time".
     EditMeeting {
         course: String,
@@ -313,6 +315,9 @@ pub struct App {
     pub force_tier: RwSignal<Option<String>>,
     /// aria-live announcements (keyboard move mode, etc.).
     pub announce: RwSignal<String>,
+    /// Drag & drop (pointer and keyboard move mode) only works while edit
+    /// mode is on — toggled per session from the grid toolbars.
+    pub edit_mode: RwSignal<bool>,
 }
 
 impl App {
@@ -491,17 +496,47 @@ impl App {
                 sel.push(code.clone());
             }
         });
-        self.toast_undo(format!("Added {code}"));
+        // Warn immediately (never block) when the new course clashes.
+        let clashing = self.clashing_partners(&code);
+        if clashing.is_empty() {
+            self.toast_undo(format!("Added {code}"));
+        } else {
+            self.toast_undo(format!(
+                "Added {code} — ⚠ clashes with {}",
+                clashing.join(", ")
+            ));
+        }
     }
 
+    /// Distinct courses this (selected) course clashes with, with day/time.
+    pub fn clashing_partners(&self, code: &str) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        for c in self.clashes() {
+            let other = if c.a == code {
+                &c.b
+            } else if c.b == code {
+                &c.a
+            } else {
+                continue;
+            };
+            let entry = format!("{other} ({} {})", c.day.short(), c.a_slot.label());
+            if !out.contains(&entry) {
+                out.push(entry);
+            }
+        }
+        out
+    }
+
+    /// Deselecting keeps the course's custom times: re-adding it (or looking
+    /// at it in the master grid) must not silently revert a move. Custom
+    /// times are removed explicitly via "My data" or per-meeting resets.
     pub fn remove_course(&self, code: &str) {
         if !self.is_selected(code) {
             return;
         }
         let code = code.to_string();
-        self.act(&format!("remove {code}"), |sel, ovs| {
+        self.act(&format!("remove {code}"), |sel, _| {
             sel.retain(|c| c != &code);
-            ovs.items.retain(|o| o.course != code);
         });
         self.removed_upstream.update(|r| r.retain(|c| c != &code));
         self.toast_undo(format!("Removed {code}"));
@@ -821,10 +856,7 @@ pub fn course_matches(app: &App, course: &Course, f: &Filters) -> bool {
         return false;
     }
     if !f.credits.is_empty() {
-        let cr = course
-            .credits
-            .map(|c| c.to_string())
-            .unwrap_or_else(|| "?".to_string());
+        let cr = course.effective_credits().to_string();
         if !f.credits.contains(&cr) {
             return false;
         }

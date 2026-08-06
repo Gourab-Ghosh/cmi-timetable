@@ -2,9 +2,11 @@
 
 A **100% client-side** timetable planner for students of the Chennai
 Mathematical Institute. It parses CMI's two public timetable pages, lets you
-assemble your personal timetable (drag meetings around, resolve clashes,
-export to your calendar), and keeps everything **saved in your browser** —
-no backend, no accounts, no analytics.
+assemble your personal timetable (drag meetings around in edit mode, resolve
+clashes, export to your calendar), and keeps everything **saved in your
+browser** — no backend, no accounts, no analytics. The header's **My data**
+dialog shows exactly what is stored (including which CMI times your custom
+times overwrite) with one-click removal for each piece.
 
 Data sources (the only two):
 
@@ -16,7 +18,7 @@ Built with **Rust → WebAssembly** ([Leptos](https://leptos.dev) CSR +
 
 ## Architecture
 
-```
+```text
 /core   Data model, parsers for both CMI pages, validation gate, snapshot
         diff, three-way merge, .ics generation, URL-state codecs.
         No wasm-only deps; unit-tested against committed HTML fixtures
@@ -30,16 +32,18 @@ Built with **Rust → WebAssembly** ([Leptos](https://leptos.dev) CSR +
         app/public/data/. One parser everywhere: one source of truth.
 ```
 
-### How the app gets data (the CORS reality)
+### How "Sync now" gets data (the CORS reality)
 
 `cmi.ac.in` sends no `Access-Control-Allow-Origin` header, so a browser on a
-GitHub Pages origin cannot fetch the pages directly. The app walks a tiered
+GitHub Pages origin cannot fetch the pages directly. Sync walks a tiered
 source chain, each tier labeled for provenance in the sync pill and the
-developer-mode fetch log:
+developer-mode fetch log. For speed, each tier fetches both pages **in
+parallel**, and the proxy tier **races all relays at once** — the first
+valid response wins:
 
-1. **direct** — a cheap 5 s attempt at the CMI URLs (in case CORS ever opens up)
-2. **proxy** — public CORS relays (see `app/src/fetch.rs`), every response
-   sanity-checked before being trusted
+1. **direct** — a cheap 4 s attempt at the CMI URLs (in case CORS ever opens up)
+2. **proxy** — public CORS relays raced in parallel (see `app/src/fetch.rs`),
+   every response sanity-checked before being trusted
 3. **mirror** — same-origin `data/latest.json` + raw HTML copies committed by
    the `sync.yml` cron
 4. **bundled** — a snapshot compiled in at build time from the fixtures
@@ -64,6 +68,29 @@ stored HTML on next load without refetching (bump `PARSER_VERSION` in
 `?c=TOC,QCOM,MFD` reproduces a selection anywhere; `&s=<lz-string>` also
 carries meeting overrides ("Share including my custom times"). When both are
 present, `s` wins. The query stays *before* the hash: `…/?c=TOC#/`.
+
+### Everyday use
+
+- **Edit layout** (My timetable / Master grid toolbars) turns on drag & drop
+  — chips are deliberately not draggable outside edit mode so touch
+  scrolling and clicks stay accident-free. Keyboard alternative while
+  editing: focus a chip, press `M`, arrows, `Enter`.
+- Deselecting a course **keeps** its custom times, so re-adding it (or
+  spotting it in the master grid) doesn't silently revert a move. Remove
+  custom times explicitly per meeting, per course, or in **My data**.
+- In the master grid an **ⓘ** button opens full course details, and
+  unselected courses that would clash with your current timetable carry a
+  **⚠** marker; adding a clashing course warns immediately (never blocks).
+- Credits: CMI states credits only exceptionally; unstated courses count as
+  **4 credits** (marked "assumed" in the details view).
+
+### Developer mode (hidden endpoint)
+
+Developer mode is not linked anywhere in the UI. Open it by navigating to
+the **`#/developer`** endpoint directly, e.g.
+`https://<host>/<repo>/#/developer` (or `http://127.0.0.1:8080/#/developer`
+during development). It exposes the fetch log, parse reports, cache
+inspector, raw-HTML viewer and fail-closed simulators.
 
 ### A note on routing (deliberate deviation)
 
@@ -101,6 +128,9 @@ cargo test --workspace
 
 # regenerate the .ics golden after an intentional format change
 UPDATE_GOLDEN=1 cargo test -p cmi-timetable-core --test ics_tests
+
+# end-to-end browser tests (Selenium + headless Chromium) — see e2e/README.md
+python e2e/test_app.py
 
 # run the mirror publisher locally (writes app/public/data/)
 cargo run -p cmi-timetable-sync

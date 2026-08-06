@@ -71,6 +71,7 @@ fn init_app() -> (App, bool) {
         move_mode: RwSignal::new(None),
         force_tier: RwSignal::new(None),
         announce: RwSignal::new(String::new()),
+        edit_mode: RwSignal::new(false),
     };
     provide_context(app);
     (app, corrupt)
