@@ -278,4 +278,12 @@ regenerates the .ics golden.
   branch Pages works) and was failing repeatedly during their major outage
   (15–19 min, then error), so publication is retried until the live URL
   serves the new build. Reminder for future rounds: a republish push CANCELS
-  an in-flight Pages build, so never re-trigger while one is running.
+  an in-flight Pages build, so never re-trigger while one is running; prefer
+  `gh api -X POST repos/<slug>/pages/builds` (queues a build, no push, no
+  cancel churn). Their failure reason is unambiguous — "The job was not
+  acquired by Runner of type hosted even after multiple attempts" — so
+  nothing about the artifact is at fault. The artifact itself was verified
+  independently of GitHub by serving the exact `origin/gh-pages` tree at the
+  same `/cmi-timetable/` subpath with DNS blackholed: boots, auto-syncs from
+  its own mirror tier, real-touch long-press drag lands without deselecting,
+  0 unexpected console errors (scratchpad/verify_artifact.py).
