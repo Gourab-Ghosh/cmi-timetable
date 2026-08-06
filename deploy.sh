@@ -3,6 +3,7 @@
 # runners in the path, so a GitHub Actions outage can never block a release.
 #
 #   ./deploy.sh                  # test + build + publish
+#   ./deploy.sh --push           # also push main first (ship code + site)
 #   ./deploy.sh --skip-tests     # publish without running the test suite
 #   ./deploy.sh --allow-stale    # publish even if origin/main is ahead
 #
@@ -34,16 +35,22 @@ BRANCH="gh-pages"
 
 SKIP_TESTS=0
 ALLOW_STALE=0
+PUSH_MAIN=0
 for arg in "$@"; do
     case "$arg" in
         --skip-tests)  SKIP_TESTS=1 ;;
         --allow-stale) ALLOW_STALE=1 ;;
-        -h|--help) sed -n '2,25p' "$0"; exit 0 ;;
+        --push)        PUSH_MAIN=1 ;;
+        -h|--help) sed -n '2,26p' "$0"; exit 0 ;;
         *) echo "unknown option: $arg (try --help)" >&2; exit 2 ;;
     esac
 done
 
 command -v git >/dev/null || { echo "git is required" >&2; exit 1; }
+if [ "$PUSH_MAIN" = 1 ]; then
+    echo "==> pushing $(git rev-parse --abbrev-ref HEAD) to origin"
+    git push origin HEAD
+fi
 ORIGIN=$(git remote get-url origin)
 REPO_NAME=$(basename -s .git "$ORIGIN")
 PUBLIC_URL="${PUBLIC_URL:-/$REPO_NAME/}"

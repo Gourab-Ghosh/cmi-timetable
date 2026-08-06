@@ -18,11 +18,38 @@ fn iso_from_epoch_ms(ms: f64) -> String {
     )
 }
 
+/// Files whose change means HEAD moved: `.git/HEAD` plus, when HEAD is a
+/// symbolic ref, the branch file it points at. Missing files are skipped
+/// (tarball builds, git worktrees where `.git` is a file).
+fn git_stamp_deps() -> Vec<String> {
+    let head = std::path::Path::new("../.git/HEAD");
+    if !head.is_file() {
+        return Vec::new();
+    }
+    let mut deps = vec!["../.git/HEAD".to_string()];
+    if let Ok(text) = std::fs::read_to_string(head) {
+        if let Some(git_ref) = text.strip_prefix("ref: ") {
+            let path = format!("../.git/{}", git_ref.trim());
+            if std::path::Path::new(&path).is_file() {
+                deps.push(path);
+            }
+        }
+    }
+    deps
+}
+
 fn main() {
     let build_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_millis() as f64;
+
+    // Without these, cargo only reruns this script when the package's own
+    // files change, so the stamp keeps reporting the commit it was first
+    // built at.
+    for path in git_stamp_deps() {
+        println!("cargo:rerun-if-changed={path}");
+    }
 
     let git_commit = Command::new("git")
         .args(["rev-parse", "--short", "HEAD"])

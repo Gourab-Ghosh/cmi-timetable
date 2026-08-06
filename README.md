@@ -187,9 +187,14 @@ Deploys are **local-first** — GitHub-hosted runners are not in the deploy
 path, so a GitHub Actions outage can never block a release:
 
 ```sh
-./deploy.sh               # test + build + publish
-./deploy.sh --skip-tests
+./deploy.sh               # test + build + publish the site
+./deploy.sh --push        # push the branch first, then publish (ship both)
+./deploy.sh --skip-tests  # skip the test suite
 ```
+
+`--push` is the everyday "ship it" command: it pushes your commits and
+updates the live site in one step. (A bare `git push` no longer touches the
+site — that is the point: nothing on GitHub's side can fail a release.)
 
 The script builds with Trunk inside a **temporary Docker container**
 (`rust:1`; it falls back to a plain local build when Docker is absent) and
