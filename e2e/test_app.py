@@ -532,6 +532,102 @@ def t20_url_codes_any_case(app):
     assert "Unknown course code" not in app.d.find_element(By.TAG_NAME, "body").text
 
 
+def t21_halls_drag_moves_hall_and_slot(app):
+    """In the Halls view, dragging a course to another row/column moves it
+    into that hall AND slot (edit mode required)."""
+    app.boot("/?c=TOC")
+    app.open_tab("Halls")
+    section = app.wait_css("section[aria-label='Lecture halls']")
+    section.find_element(
+        By.XPATH, ".//div[@role='group'][@aria-label='Day']//button[normalize-space()='Tue']"
+    ).click()
+    src_cell = "td[data-hall='Lecture Hall 803'][data-slot='550']"
+    dst_cell = "td[data-hall='Seminar Hall'][data-slot='840']"
+    app.wait_css(f"{src_cell} button.chip[aria-label^='TOC,']")
+
+    # Inert without edit mode.
+    app.drag(app.chip("TOC", src_cell), app.css(dst_cell))
+    assert "Moved" not in app.toasts_text()
+    assert not app.chips("TOC", dst_cell)
+
+    section.find_element(By.XPATH, ".//button[contains(.,'Edit layout')]").click()
+    app.drag(app.chip("TOC", src_cell), app.css(dst_cell))
+    app.wait_toast("Moved TOC to Tue 14:00–15:15 · Seminar Hall")
+    # The timetable reflects the new hall and time.
+    app.open_tab("My timetable")
+    moved = app.wait_css(
+        "td[data-day='1'][data-slot='840'] button.chip[aria-label^='TOC,']"
+    )
+    assert "Seminar Hall" in moved.get_attribute("aria-label")
+    app.xpath("//button[contains(.,'1 change')]")
+
+
+def t22_filter_menu_keeps_focus_and_scroll(app):
+    """Ticking a filter checkbox must not rebuild the menu: focus stays on
+    the input, the menu keeps its scroll position, the page doesn't move."""
+    app.boot("/")
+    app.open_tab("Catalog")
+    app.wait_css("section[aria-label='Catalog'] .filterbar")
+    app.css_all(".filterbar details.facet > summary")[1].click()  # Instructor
+    app.wait_css("details.facet[open] .menu")
+    app.d.execute_script(
+        "document.querySelector('details.facet[open] .menu').scrollTop = 150;"
+    )
+    box = app.css_all("details.facet[open] .menu label.opt input")[10]
+    app.d.execute_script("arguments[0].scrollIntoView({block:'nearest'});", box)
+    scroll_before = app.d.execute_script(
+        "return document.querySelector('details.facet[open] .menu').scrollTop;"
+    )
+    box.click()
+    time.sleep(0.5)
+    state = app.d.execute_script("""
+        const menu = document.querySelector('details.facet[open] .menu');
+        return {
+            open: !!menu,
+            menuScroll: menu ? menu.scrollTop : null,
+            pageY: window.scrollY,
+            focusedIsInput: document.activeElement
+                && document.activeElement.tagName === 'INPUT',
+            checked: document.querySelectorAll(
+                'details.facet[open] .menu input:checked').length,
+        };
+    """)
+    assert state["open"], "menu must stay open"
+    assert state["menuScroll"] == scroll_before, state
+    assert state["pageY"] == 0, state
+    assert state["focusedIsInput"], "focus must stay on the clicked checkbox"
+    assert state["checked"] == 1, state
+
+
+def t23_master_grid_marks_selected(app):
+    """Selected courses are unmistakable in the master grid: ✓ mark, accent
+    ring, and an aria hint."""
+    app.boot("/?c=TOC")
+    app.open_tab("Master grid")
+    app.wait_css("section[aria-label='Master grid'] table.tt")
+    toc = app.chip("TOC")
+    assert toc.find_elements(By.CSS_SELECTOR, ".sel-mark"), "TOC needs the ✓ mark"
+    assert "selected" in toc.get_attribute("class")
+    assert "in your timetable" in toc.get_attribute("aria-label")
+    nlp = app.chip("NLP")
+    assert not nlp.find_elements(By.CSS_SELECTOR, ".sel-mark")
+    assert "in your timetable" not in nlp.get_attribute("aria-label")
+
+
+def t24_toast_pauses_while_hovered(app):
+    """Toasts don't vanish mid-read: hovering pauses auto-dismiss."""
+    app.boot("/")
+    app.open_tab("Catalog")
+    app.wait_css("section[aria-label='Catalog']")
+    app.xpath("//div[contains(@class,'card')][1]//button[normalize-space()='Add']").click()
+    toast = app.wait_css(".toasts .toast")
+    ActionChains(app.d).move_to_element(toast).perform()
+    time.sleep(7.5)  # well past the 6 s auto-dismiss
+    assert app.css_all(".toasts .toast"), "hovered toast must not auto-dismiss"
+    ActionChains(app.d).move_by_offset(-300, -200).perform()  # leave the toast
+    app.wait_gone(".toasts .toast", timeout=10)
+
+
 TESTS = [
     t01_header_sync_button_and_hidden_dev,
     t02_developer_endpoint_only,
@@ -553,6 +649,10 @@ TESTS = [
     t18_overwrites_panel_and_remove_all,
     t19_add_extra_meetings,
     t20_url_codes_any_case,
+    t21_halls_drag_moves_hall_and_slot,
+    t22_filter_menu_keeps_focus_and_scroll,
+    t23_master_grid_marks_selected,
+    t24_toast_pauses_while_hovered,
 ]
 
 

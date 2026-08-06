@@ -131,6 +131,9 @@ pub fn chip(app: App, p: ChipProps) -> impl IntoView {
             aria.push_str(", overridden");
         }
     }
+    if selected {
+        aria.push_str(", in your timetable");
+    }
     if !clash_with.is_empty() {
         aria.push_str(&format!(", clashes with {}", clash_with.join(", ")));
     }
@@ -207,6 +210,8 @@ pub fn chip(app: App, p: ChipProps) -> impl IntoView {
                 }
             }
         >
+            {(selected && p.from_master)
+                .then(|| view! { <span class="sel-mark" aria-hidden="true">"✓"</span> })}
             {p.warn_wont_fit
                 .then(|| view! { <span class="wontfit" aria-hidden="true">"⚠"</span> })}
             <span class="code">{p.code.clone()}</span>
@@ -439,7 +444,15 @@ pub fn Toasts() -> impl IntoView {
                     .map(|toast| {
                         let id = toast.id;
                         view! {
-                            <div class="toast">
+                            // Reading pace beats the timer: hovering or
+                            // focusing a toast pauses its auto-dismiss.
+                            <div
+                                class="toast"
+                                on:mouseenter=move |_| app.set_toast_hovered(id, true)
+                                on:mouseleave=move |_| app.set_toast_hovered(id, false)
+                                on:focusin=move |_| app.set_toast_hovered(id, true)
+                                on:focusout=move |_| app.set_toast_hovered(id, false)
+                            >
                                 <span>{toast.text.clone()}</span>
                                 {toast
                                     .undo
@@ -565,17 +578,32 @@ pub fn DragGhost() -> impl IntoView {
 // Filter bar (Catalog + Master grid)
 // ---------------------------------------------------------------------------
 
+/// One facet checkbox. The input's checked state is kept in sync by an
+/// ISOLATED Effect that pokes the DOM node directly: a reactive
+/// `prop:checked` closure would subscribe the surrounding menu closure to
+/// the filters signal during its first (build-time) run, so every tick
+/// would rebuild the whole menu — stealing focus and scroll anchoring
+/// (the "page scrolls away while filtering" bug).
 fn facet_checkbox(
     app: App,
     label: String,
-    checked: bool,
+    checked: impl Fn() -> bool + Send + Sync + 'static,
     on_toggle: impl Fn(&mut Filters, bool) + Send + Sync + 'static,
 ) -> impl IntoView {
+    let node = NodeRef::<leptos::html::Input>::new();
+    let initial = untrack(|| checked());
+    Effect::new(move |_| {
+        let value = checked();
+        if let Some(input) = node.get() {
+            input.set_checked(value);
+        }
+    });
     view! {
         <label class="opt">
             <input
+                node_ref=node
                 type="checkbox"
-                prop:checked=checked
+                prop:checked=initial
                 on:change=move |ev| {
                     let on = event_target_checked(&ev);
                     app.update_filters(|f| on_toggle(f, on));
@@ -653,11 +681,12 @@ pub fn filter_bar(app: App, result_count: Signal<usize>) -> impl IntoView {
                             .iter()
                             .map(|b| {
                                 let code = b.code.clone();
+                                let code_checked = code.clone();
                                 let code2 = code.clone();
                                 facet_checkbox(
                                     app,
                                     format!("{} — {}", b.code, b.title),
-                                    app.filters().branches.contains(&code),
+                                    move || app.filters().branches.contains(&code_checked),
                                     move |f, on| toggle_vec(&mut f.branches, code2.clone(), on),
                                 )
                             })
@@ -681,11 +710,12 @@ pub fn filter_bar(app: App, result_count: Signal<usize>) -> impl IntoView {
                         names
                             .into_iter()
                             .map(|name| {
+                                let n_checked = name.clone();
                                 let n2 = name.clone();
                                 facet_checkbox(
                                     app,
                                     name.clone(),
-                                    app.filters().instructors.contains(&name),
+                                    move || app.filters().instructors.contains(&n_checked),
                                     move |f, on| toggle_vec(&mut f.instructors, n2.clone(), on),
                                 )
                             })
@@ -705,7 +735,7 @@ pub fn filter_bar(app: App, result_count: Signal<usize>) -> impl IntoView {
                                 facet_checkbox(
                                     app,
                                     day.full().to_string(),
-                                    app.filters().days.contains(&day),
+                                    move || app.filters().days.contains(&day),
                                     move |f, on| toggle_vec(&mut f.days, day, on),
                                 )
                             })
@@ -727,7 +757,7 @@ pub fn filter_bar(app: App, result_count: Signal<usize>) -> impl IntoView {
                                 facet_checkbox(
                                     app,
                                     slot.label(),
-                                    app.filters().slot_starts.contains(&start),
+                                    move || app.filters().slot_starts.contains(&start),
                                     move |f, on| toggle_vec(&mut f.slot_starts, start, on),
                                 )
                             })
@@ -745,12 +775,12 @@ pub fn filter_bar(app: App, result_count: Signal<usize>) -> impl IntoView {
                             .halls
                             .iter()
                             .map(|hall| {
-                                let h = hall.clone();
+                                let h_checked = hall.clone();
                                 let h2 = hall.clone();
                                 facet_checkbox(
                                     app,
                                     hall.clone(),
-                                    app.filters().halls.contains(&h),
+                                    move || app.filters().halls.contains(&h_checked),
                                     move |f, on| toggle_vec(&mut f.halls, h2.clone(), on),
                                 )
                             })
@@ -775,11 +805,12 @@ pub fn filter_bar(app: App, result_count: Signal<usize>) -> impl IntoView {
                             .into_iter()
                             .map(|n| {
                                 let value = n.to_string();
+                                let v_checked = value.clone();
                                 let v2 = value.clone();
                                 facet_checkbox(
                                     app,
                                     format!("{value} credits"),
-                                    app.filters().credits.contains(&value),
+                                    move || app.filters().credits.contains(&v_checked),
                                     move |f, on| toggle_vec(&mut f.credits, v2.clone(), on),
                                 )
                             })
@@ -799,11 +830,12 @@ pub fn filter_bar(app: App, result_count: Signal<usize>) -> impl IntoView {
                     ]
                         .into_iter()
                         .map(|(key, label)| {
+                            let k_checked = key.to_string();
                             let k2 = key.to_string();
                             facet_checkbox(
                                 app,
                                 label.to_string(),
-                                app.filters().flags.contains(&key.to_string()),
+                                move || app.filters().flags.contains(&k_checked),
                                 move |f, on| toggle_vec(&mut f.flags, k2.clone(), on),
                             )
                         })

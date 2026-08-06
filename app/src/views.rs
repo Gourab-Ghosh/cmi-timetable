@@ -7,12 +7,15 @@ use crate::ui::{
     ChipProps,
 };
 use leptos::prelude::*;
-use ttcore::model::{Course, Day, Meeting, ScheduleStatus, Slot};
+use ttcore::model::{Course, Day, Meeting, ScheduleStatus, Slot, Snapshot};
 
 pub fn planner(app: App) -> impl IntoView {
+    // Memoized: prefs carries filters/density too, and a filter change must
+    // not rebuild the whole tab (that would reset scroll and focus).
+    let tab = Memo::new(move |_| app.prefs.with(|p| p.tab));
     view! {
         {what_changed_panel(app)}
-        {move || match app.prefs.with(|p| p.tab) {
+        {move || match tab.get() {
             Tab::MyTimetable => my_timetable(app).into_any(),
             Tab::MyCourses => my_courses(app).into_any(),
             Tab::MasterGrid => master_grid(app).into_any(),
@@ -848,8 +851,8 @@ fn master_grid(app: App) -> impl IntoView {
                 </button>
             </div>
             <p class="muted small" style="margin:0 0 0.6rem">
-                "Click a course to add or remove it · ⓘ details · ⚠ clashes with \
-                 your timetable · rearrange with ✎ Edit layout"
+                "Click a course to add or remove it · ✓ in your timetable · ⓘ details \
+                 · ⚠ clashes with your timetable · rearrange with ✎ Edit layout"
             </p>
             {filter_bar(app, count)}
             <div
@@ -930,23 +933,25 @@ fn catalog(app: App) -> impl IntoView {
                 </span>
             </div>
             {filter_bar(app, count)}
+            // Keyed list: rows persist across filter changes, so the page
+            // keeps its scroll position and focus while filtering. The key
+            // fingerprints the content so a sync remounts changed rows.
+            <For
+                each=move || filtered.get()
+                key=|course| format!("{course:?}")
+                children=move |course| catalog_row(app, course)
+            />
             {move || {
-                let courses = filtered.get();
-                if courses.is_empty() {
-                    view! {
-                        <div class="empty panel">
-                            <p class="big">"No courses match."</p>
-                            <p>"Loosen a filter or clear the search to see more."</p>
-                        </div>
-                    }
-                        .into_any()
-                } else {
-                    courses
-                        .into_iter()
-                        .map(|course| catalog_row(app, course))
-                        .collect_view()
-                        .into_any()
-                }
+                filtered
+                    .with(|c| c.is_empty())
+                    .then(|| {
+                        view! {
+                            <div class="empty panel">
+                                <p class="big">"No courses match."</p>
+                                <p>"Loosen a filter or clear the search to see more."</p>
+                            </div>
+                        }
+                    })
             }}
         </section>
     }
@@ -1009,6 +1014,62 @@ fn catalog_row(app: App, course: Course) -> impl IntoView {
 // 5. Halls
 // ---------------------------------------------------------------------------
 
+/// A chip in the Halls grid: draggable (in edit mode) so a meeting can be
+/// moved to another hall row and/or time column in one gesture.
+fn hall_booking_chip(
+    app: App,
+    snapshot: &Snapshot,
+    code: &str,
+    day: Day,
+    slot: Slot,
+    hall: &str,
+) -> AnyView {
+    let Some(course) = snapshot.course(code) else {
+        // A booking whose code isn't in the catalog: plain reference chip.
+        return chip(app, ChipProps::list(code)).into_any();
+    };
+    // The official meeting this booking represents — matched on the override
+    // BASE, so an already-customised meeting drags with its existing
+    // override id instead of spawning a second one.
+    let booking = Meeting {
+        day,
+        slot,
+        hall: Some(hall.to_string()),
+        temp_booking: false,
+    };
+    let eff = app
+        .effective_meetings(course)
+        .into_iter()
+        .find(|e| {
+            e.base.as_ref().is_some_and(|b| {
+                b.day == day && b.slot == slot && b.hall.as_deref() == Some(hall)
+            })
+        })
+        .unwrap_or(EffMeeting {
+            meeting: booking.clone(),
+            overridden: false,
+            ov_id: None,
+            base: Some(booking),
+            user_created: false,
+        });
+    chip(
+        app,
+        ChipProps {
+            code: code.to_string(),
+            eff: Some(eff),
+            show_hall: false,
+            draggable: true,
+            // Dropping an unselected course adds it (like the master grid)
+            // and selected courses carry the ✓ mark here too.
+            from_master: true,
+            click: ChipClick::Details,
+            sublabel: None,
+            warn_wont_fit: false,
+        },
+    )
+    .into_any()
+}
+
 fn halls_view(app: App) -> impl IntoView {
     let finder_day = RwSignal::new(None::<usize>); // day index
     let finder_start = RwSignal::new(None::<u16>); // slot start_min
@@ -1042,7 +1103,13 @@ fn halls_view(app: App) -> impl IntoView {
                     }}
                 </div>
                 <div class="grow"></div>
+                {custom_changes_pill(app)}
+                {edit_toggle(app)}
             </div>
+            <p class="muted small" style="margin:0 0 0.6rem">
+                "CMI's official hall allocation · with ✎ Edit layout on, drag a \
+                 course to another hall or time — ✓ marks your courses"
+            </p>
 
             <div class="grid-scroll">
                 <table class="tt">
@@ -1074,25 +1141,49 @@ fn halls_view(app: App) -> impl IntoView {
                                                 .slot_grid
                                                 .iter()
                                                 .map(|slot| {
+                                                    let slot = *slot;
+                                                    let hall_hl = hall.clone();
                                                     let bookings: Vec<_> = snapshot
                                                         .hall_bookings
                                                         .iter()
                                                         .filter(|b| {
-                                                            b.hall == hall && b.day == day && b.slot == *slot
+                                                            b.hall == hall && b.day == day && b.slot == slot
                                                         })
                                                         .cloned()
                                                         .collect();
                                                     view! {
-                                                        <td>
+                                                        <td
+                                                            data-day=day.index().to_string()
+                                                            data-slot=slot.start_min.to_string()
+                                                            data-hall=hall.clone()
+                                                            class:drop-ok=move || {
+                                                                app.drag.with(|d| {
+                                                                    d.as_ref().is_some_and(|d| {
+                                                                        d.started
+                                                                            && d.over == Some((day, slot.start_min))
+                                                                            && d.over_hall.as_deref()
+                                                                                == Some(hall_hl.as_str())
+                                                                    })
+                                                                })
+                                                            }
+                                                        >
                                                             <div class="sidebyside">
                                                                 {bookings
                                                                     .into_iter()
                                                                     .map(|b| {
+                                                                        let hall_chip = hall.clone();
                                                                         view! {
                                                                             {b.codes
                                                                                 .iter()
                                                                                 .map(|code| {
-                                                                                    chip(app, ChipProps::list(code)).into_any()
+                                                                                    hall_booking_chip(
+                                                                                        app,
+                                                                                        &snapshot,
+                                                                                        code,
+                                                                                        day,
+                                                                                        slot,
+                                                                                        &hall_chip,
+                                                                                    )
                                                                                 })
                                                                                 .collect_view()}
                                                                             {b.temp

@@ -161,6 +161,14 @@ pub struct Toast {
     pub undo: bool,
 }
 
+thread_local! {
+    /// Toasts currently under the pointer or holding keyboard focus —
+    /// auto-dismiss pauses for them so the reader sets the pace, not the
+    /// timer. Deliberately NOT a signal: hover must not re-render toasts.
+    static HOVERED_TOASTS: std::cell::RefCell<std::collections::HashSet<u64>> =
+        std::cell::RefCell::new(std::collections::HashSet::new());
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum BannerKind {
     Info,
@@ -208,6 +216,9 @@ pub struct DragState {
     pub x: f64,
     pub y: f64,
     pub over: Option<(Day, u16)>,
+    /// Set when hovering a Halls-view cell: dropping there also moves the
+    /// meeting into that row's hall.
+    pub over_hall: Option<String>,
     /// Touch drags lift only after a 350 ms long-press.
     pub awaiting_longpress: bool,
 }
@@ -342,12 +353,29 @@ impl App {
         let toasts = self.toasts;
         leptos::task::spawn_local(async move {
             gloo_timers::future::TimeoutFuture::new(6000).await;
+            // A hovered (or focused) toast stays until the reader lets go.
+            while HOVERED_TOASTS.with(|h| h.borrow().contains(&id)) {
+                gloo_timers::future::TimeoutFuture::new(700).await;
+            }
             toasts.update(|t| t.retain(|x| x.id != id));
         });
     }
 
     pub fn dismiss_toast(&self, id: u64) {
+        HOVERED_TOASTS.with(|h| {
+            h.borrow_mut().remove(&id);
+        });
         self.toasts.update(|t| t.retain(|x| x.id != id));
+    }
+
+    pub fn set_toast_hovered(&self, id: u64, hovered: bool) {
+        HOVERED_TOASTS.with(|h| {
+            if hovered {
+                h.borrow_mut().insert(id);
+            } else {
+                h.borrow_mut().remove(&id);
+            }
+        });
     }
 
     pub fn set_banner(&self, kind: BannerKind, text: impl Into<String>) {

@@ -78,10 +78,12 @@ my custom changes"). When both are present, `s` wins. The query stays
 
 ### Everyday use
 
-- **Edit layout** (My timetable / Master grid toolbars) turns on drag & drop
-  — chips are deliberately not draggable outside edit mode so touch
-  scrolling and clicks stay accident-free. Keyboard alternative while
-  editing: focus a chip, press `M`, arrows, `Enter`.
+- **Edit layout** (My timetable / Master grid / Halls toolbars) turns on
+  drag & drop — chips are deliberately not draggable outside edit mode so
+  touch scrolling and clicks stay accident-free. Keyboard alternative while
+  editing: focus a chip, press `M`, arrows, `Enter`. In the **Halls** view a
+  drop targets a hall row *and* a time column, so one gesture moves a
+  meeting into a different hall and slot.
 - Deselecting a course **keeps** its custom times, so re-adding it (or
   spotting it in the master grid) doesn't silently revert a move. Remove
   custom times explicitly per meeting, per course, or in **My data**.
@@ -94,9 +96,12 @@ my custom changes"). When both are present, `s` wins. The query stays
 - **Any course can gain extra time slots**: "Add a meeting" (course card or
   details dialog) appends another weekly meeting; unscheduled courses get
   the same flow as "Give it a time".
-- In the master grid an **ⓘ** button opens full course details, and
-  unselected courses that would clash with your current timetable carry a
-  **⚠** marker; adding a clashing course warns immediately (never blocks).
+- In the master grid your selected courses are unmistakable — a **✓ mark
+  plus an accent ring** (never color alone); an **ⓘ** button opens full
+  course details, and unselected courses that would clash with your current
+  timetable carry a **⚠** marker; adding a clashing course warns immediately
+  (never blocks). Notifications pause their auto-dismiss while hovered or
+  focused, so there's always time to read (and hit Undo).
 - Credits: CMI states credits only exceptionally; unstated courses count as
   **4 credits** (marked "assumed"). The details dialog lets you **overwrite
   credits** per course (totals, filters and the catalog follow suit), with a

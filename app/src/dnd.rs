@@ -54,6 +54,7 @@ pub fn chip_pointer_down(app: App, ev: &web_sys::PointerEvent, spec: DragSpec) {
         x: ev.client_x() as f64,
         y: ev.client_y() as f64,
         over: None,
+        over_hall: None,
         awaiting_longpress: touch,
     };
     app.drag.set(Some(state));
@@ -75,12 +76,14 @@ pub fn chip_pointer_down(app: App, ev: &web_sys::PointerEvent, spec: DragSpec) {
     }
 }
 
-fn cell_under_point(x: f64, y: f64) -> Option<(Day, u16)> {
+/// (day, slot start, hall) under the pointer — hall only in the Halls view,
+/// whose cells carry a `data-hall` attribute.
+fn cell_under_point(x: f64, y: f64) -> Option<(Day, u16, Option<String>)> {
     let el = domx::document().element_from_point(x as f32, y as f32)?;
     let cell = el.closest("[data-day][data-slot]").ok().flatten()?;
     let day_idx: usize = cell.get_attribute("data-day")?.parse().ok()?;
     let start: u16 = cell.get_attribute("data-slot")?.parse().ok()?;
-    Some((*Day::ALL.get(day_idx)?, start))
+    Some((*Day::ALL.get(day_idx)?, start, cell.get_attribute("data-hall")))
 }
 
 fn edge_autoscroll(x: f64, y: f64) {
@@ -113,24 +116,41 @@ fn edge_autoscroll(x: f64, y: f64) {
 }
 
 /// The drop action shared by pointer drops and keyboard move mode.
-pub fn perform_drop(app: App, spec: &DragSpec, day: Day, slot_start: u16) {
+/// `target_hall` is set when dropping onto a Halls-view row: the meeting
+/// moves into that hall as well as that time.
+pub fn perform_drop(
+    app: App,
+    spec: &DragSpec,
+    day: Day,
+    slot_start: u16,
+    target_hall: Option<String>,
+) {
     let Some(slot) = app
         .snapshot
         .with_untracked(|s| s.slot_grid.iter().copied().find(|s| s.start_min == slot_start))
     else {
         return;
     };
+    let hall = target_hall.clone().or_else(|| spec.hall.clone());
     let to = Meeting {
         day,
         slot,
-        hall: spec.hall.clone(),
+        hall: hall.clone(),
         temp_booking: false,
     };
-    let where_label = format!("{} {}", day.short(), Slot::new(slot.start_min, slot.end_min).label());
+    let mut where_label =
+        format!("{} {}", day.short(), Slot::new(slot.start_min, slot.end_min).label());
+    if let Some(target) = &target_hall {
+        where_label.push_str(&format!(" · {target}"));
+    }
 
-    // Dropped back onto the official cell → reset any override.
+    // Dropped back onto the official cell (and, in the Halls view, the
+    // official hall) → reset any override.
     if let Some(base) = &spec.base {
-        if base.day == day && base.slot == slot {
+        if base.day == day
+            && base.slot == slot
+            && (target_hall.is_none() || base.hall == target_hall)
+        {
             if let Some(id) = spec.ov_id {
                 app.reset_override(id, Some(format!("{} back on CMI's time", spec.code)));
             }
@@ -186,7 +206,16 @@ fn on_pointer_move(app: App, ev: &web_sys::PointerEvent) {
     ev.prevent_default();
     d.x = x;
     d.y = y;
-    d.over = cell_under_point(x, y);
+    match cell_under_point(x, y) {
+        Some((day, start, hall)) => {
+            d.over = Some((day, start));
+            d.over_hall = hall;
+        }
+        None => {
+            d.over = None;
+            d.over_hall = None;
+        }
+    }
     edge_autoscroll(x, y);
     app.drag.set(Some(d));
 }
@@ -209,7 +238,7 @@ fn on_pointer_up(app: App, ev: &web_sys::PointerEvent) {
         })
         .forget();
         if let Some((day, slot_start)) = d.over {
-            perform_drop(app, &d.spec, day, slot_start);
+            perform_drop(app, &d.spec, day, slot_start, d.over_hall.clone());
         }
     }
 }
@@ -338,7 +367,7 @@ fn on_key_down(app: App, ev: &web_sys::KeyboardEvent) {
             "Enter" => {
                 if let Some(mm) = app.move_mode.get_untracked() {
                     app.move_mode.set(None);
-                    perform_drop(app, &mm.spec, mm.cursor.0, mm.cursor.1);
+                    perform_drop(app, &mm.spec, mm.cursor.0, mm.cursor.1, None);
                     app.say(format!("Dropped {}.", mm.spec.code));
                 }
                 ev.prevent_default();

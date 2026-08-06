@@ -20,7 +20,7 @@ DIST_DIR=../app/dist-e2e .venv/bin/python test_app.py
 Environment knobs: `CHROME_BIN` (default `/usr/bin/chromium`), `DIST_DIR`,
 `PORT`.
 
-Covered flows (20 tests): Sync-now header + hidden developer mode (URL
+Covered flows (24 tests): Sync-now header + hidden developer mode (URL
 endpoint only), `?c=` selection + clash badges/panel (any casing), unknown-
 code warning, credits defaulting to 4 and per-course credit overwrites,
 master-grid ⚠ would-clash markers and clash toast on add, the ⓘ details
@@ -28,8 +28,11 @@ button, drag & drop gated behind Edit layout, custom times surviving
 deselection and reloads, the unified overwrites list (Your changes panel +
 My data) with per-item and remove-all restore, filter dropdowns closing
 each other / on outside click / on Esc, adding extra weekly meetings to any
-course, undo/redo, "Give it a time" auto-selecting, and the free-hall
-finder requiring an explicit day + slot.
+course, undo/redo, "Give it a time" auto-selecting, the free-hall finder
+requiring an explicit day + slot, hall-and-slot drag & drop in the Halls
+view, filter menus keeping focus/scroll while ticking boxes, the ✓
+selected-course marker in the master grid, and toasts pausing while
+hovered.
 
 Each test starts from a wiped localStorage with the background sync
 suppressed, so everything runs deterministically against the bundled
