@@ -1,6 +1,8 @@
 /target
 /app/dist
 /app/dist-e2e
+/app/dist-deploy
+/.build-cache
 
 # Python tooling (e2e)
 __pycache__/

@@ -85,6 +85,8 @@ cd app && CARGO_TARGET_DIR=~/.rust-target-e2e trunk build --release --dist dist-
 cd e2e && DIST_DIR=../app/dist-e2e .venv/bin/python test_app.py
 # screenshots + print PDFs for design review (writes e2e/shots/, gitignored)
 cd e2e && .venv/bin/python shoot.py
+# deploy the site (Docker build → force-push gh-pages; no Actions involved)
+./deploy.sh            # or --skip-tests
 ```
 
 Dev server: background task `trunk serve --release` at
@@ -109,10 +111,16 @@ regenerates the .ics golden.
 - `app/public/data/` holds only a README — the CI cron (sync.yml) is the
   only writer of mirror data.
 - Published: `https://github.com/Gourab-Ghosh/cmi-timetable` (origin, ssh),
-  live at `https://gourab-ghosh.github.io/cmi-timetable/`. deploy.yml runs on
-  every push to main (tests → trunk build `--public-url /cmi-timetable/` →
-  actions/deploy-pages); sync.yml cron re-invokes it via workflow_call when
-  the mirror changes. Pages source = GitHub Actions (`build_type=workflow`).
+  live at `https://gourab-ghosh.github.io/cmi-timetable/`. Deploys are
+  LOCAL-FIRST: `./deploy.sh` builds in a temporary Docker container (rust:1;
+  falls back to a local build without Docker), runs tests, and force-pushes
+  the site as a SINGLE orphan commit to `gh-pages` (no build files on main,
+  no history on the branch). Pages source = branch `gh-pages` / root
+  (`build_type=legacy`). Caches in `.build-cache/` (gitignored). CI on
+  GitHub is best-effort only: ci.yml (tests on push), deploy.yml
+  (manual-dispatch remote fallback, same build → gh-pages), sync.yml (cron;
+  commits mirror to main, copies data/ straight onto gh-pages — no build),
+  retry.yml (one auto-rerun on infra failures).
 
 ## 7. Prompt log (append one entry per user round; newest last)
 
@@ -204,3 +212,17 @@ regenerates the .ics golden.
   touchmove preventDefault stops the scroll takeover, drag lands, no
   deselect. Gotcha: ChromeDriver mobileEmulation misplaces synthesized
   touches (coordinate transform) — use plain-window touch actions instead.
+- **R11 (local-first deploys):** GitHub's Actions+Pages major outage kept
+  failing the workflow deploys (runner acquisition / action-download / HTTP
+  timeouts — never our steps), so deploys no longer depend on GitHub-hosted
+  runners at all: new `./deploy.sh` builds in a temporary Docker container
+  (rust:1, caches in gitignored `.build-cache/`; local build fallback per
+  the user's spec), tests, then force-pushes the site as a single orphan
+  commit to `gh-pages`; Pages switched to `build_type=legacy` serving that
+  branch. main carries zero build artifacts (user requirement). deploy.yml
+  rewritten as manual-dispatch remote fallback (same build → gh-pages
+  push); new ci.yml tests every push; sync.yml now copies fresh mirror data
+  directly onto gh-pages (pure git, no rebuild) instead of workflow_call
+  redeploy; retry.yml watches all three. Self-hosted runner was considered
+  and rejected (security risk on a public repo; still depends on the Actions
+  control plane).

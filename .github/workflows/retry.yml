@@ -1,6 +1,6 @@
 # Auto-heal transient GitHub Actions infrastructure failures ("Service
 # Unavailable" while resolving actions at Set up job, runner outages, …).
-# When a deploy or sync run fails, retry its failed jobs ONCE — the
+# When a CI, deploy or sync run fails, retry its failed jobs ONCE — the
 # run_attempt guard stops the loop, so a genuinely broken build still fails
 # (and still emails) on the second attempt.
 
@@ -8,7 +8,7 @@ name: Retry transient failures
 
 on:
   workflow_run:
-    workflows: ["Deploy to GitHub Pages", "Sync CMI data mirror"]
+    workflows: ["CI", "Deploy to GitHub Pages", "Sync CMI data mirror"]
     types: [completed]
 
 permissions:

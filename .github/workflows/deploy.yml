@@ -1,20 +1,16 @@
-# Build the Leptos app with Trunk and deploy it to GitHub Pages.
-#
-# Also invoked by sync.yml (workflow_call) after the data mirror changes,
-# because pushes made with GITHUB_TOKEN do not trigger `push` workflows.
+# MANUAL fallback deploy. Deploys normally happen locally via ./deploy.sh
+# (build in Docker → force-push the gh-pages branch), which keeps
+# GitHub-hosted runners out of the deploy path entirely. Dispatch this
+# workflow only when a deploy is needed and no dev machine is available —
+# it builds the exact same way and pushes the same branch.
 
 name: Deploy to GitHub Pages
 
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
-  workflow_call:
 
 permissions:
-  contents: read
-  pages: write
-  id-token: write
+  contents: write
 
 concurrency:
   group: pages
@@ -24,7 +20,7 @@ env:
   TRUNK_VERSION: v0.21.14
 
 jobs:
-  build:
+  build-and-publish:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -54,18 +50,14 @@ jobs:
         working-directory: app
         run: trunk build --release --public-url "/${{ github.event.repository.name }}/"
 
-      - uses: actions/configure-pages@v5
-
-      - uses: actions/upload-pages-artifact@v3
-        with:
-          path: app/dist
-
-  deploy:
-    needs: build
-    runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    steps:
-      - id: deployment
-        uses: actions/deploy-pages@v4
+      - name: Publish as a single orphan commit on gh-pages
+        run: |
+          touch app/dist/.nojekyll
+          cd app/dist
+          git init -q -b gh-pages
+          git add -A
+          git -c user.name="deploy" -c user.email="actions@users.noreply.github.com" \
+              commit -qm "deploy: ${GITHUB_SHA::7} (remote dispatch)"
+          git push --force \
+            "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" \
+            gh-pages:gh-pages

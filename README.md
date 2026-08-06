@@ -183,17 +183,38 @@ cargo run -p cmi-timetable-sync
 
 ## Deploying
 
-Push to `main`: `.github/workflows/deploy.yml` runs the tests, builds with
-`--public-url "/<repo-name>/"` and deploys to GitHub Pages (enable Pages →
-"GitHub Actions" in the repo settings). For a **user/organization page**
-(`<user>.github.io` repo) change the public URL to `/` in `deploy.yml`, and
-adjust the `base` computation in `app/public/404.html` (comment inside).
+Deploys are **local-first** — GitHub-hosted runners are not in the deploy
+path, so a GitHub Actions outage can never block a release:
 
-`.github/workflows/sync.yml` (optional; the app works without it) runs the
-`/sync` binary every 6 hours, commits the validated mirror to
-`app/public/data/` and re-deploys via `workflow_call` (GITHUB_TOKEN pushes
-don't retrigger `push` workflows). A red sync run means the gate failed and
-the last good mirror stayed.
+```sh
+./deploy.sh               # test + build + publish
+./deploy.sh --skip-tests
+```
+
+The script builds with Trunk inside a **temporary Docker container**
+(`rust:1`; it falls back to a plain local build when Docker is absent) and
+force-pushes the result as a **single orphan commit** to the `gh-pages`
+branch. `main` never carries build artifacts and the branch keeps no
+history. Configure Pages once: Settings → Pages → deploy from branch →
+`gh-pages` / root (or `gh api -X PUT repos/<owner>/<repo>/pages -f
+build_type=legacy -f "source[branch]=gh-pages"`). For a
+**user/organization page** (`<user>.github.io` repo) run with
+`PUBLIC_URL=/`, and adjust the `base` computation in
+`app/public/404.html` (comment inside).
+
+The workflows that remain on GitHub's side are best-effort conveniences:
+
+- `ci.yml` — tests on every push; a red run never blocks the site.
+- `deploy.yml` — the same build+publish as `deploy.sh`, but
+  **manual-dispatch only**: a remote fallback for when no dev machine is
+  at hand.
+- `sync.yml` (optional; the app works without it) runs the `/sync` binary
+  every 6 hours, commits the validated mirror to `app/public/data/` and
+  copies the fresh data straight onto `gh-pages` — a pure git operation,
+  no rebuild. A red sync run means the gate failed and the last good
+  mirror stayed.
+- `retry.yml` — reruns a failed CI/deploy/sync run once, to absorb
+  transient GitHub infrastructure failures.
 
 ## Maintenance recipes
 

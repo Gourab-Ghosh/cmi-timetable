@@ -1,0 +1,31 @@
+# Tests on every push. Deploys are separate (local ./deploy.sh → gh-pages),
+# so a red run here never blocks the site — it just tells you main broke.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust (with the wasm target)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Run tests
+        run: cargo test --workspace
+
+      - name: Check the app compiles for wasm
+        run: cargo check -p cmi-timetable-app --target wasm32-unknown-unknown

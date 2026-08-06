@@ -5,6 +5,10 @@
 # The /sync binary fetches both CMI pages natively (no CORS server-side),
 # runs the SAME parser and validation gate as the app, and exits non-zero on
 # any failure — a red run means the last good mirror stayed in place.
+#
+# When the mirror changes, the fresh data files are copied straight onto the
+# gh-pages branch (the deployed site) — no wasm rebuild needed, and the next
+# local ./deploy.sh (which builds from main) carries them anyway.
 
 name: Sync CMI data mirror
 
@@ -48,13 +52,42 @@ jobs:
             echo "changed=true" >> "$GITHUB_OUTPUT"
           fi
 
-  # GITHUB_TOKEN pushes don't trigger the deploy workflow's `push` event, so
-  # call it explicitly when the mirror changed.
-  redeploy:
+  # Copy main's mirror onto the deployed site (gh-pages branch) directly — a
+  # pure git operation, no build. This runs on EVERY sync, not just when the
+  # data changed: local deploys replace gh-pages wholesale, so an older
+  # checkout can roll the site's data back, and this is what heals it.
+  publish-data:
     needs: sync
-    if: needs.sync.outputs.changed == 'true'
-    uses: ./.github/workflows/deploy.yml
+    runs-on: ubuntu-latest
     permissions:
-      contents: read
-      pages: write
-      id-token: write
+      contents: write
+    # Serialize against the deploy workflow: both write gh-pages.
+    concurrency:
+      group: pages
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Refresh data/ on the gh-pages branch
+        run: |
+          # Only a genuinely missing branch is a reason to skip quietly; any
+          # other git failure must fail the job so retry.yml can heal it.
+          if ! git ls-remote --exit-code origin refs/heads/gh-pages >/dev/null; then
+            echo "no gh-pages branch yet (nothing deployed) — skipping"
+            exit 0
+          fi
+          git fetch origin gh-pages
+          git worktree add ../pages FETCH_HEAD
+          rm -rf ../pages/data
+          cp -r app/public/data ../pages/data
+          cd ../pages
+          git add -A data
+          if git diff --cached --quiet; then
+            echo "site data already current"
+            exit 0
+          fi
+          git -c user.name="cmi-timetable-sync" \
+              -c user.email="actions@users.noreply.github.com" \
+              commit -qm "data: refresh CMI mirror (site)"
+          git push origin HEAD:gh-pages
