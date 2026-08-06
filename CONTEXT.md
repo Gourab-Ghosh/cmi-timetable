@@ -108,6 +108,11 @@ regenerates the .ics golden.
   550/630/710/840/930/1020; 75 courses, 18 branches.
 - `app/public/data/` holds only a README — the CI cron (sync.yml) is the
   only writer of mirror data.
+- Published: `https://github.com/Gourab-Ghosh/cmi-timetable` (origin, ssh),
+  live at `https://gourab-ghosh.github.io/cmi-timetable/`. deploy.yml runs on
+  every push to main (tests → trunk build `--public-url /cmi-timetable/` →
+  actions/deploy-pages); sync.yml cron re-invokes it via workflow_call when
+  the mirror changes. Pages source = GitHub Actions (`build_type=workflow`).
 
 ## 7. Prompt log (append one entry per user round; newest last)
 
@@ -162,3 +167,7 @@ regenerates the .ics golden.
   ics-honors-overrides); harness gained boot(selection/overrides/
   raw_snapshot), a mutable fake mirror, and a downloads dir. The conflict
   dialog defaulting to "Use CMI's" is by design.
+- **R8 (publish):** created public repo `Gourab-Ghosh/cmi-timetable`, pushed
+  main, enabled GitHub Pages with the Actions source; deploy.yml (already
+  present) redeploys on every push. Added the live URL to README, fixed a
+  stale "bundled snapshot" comment in sync.yml.

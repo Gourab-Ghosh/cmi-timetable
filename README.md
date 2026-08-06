@@ -1,5 +1,7 @@
 # CMI Timetable Planner
 
+**Live:** <https://gourab-ghosh.github.io/cmi-timetable/>
+
 A **100% client-side** timetable planner for students of the Chennai
 Mathematical Institute. It parses CMI's two public timetable pages, lets you
 assemble your personal timetable (drag meetings around in edit mode, resolve

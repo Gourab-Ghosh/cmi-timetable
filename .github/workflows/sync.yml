@@ -1,6 +1,6 @@
 # Optional but recommended: refresh the same-origin data mirror (§2.3 tier 3)
-# every six hours. The app works fine without this workflow — it falls back
-# to direct/proxy fetching and the bundled snapshot.
+# every six hours. The app works without this workflow — it falls back to
+# direct/proxy fetching — but the mirror is the most reliable tier.
 #
 # The /sync binary fetches both CMI pages natively (no CORS server-side),
 # runs the SAME parser and validation gate as the app, and exits non-zero on
