@@ -19,7 +19,8 @@ and no committed mirror (fixtures exist only for tests/e2e seed).
 
 ## 2. Standing user rules (verbatim intent, do not violate)
 
-- "Don't access anything outside this folder" (plus scratchpad for temp).
+- "Don't access anything outside this folder" (temp files live outside the
+  repo and must never be committed).
 - Package installs: pacman first, `cargo install` only on failure.
 - Nothing about the CMI website may be hard-coded; process dynamically.
 - Keep the dev server running in the background for manual testing.
@@ -80,15 +81,16 @@ CARGO_TARGET_DIR=~/.rust-target-e2e cargo test --workspace
 # app build for e2e (never plain dist while trunk serve runs)
 cd app && CARGO_TARGET_DIR=~/.rust-target-e2e trunk build --release --dist dist-e2e
 # e2e (28 tests; self-generates seed via core example, needs cargo on PATH)
-cd e2e && DIST_DIR=../app/dist-e2e <venv>/bin/python test_app.py
-# screenshots for design review
-<scratchpad>/venv/bin/python <scratchpad>/shoot.py   # writes shots/*.png + print.pdf
+cd e2e && DIST_DIR=../app/dist-e2e .venv/bin/python test_app.py
+# screenshots + print PDFs for design review (writes e2e/shots/, gitignored)
+cd e2e && .venv/bin/python shoot.py
 ```
 
 Dev server: background task `trunk serve --release` at
 `http://127.0.0.1:8080/` (auto-rebuilds ~30 s after source changes).
-Scratchpad venv has selenium. `UPDATE_GOLDEN=1 cargo test -p
-cmi-timetable-core --test ics_tests` regenerates the .ics golden.
+The e2e venv (`e2e/.venv`, selenium only) serves both scripts.
+`UPDATE_GOLDEN=1 cargo test -p cmi-timetable-core --test ics_tests`
+regenerates the .ics golden.
 
 ## 6. Current state
 
@@ -117,7 +119,7 @@ cmi-timetable-core --test ics_tests` regenerates the .ics golden.
   "What changed" dialog, poster-style print stylesheet, copy pass.
 - **R4 (halls DnD + filter scroll + ✓):** halls drag & drop, dropdown
   focus/scroll root-cause fix (reactivity trap, §4), ✓+ring selected
-  marker, hover-paused toasts. e2e t21–t24. Commit 52784d1.
+  marker, hover-paused toasts. e2e t21–t24.
 - **R5 (this round):** removed ALL shipped data (bundled snapshot + committed
   mirror) → welcome/first-sync flow (views::welcome, SourceTier::None,
   app.no-data grid fix); fixed halls DnD not re-rendering (arrivals, §4);

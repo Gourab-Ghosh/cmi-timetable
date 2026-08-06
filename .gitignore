@@ -1,3 +1,9 @@
 /target
 /app/dist
 /app/dist-e2e
+
+# Python tooling (e2e)
+__pycache__/
+*.pyc
+e2e/.venv/
+e2e/shots/

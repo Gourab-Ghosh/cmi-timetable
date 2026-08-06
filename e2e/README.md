@@ -2,6 +2,8 @@
 
 `test_app.py` serves the built app and drives it with Selenium in headless
 Chromium — real pointer events, real localStorage, real drag & drop.
+`shoot.py` (same setup) captures design-review screenshots of every view
+plus the print PDFs into `shots/` (gitignored).
 
 ```sh
 # one-time setup
