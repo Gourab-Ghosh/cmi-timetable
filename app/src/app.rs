@@ -98,11 +98,21 @@ fn apply_url_state(app: App) {
         return;
     }
 
+    // Resolve incoming codes case-insensitively and canonicalize them to the
+    // catalog's own casing (whatever CMI uses) — people type "toc" in URLs.
     let snapshot = app.snapshot.get_untracked();
-    let (known, unknown): (Vec<String>, Vec<String>) = state
-        .selection
-        .into_iter()
-        .partition(|code| snapshot.course(code).is_some());
+    let mut known: Vec<String> = Vec::new();
+    let mut unknown: Vec<String> = Vec::new();
+    for code in state.selection {
+        match snapshot.course_ci(&code) {
+            Some(course) => {
+                if !known.contains(&course.code) {
+                    known.push(course.code.clone());
+                }
+            }
+            None => unknown.push(code),
+        }
+    }
 
     let shared_overrides = state.overrides;
     let differs = app.selection.with_untracked(|s| *s != known)
@@ -110,9 +120,8 @@ fn apply_url_state(app: App) {
     if differs {
         app.act("open shared link", move |sel, ovs| {
             *sel = known;
-            if let Some(items) = shared_overrides {
-                let next_id = items.iter().map(|o| o.id + 1).max().unwrap_or(0);
-                *ovs = OverridesStore { next_id, items };
+            if let Some(store) = shared_overrides {
+                *ovs = store;
             }
         });
     } else {

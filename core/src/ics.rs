@@ -88,8 +88,24 @@ fn fmt_time(min: u16) -> String {
     format!("{:02}{:02}00", min / 60, min % 60)
 }
 
-/// Per-course date range: honor "(starts 12 Aug)" and "(Oct-Nov)" when
-/// parseable, clamped to the requested range.
+/// Resolve a month token to a concrete date inside `[lo, hi]`. CMI notes
+/// name only months, never years; the year is whichever one puts the date
+/// inside the range, so year-crossing semesters (e.g. Dec–Mar) work too.
+fn month_date_in_range(
+    lo: CivilDate,
+    hi: CivilDate,
+    m: u8,
+    day_of: impl Fn(i32) -> u8,
+) -> Option<CivilDate> {
+    (lo.y..=hi.y)
+        .map(|y| CivilDate::new(y, m, day_of(y)))
+        .find(|d| *d >= lo && *d <= hi)
+}
+
+/// Per-course date range: honor "(starts 12 Aug)" and part-of-semester
+/// notes like "(Oct-Nov)" when parseable, clamped to the requested range.
+/// A note that cannot be placed inside the range is ignored — a slightly
+/// over-covering calendar beats silently missing events.
 fn course_range(
     course: &IcsCourse,
     range_start: CivilDate,
@@ -99,29 +115,43 @@ fn course_range(
     let mut end = range_end;
     if let Some((d, mon)) = &course.starts {
         if let Some(m) = month_from_token(mon) {
-            let day = (*d).clamp(1, last_day_of_month(range_start.y, m));
-            let candidate = CivilDate::new(range_start.y, m, day);
-            if candidate > start {
-                start = candidate;
+            let candidate = month_date_in_range(range_start, range_end, m, |y| {
+                (*d).clamp(1, last_day_of_month(y, m))
+            });
+            if let Some(candidate) = candidate {
+                if candidate > start {
+                    start = candidate;
+                }
             }
         }
     }
     if let Some(part) = &course.part_of_semester {
         let mut months = part.split(['-', '\u{2013}']);
         if let Some(m1) = months.next().and_then(month_from_token) {
-            let candidate = CivilDate::new(range_start.y, m1, 1);
-            if candidate > start {
-                start = candidate;
+            if let Some(candidate) = month_date_in_range(range_start, range_end, m1, |_| 1) {
+                if candidate > start {
+                    start = candidate;
+                }
             }
         }
         if let Some(m2) = months.next().and_then(month_from_token) {
-            let candidate = CivilDate::new(range_start.y, m2, last_day_of_month(range_start.y, m2));
-            if candidate < end {
-                end = candidate;
+            // Anchor the end month at or after the resolved start so a month
+            // that occurs twice in a long range picks the right year.
+            let candidate =
+                month_date_in_range(start, range_end, m2, |y| last_day_of_month(y, m2));
+            if let Some(candidate) = candidate {
+                if candidate < end {
+                    end = candidate;
+                }
             }
         }
     }
-    (start, end)
+    // Fail-safe: an inverted clamp must widen, never drop events silently.
+    if start > end {
+        (range_start, range_end)
+    } else {
+        (start, end)
+    }
 }
 
 pub fn build_ics(courses: &[IcsCourse], opts: &IcsOptions) -> String {
@@ -149,6 +179,11 @@ pub fn build_ics(courses: &[IcsCourse], opts: &IcsOptions) -> String {
     let mut sorted: Vec<&IcsCourse> = courses.iter().collect();
     sorted.sort_by(|a, b| a.code.cmp(&b.code));
 
+    // UIDs must be unique across the file; a course CAN meet twice at the
+    // same day+start (different halls, or user-added meetings), so the UID
+    // covers day, start, end and hall — plus a counter for exact repeats.
+    let mut seen_uids: std::collections::HashSet<String> = std::collections::HashSet::new();
+
     for course in sorted {
         let (start, end) = course_range(course, opts.range_start, opts.range_end);
         let mut meetings: Vec<&Meeting> = course.meetings.iter().collect();
@@ -162,13 +197,30 @@ pub fn build_ics(courses: &[IcsCourse], opts: &IcsOptions) -> String {
             let date = first.to_compact();
             // 23:59:59 IST on the last day == 18:29:59 UTC the same day.
             let until = format!("{}T182959Z", end.to_compact());
-            let uid = format!(
-                "{}-{}-{:02}{:02}@cmi-timetable",
+            let hall_slug: String = meeting
+                .hall
+                .as_deref()
+                .unwrap_or("tba")
+                .chars()
+                .filter(|c| c.is_ascii_alphanumeric())
+                .collect::<String>()
+                .to_ascii_lowercase();
+            let base_uid = format!(
+                "{}-{}-{:02}{:02}{:02}{:02}-{}@cmi-timetable",
                 course.code,
                 meeting.day.short(),
                 meeting.slot.start_min / 60,
                 meeting.slot.start_min % 60,
+                meeting.slot.end_min / 60,
+                meeting.slot.end_min % 60,
+                hall_slug,
             );
+            let mut uid = base_uid.clone();
+            let mut n = 1;
+            while !seen_uids.insert(uid.clone()) {
+                n += 1;
+                uid = format!("{base_uid}-{n}");
+            }
 
             push(&mut out, "BEGIN:VEVENT");
             push(&mut out, &format!("UID:{}", escape_text(&uid)));

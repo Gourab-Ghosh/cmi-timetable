@@ -325,3 +325,54 @@ fn snapshot_serde_round_trip() {
     let back: Snapshot = serde_json::from_str(&json).unwrap();
     assert_eq!(*snap, back);
 }
+
+/// The semester heading is matched loosely — CMI can reword it — and course
+/// names may contain colons (the halls legend splits at the LAST colon).
+#[test]
+fn label_and_legend_survive_rewording() {
+    use cmi_timetable_core::parse::{find_semester_label, parse_halls_legend_line};
+
+    // Loosened phrasing all resolve to a label.
+    assert_eq!(
+        find_semester_label("Timetable for August--November 2026").as_deref(),
+        Some("August--November 2026")
+    );
+    assert_eq!(
+        find_semester_label("Time Table of the Odd Semester 2026").as_deref(),
+        Some("the Odd Semester 2026")
+    );
+    assert_eq!(
+        find_semester_label("TIMETABLE FOR JAN-APR 2027").as_deref(),
+        Some("JAN-APR 2027")
+    );
+
+    // A colon inside the course name must not truncate it.
+    let entry =
+        parse_halls_legend_line("TQI : Topics: Quantum Information : R Rao").unwrap();
+    assert_eq!(entry.code, "TQI");
+    assert_eq!(entry.name, "Topics: Quantum Information");
+    assert_eq!(entry.instructors_raw.as_deref(), Some("R Rao"));
+
+    // The plain two-field form still works.
+    let plain = parse_halls_legend_line("RFLR : Reinforcement Learning : I Murugeswari")
+        .unwrap();
+    assert_eq!(plain.name, "Reinforcement Learning");
+    assert_eq!(plain.instructors_raw.as_deref(), Some("I Murugeswari"));
+}
+
+/// A page pair whose headings were reworded beyond recognition still passes
+/// the gate: the label is display-only, so (None, None) is warn-only.
+#[test]
+fn missing_labels_are_warn_only() {
+    let tt_reworded = TT.replace("Timetable", "Schedule").replace("timetable", "schedule");
+    let halls_reworded = HALLS.replace("Timetable", "Schedule").replace("timetable", "schedule");
+    let out = parse_html_pages(&tt_reworded, &halls_reworded, 0.0, SourceTier::Direct, false);
+    // Either the year-line fallback found a label, or the gate passed
+    // without one — a heading reword must never block a fresh semester.
+    assert!(
+        out.report.gate_passed(),
+        "reworded headings must not fail the gate: {:#?}",
+        out.report.gate
+    );
+    assert!(out.snapshot.is_some());
+}

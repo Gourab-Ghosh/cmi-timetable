@@ -2,7 +2,10 @@
 //! and days/halls run down the left column — never transposed.
 
 use crate::state::{App, Density, Dialog, EffMeeting, Tab};
-use crate::ui::{branch_chip, chip, edit_toggle, filter_bar, ChipClick, ChipProps};
+use crate::ui::{
+    branch_chip, chip, custom_changes_pill, edit_toggle, filter_bar, overrides_list, ChipClick,
+    ChipProps,
+};
 use leptos::prelude::*;
 use ttcore::model::{Course, Day, Meeting, ScheduleStatus, Slot};
 
@@ -193,6 +196,7 @@ fn my_timetable(app: App) -> impl IntoView {
                             .collect_view()
                     }}
                 </div>
+                {custom_changes_pill(app)}
                 {edit_toggle(app)}
                 <button
                     class="btn"
@@ -339,6 +343,28 @@ fn my_timetable(app: App) -> impl IntoView {
                     })
             }}
 
+            // Your changes — every overwrite of CMI data in one place, each
+            // showing the official value it replaces, with one-click removal.
+            {move || {
+                (app.custom_change_count() > 0)
+                    .then(|| {
+                        view! {
+                            <div class="panel noprint" data-testid="your-changes">
+                                <h3>
+                                    <span class="badge accent">"✎"</span>
+                                    " Your changes"
+                                </h3>
+                                <p class="muted small">
+                                    "These overwrite CMI's data in your timetable. Remove \
+                                     one to go back to the official value — every change \
+                                     is also undoable (Ctrl+Z)."
+                                </p>
+                                {overrides_list(app)}
+                            </div>
+                        }
+                    })
+            }}
+
             // Unscheduled tray
             {move || {
                 let items = unscheduled();
@@ -358,12 +384,6 @@ fn my_timetable(app: App) -> impl IntoView {
                                         .map(|course| {
                                             let code = course.code.clone();
                                             let give_code = code.clone();
-                                            let default_slot = app
-                                                .snapshot
-                                                .with(|s| {
-                                                    s.slot_grid.first().copied()
-                                                })
-                                                .unwrap_or(Slot::new(550, 625));
                                             view! {
                                                 <span style="display:inline-flex;align-items:center;gap:0.3rem">
                                                     {chip(
@@ -388,12 +408,7 @@ fn my_timetable(app: App) -> impl IntoView {
                                                                         course: give_code.clone(),
                                                                         ov_id: None,
                                                                         base: None,
-                                                                        init: Meeting {
-                                                                            day: Day::Mon,
-                                                                            slot: default_slot,
-                                                                            hall: None,
-                                                                            temp_booking: false,
-                                                                        },
+                                                                        init: app.default_meeting(),
                                                                         create: true,
                                                                     }),
                                                                 );
@@ -426,16 +441,30 @@ fn my_courses(app: App) -> impl IntoView {
         }
         let total: u32 = courses
             .iter()
-            .map(|c| u32::from(c.effective_credits()))
+            .map(|c| u32::from(app.course_credits(c)))
             .sum();
-        let assumed = courses.iter().filter(|c| c.credits_assumed()).count();
-        if assumed == 0 {
+        let custom = courses
+            .iter()
+            .filter(|c| app.credits_custom(&c.code).is_some())
+            .count();
+        let assumed = courses
+            .iter()
+            .filter(|c| c.credits_assumed() && app.credits_custom(&c.code).is_none())
+            .count();
+        let mut notes: Vec<String> = Vec::new();
+        if assumed > 0 {
+            notes.push(format!(
+                "4 assumed for {assumed} course{} CMI doesn't state",
+                if assumed == 1 { "" } else { "s" },
+            ));
+        }
+        if custom > 0 {
+            notes.push(format!("{custom} set by you"));
+        }
+        if notes.is_empty() {
             format!("Total credits: {total}")
         } else {
-            format!(
-                "Total credits: {total} (4 assumed for {assumed} course{} CMI doesn't state)",
-                if assumed == 1 { "" } else { "s" },
-            )
+            format!("Total credits: {total} ({})", notes.join(" · "))
         }
     };
 
@@ -479,6 +508,11 @@ fn course_card(app: App, course: Course) -> impl IntoView {
     let removed = app.is_removed_upstream(&code);
     let remove_code = code.clone();
     let reset_code = code.clone();
+    let cr_course = course.clone();
+    let cr_code = code.clone();
+    let cr_code_title = code.clone();
+    let cr_official = course.effective_credits();
+    let cr_assumed = course.credits_assumed();
     let notes = {
         let mut notes: Vec<String> = Vec::new();
         if let Some((d, m)) = &course.starts {
@@ -497,8 +531,23 @@ fn course_card(app: App, course: Course) -> impl IntoView {
                 <strong>{course.name.clone()}</strong>
                 <span class="muted">{course.instructors.join(" / ")}</span>
                 <div class="grow" style="flex:1"></div>
-                <span class="badge" title=if course.credits_assumed() { "assumed — CMI doesn't state it" } else { "" }>
-                    {format!("{} cr", course.effective_credits())}
+                <span
+                    class="badge"
+                    class:accent=move || app.credits_custom(&cr_code).is_some()
+                    title=move || {
+                        if app.credits_custom(&cr_code_title).is_some() {
+                            format!(
+                                "set by you — CMI: {cr_official}{}",
+                                if cr_assumed { " (assumed)" } else { "" },
+                            )
+                        } else if cr_assumed {
+                            "assumed — CMI doesn't state it".to_string()
+                        } else {
+                            String::new()
+                        }
+                    }
+                >
+                    {move || format!("{} cr", app.course_credits(&cr_course))}
                 </span>
             </div>
             <div class="row" style="margin-top:0.3rem">
@@ -529,6 +578,27 @@ fn course_card(app: App, course: Course) -> impl IntoView {
                     }
                 })}
             <div class="row" style="margin-top:0.4rem">
+                <button
+                    class="btn small"
+                    title="Give this course an extra weekly time slot"
+                    on:click={
+                        let add_code = code.clone();
+                        move |_| {
+                            app.dialog
+                                .set(
+                                    Some(Dialog::EditMeeting {
+                                        course: add_code.clone(),
+                                        ov_id: None,
+                                        base: None,
+                                        init: app.default_meeting(),
+                                        create: true,
+                                    }),
+                                );
+                        }
+                    }
+                >
+                    "Add a meeting"
+                </button>
                 {has_overrides
                     .then(|| {
                         let reset_code = reset_code.clone();
@@ -629,6 +699,7 @@ fn master_grid(app: App) -> impl IntoView {
                      timetable · turn on Edit layout to drag"
                 </span>
                 <div class="grow"></div>
+                {custom_changes_pill(app)}
                 {edit_toggle(app)}
                 <button
                     class="btn small"
@@ -819,7 +890,7 @@ fn halls_view(app: App) -> impl IntoView {
                 <h2 style="margin:0">"Halls"</h2>
                 <div class="seg" role="group" aria-label="Day">
                     {move || {
-                        app.grid_days()
+                        app.hall_days()
                             .into_iter()
                             .map(|d| {
                                 view! {
@@ -931,7 +1002,7 @@ fn halls_view(app: App) -> impl IntoView {
                             "Pick a day…"
                         </option>
                         {move || {
-                            app.grid_days()
+                            app.hall_days()
                                 .into_iter()
                                 .map(|d| {
                                     view! {

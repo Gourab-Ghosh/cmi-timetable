@@ -115,6 +115,67 @@ fn part_of_semester_clamps_range() {
 }
 
 #[test]
+fn year_crossing_semester_keeps_events() {
+    // A Dec–Mar semester crosses the calendar year: a "(Jan-Feb)" course
+    // must resolve its months into the FOLLOWING year, not vanish.
+    let course = IcsCourse {
+        code: "TQI".to_string(),
+        name: "Topics: Quantum Information".to_string(),
+        instructors: vec![],
+        branches: vec![],
+        meetings: vec![mtg(Day::Mon, 550, 625, "Lecture Hall 1")],
+        starts: None,
+        part_of_semester: Some("Jan-Feb".to_string()),
+    };
+    let opts = IcsOptions {
+        range_start: CivilDate::new(2027, 12, 1),
+        range_end: CivilDate::new(2028, 3, 31),
+        alarm: false,
+        app_url: String::new(),
+        dtstamp: "20271201T120000Z".to_string(),
+        calendar_name: "test".to_string(),
+    };
+    let ics = build_ics(&[course], &opts);
+    // First Monday on/after 1 Jan 2028 is 3 Jan 2028.
+    assert!(ics.contains("DTSTART;TZID=Asia/Kolkata:20280103T091000"), "{ics}");
+    // Ends within Feb 2028, not Feb of the start year.
+    assert!(ics.contains("UNTIL=20280229T182959Z"), "{ics}");
+}
+
+#[test]
+fn uids_distinguish_same_start_meetings() {
+    // Two meetings at the same day+start (different halls) — the data model
+    // allows this — must not collide on UID.
+    let course = IcsCourse {
+        code: "SEM".to_string(),
+        name: "Seminar".to_string(),
+        instructors: vec![],
+        branches: vec![],
+        meetings: vec![
+            mtg(Day::Mon, 550, 625, "Lecture Hall 1"),
+            mtg(Day::Mon, 550, 705, "Seminar Hall"),
+        ],
+        starts: None,
+        part_of_semester: None,
+    };
+    let opts = IcsOptions {
+        range_start: CivilDate::new(2026, 8, 3),
+        range_end: CivilDate::new(2026, 11, 30),
+        alarm: false,
+        app_url: String::new(),
+        dtstamp: "20260805T120000Z".to_string(),
+        calendar_name: "test".to_string(),
+    };
+    let ics = build_ics(&[course], &opts);
+    let uids: Vec<&str> = ics
+        .lines()
+        .filter(|l| l.starts_with("UID:"))
+        .collect();
+    assert_eq!(uids.len(), 2, "{ics}");
+    assert_ne!(uids[0], uids[1], "UIDs must be unique: {uids:?}");
+}
+
+#[test]
 fn escaping_and_structure() {
     let course = IcsCourse {
         code: "ALGO".to_string(),

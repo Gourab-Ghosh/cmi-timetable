@@ -127,8 +127,12 @@ pub const MONTH_SHORT: [&str; 12] = [
     "jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec",
 ];
 
-/// "August--November 2026" → (first Monday of August 2026, 30 Nov 2026).
-/// Tolerates `--`, en dash or a single hyphen between the months.
+/// "August--November 2026" → (1 Aug 2026, 30 Nov 2026). Tolerates `--`, en
+/// dash or a single hyphen between the months. The range deliberately
+/// starts on the 1st — assuming a Monday start would silently drop real
+/// events if a semester ever began mid-week; over-covering yields at most
+/// one visible, deletable first-week event (and the export dialog's dates
+/// stay user-editable either way).
 pub fn semester_range_from_label(label: &str) -> Option<(CivilDate, CivilDate)> {
     let re = regex_lite::Regex::new(
         r"([A-Za-z]{3,})\s*(?:--|\u{2013}|-)\s*([A-Za-z]{3,})\s+(\d{4})",
@@ -138,7 +142,7 @@ pub fn semester_range_from_label(label: &str) -> Option<(CivilDate, CivilDate)> 
     let m1 = month_from_token(caps.get(1)?.as_str())?;
     let m2 = month_from_token(caps.get(2)?.as_str())?;
     let year = caps.get(3)?.as_str().parse::<i32>().ok()?;
-    let start = CivilDate::new(year, m1, 1).first_on_or_after(Day::Mon);
+    let start = CivilDate::new(year, m1, 1);
     let end_year = if m2 < m1 { year + 1 } else { year };
     let end = CivilDate::new(end_year, m2, last_day_of_month(end_year, m2));
     Some((start, end))
@@ -161,10 +165,14 @@ mod tests {
     #[test]
     fn semester_range() {
         let (start, end) = semester_range_from_label("August--November 2026").unwrap();
-        assert_eq!(start.to_iso(), "2026-08-03"); // first Monday of Aug 2026
+        assert_eq!(start.to_iso(), "2026-08-01"); // 1st of the month, not a weekday guess
         assert_eq!(end.to_iso(), "2026-11-30");
         let (s2, e2) = semester_range_from_label("January\u{2013}April 2027").unwrap();
-        assert_eq!(s2.to_iso(), "2027-01-04");
+        assert_eq!(s2.to_iso(), "2027-01-01");
         assert_eq!(e2.to_iso(), "2027-04-30");
+        // Year-crossing labels roll the end into the next year.
+        let (s3, e3) = semester_range_from_label("December--March 2027").unwrap();
+        assert_eq!(s3.to_iso(), "2027-12-01");
+        assert_eq!(e3.to_iso(), "2028-03-31");
     }
 }

@@ -158,11 +158,22 @@ fn run_gate(
                 detail: format!("halls page says {h:?} (timetable page has none)"),
             }
         }
-        (None, None) => GateCheck {
-            rule: "semester label".into(),
-            passed: false,
-            detail: "no semester label found on either page".into(),
-        },
+        (None, None) => {
+            // The label is display-only metadata; rules 2–6 guard the data
+            // itself. Rewording of the heading must not block a fresh
+            // semester, so this is warn-only — CONFLICTING labels still fail.
+            report.warnings.push(
+                "no semester label found on either page; continuing without one"
+                    .to_string(),
+            );
+            GateCheck {
+                rule: "semester label".into(),
+                passed: true,
+                detail: "no label on either page (warn only — labels only fail \
+                         this rule when the two pages disagree)"
+                    .into(),
+            }
+        }
     };
     report.gate.push(rule1);
 

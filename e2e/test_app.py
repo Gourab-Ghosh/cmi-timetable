@@ -28,6 +28,7 @@ from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.action_chains import ActionChains
 from selenium.webdriver.common.by import By
+from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 
@@ -297,7 +298,7 @@ def t11_my_data_lists_and_removes_overrides(app):
     time.sleep(0.4)
     app.xpath("//button[normalize-space()='My data']").click()
     dialog = app.wait_css(".dialog")
-    assert "Your custom times" in dialog.text
+    assert "Your overwrites" in dialog.text
     assert "TOC" in dialog.text and "→" in dialog.text, dialog.text
     assert "Tue 09:10–10:25" in dialog.text and "Wed 17:00–18:15" in dialog.text, \
         f"override line should show official → custom: {dialog.text!r}"
@@ -368,6 +369,166 @@ def t15_halls_free_finder(app):
     assert "Lecture Hall 6" not in line, line
 
 
+def t16_facet_menus_close_each_other(app):
+    """Opening one filter dropdown closes the previous one; outside clicks
+    and Esc close them; clicks INSIDE a menu keep it open."""
+    app.boot("/")
+    app.open_tab("Catalog")
+    app.wait_css("section[aria-label='Catalog'] .filterbar")
+
+    def facet(i):
+        return app.css_all(".filterbar details.facet")[i]
+
+    def summary(i):
+        return app.css_all(".filterbar details.facet > summary")[i]
+
+    summary(0).click()  # Branch
+    assert facet(0).get_attribute("open") is not None
+    # A click inside the open menu must NOT close it.
+    facet(0).find_element(By.CSS_SELECTOR, ".menu label.opt input").click()
+    time.sleep(0.2)
+    assert facet(0).get_attribute("open") is not None, \
+        "clicking a checkbox inside the menu must not close it"
+    summary(1).click()  # Instructor — must close Branch
+    time.sleep(0.2)
+    assert facet(0).get_attribute("open") is None, \
+        "opening the second menu must close the first"
+    assert facet(1).get_attribute("open") is not None
+    # Clicking anywhere outside closes the open menu.
+    app.css("section[aria-label='Catalog'] .toolbar h2").click()
+    time.sleep(0.2)
+    assert all(
+        f.get_attribute("open") is None
+        for f in app.css_all(".filterbar details.facet")
+    ), "outside click must close every open menu"
+    # Esc closes too.
+    summary(2).click()
+    assert facet(2).get_attribute("open") is not None
+    app.d.find_element(By.TAG_NAME, "body").send_keys(Keys.ESCAPE)
+    time.sleep(0.2)
+    assert all(
+        f.get_attribute("open") is None
+        for f in app.css_all(".filterbar details.facet")
+    ), "Esc must close every open menu"
+
+
+def t17_credit_override(app):
+    """Credits can be overwritten per course, feed the total, and are listed
+    with their official value and removable."""
+    app.boot("/?c=TOC,RDBM")
+    app.open_tab("My courses")
+    section = app.wait_css("section[aria-label='My courses']")
+    assert "Total credits: 6" in section.text  # 4 assumed + 2 stated
+    app.chip("TOC").click()
+    dialog = app.wait_css(".dialog")
+    dialog.find_element(By.XPATH, ".//dd//button[normalize-space()='Edit']").click()
+    inp = dialog.find_element(By.CSS_SELECTOR, "input[aria-label='Credits']")
+    inp.clear()
+    inp.send_keys("3")
+    dialog.find_element(By.XPATH, ".//dd//button[normalize-space()='Save']").click()
+    app.wait_toast("TOC now counts as 3 credits")
+    WebDriverWait(app.d, 10).until(
+        lambda d: "3 (set by you — CMI: 4 assumed)" in app.css(".dialog").text
+    )
+    app.xpath("//div[@class='dialog']//button[normalize-space()='Close']").click()
+    section = app.css("section[aria-label='My courses']")
+    assert "Total credits: 5" in section.text, section.text
+    assert "1 set by you" in section.text, section.text
+    # The 'Your changes' panel shows official → yours; removing it restores.
+    app.open_tab("My timetable")
+    panel = app.wait_css("[data-testid='your-changes']")
+    assert "credits: 4 (assumed) → 3" in panel.text, panel.text
+    app.xpath("//button[contains(.,'1 overwrite')]")  # toolbar pill
+    panel.find_element(
+        By.XPATH, ".//li[contains(.,'TOC')]//button[normalize-space()='Remove']"
+    ).click()
+    app.wait_toast("TOC back on official credits")
+    app.wait_gone("[data-testid='your-changes']")
+    app.open_tab("My courses")
+    assert "Total credits: 6" in app.css("section[aria-label='My courses']").text
+
+
+def t18_overwrites_panel_and_remove_all(app):
+    """Meeting moves and credit changes appear together with provenance;
+    'Remove all overwrites' restores CMI's data in one step."""
+    t09_drag_requires_edit_mode(app)  # TOC moved Tue 09:10 → Wed 17:00
+    time.sleep(0.4)
+    app.css("button.chip-info[aria-label='Details for TOC']").click()
+    dialog = app.wait_css(".dialog")
+    dialog.find_element(By.XPATH, ".//dd//button[normalize-space()='Edit']").click()
+    inp = dialog.find_element(By.CSS_SELECTOR, "input[aria-label='Credits']")
+    inp.clear()
+    inp.send_keys("2")
+    dialog.find_element(By.XPATH, ".//dd//button[normalize-space()='Save']").click()
+    app.wait_toast("TOC now counts as 2 credits")
+    app.xpath("//div[@class='dialog']//button[normalize-space()='Close']").click()
+    # Inline provenance on the course card's meeting row.
+    app.open_tab("My courses")
+    section = app.wait_css("section[aria-label='My courses']")
+    assert "overwrites CMI's Tue 09:10–10:25" in section.text, section.text
+    # The panel lists both overwrites; the pill counts them.
+    app.open_tab("My timetable")
+    panel = app.wait_css("[data-testid='your-changes']")
+    assert "→ Wed 17:00–18:15" in panel.text, panel.text
+    assert "credits: 4 (assumed) → 2" in panel.text, panel.text
+    app.xpath("//button[contains(.,'2 overwrites')]")
+    panel.find_element(
+        By.XPATH, ".//button[normalize-space()='Remove all overwrites']"
+    ).click()
+    app.wait_toast("All overwrites removed")
+    app.wait_gone("[data-testid='your-changes']")
+    # Back on CMI's data: official Tuesday slot again.
+    app.wait_css("td[data-day='1'][data-slot='550'] button.chip[aria-label^='TOC,']")
+
+
+def t19_add_extra_meetings(app):
+    """Any course can gain extra weekly time slots; adding twice creates two
+    independent meetings (nothing gets overwritten)."""
+    app.boot("/?c=TOC")
+    app.open_tab("My courses")
+    app.wait_css("section[aria-label='My courses']")
+    card = "//div[contains(@class,'card')][.//strong[contains(.,'Theory of Computation')]]"
+
+    def add_meeting(day_idx, slot_start, toast):
+        app.xpath(f"{card}//button[normalize-space()='Add a meeting']").click()
+        dialog = app.wait_css(".dialog")
+        assert "Add a meeting — TOC" in dialog.text, dialog.text
+        dialog.find_element(
+            By.CSS_SELECTOR, f"#em-day option[value='{day_idx}']"
+        ).click()
+        dialog.find_element(
+            By.CSS_SELECTOR, f"#em-slot option[value='{slot_start}']"
+        ).click()
+        dialog.find_element(By.XPATH, ".//button[normalize-space()='Save']").click()
+        app.wait_toast(toast)
+
+    add_meeting(2, 1020, "Added a Wed 17:00–18:15 meeting to TOC")
+    add_meeting(4, 1020, "Added a Fri 17:00–18:15 meeting to TOC")
+    section = app.css("section[aria-label='My courses']")
+    assert "Wed 17:00–18:15" in section.text and "Fri 17:00–18:15" in section.text, \
+        "both added meetings must exist — the second must not overwrite the first"
+    assert "not on CMI's timetable — created by you" in section.text
+    # Official meetings untouched, both extras on the grid.
+    app.open_tab("My timetable")
+    assert app.chips("TOC", "td[data-day='1'][data-slot='550']"), "official Tue stays"
+    assert app.chips("TOC", "td[data-day='2'][data-slot='1020']")
+    assert app.chips("TOC", "td[data-day='4'][data-slot='1020']")
+    app.xpath("//button[contains(.,'2 overwrites')]")
+
+
+def t20_url_codes_any_case(app):
+    """Share URLs typed by hand work regardless of casing: codes resolve
+    against the catalog case-insensitively and canonicalize."""
+    app.boot("/?c=toc,rdbm")
+    app.chip("TOC")  # canonical casing rendered
+    app.open_tab("My courses")
+    section = app.wait_css("section[aria-label='My courses']")
+    assert "Theory of Computation" in section.text, section.text
+    assert "RDBM" in section.text
+    # No 'unknown code' warning for a merely lowercase code.
+    assert "Unknown course code" not in app.d.find_element(By.TAG_NAME, "body").text
+
+
 TESTS = [
     t01_header_sync_button_and_hidden_dev,
     t02_developer_endpoint_only,
@@ -384,6 +545,11 @@ TESTS = [
     t13_reload_persists_state,
     t14_edit_dialog_and_unscheduled,
     t15_halls_free_finder,
+    t16_facet_menus_close_each_other,
+    t17_credit_override,
+    t18_overwrites_panel_and_remove_all,
+    t19_add_extra_meetings,
+    t20_url_codes_any_case,
 ]
 
 

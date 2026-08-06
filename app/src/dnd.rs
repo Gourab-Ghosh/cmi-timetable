@@ -227,13 +227,11 @@ fn cancel_drag(app: App) {
 
 /// Enter move mode for a focused chip (M key).
 pub fn enter_move_mode(app: App, spec: DragSpec, from: Option<Meeting>) {
-    let cursor = from
-        .map(|m| (m.day, m.slot.start_min))
-        .or_else(|| {
-            app.snapshot
-                .with_untracked(|s| s.slot_grid.first().map(|slot| (Day::Mon, slot.start_min)))
-        })
-        .unwrap_or((Day::Mon, 550));
+    let cursor = from.map(|m| (m.day, m.slot.start_min)).unwrap_or_else(|| {
+        // Start at the grid's first day/slot — derived from the data.
+        let m = app.default_meeting();
+        (m.day, m.slot.start_min)
+    });
     app.say(format!(
         "Move mode for {}. Use arrow keys to pick a cell, Enter to drop, Escape to cancel.",
         spec.code
@@ -263,12 +261,14 @@ fn move_cursor(app: App, dx: i32, dy: i32) {
         }
     });
     if let Some(mm) = app.move_mode.get_untracked() {
-        let slot = slots
+        // The cursor always comes from the slot grid; if it somehow doesn't
+        // resolve, announce just the start time rather than inventing an end.
+        let label = slots
             .iter()
             .find(|s| s.start_min == mm.cursor.1)
-            .copied()
-            .unwrap_or(Slot::new(mm.cursor.1, mm.cursor.1 + 75));
-        app.say(format!("{} {}", mm.cursor.0.full(), slot.label()));
+            .map(|s| s.label())
+            .unwrap_or_else(|| Slot::new(mm.cursor.1, mm.cursor.1).start_label());
+        app.say(format!("{} {}", mm.cursor.0.full(), label));
     }
 }
 
@@ -286,7 +286,7 @@ fn is_editing_context(target: &Option<web_sys::EventTarget>) -> bool {
 fn on_key_down(app: App, ev: &web_sys::KeyboardEvent) {
     let key = ev.key();
 
-    // Esc: cancel drag → move mode → dialog, in that order.
+    // Esc: cancel drag → move mode → open facet menu → dialog, in that order.
     if key == "Escape" {
         if app.drag.with_untracked(|d| d.is_some()) {
             cancel_drag(app);
@@ -296,6 +296,11 @@ fn on_key_down(app: App, ev: &web_sys::KeyboardEvent) {
         if app.move_mode.with_untracked(|m| m.is_some()) {
             app.move_mode.set(None);
             app.say("Move cancelled.");
+            ev.prevent_default();
+            return;
+        }
+        if domx::any_open_facet() {
+            domx::close_open_facets(None);
             ev.prevent_default();
             return;
         }
@@ -394,9 +399,25 @@ pub fn install_global_handlers(app: App) {
             }
         },
     );
+    // Facet dropdowns are native <details>: they only ever close themselves
+    // when their own summary is clicked. Close them on any press outside.
+    let facet_close =
+        Closure::<dyn FnMut(web_sys::PointerEvent)>::new(move |ev: web_sys::PointerEvent| {
+            let inside = ev
+                .target()
+                .and_then(|t| t.dyn_into::<web_sys::Element>().ok())
+                .and_then(|el| el.closest("details.facet").ok().flatten())
+                .is_some();
+            if !inside {
+                domx::close_open_facets(None);
+            }
+        });
+
     let opts = web_sys::AddEventListenerOptions::new();
     opts.set_passive(false);
 
+    let _ =
+        doc.add_event_listener_with_callback("pointerdown", facet_close.as_ref().unchecked_ref());
     let _ = doc.add_event_listener_with_callback("pointermove", mv.as_ref().unchecked_ref());
     let _ = doc.add_event_listener_with_callback("pointerup", up.as_ref().unchecked_ref());
     let _ = doc.add_event_listener_with_callback("pointercancel", cancel.as_ref().unchecked_ref());
@@ -412,4 +433,5 @@ pub fn install_global_handlers(app: App) {
     cancel.forget();
     key.forget();
     touchmove.forget();
+    facet_close.forget();
 }

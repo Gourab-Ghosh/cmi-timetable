@@ -120,11 +120,16 @@ pub fn chip(app: App, p: ChipProps) -> impl IntoView {
         aria.push_str(", temporary booking");
     }
     if overridden {
-        aria.push_str(if user_created {
-            ", custom meeting"
+        if user_created {
+            aria.push_str(", your custom meeting (not on CMI's timetable)");
+        } else if let Some(base) = p.eff.as_ref().and_then(|e| e.base.as_ref()) {
+            aria.push_str(&format!(
+                ", your custom time — overwrites CMI's {}",
+                base.describe()
+            ));
         } else {
-            ", overridden"
-        });
+            aria.push_str(", overridden");
+        }
     }
     if !clash_with.is_empty() {
         aria.push_str(&format!(", clashes with {}", clash_with.join(", ")));
@@ -597,7 +602,22 @@ pub fn filter_bar(app: App, result_count: Signal<usize>) -> impl IntoView {
                  count: Box<dyn Fn() -> usize + Send + Sync>,
                  body: AnyView| {
         view! {
-            <details class="facet">
+            // Facets behave like menus: opening one closes the others
+            // (outside clicks and Esc close them via global handlers).
+            <details
+                class="facet"
+                on:toggle=move |ev| {
+                    use wasm_bindgen::JsCast;
+                    if let Some(el) = ev
+                        .target()
+                        .and_then(|t| t.dyn_into::<web_sys::Element>().ok())
+                    {
+                        if el.has_attribute("open") {
+                            crate::domx::close_open_facets(Some(&el));
+                        }
+                    }
+                }
+            >
                 <summary>
                     {name}
                     {move || {
@@ -746,7 +766,7 @@ pub fn filter_bar(app: App, result_count: Signal<usize>) -> impl IntoView {
                         let mut values: Vec<u8> = snapshot()
                             .courses
                             .iter()
-                            .map(|c| c.effective_credits())
+                            .map(|c| app.course_credits(c))
                             .collect();
                         values.sort_unstable();
                         values.dedup();
@@ -1053,6 +1073,11 @@ pub fn meeting_row(app: App, course: &Course, eff: EffMeeting) -> impl IntoView 
     let edit_code = code.clone();
     let edit_eff = eff.clone();
     let reset_code = code.clone();
+    // Say inline exactly which CMI data this custom meeting overwrites.
+    let provenance = eff.overridden.then(|| match (&eff.base, eff.user_created) {
+        (Some(base), false) => format!("overwrites CMI's {}", base.describe()),
+        _ => "not on CMI's timetable — created by you".to_string(),
+    });
 
     view! {
         <li>
@@ -1070,6 +1095,7 @@ pub fn meeting_row(app: App, course: &Course, eff: EffMeeting) -> impl IntoView 
                         </span>
                     }
                 })}
+            {provenance.map(|text| view! { <span class="muted small">{text}</span> })}
             {clash.then(|| view! { <span class="badge alarm">"⚠ clash"</span> })}
             <button
                 class="btn small"
@@ -1106,6 +1132,122 @@ pub fn meeting_row(app: App, course: &Course, eff: EffMeeting) -> impl IntoView 
                     }
                 })}
         </li>
+    }
+}
+
+/// Inline credits display + editor (details dialog). Shows the official
+/// value, lets the user overwrite it, and always offers a one-click reset.
+fn credits_editor(app: App, course: &Course) -> impl IntoView {
+    let code = course.code.clone();
+    let official = course.effective_credits();
+    let official_assumed = course.credits_assumed();
+    let official_label = if official_assumed {
+        format!("{official} (assumed — CMI doesn't state it)")
+    } else {
+        official.to_string()
+    };
+    let official_short = if official_assumed {
+        format!("{official} assumed")
+    } else {
+        official.to_string()
+    };
+
+    let editing = RwSignal::new(false);
+    let input = RwSignal::new(String::new());
+    let error = RwSignal::new(false);
+
+    view! {
+        <span class="row" style="display:inline-flex;gap:0.4rem;align-items:center;flex-wrap:wrap">
+            {move || {
+                let code = code.clone();
+                let official_label = official_label.clone();
+                let official_short = official_short.clone();
+                if editing.get() {
+                    let save_code = code.clone();
+                    view! {
+                        <input
+                            type="number"
+                            min="0"
+                            max="20"
+                            style="width:5rem"
+                            aria-label="Credits"
+                            prop:value=input.get_untracked()
+                            on:input=move |ev| input.set(event_target_value(&ev))
+                        />
+                        <button
+                            class="btn small primary"
+                            on:click=move |_| {
+                                match input.get_untracked().trim().parse::<u8>() {
+                                    Ok(n) if n <= 20 => {
+                                        app.set_credit_override(&save_code, n);
+                                        editing.set(false);
+                                        error.set(false);
+                                    }
+                                    _ => error.set(true),
+                                }
+                            }
+                        >
+                            "Save"
+                        </button>
+                        <button
+                            class="btn small"
+                            on:click=move |_| {
+                                editing.set(false);
+                                error.set(false);
+                            }
+                        >
+                            "Cancel"
+                        </button>
+                        {move || {
+                            error
+                                .get()
+                                .then(|| {
+                                    view! {
+                                        <span style="color:var(--warn)">
+                                            "Enter a whole number from 0 to 20."
+                                        </span>
+                                    }
+                                })
+                        }}
+                    }
+                        .into_any()
+                } else {
+                    let custom = app.credits_custom(&code);
+                    let shown = match custom {
+                        Some(n) => format!("{n} (set by you — CMI: {official_short})"),
+                        None => official_label,
+                    };
+                    let edit_start = custom.unwrap_or(official);
+                    let reset_code = code.clone();
+                    view! {
+                        <span>{shown}</span>
+                        <button
+                            class="btn small"
+                            on:click=move |_| {
+                                input.set(edit_start.to_string());
+                                editing.set(true);
+                            }
+                        >
+                            "Edit"
+                        </button>
+                        {custom
+                            .map(|_| {
+                                view! {
+                                    <button
+                                        class="btn small"
+                                        on:click=move |_| {
+                                            app.remove_credit_override(&reset_code);
+                                        }
+                                    >
+                                        "Reset to CMI's value"
+                                    </button>
+                                }
+                            })}
+                    }
+                        .into_any()
+                }
+            }}
+        </span>
     }
 }
 
@@ -1168,11 +1310,6 @@ fn details_dialog(app: App, code: String) -> impl IntoView {
     let toggle_code = course.code.clone();
     let give_code = course.code.clone();
     let export_code = course.code.clone();
-    let default_slot = snapshot
-        .slot_grid
-        .first()
-        .copied()
-        .unwrap_or(Slot::new(550, 625));
     let course_notes = {
         let mut notes: Vec<String> = Vec::new();
         if let Some((d, m)) = &course.starts {
@@ -1212,13 +1349,7 @@ fn details_dialog(app: App, code: String) -> impl IntoView {
                     }}
                 </dd>
                 <dt>"Credits"</dt>
-                <dd>
-                    {if course.credits_assumed() {
-                        format!("{} (assumed — CMI doesn't state it)", course.effective_credits())
-                    } else {
-                        course.effective_credits().to_string()
-                    }}
-                </dd>
+                <dd>{credits_editor(app, &course)}</dd>
                 {(!course_notes.is_empty())
                     .then(|| {
                         view! {
@@ -1260,34 +1391,31 @@ fn details_dialog(app: App, code: String) -> impl IntoView {
                     }
                 })}
             <div class="actions">
-                {eff.is_empty()
-                    .then(|| {
-                        let give_code = give_code.clone();
-                        view! {
-                            <button
-                                class="btn"
-                                on:click=move |_| {
-                                    app.dialog
-                                        .set(
-                                            Some(Dialog::EditMeeting {
-                                                course: give_code.clone(),
-                                                ov_id: None,
-                                                base: None,
-                                                init: Meeting {
-                                                    day: Day::Mon,
-                                                    slot: default_slot,
-                                                    hall: None,
-                                                    temp_booking: false,
-                                                },
-                                                create: true,
-                                            }),
-                                        );
-                                }
-                            >
-                                "Give it a time"
-                            </button>
-                        }
-                    })}
+                // Any course can gain extra time slots — the button is only
+                // labeled differently when CMI gave it none to begin with.
+                {
+                    let no_meetings = eff.is_empty();
+                    let give_code = give_code.clone();
+                    view! {
+                        <button
+                            class="btn"
+                            on:click=move |_| {
+                                app.dialog
+                                    .set(
+                                        Some(Dialog::EditMeeting {
+                                            course: give_code.clone(),
+                                            ov_id: None,
+                                            base: None,
+                                            init: app.default_meeting(),
+                                            create: true,
+                                        }),
+                                    );
+                            }
+                        >
+                            {if no_meetings { "Give it a time" } else { "Add a meeting" }}
+                        </button>
+                    }
+                }
                 {selected
                     .then(|| {
                         let export_code = export_code.clone();
@@ -1316,6 +1444,146 @@ fn details_dialog(app: App, code: String) -> impl IntoView {
         </div>
     }
     .into_any()
+}
+
+// ---------------------------------------------------------------------------
+// Overwrites — every custom change in one place
+// ---------------------------------------------------------------------------
+
+/// Toolbar pill: "✎ N overwrites" — a constant reminder that custom data is
+/// in play, one click from the full list.
+pub fn custom_changes_pill(app: App) -> impl IntoView {
+    view! {
+        {move || {
+            let n = app.custom_change_count();
+            (n > 0)
+                .then(|| {
+                    view! {
+                        <button
+                            class="btn small"
+                            title="Everything of CMI's you've overwritten — with one-click removal"
+                            on:click=move |_| app.dialog.set(Some(Dialog::MyData))
+                        >
+                            {format!("✎ {n} overwrite{}", if n == 1 { "" } else { "s" })}
+                        </button>
+                    }
+                })
+        }}
+    }
+}
+
+/// Every overwrite together — moved/created meetings and changed credits —
+/// each row showing exactly which CMI data it replaces, with one-click
+/// removal. Shared by the "Your changes" panel and the My data dialog.
+pub fn overrides_list(app: App) -> impl IntoView {
+    view! {
+        {move || {
+            let overrides = app.overrides.get();
+            if overrides.is_empty() {
+                return view! {
+                    <p class="muted small">
+                        "None. Meetings you move or create and credits you change \
+                         appear here, each showing which CMI data it overwrites."
+                    </p>
+                }
+                    .into_any();
+            }
+            let snapshot = app.snapshot.get();
+            let time_rows = overrides
+                .items
+                .iter()
+                .map(|o| {
+                    let id = o.id;
+                    let course = o.course.clone();
+                    let line = match &o.base {
+                        Some(base) => {
+                            format!("{} → {}", base.describe(), o.to.describe())
+                        }
+                        None => format!("created meeting: {}", o.to.describe()),
+                    };
+                    let selected = app.is_selected(&course);
+                    view! {
+                        <li>
+                            <span class="chip mono" style="--hue:215">{course.clone()}</span>
+                            <span class="when">{line}</span>
+                            {(!selected)
+                                .then(|| {
+                                    view! {
+                                        <span class="badge">"not currently selected"</span>
+                                    }
+                                })}
+                            <button
+                                class="btn small"
+                                on:click=move |_| {
+                                    app.reset_override(
+                                        id,
+                                        Some(format!("{course} back on CMI's time")),
+                                    );
+                                }
+                            >
+                                "Remove"
+                            </button>
+                        </li>
+                    }
+                })
+                .collect_view();
+            let credit_rows = overrides
+                .credits
+                .iter()
+                .map(|c| {
+                    let course = c.course.clone();
+                    let remove_course = c.course.clone();
+                    let official = match snapshot.course(&c.course) {
+                        Some(cr) if cr.credits_assumed() => {
+                            format!("{} (assumed)", cr.effective_credits())
+                        }
+                        Some(cr) => cr.effective_credits().to_string(),
+                        None => "?".to_string(),
+                    };
+                    let selected = app.is_selected(&course);
+                    view! {
+                        <li>
+                            <span class="chip mono" style="--hue:215">{course.clone()}</span>
+                            <span class="when">
+                                {format!("credits: {official} → {}", c.credits)}
+                            </span>
+                            {(!selected)
+                                .then(|| {
+                                    view! {
+                                        <span class="badge">"not currently selected"</span>
+                                    }
+                                })}
+                            <button
+                                class="btn small"
+                                on:click=move |_| app.remove_credit_override(&remove_course)
+                            >
+                                "Remove"
+                            </button>
+                        </li>
+                    }
+                })
+                .collect_view();
+            view! {
+                <ul class="meetings">
+                    {time_rows}
+                    {credit_rows}
+                </ul>
+                <button
+                    class="btn small"
+                    on:click=move |_| {
+                        app.act("remove all overwrites", |_, ovs| {
+                            ovs.items.clear();
+                            ovs.credits.clear();
+                        });
+                        app.toast_undo("All overwrites removed — back on CMI's data");
+                    }
+                >
+                    "Remove all overwrites"
+                </button>
+            }
+                .into_any()
+        }}
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1359,77 +1627,10 @@ fn my_data_dialog(app: App) -> impl IntoView {
                  stored on a server."
             </p>
 
-            // Custom times: exactly which CMI data the user's changes overwrite.
-            <h3>"Your custom times"</h3>
-            {move || {
-                let overrides = app.overrides.get();
-                if overrides.items.is_empty() {
-                    view! {
-                        <p class="muted small">
-                            "None. Meetings you move or create appear here, each showing \
-                             what CMI data it overwrites."
-                        </p>
-                    }
-                        .into_any()
-                } else {
-                    view! {
-                        <ul class="meetings">
-                            {overrides
-                                .items
-                                .iter()
-                                .map(|o| {
-                                    let id = o.id;
-                                    let course = o.course.clone();
-                                    let line = match &o.base {
-                                        Some(base) => format!(
-                                            "{} → {}",
-                                            base.describe(),
-                                            o.to.describe(),
-                                        ),
-                                        None => format!("created meeting: {}", o.to.describe()),
-                                    };
-                                    let selected = app.is_selected(&course);
-                                    view! {
-                                        <li>
-                                            <span class="chip mono" style="--hue:215">
-                                                {course.clone()}
-                                            </span>
-                                            <span class="when">{line}</span>
-                                            {(!selected)
-                                                .then(|| {
-                                                    view! {
-                                                        <span class="badge">"not currently selected"</span>
-                                                    }
-                                                })}
-                                            <button
-                                                class="btn small"
-                                                on:click=move |_| {
-                                                    app.reset_override(
-                                                        id,
-                                                        Some(format!("{course} back on CMI's time")),
-                                                    );
-                                                }
-                                            >
-                                                "Remove"
-                                            </button>
-                                        </li>
-                                    }
-                                })
-                                .collect_view()}
-                        </ul>
-                        <button
-                            class="btn small"
-                            on:click=move |_| {
-                                app.act("reset all custom times", |_, ovs| ovs.items.clear());
-                                app.toast_undo("All custom times removed");
-                            }
-                        >
-                            "Remove all custom times"
-                        </button>
-                    }
-                        .into_any()
-                }
-            }}
+            // Overwrites: exactly which CMI data the user's changes replace —
+            // moved/created meetings and changed credits, all together.
+            <h3>"Your overwrites"</h3>
+            {overrides_list(app)}
 
             <h3 style="margin-top:0.9rem">"Your course selection"</h3>
             <p class="small">
@@ -1532,7 +1733,15 @@ fn edit_meeting_dialog(
     let slots_for_save = slots.clone();
     let course_save = course.clone();
     let title = if create {
-        format!("Give {course} a time")
+        let already_meets = snapshot
+            .course(&course)
+            .map(|c| !app.effective_meetings(c).is_empty())
+            .unwrap_or(false);
+        if already_meets {
+            format!("Add a meeting — {course}")
+        } else {
+            format!("Give {course} a time")
+        }
     } else {
         format!("Edit meeting — {course}")
     };
@@ -1569,24 +1778,36 @@ fn edit_meeting_dialog(
             hall: (!hall_value.is_empty()).then_some(hall_value),
             temp_booking: false,
         };
-        // "Give it a time" on a course that isn't selected yet selects it
-        // too, as one undo step — a placed meeting must never be invisible.
-        if create && !app.is_selected(&course_save) {
-            app.select_and_override(
-                &course_save,
-                None,
-                to.clone(),
-                format!(
-                    "Added {course_save} and placed it on {} {}",
-                    day.short(),
-                    to.slot.label(),
-                ),
-            );
+        if create {
+            // Creating always ADDS a meeting (a course can have any number
+            // of extra slots). On a not-yet-selected course it selects it
+            // too, as one undo step — a placed meeting must never be
+            // invisible.
+            if app.is_selected(&course_save) {
+                app.add_meeting(
+                    &course_save,
+                    to.clone(),
+                    format!(
+                        "Added a {} {} meeting to {course_save}",
+                        day.short(),
+                        to.slot.label(),
+                    ),
+                );
+            } else {
+                app.select_and_override(
+                    &course_save,
+                    None,
+                    to.clone(),
+                    format!(
+                        "Added {course_save} and placed it on {} {}",
+                        day.short(),
+                        to.slot.label(),
+                    ),
+                );
+            }
         } else {
             let toast = format!(
-                "{} {} on {} {}",
-                if create { "Placed" } else { "Moved" },
-                course_save,
+                "Moved {course_save} on {} {}",
                 day.short(),
                 to.slot.label(),
             );
@@ -1595,11 +1816,7 @@ fn edit_meeting_dialog(
                 ov_id,
                 base.clone(),
                 to,
-                &if create {
-                    format!("give {course_save} a time")
-                } else {
-                    format!("edit {course_save} meeting")
-                },
+                &format!("edit {course_save} meeting"),
                 Some(toast),
             );
         }
@@ -1952,7 +2169,7 @@ fn export_dialog(app: App, scope: Option<String>) -> impl IntoView {
                 <span>"Add a 10-minute reminder to every class"</span>
             </label>
             <p class="muted small">
-                "Courses with a “starts …” or “Oct–Nov” note are exported with their own dates. "
+                "Courses with a “starts …” or “runs … only” note are exported with their own dates. "
                 "CMI holidays are not excluded — see the CMI semester schedule."
             </p>
             {move || {
@@ -1982,9 +2199,9 @@ fn share_dialog(app: App) -> impl IntoView {
     let plain = domx::share_url(&format!("?c={c_param}"));
     let with_times = domx::share_url(&format!(
         "?c={c_param}&s={}",
-        ttcore::share::encode_share(&selection, &overrides.items)
+        ttcore::share::encode_share(&selection, &overrides)
     ));
-    let has_overrides = !overrides.items.is_empty();
+    let has_overrides = !overrides.is_empty();
     let plain2 = plain.clone();
     let with2 = with_times.clone();
 
@@ -2018,14 +2235,18 @@ fn share_dialog(app: App) -> impl IntoView {
                 <button
                     class="btn"
                     disabled=!has_overrides
-                    title=if has_overrides { "" } else { "You have no custom times yet" }
+                    title=if has_overrides {
+                        "Includes your moved/created meetings and credit changes"
+                    } else {
+                        "You have no overwrites yet"
+                    }
                     on:click=move |_| {
                         let url = with2.clone();
                         domx::copy_to_clipboard(url, |_| {});
-                        app.toast("Link with your custom times copied.");
+                        app.toast("Link with your custom changes copied.");
                     }
                 >
-                    "Copy incl. my custom times"
+                    "Copy incl. my custom changes"
                 </button>
             </div>
             <div class="actions">{close_button(app)}</div>

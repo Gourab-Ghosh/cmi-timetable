@@ -602,6 +602,36 @@ impl App {
         self.toast_undo(toast);
     }
 
+    /// Add an extra weekly meeting to a course (base = None ⇒ user-created).
+    /// Unlike `apply_override`, this ALWAYS creates a new entry, so a course
+    /// can gain any number of additional time slots.
+    pub fn add_meeting(&self, course: &str, to: Meeting, toast: String) {
+        let course = course.to_string();
+        let now = domx::now_ms();
+        self.act(&format!("add a meeting to {course}"), |_, ovs| {
+            ovs.add(&course, None, to.clone(), now);
+        });
+        self.toast_undo(toast);
+    }
+
+    /// Starting point for newly created meetings: the grid's first day and
+    /// slot — derived from the parsed data, never from CMI's current scheme.
+    /// (The validation gate guarantees a non-empty slot grid; the fallback
+    /// is a generic 09:00–10:00 hour.)
+    pub fn default_meeting(&self) -> Meeting {
+        let slot = self
+            .snapshot
+            .with_untracked(|s| s.slot_grid.first().copied())
+            .unwrap_or(Slot::new(9 * 60, 10 * 60));
+        let day = self.grid_days().first().copied().unwrap_or(Day::Mon);
+        Meeting {
+            day,
+            slot,
+            hall: None,
+            temp_booking: false,
+        }
+    }
+
     pub fn reset_override(&self, id: u64, toast: Option<String>) {
         self.act("reset to CMI's time", |_, ovs| ovs.remove(id));
         if let Some(text) = toast {
@@ -615,6 +645,46 @@ impl App {
             ovs.items.retain(|o| o.course != code);
         });
         self.toast_undo(format!("{code} back on CMI's times"));
+    }
+
+    // -- credits -------------------------------------------------------------
+
+    /// Credits used everywhere: your override, else CMI's stated value,
+    /// else the campus default of 4.
+    pub fn course_credits(&self, course: &Course) -> u8 {
+        self.overrides
+            .with(|o| o.credits_for(&course.code))
+            .unwrap_or_else(|| course.effective_credits())
+    }
+
+    /// The user's custom credit value for a course, if any.
+    pub fn credits_custom(&self, code: &str) -> Option<u8> {
+        self.overrides.with(|o| o.credits_for(code))
+    }
+
+    pub fn set_credit_override(&self, code: &str, credits: u8) {
+        let code = code.to_string();
+        let now = domx::now_ms();
+        self.act(&format!("set {code} to {credits} credits"), |_, ovs| {
+            ovs.set_credits(&code, credits, now);
+        });
+        self.toast_undo(format!(
+            "{code} now counts as {credits} credit{}",
+            if credits == 1 { "" } else { "s" },
+        ));
+    }
+
+    pub fn remove_credit_override(&self, code: &str) {
+        let code = code.to_string();
+        self.act(&format!("reset {code} credits"), |_, ovs| {
+            ovs.remove_credits(&code);
+        });
+        self.toast_undo(format!("{code} back on official credits"));
+    }
+
+    /// Total number of custom changes (meeting moves + credit overrides).
+    pub fn custom_change_count(&self) -> usize {
+        self.overrides.with(|o| o.items.len() + o.credits.len())
     }
 
     /// Resolve all queued conflicts in one undoable step.
@@ -749,6 +819,22 @@ impl App {
         days
     }
 
+    /// Days for the Halls tab and the free-hall finder: grid days UNION any
+    /// day that appears only in hall bookings (e.g. a Saturday seminar) —
+    /// parsed hall data must never be silently unviewable.
+    pub fn hall_days(&self) -> Vec<Day> {
+        let mut days = self.grid_days();
+        self.snapshot.with(|s| {
+            for booking in &s.hall_bookings {
+                if !days.contains(&booking.day) {
+                    days.push(booking.day);
+                }
+            }
+        });
+        days.sort_by_key(|d| d.index());
+        days
+    }
+
     // -- navigation ----------------------------------------------------------
 
     pub fn set_tab(&self, tab: Tab) {
@@ -856,7 +942,8 @@ pub fn course_matches(app: &App, course: &Course, f: &Filters) -> bool {
         return false;
     }
     if !f.credits.is_empty() {
-        let cr = course.effective_credits().to_string();
+        // Facet matches what the user sees — custom credit values included.
+        let cr = app.course_credits(course).to_string();
         if !f.credits.contains(&cr) {
             return false;
         }

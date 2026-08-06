@@ -42,11 +42,16 @@ parallel**, and the proxy tier **races all relays at once** — the first
 valid response wins:
 
 1. **direct** — a cheap 4 s attempt at the CMI URLs (in case CORS ever opens up)
-2. **proxy** — public CORS relays raced in parallel (see `app/src/fetch.rs`),
-   every response sanity-checked before being trusted
+2. **proxy** — public CORS relays raced in parallel (see `app/src/fetch.rs`)
 3. **mirror** — same-origin `data/latest.json` + raw HTML copies committed by
    the `sync.yml` cron
 4. **bundled** — a snapshot compiled in at build time from the fixtures
+
+The parser + validation gate are the **only** judges of content — no
+hard-coded shape or wording check can reject a page they would accept, so a
+CMI redesign surfaces honestly as "the app needs an update", never as fake
+unreachability. (A loose marker check runs only on proxy responses, only
+after a gate failure, to tell proxy error pages apart from real CMI drift.)
 
 A fetched snapshot replaces the cache **only after the validation gate
 passes** (≥ 10 branch grids, ≥ 40 courses, ≥ 90 % legend resolution, sane
@@ -65,9 +70,11 @@ stored HTML on next load without refetching (bump `PARSER_VERSION` in
 
 ### URL state
 
-`?c=TOC,QCOM,MFD` reproduces a selection anywhere; `&s=<lz-string>` also
-carries meeting overrides ("Share including my custom times"). When both are
-present, `s` wins. The query stays *before* the hash: `…/?c=TOC#/`.
+`?c=TOC,QCOM,MFD` reproduces a selection anywhere (codes are matched
+case-insensitively against the live catalog, so hand-typed `?c=toc` works);
+`&s=<lz-string>` also carries meeting **and credit** overrides ("Copy incl.
+my custom changes"). When both are present, `s` wins. The query stays
+*before* the hash: `…/?c=TOC#/`.
 
 ### Everyday use
 
@@ -78,11 +85,22 @@ present, `s` wins. The query stays *before* the hash: `…/?c=TOC#/`.
 - Deselecting a course **keeps** its custom times, so re-adding it (or
   spotting it in the master grid) doesn't silently revert a move. Remove
   custom times explicitly per meeting, per course, or in **My data**.
+- **Every overwrite is visible in one place**: the "Your changes" panel on
+  My timetable (and the same list inside **My data**) shows each custom
+  meeting and credit change as *official → yours*, each with a one-click
+  Remove, plus "Remove all overwrites". A "✎ N overwrites" pill sits in the
+  grid toolbars whenever custom data is in play, and overridden meeting rows
+  say inline exactly which CMI time they overwrite.
+- **Any course can gain extra time slots**: "Add a meeting" (course card or
+  details dialog) appends another weekly meeting; unscheduled courses get
+  the same flow as "Give it a time".
 - In the master grid an **ⓘ** button opens full course details, and
   unselected courses that would clash with your current timetable carry a
   **⚠** marker; adding a clashing course warns immediately (never blocks).
 - Credits: CMI states credits only exceptionally; unstated courses count as
-  **4 credits** (marked "assumed" in the details view).
+  **4 credits** (marked "assumed"). The details dialog lets you **overwrite
+  credits** per course (totals, filters and the catalog follow suit), with a
+  one-click reset to CMI's value.
 
 ### Developer mode (hidden endpoint)
 

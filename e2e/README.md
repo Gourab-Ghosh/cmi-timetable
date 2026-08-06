@@ -15,12 +15,15 @@ python3 -m venv .venv && .venv/bin/pip install selenium   # driver auto-managed
 Environment knobs: `CHROME_BIN` (default `/usr/bin/chromium`), `DIST_DIR`,
 `PORT`.
 
-Covered flows (15 tests): Sync-now header + hidden developer mode (URL
-endpoint only), `?c=` selection + clash badges/panel, unknown-code warning,
-credits defaulting to 4, master-grid ⚠ would-clash markers and clash toast on
-add, the ⓘ details button, drag & drop gated behind Edit layout, custom
-times surviving deselection and reloads, the My data dialog listing/removing
-overrides, undo/redo, "Give it a time" auto-selecting, and the free-hall
+Covered flows (20 tests): Sync-now header + hidden developer mode (URL
+endpoint only), `?c=` selection + clash badges/panel (any casing), unknown-
+code warning, credits defaulting to 4 and per-course credit overwrites,
+master-grid ⚠ would-clash markers and clash toast on add, the ⓘ details
+button, drag & drop gated behind Edit layout, custom times surviving
+deselection and reloads, the unified overwrites list (Your changes panel +
+My data) with per-item and remove-all restore, filter dropdowns closing
+each other / on outside click / on Esc, adding extra weekly meetings to any
+course, undo/redo, "Give it a time" auto-selecting, and the free-hall
 finder requiring an explicit day + slot.
 
 Each test starts from a wiped localStorage with the background sync

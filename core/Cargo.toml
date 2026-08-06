@@ -26,3 +26,5 @@ scraper = { workspace = true, optional = true }
 # Self dev-dependency: turns the `html` feature on for unit/integration tests
 # regardless of how the library itself is being built.
 cmi-timetable-core = { path = ".", features = ["html"] }
+# url_tests hand-crafts pre-credit-override share payloads.
+lz-str.workspace = true

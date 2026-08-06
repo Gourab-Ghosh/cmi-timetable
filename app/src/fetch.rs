@@ -122,15 +122,16 @@ fn log(app: &App, tier: &str, url: &str, result: &Result<FetchOk, String>) {
     });
 }
 
-/// Sanity-check a (possibly proxy-mangled) response before trusting it:
-/// must mention CMI and contain at least one recognizable grid header line.
-fn sane(html: &str) -> bool {
-    if !html.contains("Chennai Mathematical Institute") {
-        return false;
-    }
-    html.lines().any(|l| {
-        l.contains('|') && ttcore::textgrid::TIME_RANGE_RE.find_iter(l).count() >= 3
-    })
+/// Does a proxy-relayed body plausibly come from CMI at all? Proxies
+/// substitute their own error pages on rate limits/failures. This check is
+/// used ONLY to pick honest error copy AFTER the parser rejected content —
+/// never to reject content the parser would accept, and never for the
+/// direct or mirror tiers (their URLs already prove the origin). It is
+/// deliberately loose (case-insensitive, several markers) so a CMI redesign
+/// doesn't get misreported as "unreachable".
+fn looks_like_cmi(html: &str) -> bool {
+    let lower = html.to_ascii_lowercase();
+    lower.contains("chennai mathematical institute") || lower.contains("cmi.ac.in")
 }
 
 /// Parse a fetched page pair through the shared gate.
@@ -251,8 +252,11 @@ enum TierResult {
     Unreachable,
 }
 
-/// Fetch, sanity-check and parse one tier's page pair. Both pages are
-/// fetched **in parallel**, halving the tier's wall-clock time.
+/// Fetch and parse one tier's page pair. Both pages are fetched **in
+/// parallel**, halving the tier's wall-clock time. The parser + validation
+/// gate are the ONLY judges of content — no shape/marker check may reject a
+/// page they would accept, so a CMI redesign surfaces as a gate failure
+/// ("the app needs an update"), never as fake unreachability.
 async fn fetch_pages_tier(
     app: App,
     tier_name: String,
@@ -261,6 +265,7 @@ async fn fetch_pages_tier(
     timeout_ms: u32,
     source: SourceTier,
 ) -> TierResult {
+    let is_proxy = matches!(source, SourceTier::Proxy(_));
     let (tt, halls) = futures::join!(
         fetch_text(&tt_url, timeout_ms),
         fetch_text(&halls_url, timeout_ms)
@@ -271,21 +276,27 @@ async fn fetch_pages_tier(
         return TierResult::Unreachable;
     };
 
-    if !sane(&tt.text) || !sane(&halls.text) {
-        log(
-            &app,
-            &tier_name,
-            &tt_url,
-            &Err("response failed the sanity check (not a CMI timetable page)".to_string()),
-        );
-        return TierResult::Unreachable;
-    }
-
     match parse_pair(&tt.text, &halls.text, domx::now_ms(), source) {
         Ok(outcome) => {
             record_report(&app, &tier_name, outcome.report.clone());
             match outcome.snapshot {
                 Some(snapshot) => TierResult::Snapshot(Box::new(snapshot)),
+                // Gate failure on a proxy body with no CMI marker at all is
+                // almost certainly the proxy's own error page — keep trying
+                // other routes instead of announcing that CMI changed.
+                None if is_proxy
+                    && (!looks_like_cmi(&tt.text) || !looks_like_cmi(&halls.text)) =>
+                {
+                    log(
+                        &app,
+                        &tier_name,
+                        &tt_url,
+                        &Err("gate failed on a body with no CMI markers — \
+                              treating as a proxy error page"
+                            .to_string()),
+                    );
+                    TierResult::Unreachable
+                }
                 None => TierResult::GateFailed,
             }
         }
@@ -310,21 +321,20 @@ async fn try_mirror(app: App) -> TierResult {
         .ok()
         .and_then(|ok| serde_json::from_str(&ok.text).ok());
 
+    // Same-origin copies: the URL proves the origin, so the parser + gate
+    // are the only judges of content (no marker/shape pre-check).
     if let (Ok(tt), Ok(halls)) = (&tt, &halls) {
-        if sane(&tt.text) && sane(&halls.text) {
-            let fetched_at = meta
-                .as_ref()
-                .map(|m| m.generated_at)
-                .unwrap_or_else(domx::now_ms);
-            if let Ok(outcome) = parse_pair(&tt.text, &halls.text, fetched_at, SourceTier::Mirror)
-            {
-                record_report(&app, "mirror", outcome.report.clone());
-                if let Some(snapshot) = outcome.snapshot {
-                    return TierResult::Snapshot(Box::new(snapshot));
-                }
-                // Client parser rejected the mirror HTML — fall back to the
-                // CI-validated snapshot inside latest.json if present.
+        let fetched_at = meta
+            .as_ref()
+            .map(|m| m.generated_at)
+            .unwrap_or_else(domx::now_ms);
+        if let Ok(outcome) = parse_pair(&tt.text, &halls.text, fetched_at, SourceTier::Mirror) {
+            record_report(&app, "mirror", outcome.report.clone());
+            if let Some(snapshot) = outcome.snapshot {
+                return TierResult::Snapshot(Box::new(snapshot));
             }
+            // Client parser rejected the mirror HTML — fall back to the
+            // CI-validated snapshot inside latest.json if present.
         }
     }
     if let Some(meta) = meta {

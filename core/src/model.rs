@@ -4,7 +4,8 @@ use serde::{Deserialize, Serialize};
 
 /// Bump whenever parsing logic changes in a way that should trigger a
 /// re-parse of the raw HTML stored inside a cached snapshot.
-pub const PARSER_VERSION: u32 = 1;
+/// v2: looser semester-label detection + last-colon halls-legend split.
+pub const PARSER_VERSION: u32 = 2;
 
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
@@ -290,6 +291,14 @@ impl Snapshot {
         self.courses.iter().find(|c| c.code == code)
     }
 
+    /// Case-insensitive lookup for codes typed by people (share URLs). The
+    /// catalog's own casing — whatever CMI uses — is canonical.
+    pub fn course_ci(&self, code: &str) -> Option<&Course> {
+        self.courses
+            .iter()
+            .find(|c| c.code.eq_ignore_ascii_case(code))
+    }
+
     pub fn branch(&self, code: &str) -> Option<&Branch> {
         self.branches.iter().find(|b| b.code == code)
     }
@@ -318,10 +327,23 @@ pub struct MeetingOverride {
     pub created_at: f64,
 }
 
+/// A user-set credit value for one course. The official value (stated by
+/// CMI, or the assumed default) stays available for "official → yours"
+/// displays.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CreditOverride {
+    pub course: String,
+    pub credits: u8,
+    pub created_at: f64,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct OverridesStore {
     pub next_id: u64,
     pub items: Vec<MeetingOverride>,
+    /// At most one per course.
+    #[serde(default)]
+    pub credits: Vec<CreditOverride>,
 }
 
 impl OverridesStore {
@@ -344,6 +366,32 @@ impl OverridesStore {
 
     pub fn for_course<'a>(&'a self, code: &'a str) -> impl Iterator<Item = &'a MeetingOverride> {
         self.items.iter().filter(move |o| o.course == code)
+    }
+
+    pub fn set_credits(&mut self, course: &str, credits: u8, now: f64) {
+        match self.credits.iter_mut().find(|c| c.course == course) {
+            Some(c) => c.credits = credits,
+            None => self.credits.push(CreditOverride {
+                course: course.to_string(),
+                credits,
+                created_at: now,
+            }),
+        }
+    }
+
+    pub fn remove_credits(&mut self, course: &str) {
+        self.credits.retain(|c| c.course != course);
+    }
+
+    pub fn credits_for(&self, course: &str) -> Option<u8> {
+        self.credits
+            .iter()
+            .find(|c| c.course == course)
+            .map(|c| c.credits)
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.items.is_empty() && self.credits.is_empty()
     }
 }
 

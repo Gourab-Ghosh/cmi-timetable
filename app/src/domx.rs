@@ -17,6 +17,37 @@ pub fn now_ms() -> f64 {
     js_sys::Date::now()
 }
 
+/// Close every open filter-facet dropdown, except (optionally) one — the
+/// facets are native `<details>` elements, which never close on their own.
+pub fn close_open_facets(except: Option<&web_sys::Element>) {
+    let Ok(list) = document().query_selector_all("details.facet[open]") else {
+        return;
+    };
+    for i in 0..list.length() {
+        let Some(el) = list
+            .item(i)
+            .and_then(|n| n.dyn_into::<web_sys::Element>().ok())
+        else {
+            continue;
+        };
+        if except.is_some_and(|x| {
+            let node: &web_sys::Node = x.as_ref();
+            el.is_same_node(Some(node))
+        }) {
+            continue;
+        }
+        let _ = el.remove_attribute("open");
+    }
+}
+
+pub fn any_open_facet() -> bool {
+    document()
+        .query_selector("details.facet[open]")
+        .ok()
+        .flatten()
+        .is_some()
+}
+
 /// Extract every `<pre>` block (paired with the nearest preceding heading)
 /// using the browser's DOMParser — maximally tolerant of CMI's HTML and much
 /// smaller than shipping an HTML parser in wasm.
