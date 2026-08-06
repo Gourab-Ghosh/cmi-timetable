@@ -59,6 +59,9 @@ def make_driver():
     opts.add_argument("--no-sandbox")
     opts.add_argument("--disable-gpu")
     opts.add_argument("--window-size=1500,1000")
+    # The stylesheet honors prefers-reduced-motion; forcing it here disables
+    # entry animations so dialogs are fully visible the moment they mount.
+    opts.add_argument("--force-prefers-reduced-motion")
     return webdriver.Chrome(options=opts)
 
 
@@ -198,7 +201,7 @@ def t05_credits_default_four(app):
     app.open_tab("My courses")
     section = app.wait_css("section[aria-label='My courses']")
     assert "Total credits: 6" in section.text, section.text  # 4 (assumed) + 2
-    assert "4 assumed for 1 course" in section.text, section.text
+    assert "1 course assumed at 4" in section.text, section.text
     # Details dialog marks the assumption.
     app.chip("TOC").click()
     dialog = app.wait_css(".dialog")
@@ -298,7 +301,7 @@ def t11_my_data_lists_and_removes_overrides(app):
     time.sleep(0.4)
     app.xpath("//button[normalize-space()='My data']").click()
     dialog = app.wait_css(".dialog")
-    assert "Your overwrites" in dialog.text
+    assert "Your changes" in dialog.text
     assert "TOC" in dialog.text and "→" in dialog.text, dialog.text
     assert "Tue 09:10–10:25" in dialog.text and "Wed 17:00–18:15" in dialog.text, \
         f"override line should show official → custom: {dialog.text!r}"
@@ -438,7 +441,7 @@ def t17_credit_override(app):
     app.open_tab("My timetable")
     panel = app.wait_css("[data-testid='your-changes']")
     assert "credits: 4 (assumed) → 3" in panel.text, panel.text
-    app.xpath("//button[contains(.,'1 overwrite')]")  # toolbar pill
+    app.xpath("//button[contains(.,'1 change')]")  # toolbar pill
     panel.find_element(
         By.XPATH, ".//li[contains(.,'TOC')]//button[normalize-space()='Remove']"
     ).click()
@@ -450,7 +453,7 @@ def t17_credit_override(app):
 
 def t18_overwrites_panel_and_remove_all(app):
     """Meeting moves and credit changes appear together with provenance;
-    'Remove all overwrites' restores CMI's data in one step."""
+    'Remove all changes' restores CMI's data in one step."""
     t09_drag_requires_edit_mode(app)  # TOC moved Tue 09:10 → Wed 17:00
     time.sleep(0.4)
     app.css("button.chip-info[aria-label='Details for TOC']").click()
@@ -471,11 +474,11 @@ def t18_overwrites_panel_and_remove_all(app):
     panel = app.wait_css("[data-testid='your-changes']")
     assert "→ Wed 17:00–18:15" in panel.text, panel.text
     assert "credits: 4 (assumed) → 2" in panel.text, panel.text
-    app.xpath("//button[contains(.,'2 overwrites')]")
+    app.xpath("//button[contains(.,'2 changes')]")
     panel.find_element(
-        By.XPATH, ".//button[normalize-space()='Remove all overwrites']"
+        By.XPATH, ".//button[normalize-space()='Remove all changes']"
     ).click()
-    app.wait_toast("All overwrites removed")
+    app.wait_toast("All custom changes removed")
     app.wait_gone("[data-testid='your-changes']")
     # Back on CMI's data: official Tuesday slot again.
     app.wait_css("td[data-day='1'][data-slot='550'] button.chip[aria-label^='TOC,']")
@@ -513,7 +516,7 @@ def t19_add_extra_meetings(app):
     assert app.chips("TOC", "td[data-day='1'][data-slot='550']"), "official Tue stays"
     assert app.chips("TOC", "td[data-day='2'][data-slot='1020']")
     assert app.chips("TOC", "td[data-day='4'][data-slot='1020']")
-    app.xpath("//button[contains(.,'2 overwrites')]")
+    app.xpath("//button[contains(.,'2 changes')]")
 
 
 def t20_url_codes_any_case(app):

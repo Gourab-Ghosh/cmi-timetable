@@ -263,8 +263,8 @@ pub fn edit_toggle(app: App) -> impl IntoView {
                 app.edit_mode.set(on);
                 if on {
                     app.toast(
-                        "Edit layout is on — drag chips to move them (Esc cancels). \
-                         Press it again when you're done.",
+                        "Edit layout is on — drag any chip to a new slot (Esc cancels). \
+                         Click ✎ Done editing when you're finished.",
                     );
                 } else {
                     app.move_mode.set(None);
@@ -313,6 +313,7 @@ pub fn Header() -> impl IntoView {
 
     view! {
         <header class="header">
+            <span class="logo" aria-hidden="true"></span>
             <div class="brand">
                 <h1>"CMI Timetable"</h1>
                 <span class="semester">
@@ -1259,7 +1260,7 @@ fn details_dialog(app: App, code: String) -> impl IntoView {
         return view! {
             <div>
                 <h2 class="mono">{code.clone()}</h2>
-                <p>"This course is not in the current timetable data."</p>
+                <p>"This course isn't in CMI's current timetable data."</p>
                 {selected
                     .then(|| {
                         view! {
@@ -1323,10 +1324,16 @@ fn details_dialog(app: App, code: String) -> impl IntoView {
 
     view! {
         <div>
-            <h2 class="mono">{course.code.clone()}</h2>
-            <p>{course.name.clone()}</p>
+            // The human-readable name is the headline; the code rides along
+            // as its usual chip, matching card headers everywhere else.
+            <div class="row" style="align-items:center;gap:0.55rem;margin-bottom:0.45rem">
+                {chip(app, ChipProps::list(&course.code))}
+                <h2 style="margin:0">{course.name.clone()}</h2>
+            </div>
             <dl class="kv">
-                <dt>"Instructor(s)"</dt>
+                <dt>
+                    {if course.instructors.len() > 1 { "Instructors" } else { "Instructor" }}
+                </dt>
                 <dd>
                     {if course.instructors.is_empty() {
                         "—".to_string()
@@ -1431,8 +1438,11 @@ fn details_dialog(app: App, code: String) -> impl IntoView {
                             </button>
                         }
                     })}
+                // The single filled accent is reserved for the constructive
+                // action; removal is a quiet button.
                 <button
-                    class="btn primary"
+                    class="btn"
+                    class:primary=!selected
                     on:click=move |_| {
                         app.toggle_select(&toggle_code);
                     }
@@ -1461,10 +1471,10 @@ pub fn custom_changes_pill(app: App) -> impl IntoView {
                     view! {
                         <button
                             class="btn small"
-                            title="Everything of CMI's you've overwritten — with one-click removal"
+                            title="Everything of CMI's you've changed — with one-click removal"
                             on:click=move |_| app.dialog.set(Some(Dialog::MyData))
                         >
-                            {format!("✎ {n} overwrite{}", if n == 1 { "" } else { "s" })}
+                            {format!("✎ {n} change{}", if n == 1 { "" } else { "s" })}
                         </button>
                     }
                 })
@@ -1499,13 +1509,13 @@ pub fn overrides_list(app: App) -> impl IntoView {
                         Some(base) => {
                             format!("{} → {}", base.describe(), o.to.describe())
                         }
-                        None => format!("created meeting: {}", o.to.describe()),
+                        None => format!("added a meeting — {}", o.to.describe()),
                     };
                     let selected = app.is_selected(&course);
                     view! {
                         <li>
-                            <span class="chip mono" style="--hue:215">{course.clone()}</span>
-                            <span class="when">{line}</span>
+                            {chip(app, ChipProps::list(&course))}
+                            <span class="small">{line}</span>
                             {(!selected)
                                 .then(|| {
                                     view! {
@@ -1543,8 +1553,8 @@ pub fn overrides_list(app: App) -> impl IntoView {
                     let selected = app.is_selected(&course);
                     view! {
                         <li>
-                            <span class="chip mono" style="--hue:215">{course.clone()}</span>
-                            <span class="when">
+                            {chip(app, ChipProps::list(&course))}
+                            <span class="small">
                                 {format!("credits: {official} → {}", c.credits)}
                             </span>
                             {(!selected)
@@ -1571,14 +1581,14 @@ pub fn overrides_list(app: App) -> impl IntoView {
                 <button
                     class="btn small"
                     on:click=move |_| {
-                        app.act("remove all overwrites", |_, ovs| {
+                        app.act("remove all custom changes", |_, ovs| {
                             ovs.items.clear();
                             ovs.credits.clear();
                         });
-                        app.toast_undo("All overwrites removed — back on CMI's data");
+                        app.toast_undo("All custom changes removed — back on CMI's data");
                     }
                 >
-                    "Remove all overwrites"
+                    "Remove all changes"
                 </button>
             }
                 .into_any()
@@ -1627,9 +1637,9 @@ fn my_data_dialog(app: App) -> impl IntoView {
                  stored on a server."
             </p>
 
-            // Overwrites: exactly which CMI data the user's changes replace —
-            // moved/created meetings and changed credits, all together.
-            <h3>"Your overwrites"</h3>
+            // Every custom change together: exactly which CMI data it
+            // replaces — moved/created meetings and changed credits.
+            <h3>"Your changes"</h3>
             {overrides_list(app)}
 
             <h3 style="margin-top:0.9rem">"Your course selection"</h3>
@@ -1696,7 +1706,11 @@ fn my_data_dialog(app: App) -> impl IntoView {
                 "Reset preferences"
             </button>
 
-            <h3 style="margin-top:0.9rem">"Everything"</h3>
+            <h3 style="margin-top:0.9rem">"Start fresh"</h3>
+            <p class="muted small">
+                "Removes your changes, selection, cached timetable and preferences \
+                 from this browser."
+            </p>
             <button class="btn small danger" on:click=delete_everything>
                 "Delete all app data"
             </button>
@@ -1994,7 +2008,7 @@ fn conflicts_dialog(app: App) -> impl IntoView {
                     view! {
                         <div class="conflict-item">
                             <div class="row">
-                                <span class="chip mono" style="--hue:215">{c.course.clone()}</span>
+                                {chip(app, ChipProps::list(&c.course))}
                             </div>
                             <label class="opt">
                                 <input
@@ -2260,44 +2274,128 @@ fn share_dialog(app: App) -> impl IntoView {
 
 fn what_changed_dialog(app: App) -> impl IntoView {
     let diff = app.what_changed.get_untracked().unwrap_or_default();
+    let snapshot = app.snapshot.get_untracked();
+    let selection = app.selection.get_untracked();
+    let mine = move |code: &str| selection.iter().any(|c| c == code);
+
+    // Courses in the user's own timetable always come first.
+    let mut added = diff.added.clone();
+    added.sort_by_key(|c| (!mine(c), c.clone()));
+    let mut removed = diff.removed.clone();
+    removed.sort_by_key(|c| (!mine(c), c.clone()));
+    let mut changed = diff.changed.clone();
+    changed.sort_by_key(|c| (!mine(&c.code), c.code.clone()));
+
+    let course_name =
+        move |code: &str| snapshot.course(code).map(|c| c.name.clone()).unwrap_or_default();
+
+    let mine_badge = |is_mine: bool| {
+        is_mine.then(|| view! { <span class="badge accent">"in your timetable"</span> })
+    };
+
+    let section = |title: &'static str, count: usize, body: AnyView| {
+        (count > 0).then(move || {
+            view! {
+                <div class="diff-section">
+                    <h3>
+                        {title}
+                        <span class="diff-count">{count.to_string()}</span>
+                    </h3>
+                    {body}
+                </div>
+            }
+        })
+    };
+
     view! {
         <div>
             <h2>"What changed since last sync"</h2>
-            {(!diff.added.is_empty())
+            <p class="muted small">
+                "How CMI's pages differ from the timetable this app showed before \
+                 the sync. Your own selection and custom changes are untouched."
+            </p>
+            {section(
+                "New courses",
+                added.len(),
+                view! {
+                    {added
+                        .iter()
+                        .map(|code| {
+                            let name = course_name(code);
+                            view! {
+                                <div class="diff-item">
+                                    {chip(app, ChipProps::list(code))}
+                                    <span class="name">{name}</span>
+                                    {mine_badge(mine(code))}
+                                </div>
+                            }
+                        })
+                        .collect_view()}
+                }
+                    .into_any(),
+            )}
+            {section(
+                "No longer listed",
+                removed.len(),
+                view! {
+                    {removed
+                        .iter()
+                        .map(|code| {
+                            let is_mine = mine(code);
+                            view! {
+                                <div class="diff-item">
+                                    <span class="chip mono" style="--hue:215">{code.clone()}</span>
+                                    <span class="muted small">
+                                        "dropped from CMI's pages"
+                                    </span>
+                                    {is_mine
+                                        .then(|| {
+                                            view! {
+                                                <span class="badge warn">"was in your timetable"</span>
+                                            }
+                                        })}
+                                </div>
+                            }
+                        })
+                        .collect_view()}
+                }
+                    .into_any(),
+            )}
+            {section(
+                "Changed",
+                changed.len(),
+                view! {
+                    {changed
+                        .iter()
+                        .map(|c| {
+                            let name = course_name(&c.code);
+                            view! {
+                                <div class="diff-item">
+                                    {chip(app, ChipProps::list(&c.code))}
+                                    <span class="name">{name}</span>
+                                    {mine_badge(mine(&c.code))}
+                                    <ul class="diff-lines">
+                                        {c.summary
+                                            .iter()
+                                            .map(|line| view! { <li>{line.clone()}</li> })
+                                            .collect_view()}
+                                    </ul>
+                                </div>
+                            }
+                        })
+                        .collect_view()}
+                }
+                    .into_any(),
+            )}
+            {diff
+                .is_empty()
                 .then(|| {
                     view! {
-                        <h3>"New courses"</h3>
-                        <p class="mono">{diff.added.join(", ")}</p>
+                        <p class="muted">
+                            "Nothing differs — the timetable already matches CMI's pages."
+                        </p>
                     }
                 })}
-            {(!diff.removed.is_empty())
-                .then(|| {
-                    view! {
-                        <h3>"Removed courses"</h3>
-                        <p class="mono">{diff.removed.join(", ")}</p>
-                    }
-                })}
-            {(!diff.changed.is_empty())
-                .then(|| {
-                    view! {
-                        <h3>"Changed"</h3>
-                        <ul>
-                            {diff.changed
-                                .iter()
-                                .map(|c| {
-                                    view! {
-                                        <li>
-                                            <span class="mono">{c.code.clone()}</span>
-                                            " — "
-                                            {c.summary.join("; ")}
-                                        </li>
-                                    }
-                                })
-                                .collect_view()}
-                        </ul>
-                    }
-                })}
-            {diff.is_empty().then(|| view! { <p class="muted">"No differences."</p> })}
             <div class="actions">{close_button(app)}</div>
         </div>
     }

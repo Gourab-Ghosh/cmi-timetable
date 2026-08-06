@@ -10,6 +10,11 @@ python3 -m venv .venv && .venv/bin/pip install selenium   # driver auto-managed
 # build the app, then run
 (cd ../app && trunk build --release)
 .venv/bin/python test_app.py
+
+# if `trunk serve` is running, build to a separate dist and target dir so the
+# watcher can't race the test build (truncated wasm / mismatched hashes):
+(cd ../app && CARGO_TARGET_DIR=~/.rust-target-e2e trunk build --release --dist dist-e2e)
+DIST_DIR=../app/dist-e2e .venv/bin/python test_app.py
 ```
 
 Environment knobs: `CHROME_BIN` (default `/usr/bin/chromium`), `DIST_DIR`,

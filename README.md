@@ -85,12 +85,12 @@ my custom changes"). When both are present, `s` wins. The query stays
 - Deselecting a course **keeps** its custom times, so re-adding it (or
   spotting it in the master grid) doesn't silently revert a move. Remove
   custom times explicitly per meeting, per course, or in **My data**.
-- **Every overwrite is visible in one place**: the "Your changes" panel on
-  My timetable (and the same list inside **My data**) shows each custom
+- **Every custom change is visible in one place**: the "Your changes" panel
+  on My timetable (and the same list inside **My data**) shows each custom
   meeting and credit change as *official → yours*, each with a one-click
-  Remove, plus "Remove all overwrites". A "✎ N overwrites" pill sits in the
-  grid toolbars whenever custom data is in play, and overridden meeting rows
-  say inline exactly which CMI time they overwrite.
+  Remove, plus "Remove all changes". A "✎ N changes" pill sits in the grid
+  toolbars whenever custom data is in play, and overridden meeting rows say
+  inline exactly which CMI time they overwrite.
 - **Any course can gain extra time slots**: "Add a meeting" (course card or
   details dialog) appends another weekly meeting; unscheduled courses get
   the same flow as "Give it a time".

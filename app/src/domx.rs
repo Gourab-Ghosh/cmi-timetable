@@ -177,12 +177,22 @@ pub fn today_local() -> ttcore::date::CivilDate {
     )
 }
 
-/// Exact local timestamp for tooltips.
+/// Exact local timestamp — unambiguous "6 Aug 2026, 15:19" (numeric d/m/y
+/// reads differently across locales, and seconds are log noise).
 pub fn fmt_local(ms: f64) -> String {
+    const MONTHS: [&str; 12] = [
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+        "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+    ];
     let d = js_sys::Date::new(&wasm_bindgen::JsValue::from_f64(ms));
-    d.to_locale_string("en-IN", &wasm_bindgen::JsValue::UNDEFINED)
-        .as_string()
-        .unwrap_or_default()
+    format!(
+        "{} {} {}, {:02}:{:02}",
+        d.get_date(),
+        MONTHS[(d.get_month() as usize).min(11)],
+        d.get_full_year(),
+        d.get_hours(),
+        d.get_minutes(),
+    )
 }
 
 /// Short local date ("5 Aug 2026") for user-facing failure copy.

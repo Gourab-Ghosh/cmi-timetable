@@ -237,7 +237,8 @@ impl SourceTier {
             SourceTier::Direct => "direct".to_string(),
             SourceTier::Proxy(_) => "proxy".to_string(),
             SourceTier::Mirror => "mirror".to_string(),
-            SourceTier::Bundled => "bundled".to_string(),
+            // Students shouldn't need to know what "bundled" means.
+            SourceTier::Bundled => "built-in copy".to_string(),
         }
     }
 }

@@ -35,23 +35,54 @@ fn meetings_set(course: &Course) -> BTreeSet<(usize, u16, u16, Option<String>)> 
         .collect()
 }
 
+fn fmt_credits(credits: Option<u8>) -> String {
+    match credits {
+        Some(n) => n.to_string(),
+        None => "unstated".to_string(),
+    }
+}
+
+fn fmt_people(people: &[String]) -> String {
+    if people.is_empty() {
+        "—".to_string()
+    } else {
+        people.join(" / ")
+    }
+}
+
+fn status_words(status: crate::model::ScheduleStatus) -> &'static str {
+    match status {
+        crate::model::ScheduleStatus::Scheduled => "on the timetable",
+        crate::model::ScheduleStatus::UnscheduledListed => "listed without a time slot",
+        crate::model::ScheduleStatus::ScheduledNoBranch => "scheduled outside the branch grids",
+    }
+}
+
 fn describe_course_change(old: &Course, new: &Course) -> Vec<String> {
     let mut out = Vec::new();
     if old.name != new.name {
-        out.push(format!("name: {:?} → {:?}", old.name, new.name));
+        out.push(format!("renamed: {} → {}", old.name, new.name));
     }
     if old.instructors != new.instructors {
         out.push(format!(
-            "instructors: {} → {}",
-            old.instructors.join("/"),
-            new.instructors.join("/")
+            "instructor: {} → {}",
+            fmt_people(&old.instructors),
+            fmt_people(&new.instructors)
         ));
     }
     if old.credits != new.credits {
-        out.push("credits changed".to_string());
+        out.push(format!(
+            "credits: {} → {}",
+            fmt_credits(old.credits),
+            fmt_credits(new.credits)
+        ));
     }
     if old.status != new.status {
-        out.push("schedule status changed".to_string());
+        out.push(format!(
+            "{} → {}",
+            status_words(old.status),
+            status_words(new.status)
+        ));
     }
     let (before, after) = (meetings_set(old), meetings_set(new));
     if before != after {

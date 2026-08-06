@@ -28,20 +28,33 @@ fn what_changed_panel(app: App) -> impl IntoView {
             app.what_changed
                 .get()
                 .map(|diff| {
-                    let n = diff.added.len() + diff.removed.len() + diff.changed.len();
+                    let mut parts: Vec<String> = Vec::new();
+                    if !diff.changed.is_empty() {
+                        parts.push(format!(
+                            "{} course{} changed",
+                            diff.changed.len(),
+                            if diff.changed.len() == 1 { "" } else { "s" },
+                        ));
+                    }
+                    if !diff.added.is_empty() {
+                        parts.push(format!("{} new", diff.added.len()));
+                    }
+                    if !diff.removed.is_empty() {
+                        parts.push(format!("{} no longer listed", diff.removed.len()));
+                    }
                     view! {
                         <div class="banner noprint" role="status">
                             <span>
                                 {format!(
-                                    "What changed since last sync: {n} difference{}.",
-                                    if n == 1 { "" } else { "s" },
+                                    "CMI updated the timetable since your last sync — {}.",
+                                    parts.join(", "),
                                 )}
                             </span>
                             <button
                                 class="btn small"
                                 on:click=move |_| app.dialog.set(Some(Dialog::WhatChanged))
                             >
-                                "View"
+                                "See what changed"
                             </button>
                             <button class="btn small" on:click=move |_| app.what_changed.set(None)>
                                 "Dismiss"
@@ -164,10 +177,26 @@ fn my_timetable(app: App) -> impl IntoView {
         <section aria-label="My timetable">
             <h2 class="print-title">
                 {move || format!(
-                    "CMI Timetable — {}",
+                    "My timetable — {}",
                     app.snapshot.with(|s| s.semester_label_display()),
                 )}
             </h2>
+            <span class="print-sub print-only">
+                {move || {
+                    let courses = app.selected_courses();
+                    let total: u32 = courses
+                        .iter()
+                        .map(|c| u32::from(app.course_credits(c)))
+                        .sum();
+                    format!(
+                        "{} course{} · {} credits · data from cmi.ac.in · \
+                         made with the CMI Timetable Planner",
+                        courses.len(),
+                        if courses.len() == 1 { "" } else { "s" },
+                        total,
+                    )
+                }}
+            </span>
             <div class="toolbar noprint">
                 <h2 style="margin:0">"My timetable"</h2>
                 <div class="grow"></div>
@@ -216,8 +245,11 @@ fn my_timetable(app: App) -> impl IntoView {
                 if app.selection.with(|s| s.is_empty()) {
                     view! {
                         <div class="empty panel">
-                            <p class="big">"Nothing here yet."</p>
-                            <p>"Pick your courses from the catalog to build your timetable."</p>
+                            <p class="big">"Your week is a blank grid."</p>
+                            <p>
+                                "Add courses from the catalog — clashes are flagged the moment \
+                                 they appear, and every time slot stays yours to fine-tune."
+                            </p>
                             <button class="btn primary" on:click=move |_| app.set_tab(Tab::Catalog)>
                                 "Open the catalog"
                             </button>
@@ -425,6 +457,102 @@ fn my_timetable(app: App) -> impl IntoView {
                         }
                     })
             }}
+
+            // Print-only legend: what every code on the sheet means.
+            {move || {
+                let courses = app.selected_courses();
+                (!courses.is_empty())
+                    .then(|| {
+                        view! {
+                            <div class="print-legend print-only">
+                                <h3>"Courses"</h3>
+                                <table>
+                                    <thead>
+                                        <tr>
+                                            <th>"Code"</th>
+                                            <th>"Course"</th>
+                                            <th>"Instructor"</th>
+                                            <th>"Cr"</th>
+                                            <th>"Meets"</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {courses
+                                            .into_iter()
+                                            .map(|course| {
+                                                let eff = app.effective_meetings(&course);
+                                                let meets = if eff.is_empty() {
+                                                    "no fixed slot".to_string()
+                                                } else {
+                                                    eff.iter()
+                                                        .map(|e| {
+                                                            let mut s = format!(
+                                                                "{} {}",
+                                                                e.meeting.day.short(),
+                                                                e.meeting.slot.label(),
+                                                            );
+                                                            if let Some(hall) = &e.meeting.hall {
+                                                                s.push_str(&format!(" · {hall}"));
+                                                            }
+                                                            if e.overridden {
+                                                                s.push_str(" ✎");
+                                                            }
+                                                            s
+                                                        })
+                                                        .collect::<Vec<_>>()
+                                                        // pre-line: one meeting per line
+                                                        .join("\n")
+                                                };
+                                                let credits = {
+                                                    let n = app.course_credits(&course);
+                                                    if app.credits_custom(&course.code).is_some() {
+                                                        format!("{n} ✎")
+                                                    } else if course.credits_assumed() {
+                                                        format!("{n}*")
+                                                    } else {
+                                                        n.to_string()
+                                                    }
+                                                };
+                                                view! {
+                                                    <tr>
+                                                        <td class="code">{course.code.clone()}</td>
+                                                        <td>{course.name.clone()}</td>
+                                                        <td>
+                                                            {if course.instructors.is_empty() {
+                                                                "—".to_string()
+                                                            } else {
+                                                                course.instructors.join(" / ")
+                                                            }}
+                                                        </td>
+                                                        <td>{credits}</td>
+                                                        <td>{meets}</td>
+                                                    </tr>
+                                                }
+                                            })
+                                            .collect_view()}
+                                    </tbody>
+                                </table>
+                                <p class="print-footnote">
+                                    <span>
+                                        {move || {
+                                            let mut legend = "✎ customised in the planner · \
+                                                              * assumed credits (not listed \
+                                                              by CMI)"
+                                                .to_string();
+                                            if !app.clashes().is_empty() {
+                                                legend.push_str(
+                                                    " · a doubled border marks a clash",
+                                                );
+                                            }
+                                            legend
+                                        }}
+                                    </span>
+                                    <span>"Verify against official CMI announcements."</span>
+                                </p>
+                            </div>
+                        }
+                    })
+            }}
         </section>
     }
 }
@@ -454,7 +582,7 @@ fn my_courses(app: App) -> impl IntoView {
         let mut notes: Vec<String> = Vec::new();
         if assumed > 0 {
             notes.push(format!(
-                "4 assumed for {assumed} course{} CMI doesn't state",
+                "{assumed} course{} assumed at 4 (CMI doesn't list credits)",
                 if assumed == 1 { "" } else { "s" },
             ));
         }
@@ -464,7 +592,7 @@ fn my_courses(app: App) -> impl IntoView {
         if notes.is_empty() {
             format!("Total credits: {total}")
         } else {
-            format!("Total credits: {total} ({})", notes.join(" · "))
+            format!("Total credits: {total} · {}", notes.join(" · "))
         }
     };
 
@@ -480,8 +608,11 @@ fn my_courses(app: App) -> impl IntoView {
                 if courses.is_empty() {
                     view! {
                         <div class="empty panel">
-                            <p class="big">"No courses yet."</p>
-                            <p>"Everything you add shows up here with its full details."</p>
+                            <p class="big">"No courses selected yet."</p>
+                            <p>
+                                "Courses you add appear here with their instructors, credits, \
+                                 meeting times and your customisations."
+                            </p>
                             <button class="btn primary" on:click=move |_| app.set_tab(Tab::Catalog)>
                                 "Open the catalog"
                             </button>
@@ -611,7 +742,7 @@ fn course_card(app: App, course: Course) -> impl IntoView {
                             </button>
                         }
                     })}
-                <button class="btn small danger" on:click=move |_| app.remove_course(&remove_code)>
+                <button class="btn small" on:click=move |_| app.remove_course(&remove_code)>
                     "Remove"
                 </button>
             </div>
@@ -692,12 +823,8 @@ fn master_grid(app: App) -> impl IntoView {
 
     view! {
         <section aria-label="Master grid">
-            <div class="toolbar">
+            <div class="toolbar" style="margin-bottom:0.25rem">
                 <h2 style="margin:0">"Master grid"</h2>
-                <span class="muted small">
-                    "Click adds or removes · ⓘ shows details · ⚠ = would clash with your \
-                     timetable · turn on Edit layout to drag"
-                </span>
                 <div class="grow"></div>
                 {custom_changes_pill(app)}
                 {edit_toggle(app)}
@@ -720,6 +847,10 @@ fn master_grid(app: App) -> impl IntoView {
                     }}
                 </button>
             </div>
+            <p class="muted small" style="margin:0 0 0.6rem">
+                "Click a course to add or remove it · ⓘ details · ⚠ clashes with \
+                 your timetable · rearrange with ✎ Edit layout"
+            </p>
             {filter_bar(app, count)}
             <div
                 class="grid-scroll"
@@ -805,7 +936,7 @@ fn catalog(app: App) -> impl IntoView {
                     view! {
                         <div class="empty panel">
                             <p class="big">"No courses match."</p>
-                            <p>"Try removing a filter or clearing the search."</p>
+                            <p>"Loosen a filter or clear the search to see more."</p>
                         </div>
                     }
                         .into_any()
@@ -858,7 +989,7 @@ fn catalog_row(app: App, course: Course) -> impl IntoView {
                 {temp.then(|| view! { <span class="badge warn">"temporary booking"</span> })}
                 <button
                     class="btn small"
-                    class:primary=move || !app.is_selected(&toggle_code)
+                    class:ghost-accent=move || !app.is_selected(&toggle_code)
                     on:click={
                         let c = code.clone();
                         move |_| app.toggle_select(&c)
