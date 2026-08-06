@@ -34,9 +34,9 @@ Built with **Rust → WebAssembly** ([Leptos](https://leptos.dev) CSR +
         DOMParser and feeds them to the same core parsing functions.
         Ships empty: the first load asks for a sync (build.rs only stamps
         build metadata — no data is baked in).
-/sync   Small native binary (reqwest + core). The optional GitHub Actions
-        cron uses it to publish a validated data mirror under
-        app/public/data/. One parser everywhere: one source of truth.
+/sync   Small native binary (reqwest + core). `./deploy.sh --sync` runs it
+        to publish a validated data mirror under app/public/data/.
+        One parser everywhere: one source of truth.
 ```
 
 ### How "Sync now" gets data (the CORS reality)
@@ -50,8 +50,8 @@ valid response wins:
 
 1. **direct** — a cheap 4 s attempt at the CMI URLs (in case CORS ever opens up)
 2. **proxy** — public CORS relays raced in parallel (see `app/src/fetch.rs`)
-3. **mirror** — same-origin `data/latest.json` + raw HTML copies committed by
-   the `sync.yml` cron (never committed by hand — the repo carries no data)
+3. **mirror** — same-origin `data/latest.json` + raw HTML copies produced by
+   `./deploy.sh --sync` (never hand-written: the gate is the only judge)
 
 Until the first sync succeeds the app stays on its welcome screen; a failed
 first sync explains itself in a banner and every later page load retries
@@ -183,53 +183,43 @@ cargo run -p cmi-timetable-sync
 
 ## Deploying
 
-Deploys are **local-first**: the whole build happens on your machine, so a
-GitHub Actions outage can't fail a release. (GitHub still runs its own
-managed `pages-build-deployment` to serve the branch — but that only copies
-static files, with no Rust toolchain, no third-party actions and no build to
-break. If their queue is backed up, the site lags; nothing is lost, because
-the finished artifact is already on the branch.)
+Everything runs on your machine. **This repo has no GitHub Actions
+workflows at all** — nothing on GitHub's side builds, tests, or schedules
+anything, so no CI job can fail, stall, or mail you about it.
 
 ```sh
 ./deploy.sh               # test + build + publish + verify it went live
-./deploy.sh --push        # push the branch first, then publish (ship both)
+./deploy.sh --sync        # refresh the CMI data mirror first
+./deploy.sh --push        # push your commits too (ship code + site)
 ./deploy.sh --skip-tests  # skip the test suite
-./deploy.sh --republish    # re-trigger serving of what is already published
+./deploy.sh --republish   # re-trigger serving of what is already published
 ```
 
-After publishing, the script checks that the live URL really serves the new
-build and asks Pages to rebuild if it doesn't (`--no-verify` skips the wait).
-If GitHub is having an incident, the artifact is already on the branch —
-`./deploy.sh --republish` re-triggers serving later without rebuilding.
-
-`--push` is the everyday "ship it" command: it pushes your commits and
-updates the live site in one step. (A bare `git push` no longer touches the
-site — that is the point: nothing on GitHub's side can fail a release.)
-
 The script builds with Trunk inside a **temporary Docker container**
-(`rust:1`; it falls back to a plain local build when Docker is absent) and
-force-pushes the result as a **single orphan commit** to the `gh-pages`
-branch. `main` never carries build artifacts and the branch keeps no
-history. Configure Pages once: Settings → Pages → deploy from branch →
+(`rust:1`; it falls back to a plain local build when Docker is absent),
+runs the tests, and force-pushes the result as a **single orphan commit**
+to the `gh-pages` branch. `main` never carries build artifacts and the
+branch keeps no history, so the repository shows only source. It then
+checks that the live URL really serves the new build and asks Pages to
+rebuild if it doesn't (`--no-verify` skips the wait).
+
+Configure Pages once: Settings → Pages → deploy from branch →
 `gh-pages` / root (or `gh api -X PUT repos/<owner>/<repo>/pages -f
 build_type=legacy -f "source[branch]=gh-pages"`). For a
 **user/organization page** (`<user>.github.io` repo) run with
 `PUBLIC_URL=/`, and adjust the `base` computation in
 `app/public/404.html` (comment inside).
 
-The workflows that remain on GitHub's side are best-effort conveniences:
+`--sync` does locally what a cron used to do on GitHub: fetch both CMI
+pages, run them through the same parser and validation gate, and update
+`app/public/data/` (committed as *data*, never as build output). A failed
+gate leaves the last good mirror in place and stops the deploy.
 
-- `ci.yml` — tests on every push; a red run never blocks the site.
-- `deploy.yml` — the same build+publish as `deploy.sh`, but
-  **manual-dispatch only**: a remote fallback for when no dev machine is
-  at hand.
-- `sync.yml` (optional; the app works without it) runs the `/sync` binary
-  every 6 hours, commits the validated mirror to `app/public/data/` and
-  copies the fresh data straight onto `gh-pages` — a pure git operation,
-  no rebuild. A red sync run means the gate failed and the last good
-  mirror stayed.
-- `retry.yml` — reruns a failed CI/deploy/sync run once, to absorb
-  transient GitHub infrastructure failures.
+The one step still on GitHub's side is serving the branch — their managed
+`pages-build-deployment`, which only copies static files. If they are
+having an incident it can lag or fail; nothing is lost, because the
+finished site is already on the branch, and `./deploy.sh --republish`
+re-triggers serving without rebuilding.
 
 ## Maintenance recipes
 

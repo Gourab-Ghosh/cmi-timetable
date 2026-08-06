@@ -108,19 +108,21 @@ regenerates the .ics golden.
   credits unstated→4; RDBM 2 credits; SVA unscheduled; MFD Wed/Fri 840 LH6;
   RFLR Mon/Wed 630 LH5; QCOM Tue/Thu 930 LH803; slots
   550/630/710/840/930/1020; 75 courses, 18 branches.
-- `app/public/data/` holds only a README — the CI cron (sync.yml) is the
-  only writer of mirror data.
+- `app/public/data/` mirror files are written ONLY by the sync binary
+  (`./deploy.sh --sync`), never by hand.
 - Published: `https://github.com/Gourab-Ghosh/cmi-timetable` (origin, ssh),
   live at `https://gourab-ghosh.github.io/cmi-timetable/`. Deploys are
   LOCAL-FIRST: `./deploy.sh` builds in a temporary Docker container (rust:1;
   falls back to a local build without Docker), runs tests, and force-pushes
   the site as a SINGLE orphan commit to `gh-pages` (no build files on main,
   no history on the branch). Pages source = branch `gh-pages` / root
-  (`build_type=legacy`). Caches in `.build-cache/` (gitignored). CI on
-  GitHub is best-effort only: ci.yml (tests on push), deploy.yml
-  (manual-dispatch remote fallback, same build → gh-pages), sync.yml (cron;
-  commits mirror to main, copies data/ straight onto gh-pages — no build),
-  retry.yml (one auto-rerun on infra failures).
+  (`build_type=legacy`). Caches in `.build-cache/` (gitignored).
+  **There are NO GitHub Actions workflows in this repo** (all four deleted at
+  the user's request: nothing on GitHub may build/schedule/fail/mail). The
+  data-mirror cron became `./deploy.sh --sync` (same binary, same gate, run
+  locally; commits `app/public/data` as data, not build output). The ONLY
+  GitHub-side step left is their managed `pages-build-deployment`, which
+  copies the branch's static files — unavoidable for Pages.
 
 ## 7. Prompt log (append one entry per user round; newest last)
 
@@ -266,3 +268,14 @@ regenerates the .ics golden.
   AND would have falsely reported "live"); `--republish` ignored
   `--no-verify` (blocked ~6 min); `--help` truncated the header mid-sentence
   (now prints the whole comment block via awk).
+- **R12 (no GitHub-side processes):** user aborted an in-progress switch to
+  committing build output into `docs/` on main (uncommitted work reverted with
+  `git checkout --`) and instead asked that nothing on GitHub be able to
+  error, while build files stay out of the repo. Deleted ALL FOUR workflows
+  (ci/deploy/retry/sync — recoverable from history if ever wanted) and folded
+  the mirror cron into `deploy.sh --sync`. GitHub's own
+  `pages-build-deployment` for the served branch cannot be removed (it is how
+  branch Pages works) and was failing repeatedly during their major outage
+  (15–19 min, then error), so publication is retried until the live URL
+  serves the new build. Reminder for future rounds: a republish push CANCELS
+  an in-flight Pages build, so never re-trigger while one is running.
