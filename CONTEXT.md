@@ -286,4 +286,10 @@ regenerates the .ics golden.
   independently of GitHub by serving the exact `origin/gh-pages` tree at the
   same `/cmi-timetable/` subpath with DNS blackholed: boots, auto-syncs from
   its own mirror tier, real-touch long-press drag lands without deselecting,
-  0 unexpected console errors (scratchpad/verify_artifact.py).
+  0 unexpected console errors (scratchpad/verify_artifact.py). GitHub's
+  runners came back ~20:40 IST and the queued build published: the LIVE site
+  now serves this build (index.html byte-identical to the local dist, all
+  assets 200, data/latest.json 200, /nope → 404) and a browser pass on the
+  real URL confirms welcome → sync (76 courses, proxy tier) → touch
+  long-press drag lands without deselecting → Ctrl+Z reverts → hidden
+  `#/developer` reachable → 0 unexpected console errors.
