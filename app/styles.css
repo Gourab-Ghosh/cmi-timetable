@@ -1207,9 +1207,14 @@ pre.devpre {
   table.tt tbody tr { break-inside: avoid; }
   table.tt tbody tr:hover td { background: #fff !important; }
 
-  /* Chips fill the whole cell: code large and centered, hall beneath. */
-  table.tt td .cellstack, table.tt td .sidebyside { height: 100%; gap: 2px; }
-  .chipwrap { display: flex; width: 100%; height: 100%; }
+  /* Chips fill the whole cell: code large and centered, hall beneath.
+     Several chips in one cell (clashes) share it side by side. */
+  table.tt td .cellstack, table.tt td .sidebyside {
+    height: 100%;
+    gap: 2px;
+    flex-wrap: nowrap;
+  }
+  .chipwrap { display: flex; width: 100%; height: 100%; min-width: 0; }
   .chip {
     position: relative;
     display: flex;
@@ -1236,7 +1241,16 @@ pre.devpre {
     opacity: 0.85;
     max-width: 100%;
   }
-  .chip.clash { border: 2.2px double hsl(var(--hue) 60% 30%) !important; }
+  /* Clash: alarm red — the one thing red is reserved for — plus the ⚠
+     glyph pinned to the corner so grayscale printers keep the meaning. */
+  .chip.clash { border: 1.6px solid #c22f41 !important; }
+  .chip.clash::before {
+    position: absolute;
+    top: 1px;
+    left: 4px;
+    font-size: 8px;
+    color: #c22f41;
+  }
   .chip.overridden { border-style: dashed !important; }
   /* The ✎ sits in the chip's corner instead of stacking under the code. */
   .chip.overridden::after {
@@ -1246,6 +1260,22 @@ pre.devpre {
     font-size: 8px;
   }
   .chip .sel-mark { display: none; }
+
+  /* Clash strip under the grid — the poster equivalent of the on-screen
+     Clashes panel. */
+  .print-clashes {
+    display: block;
+    margin-top: 3mm;
+    padding: 1.8mm 3mm;
+    border: 1px solid #c22f41;
+    border-left: 3.5px solid #c22f41;
+    border-radius: 4px;
+    background: #fceef0 !important;
+    font-size: 9px;
+    color: #7c1d2a;
+    break-inside: avoid;
+  }
+  .print-clashes strong { color: #c22f41; }
 
   /* --- Legend: colored code chips, airy hairline rows. --- */
   .print-legend { margin-top: 5.5mm; break-inside: avoid; }

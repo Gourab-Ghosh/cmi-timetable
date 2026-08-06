@@ -425,6 +425,35 @@ fn my_timetable(app: App) -> impl IntoView {
                 }
             }}
 
+            // Print-only clash strip: a wall poster must shout about
+            // overlaps at least as loudly as the screen does.
+            {move || {
+                let clashes = clash_list();
+                (!clashes.is_empty())
+                    .then(|| {
+                        let lines = clashes
+                            .iter()
+                            .map(|c| {
+                                format!(
+                                    "{} × {} ({} {})",
+                                    c.a,
+                                    c.b,
+                                    c.day.short(),
+                                    c.a_slot.label(),
+                                )
+                            })
+                            .collect::<Vec<_>>()
+                            .join("  ·  ");
+                        view! {
+                            <div class="print-clashes print-only" aria-hidden="true">
+                                <strong>"⚠ Clashes on this sheet:"</strong>
+                                " "
+                                {lines}
+                            </div>
+                        }
+                    })
+            }}
+
             // Clashes panel
             {move || {
                 let clashes = clash_list();
@@ -635,7 +664,7 @@ fn my_timetable(app: App) -> impl IntoView {
                                                 .to_string();
                                             if !app.clashes().is_empty() {
                                                 legend.push_str(
-                                                    " · a doubled border marks a clash",
+                                                    " · ⚠ and a red border mark a clash",
                                                 );
                                             }
                                             legend

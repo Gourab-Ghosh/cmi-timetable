@@ -133,3 +133,8 @@ cmi-timetable-core --test ics_tests` regenerates the .ics golden.
   branch pastels with corner ✎, colored code chips in legend, hairline
   footnote); `domx::fmt_local_date` now hand-rolled "6 Aug 2026" (was
   locale-numeric) — also improves failure banners.
+- **R6b (print clashes):** clashing chips share their cell side by side
+  (print `.sidebyside` nowrap), carry an alarm-red border + ⚠ corner glyph,
+  and a red `.print-clashes` strip under the grid lists every overlap;
+  footnote copy matches. Verified via a dedicated TOC+ISS clash PDF in
+  shoot.py (`print-clash.pdf`).
