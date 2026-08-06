@@ -183,8 +183,12 @@ cargo run -p cmi-timetable-sync
 
 ## Deploying
 
-Deploys are **local-first** — GitHub-hosted runners are not in the deploy
-path, so a GitHub Actions outage can never block a release:
+Deploys are **local-first**: the whole build happens on your machine, so a
+GitHub Actions outage can't fail a release. (GitHub still runs its own
+managed `pages-build-deployment` to serve the branch — but that only copies
+static files, with no Rust toolchain, no third-party actions and no build to
+break. If their queue is backed up, the site lags; nothing is lost, because
+the finished artifact is already on the branch.)
 
 ```sh
 ./deploy.sh               # test + build + publish the site

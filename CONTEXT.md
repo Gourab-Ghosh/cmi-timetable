@@ -225,4 +225,26 @@ regenerates the .ics golden.
   directly onto gh-pages (pure git, no rebuild) instead of workflow_call
   redeploy; retry.yml watches all three. Self-hosted runner was considered
   and rejected (security risk on a public repo; still depends on the Actions
-  control plane).
+  control plane). An adversarial review then found 8 real defects, all fixed:
+  container git hit "dubious ownership" so build.rs stamped
+  APP_GIT_COMMIT=unknown (`safe.directory /work`, plus build.rs now watches
+  `.git/HEAD` + its ref file — without rerun-if-changed cargo reused a stale
+  stamp); a failed build left root-owned files in the repo (chown via EXIT
+  trap; rootless Docker detected and skipped); deploying behind origin/main
+  silently rolled back the data mirror (now refused unless `--allow-stale`);
+  sync's publish-data was gated on changed-vs-main so it could never heal
+  that (now runs every cron, `concurrency: pages`); `git fetch` failure was
+  read as "branch missing" (now `git ls-remote --exit-code`); trunk download
+  was linux-gnu-only without `curl -f` (OS/arch mapped, cache key includes
+  the target, reuses a PATH trunk); the throwaway staging repo ignored
+  repo-local git config (publish now builds the orphan commit with
+  `git commit-tree` in the real repo via a scratch index — working tree
+  untouched); `git init -b` needed git ≥2.28 (gone with the above). Also
+  `XDG_CACHE_HOME` into .build-cache so trunk stops re-downloading
+  wasm-bindgen/wasm-opt each run. `./deploy.sh --push` = push + publish
+  (a bare `git push` no longer updates the site — by design). Verified:
+  three real deploys, commit stamp correct in the wasm, caches reused.
+  Caveat to state honestly: branch-served Pages still runs GitHub's own
+  managed `pages-build-deployment` (static copy only — no toolchain, no
+  third-party actions), so during their outage the SITE can lag even though
+  the build never fails; the artifact is already on gh-pages either way.
