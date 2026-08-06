@@ -20,7 +20,8 @@
   --text: #1a2029;
   --muted: #5b6472;
   --accent: #3b5bcc;
-  --alarm: #c72e3f;
+  --alarm: #c72e3f; /* reserved EXCLUSIVELY for clashes */
+  --warn: #9c7700;
 
   --chip-sat: 52%;
   --chip-bg-l: 88%;
@@ -38,7 +39,8 @@
   --text: #e8eaee;
   --muted: #9aa2af;
   --accent: #7d95ea;
-  --alarm: #ff6473;
+  --alarm: #ff6473; /* reserved EXCLUSIVELY for clashes */
+  --warn: #e3bd53;
 
   --chip-sat: 38%;
   --chip-bg-l: 24%;
@@ -143,7 +145,8 @@ button {
   color: #fff;
 }
 :root[data-theme="dark"] .btn.primary { color: #10131c; }
-.btn.danger { color: var(--alarm); border-color: var(--alarm); }
+.btn.danger { font-weight: 600; }
+.btn.danger:hover:not(:disabled) { border-color: var(--warn); }
 .btn.small { padding: 0.2rem 0.5rem; min-height: 28px; font-size: 0.8rem; }
 
 .sync-pill {
@@ -253,7 +256,9 @@ button {
   max-width: 100%;
   text-align: left;
   cursor: pointer;
-  touch-action: none; /* pointer-events drag on touch */
+  /* Swiping across a chip must still scroll the page; once a long-press
+     drag is active, a non-passive touchmove handler suppresses scrolling. */
+  touch-action: manipulation;
   user-select: none;
   -webkit-user-select: none;
 }
@@ -267,7 +272,16 @@ button {
 .chip:hover { filter: brightness(1.03); }
 
 @media (pointer: coarse) {
-  .chip { min-height: 44px; }
+  .chip,
+  .btn,
+  .btn.small,
+  .tab,
+  .seg button,
+  details.facet > summary,
+  input[type="text"], input[type="search"], input[type="date"],
+  input[type="time"], select {
+    min-height: 44px;
+  }
 }
 
 /* Clash: alarm color + icon + (text badge in details). Never color alone. */
@@ -295,8 +309,7 @@ button {
   padding: 0.08rem 0.5rem;
   white-space: nowrap;
 }
-.badge.warn { border-color: #b58900; color: #9c7700; }
-:root[data-theme="dark"] .badge.warn { border-color: #d1a52c; color: #e3bd53; }
+.badge.warn { border-color: var(--warn); color: var(--warn); }
 .badge.alarm { border-color: var(--alarm); color: var(--alarm); }
 .badge.accent { border-color: var(--accent); color: var(--accent); }
 
@@ -310,6 +323,9 @@ button {
   border-radius: 10px;
   background: var(--surface);
   max-width: 100%;
+  /* Vertical scrolling happens inside this container so the sticky slot
+     header actually engages (sticky is relative to the scroll container). */
+  max-height: calc(100vh - 13rem);
 }
 
 table.tt {
@@ -497,8 +513,7 @@ details.facet .menu {
   align-items: baseline;
   flex-wrap: wrap;
 }
-.banner.warn { border-left-color: #b58900; }
-.banner.alarm { border-left-color: var(--alarm); }
+.banner.warn { border-left-color: var(--warn); }
 
 .toasts {
   position: fixed;
@@ -585,7 +600,7 @@ details.facet .menu {
   text-align: left;
   vertical-align: top;
 }
-.devlog .fail { color: var(--alarm); }
+.devlog .fail { color: var(--warn); font-weight: 600; }
 .devlog .ok { color: var(--accent); }
 pre.devpre {
   background: var(--bg);
@@ -659,7 +674,7 @@ pre.devpre {
   .header, .tabs, .toolbar, .toasts, .banner, .tray, .overlay,
   .filterbar, .noprint { display: none !important; }
   .main { padding: 0; max-width: none; }
-  .grid-scroll { border: none; overflow: visible; }
+  .grid-scroll { border: none; overflow: visible; max-height: none; }
   table.tt { min-width: 0; width: 100%; }
   table.tt th, table.tt td { border: 1px solid #000 !important; background: #fff !important; }
   .chip {

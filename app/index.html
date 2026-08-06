@@ -15,6 +15,8 @@
         var prefs = JSON.parse(localStorage.getItem("cmitt.v1.prefs") || "{}");
         if (prefs && prefs.theme) theme = prefs.theme;
       } catch (e) { /* corrupt prefs are handled by the app */ }
+      // serde stores the variant capitalized ("Dark"); CSS keys off lowercase.
+      theme = String(theme).toLowerCase();
       if (theme !== "light" && theme !== "dark") {
         theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
       }

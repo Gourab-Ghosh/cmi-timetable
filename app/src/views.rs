@@ -146,7 +146,11 @@ fn my_timetable(app: App) -> impl IntoView {
     let unscheduled = move || -> Vec<Course> {
         app.selected_courses()
             .into_iter()
-            .filter(|c| app.effective_meetings(c).is_empty())
+            // Courses removed upstream get the "No longer on CMI's
+            // timetable" flow (My courses), not the unscheduled tray.
+            .filter(|c| {
+                app.effective_meetings(c).is_empty() && !app.is_removed_upstream(&c.code)
+            })
             .collect()
     };
 
@@ -461,7 +465,7 @@ fn course_card(app: App, course: Course) -> impl IntoView {
     let eff = app.effective_meetings(&course);
     let has_overrides = eff.iter().any(|e| e.overridden);
     let clash = app.course_has_clash(&code);
-    let removed = app.removed_upstream.with(|r| r.contains(&code));
+    let removed = app.is_removed_upstream(&code);
     let remove_code = code.clone();
     let reset_code = code.clone();
     let notes = {
@@ -491,7 +495,7 @@ fn course_card(app: App, course: Course) -> impl IntoView {
                 {course
                     .optional_flag
                     .then(|| view! { <span class="badge">"+ optional"</span> })}
-                {(course.status == ScheduleStatus::UnscheduledListed)
+                {(!removed && course.status == ScheduleStatus::UnscheduledListed)
                     .then(|| view! { <span class="badge warn">"unscheduled"</span> })}
                 {(course.status == ScheduleStatus::ScheduledNoBranch)
                     .then(|| view! { <span class="badge warn">"no branch"</span> })}
@@ -500,7 +504,7 @@ fn course_card(app: App, course: Course) -> impl IntoView {
                 {clash.then(|| view! { <span class="badge alarm">"⚠ clash"</span> })}
                 {removed
                     .then(|| {
-                        view! { <span class="badge alarm">"No longer on CMI's timetable"</span> }
+                        view! { <span class="badge warn">"No longer on CMI's timetable"</span> }
                     })}
             </div>
             {(!eff.is_empty())
@@ -769,7 +773,8 @@ fn catalog_row(app: App, course: Course) -> impl IntoView {
 // ---------------------------------------------------------------------------
 
 fn halls_view(app: App) -> impl IntoView {
-    let finder_slot = RwSignal::new(None::<(usize, u16)>); // (day idx, slot start)
+    let finder_day = RwSignal::new(None::<usize>); // day index
+    let finder_start = RwSignal::new(None::<u16>); // slot start_min
 
     let sel_day = move || app.prefs.with(|p| p.halls_day);
 
@@ -876,30 +881,32 @@ fn halls_view(app: App) -> impl IntoView {
                 </table>
             </div>
 
-            // Find a free hall
+            // Find a free hall — results appear once BOTH day and slot are
+            // picked (never assume a default day).
             <div class="panel" style="margin-top:0.8rem">
                 <h3>"Find a free hall"</h3>
                 <div class="row" style="display:flex;gap:0.5rem;flex-wrap:wrap;align-items:center">
                     <select
                         aria-label="Day"
                         on:change=move |ev| {
-                            if let Ok(i) = event_target_value(&ev).parse::<usize>() {
-                                finder_slot
-                                    .update(|f| {
-                                        let start = f.map(|(_, s)| s).unwrap_or(0);
-                                        *f = Some((i, start));
-                                    });
-                            }
+                            finder_day.set(event_target_value(&ev).parse::<usize>().ok());
                         }
                     >
-                        <option value="" selected=move || finder_slot.get().is_none()>
+                        <option value="" selected=move || finder_day.get().is_none()>
                             "Pick a day…"
                         </option>
                         {move || {
                             app.grid_days()
                                 .into_iter()
                                 .map(|d| {
-                                    view! { <option value=d.index().to_string()>{d.full()}</option> }
+                                    view! {
+                                        <option
+                                            value=d.index().to_string()
+                                            selected=move || finder_day.get() == Some(d.index())
+                                        >
+                                            {d.full()}
+                                        </option>
+                                    }
                                 })
                                 .collect_view()
                         }}
@@ -907,63 +914,67 @@ fn halls_view(app: App) -> impl IntoView {
                     <select
                         aria-label="Time slot"
                         on:change=move |ev| {
-                            if let Ok(start) = event_target_value(&ev).parse::<u16>() {
-                                finder_slot
-                                    .update(|f| {
-                                        let day = f.map(|(d, _)| d).unwrap_or(0);
-                                        *f = Some((day, start));
-                                    });
-                            }
+                            finder_start.set(event_target_value(&ev).parse::<u16>().ok());
                         }
                     >
-                        <option value="">"Pick a slot…"</option>
+                        <option value="" selected=move || finder_start.get().is_none()>
+                            "Pick a slot…"
+                        </option>
                         {move || {
                             app.snapshot
                                 .with(|s| s.slot_grid.clone())
                                 .into_iter()
                                 .map(|s| {
-                                    view! { <option value=s.start_min.to_string()>{s.label()}</option> }
+                                    view! {
+                                        <option
+                                            value=s.start_min.to_string()
+                                            selected=move || finder_start.get() == Some(s.start_min)
+                                        >
+                                            {s.label()}
+                                        </option>
+                                    }
                                 })
                                 .collect_view()
                         }}
                     </select>
                 </div>
                 {move || {
-                    finder_slot
-                        .get()
-                        .filter(|(_, start)| *start != 0)
-                        .map(|(day_idx, start)| {
-                            let day = Day::ALL[day_idx];
-                            let snapshot = app.snapshot.get();
-                            let free: Vec<String> = snapshot
-                                .halls
+                    let (day_idx, start) = (finder_day.get()?, finder_start.get()?);
+                    let day = *Day::ALL.get(day_idx)?;
+                    let snapshot = app.snapshot.get();
+                    let slot_label = snapshot
+                        .slot_grid
+                        .iter()
+                        .find(|s| s.start_min == start)
+                        .map(|s| s.label())
+                        .unwrap_or_default();
+                    let free: Vec<String> = snapshot
+                        .halls
+                        .iter()
+                        .filter(|hall| {
+                            !snapshot
+                                .hall_bookings
                                 .iter()
-                                .filter(|hall| {
-                                    !snapshot
-                                        .hall_bookings
-                                        .iter()
-                                        .any(|b| {
-                                            b.hall == **hall && b.day == day
-                                                && b.slot.start_min == start
-                                        })
+                                .any(|b| {
+                                    b.hall == **hall && b.day == day
+                                        && b.slot.start_min == start
                                 })
-                                .cloned()
-                                .collect();
-                            view! {
-                                <p style="margin-top:0.6rem">
-                                    {if free.is_empty() {
-                                        format!("No free halls on {} at that time.", day.full())
-                                    } else {
-                                        format!(
-                                            "Free on {} {}: {}",
-                                            day.full(),
-                                            Slot::new(start, start).start_label(),
-                                            free.join(", "),
-                                        )
-                                    }}
-                                </p>
-                            }
                         })
+                        .cloned()
+                        .collect();
+                    Some(view! {
+                        <p style="margin-top:0.6rem">
+                            {if free.is_empty() {
+                                format!("No free halls on {} {slot_label}.", day.full())
+                            } else {
+                                format!(
+                                    "Free on {} {slot_label}: {}",
+                                    day.full(),
+                                    free.join(", "),
+                                )
+                            }}
+                        </p>
+                    })
                 }}
             </div>
         </section>

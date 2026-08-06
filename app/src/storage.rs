@@ -36,10 +36,23 @@ pub fn load<T: DeserializeOwned>(key: &str) -> Loaded<T> {
     match serde_json::from_str::<T>(&text) {
         Ok(value) => Loaded::Value(value),
         Err(_) => {
-            let backup_key = format!("cmitt.corrupt.{}", js_sys::Date::now() as u64);
-            let _ = storage.set_item(&backup_key, &text);
-            let _ = storage.remove_item(key);
-            Loaded::Corrupt(backup_key)
+            // Pick a backup key that doesn't clobber an existing backup
+            // (several keys can go corrupt in the same millisecond).
+            let ts = js_sys::Date::now() as u64;
+            let mut backup_key = format!("cmitt.corrupt.{ts}");
+            let mut n = 0;
+            while matches!(storage.get_item(&backup_key), Ok(Some(_))) {
+                n += 1;
+                backup_key = format!("cmitt.corrupt.{ts}-{n}");
+            }
+            // Only drop the original once the backup definitely exists —
+            // "Nothing was deleted" must stay true even under quota errors.
+            if storage.set_item(&backup_key, &text).is_ok() {
+                let _ = storage.remove_item(key);
+                Loaded::Corrupt(backup_key)
+            } else {
+                Loaded::Corrupt(format!("(backup failed — original kept in {key})"))
+            }
         }
     }
 }

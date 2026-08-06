@@ -48,8 +48,10 @@ impl PreKind {
 static SEMESTER_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"Timetable\s+for\s+(.+?\d{4})").unwrap());
 
+// Codes are 2–5 chars today; {1,12} leaves generous headroom so a longer
+// future code isn't silently dropped from the legend.
 static LEGEND_LINE_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^\s*(\S{1,6})\s*:\s*(.*)$").unwrap());
+    LazyLock::new(|| Regex::new(r"^\s*(\S{1,12})\s*:\s*(.*)$").unwrap());
 
 pub fn find_semester_label(text: &str) -> Option<String> {
     SEMESTER_RE
@@ -128,7 +130,7 @@ pub fn parse_timetable_legend_line(line: &str) -> Option<LegendEntry> {
 }
 
 static HALLS_LEGEND_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^\s*(\S{1,6})\s*:\s*(.*?)\s*:\s*(.*)$").unwrap());
+    LazyLock::new(|| Regex::new(r"^\s*(\S{1,12})\s*:\s*(.*?)\s*:\s*(.*)$").unwrap());
 
 /// Parse one line of the halls page's colon-separated legend:
 /// `RFLR : Reinforcement Learning : I Murugeswari`

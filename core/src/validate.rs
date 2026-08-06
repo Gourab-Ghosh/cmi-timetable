@@ -48,6 +48,18 @@ pub fn parse_and_validate(
         errors: Vec::new(),
         gate: Vec::new(),
         classifications: Vec::new(),
+        branch_stats: tt
+            .sections
+            .iter()
+            .map(|s| crate::model::BranchStat {
+                code: s.branch.code.clone(),
+                title: s.branch.title.clone(),
+                day_rows: s.days.len(),
+                slots: s.slots.len(),
+                occurrences: s.occurrences.len(),
+                legend_entries: s.legend.len(),
+            })
+            .collect(),
     };
     report.warnings.extend(tt.warnings.iter().cloned());
     report.warnings.extend(hp.warnings.iter().cloned());

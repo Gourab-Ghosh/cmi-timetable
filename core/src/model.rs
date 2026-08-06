@@ -355,6 +355,17 @@ pub struct GateCheck {
     pub detail: String,
 }
 
+/// Per-branch parse statistics — shown in developer mode.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BranchStat {
+    pub code: String,
+    pub title: String,
+    pub day_rows: usize,
+    pub slots: usize,
+    pub occurrences: usize,
+    pub legend_entries: usize,
+}
+
 /// How each `<pre>` block was classified — shown in developer mode.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PreClassification {
@@ -372,6 +383,8 @@ pub struct ParseReport {
     pub errors: Vec<String>,
     pub gate: Vec<GateCheck>,
     pub classifications: Vec<PreClassification>,
+    #[serde(default)]
+    pub branch_stats: Vec<BranchStat>,
 }
 
 impl ParseReport {

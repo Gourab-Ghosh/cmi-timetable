@@ -165,13 +165,15 @@ pub struct Toast {
 pub enum BannerKind {
     Info,
     Warn,
-    Alarm,
 }
 
 #[derive(Clone, PartialEq)]
 pub struct Banner {
     pub kind: BannerKind,
     pub text: String,
+    /// Sticky banners (e.g. the corrupt-data notice) survive the start of
+    /// the next update attempt; ordinary failure banners are cleared there.
+    pub sticky: bool,
 }
 
 #[derive(Clone, PartialEq)]
@@ -347,7 +349,25 @@ impl App {
         self.banner.set(Some(Banner {
             kind,
             text: text.into(),
+            sticky: false,
         }));
+    }
+
+    pub fn set_banner_sticky(&self, kind: BannerKind, text: impl Into<String>) {
+        self.banner.set(Some(Banner {
+            kind,
+            text: text.into(),
+            sticky: true,
+        }));
+    }
+
+    /// Clear any non-sticky banner (called when a new update attempt starts).
+    pub fn clear_transient_banner(&self) {
+        self.banner.update(|b| {
+            if b.as_ref().is_some_and(|b| !b.sticky) {
+                *b = None;
+            }
+        });
     }
 
     pub fn say(&self, text: impl Into<String>) {
@@ -582,17 +602,22 @@ impl App {
         effective_meetings(course, &overrides)
     }
 
+    /// A selected course no longer present upstream ("No longer on CMI's
+    /// timetable"). Derived from the snapshot so it survives reloads.
+    pub fn is_removed_upstream(&self, code: &str) -> bool {
+        self.is_selected(code) && self.snapshot.with(|s| s.course(code).is_none())
+    }
+
     pub fn selected_courses(&self) -> Vec<Course> {
         let snapshot = self.snapshot.get();
-        let removed = self.removed_upstream.get();
         self.selection
             .get()
             .iter()
-            .filter_map(|code| {
-                snapshot.course(code).cloned().or_else(|| {
+            .map(|code| {
+                snapshot.course(code).cloned().unwrap_or_else(|| {
                     // Removed upstream but still selected: synthesize a stub
                     // so it stays visible with its badge.
-                    removed.contains(code).then(|| Course {
+                    Course {
                         code: code.clone(),
                         name: code.clone(),
                         instructors: vec![],
@@ -603,7 +628,7 @@ impl App {
                         optional_flag: false,
                         status: ScheduleStatus::UnscheduledListed,
                         meetings: vec![],
-                    })
+                    }
                 })
             })
             .collect()
@@ -808,7 +833,7 @@ pub fn course_matches(app: &App, course: &Course, f: &Filters) -> bool {
         let has_custom = !eff.is_empty() && eff.iter().any(|e| e.overridden);
         let matches_flag = f.flags.iter().any(|flag| match flag.as_str() {
             "optional" => course.optional_flag,
-            "unscheduled" => course.status != ScheduleStatus::Scheduled,
+            "unscheduled" => course.status == ScheduleStatus::UnscheduledListed,
             "custom" => has_custom,
             _ => false,
         });

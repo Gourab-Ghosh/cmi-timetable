@@ -238,10 +238,53 @@ fn parse_reports(app: App) -> impl IntoView {
                                                         .errors
                                                         .iter()
                                                         .map(|e| {
-                                                            view! { <li class="fail" style="color:var(--alarm)">{e.clone()}</li> }
+                                                            view! { <li class="fail">{e.clone()}</li> }
                                                         })
                                                         .collect_view()}
                                                 </ul>
+                                            }
+                                        })}
+                                    {(!r.report.branch_stats.is_empty())
+                                        .then(|| {
+                                            view! {
+                                                <details>
+                                                    <summary>
+                                                        {format!(
+                                                            "{} branch grids (per-branch stats)",
+                                                            r.report.branch_stats.len(),
+                                                        )}
+                                                    </summary>
+                                                    <table class="devlog">
+                                                        <thead>
+                                                            <tr>
+                                                                <th>"branch"</th>
+                                                                <th>"title"</th>
+                                                                <th>"day rows"</th>
+                                                                <th>"slots"</th>
+                                                                <th>"cells"</th>
+                                                                <th>"legend"</th>
+                                                            </tr>
+                                                        </thead>
+                                                        <tbody>
+                                                            {r.report
+                                                                .branch_stats
+                                                                .iter()
+                                                                .map(|b| {
+                                                                    view! {
+                                                                        <tr>
+                                                                            <td>{b.code.clone()}</td>
+                                                                            <td>{b.title.clone()}</td>
+                                                                            <td>{b.day_rows.to_string()}</td>
+                                                                            <td>{b.slots.to_string()}</td>
+                                                                            <td>{b.occurrences.to_string()}</td>
+                                                                            <td>{b.legend_entries.to_string()}</td>
+                                                                        </tr>
+                                                                    }
+                                                                })
+                                                                .collect_view()}
+                                                        </tbody>
+                                                    </table>
+                                                </details>
                                             }
                                         })}
                                     <details>
@@ -464,10 +507,12 @@ fn raw_html_viewer(app: App) -> impl IntoView {
 
 /// Surfacing storage problems found at startup (called from init).
 pub fn corrupt_data_banner(app: App) {
-    app.set_banner(
+    // Sticky: must survive the background update that runs right after
+    // startup. First two sentences are the exact §2.4 copy.
+    app.set_banner_sticky(
         BannerKind::Warn,
         "Your saved data couldn't be read, so it was set aside and the built-in \
-         timetable loaded. Nothing was deleted — the unreadable copy is kept under \
-         a cmitt.corrupt.* key (see the cache inspector in developer mode).",
+         timetable loaded. Nothing was deleted. The unreadable copy is kept under \
+         a cmitt.corrupt.* key — see the cache inspector in developer mode.",
     );
 }

@@ -14,41 +14,35 @@ use ttcore::model::{OverridesStore, Snapshot};
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::JsCast;
 
+fn load_or<T: serde::de::DeserializeOwned>(
+    key: &str,
+    corrupt: &mut bool,
+    default: impl FnOnce() -> T,
+) -> T {
+    match storage::load::<T>(key) {
+        storage::Loaded::Value(v) => v,
+        storage::Loaded::Missing => default(),
+        storage::Loaded::Corrupt(backup_key) => {
+            leptos::logging::warn!("cmitt: {key} was unreadable; backed up under {backup_key}");
+            *corrupt = true;
+            default()
+        }
+    }
+}
+
 fn init_app() -> (App, bool) {
     let mut corrupt = false;
 
-    let prefs = match storage::load::<crate::state::Prefs>(storage::KEY_PREFS) {
-        storage::Loaded::Value(p) => p,
-        storage::Loaded::Missing => Default::default(),
-        storage::Loaded::Corrupt(_) => {
-            corrupt = true;
-            Default::default()
-        }
-    };
-    let selection = match storage::load::<Vec<String>>(storage::KEY_SELECTION) {
-        storage::Loaded::Value(s) => s,
-        storage::Loaded::Missing => Vec::new(),
-        storage::Loaded::Corrupt(_) => {
-            corrupt = true;
-            Vec::new()
-        }
-    };
-    let overrides = match storage::load::<OverridesStore>(storage::KEY_OVERRIDES) {
-        storage::Loaded::Value(o) => o,
-        storage::Loaded::Missing => OverridesStore::default(),
-        storage::Loaded::Corrupt(_) => {
-            corrupt = true;
-            OverridesStore::default()
-        }
-    };
-    let snapshot = match storage::load::<Snapshot>(storage::KEY_SNAPSHOT) {
-        storage::Loaded::Value(s) => s,
-        storage::Loaded::Missing => crate::state::bundled_snapshot(),
-        storage::Loaded::Corrupt(_) => {
-            corrupt = true;
-            crate::state::bundled_snapshot()
-        }
-    };
+    let prefs: crate::state::Prefs =
+        load_or(storage::KEY_PREFS, &mut corrupt, Default::default);
+    let selection: Vec<String> = load_or(storage::KEY_SELECTION, &mut corrupt, Vec::new);
+    let overrides: OverridesStore =
+        load_or(storage::KEY_OVERRIDES, &mut corrupt, OverridesStore::default);
+    let snapshot: Snapshot = load_or(
+        storage::KEY_SNAPSHOT,
+        &mut corrupt,
+        crate::state::bundled_snapshot,
+    );
 
     let app = App {
         sync: RwSignal::new(SyncMeta {
@@ -91,6 +85,18 @@ fn apply_url_state(app: App) {
         return;
     }
     let state = ttcore::share::resolve_url_state(c.as_deref(), s.as_deref());
+
+    // If the URL merely mirrors the stored selection (the app writes ?c= on
+    // every change), keep the stored state as-is — a selected course that
+    // vanished upstream must stay visible with its badge, not get stripped
+    // as an "unknown code".
+    if state.overrides.is_none()
+        && app.selection.with_untracked(|sel| *sel == state.selection)
+    {
+        app.sync_url();
+        return;
+    }
+
     let snapshot = app.snapshot.get_untracked();
     let (known, unknown): (Vec<String>, Vec<String>) = state
         .selection

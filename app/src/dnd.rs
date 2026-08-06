@@ -202,6 +202,12 @@ fn on_pointer_up(app: App, ev: &web_sys::PointerEvent) {
     app.drag.set(None);
     if d.started {
         SUPPRESS_CLICK.with(|s| *s.borrow_mut() = true);
+        // If no click follows (the drop landed off the source chip), don't
+        // let the stale flag swallow an unrelated future click.
+        gloo_timers::callback::Timeout::new(250, || {
+            SUPPRESS_CLICK.with(|s| *s.borrow_mut() = false);
+        })
+        .forget();
         if let Some((day, slot_start)) = d.over {
             perform_drop(app, &d.spec, day, slot_start);
         }
@@ -377,13 +383,33 @@ pub fn install_global_handlers(app: App) {
         },
     );
 
+    // Chips use `touch-action: manipulation` so a swipe starting on a chip
+    // still scrolls the page. Once a drag IS active (after the long-press),
+    // native scrolling must be suppressed or the browser cancels the drag —
+    // hence this non-passive touchmove listener.
+    let touchmove = Closure::<dyn FnMut(web_sys::TouchEvent)>::new(
+        move |ev: web_sys::TouchEvent| {
+            if app.drag.with_untracked(|d| d.as_ref().is_some_and(|d| d.started)) {
+                ev.prevent_default();
+            }
+        },
+    );
+    let opts = web_sys::AddEventListenerOptions::new();
+    opts.set_passive(false);
+
     let _ = doc.add_event_listener_with_callback("pointermove", mv.as_ref().unchecked_ref());
     let _ = doc.add_event_listener_with_callback("pointerup", up.as_ref().unchecked_ref());
     let _ = doc.add_event_listener_with_callback("pointercancel", cancel.as_ref().unchecked_ref());
     let _ = doc.add_event_listener_with_callback("keydown", key.as_ref().unchecked_ref());
+    let _ = doc.add_event_listener_with_callback_and_add_event_listener_options(
+        "touchmove",
+        touchmove.as_ref().unchecked_ref(),
+        &opts,
+    );
 
     mv.forget();
     up.forget();
     cancel.forget();
     key.forget();
+    touchmove.forget();
 }

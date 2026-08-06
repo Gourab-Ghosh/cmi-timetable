@@ -26,6 +26,7 @@ version = "0.3"
 features = [
   "AbortController",
   "AbortSignal",
+  "AddEventListenerOptions",
   "Blob",
   "BlobPropertyBag",
   "Clipboard",
@@ -55,6 +56,7 @@ features = [
   "ScrollToOptions",
   "Storage",
   "SupportedType",
+  "TouchEvent",
   "Url",
   "UrlSearchParams",
   "Window",

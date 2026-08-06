@@ -214,6 +214,25 @@ pub fn branch_chip(app: App, code: &str) -> impl IntoView {
     }
 }
 
+/// Full-text variant for the details popover: "OCS2 · CS Electives 2".
+pub fn branch_chip_full(app: App, code: &str) -> impl IntoView {
+    let title = app
+        .snapshot
+        .with(|s| s.branch(code).map(|b| b.title.clone()))
+        .unwrap_or_default();
+    let hue = hues::branch_hue(code);
+    let label = if title.is_empty() {
+        code.to_string()
+    } else {
+        format!("{code} · {title}")
+    };
+    view! {
+        <span class="chip" style=format!("--hue:{hue}")>
+            {label}
+        </span>
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Header, tabs, toasts, banner
 // ---------------------------------------------------------------------------
@@ -413,7 +432,6 @@ pub fn BannerView() -> impl IntoView {
                         <div
                             class="banner"
                             class:warn=banner.kind == BannerKind::Warn
-                            class:alarm=banner.kind == BannerKind::Alarm
                             role="status"
                         >
                             <span>{banner.text.clone()}</span>
@@ -842,9 +860,54 @@ fn active_filter_chips(app: App) -> impl IntoView {
 // Dialog host
 // ---------------------------------------------------------------------------
 
+thread_local! {
+    /// The element that had focus when a dialog opened — restored on close.
+    static PREV_FOCUS: std::cell::RefCell<Option<web_sys::HtmlElement>> =
+        const { std::cell::RefCell::new(None) };
+}
+
 #[component]
 pub fn DialogHost() -> impl IntoView {
+    use wasm_bindgen::JsCast;
     let app = App::use_ctx();
+
+    // Focus management: remember the trigger, focus the dialog's first
+    // control once it paints, restore focus on close.
+    Effect::new(move |prev: Option<bool>| {
+        let open = app.dialog.with(|d| d.is_some());
+        let was_open = prev.unwrap_or(false);
+        if open {
+            if !was_open {
+                PREV_FOCUS.with(|p| {
+                    *p.borrow_mut() = domx::document()
+                        .active_element()
+                        .and_then(|el| el.dyn_into::<web_sys::HtmlElement>().ok());
+                });
+            }
+            gloo_timers::callback::Timeout::new(0, || {
+                if let Some(el) = domx::document()
+                    .query_selector(
+                        ".dialog button, .dialog [href], .dialog input, .dialog select, \
+                         .dialog textarea",
+                    )
+                    .ok()
+                    .flatten()
+                    .and_then(|el| el.dyn_into::<web_sys::HtmlElement>().ok())
+                {
+                    let _ = el.focus();
+                }
+            })
+            .forget();
+        } else if was_open {
+            PREV_FOCUS.with(|p| {
+                if let Some(el) = p.borrow_mut().take() {
+                    let _ = el.focus();
+                }
+            });
+        }
+        open
+    });
+
     view! {
         {move || {
             app.dialog
@@ -1019,11 +1082,37 @@ pub fn meeting_row(app: App, course: &Course, eff: EffMeeting) -> impl IntoView 
 fn details_dialog(app: App, code: String) -> impl IntoView {
     let snapshot = app.snapshot.get();
     let Some(course) = snapshot.course(&code).cloned() else {
+        let selected = app.is_selected(&code);
+        let remove_code = code.clone();
         return view! {
             <div>
-                <h2>{code.clone()}</h2>
+                <h2 class="mono">{code.clone()}</h2>
                 <p>"This course is not in the current timetable data."</p>
-                <div class="actions">{close_button(app)}</div>
+                {selected
+                    .then(|| {
+                        view! {
+                            <p>
+                                <span class="badge warn">"No longer on CMI's timetable"</span>
+                            </p>
+                        }
+                    })}
+                <div class="actions">
+                    {selected
+                        .then(|| {
+                            view! {
+                                <button
+                                    class="btn danger"
+                                    on:click=move |_| {
+                                        app.remove_course(&remove_code);
+                                        app.dialog.set(None);
+                                    }
+                                >
+                                    "Remove from my timetable"
+                                </button>
+                            }
+                        })}
+                    {close_button(app)}
+                </div>
             </div>
         }
         .into_any();
@@ -1036,11 +1125,15 @@ fn details_dialog(app: App, code: String) -> impl IntoView {
         .into_iter()
         .filter(|c| c.a == code || c.b == code)
         .map(|c| {
-            let other = if c.a == code { c.b } else { c.a };
-            format!("{other} on {} {}", c.day.short(), c.a_slot.label())
+            let (other, slot) = if c.a == code {
+                (c.b, c.b_slot)
+            } else {
+                (c.a, c.a_slot)
+            };
+            format!("{other} on {} {}", c.day.short(), slot.label())
         })
         .collect();
-    let removed = app.removed_upstream.with(|r| r.contains(&code));
+    let removed = app.is_removed_upstream(&code);
 
     let toggle_code = course.code.clone();
     let give_code = course.code.clone();
@@ -1083,7 +1176,7 @@ fn details_dialog(app: App, code: String) -> impl IntoView {
                         course
                             .branches
                             .iter()
-                            .map(|b| branch_chip(app, b))
+                            .map(|b| branch_chip_full(app, b))
                             .collect_view()
                             .into_any()
                     }}
@@ -1101,7 +1194,7 @@ fn details_dialog(app: App, code: String) -> impl IntoView {
             <div class="chipline">
                 {status_badges(&course)}
                 {removed
-                    .then(|| view! { <span class="badge alarm">"No longer on CMI's timetable"</span> })}
+                    .then(|| view! { <span class="badge warn">"No longer on CMI's timetable"</span> })}
             </div>
             <h3 style="margin-top:0.8rem">"Meetings"</h3>
             {if eff.is_empty() {
@@ -1253,24 +1346,40 @@ fn edit_meeting_dialog(
             hall: (!hall_value.is_empty()).then_some(hall_value),
             temp_booking: false,
         };
-        let toast = format!("{} {} on {} {}",
-            if create { "Placed" } else { "Moved" },
-            course_save,
-            day.short(),
-            to.slot.label(),
-        );
-        app.apply_override(
-            &course_save,
-            ov_id,
-            base.clone(),
-            to,
-            &if create {
-                format!("give {course_save} a time")
-            } else {
-                format!("edit {course_save} meeting")
-            },
-            Some(toast),
-        );
+        // "Give it a time" on a course that isn't selected yet selects it
+        // too, as one undo step — a placed meeting must never be invisible.
+        if create && !app.is_selected(&course_save) {
+            app.select_and_override(
+                &course_save,
+                None,
+                to.clone(),
+                format!(
+                    "Added {course_save} and placed it on {} {}",
+                    day.short(),
+                    to.slot.label(),
+                ),
+            );
+        } else {
+            let toast = format!(
+                "{} {} on {} {}",
+                if create { "Placed" } else { "Moved" },
+                course_save,
+                day.short(),
+                to.slot.label(),
+            );
+            app.apply_override(
+                &course_save,
+                ov_id,
+                base.clone(),
+                to,
+                &if create {
+                    format!("give {course_save} a time")
+                } else {
+                    format!("edit {course_save} meeting")
+                },
+                Some(toast),
+            );
+        }
         app.dialog.set(None);
     };
 
@@ -1379,7 +1488,7 @@ fn edit_meeting_dialog(
             </div>
             {move || {
                 let e = error.get();
-                (!e.is_empty()).then(|| view! { <p style="color:var(--alarm)">{e}</p> })
+                (!e.is_empty()).then(|| view! { <p style="color:var(--warn)">{e}</p> })
             }}
             <div class="actions">
                 <button class="btn" on:click=move |_| app.dialog.set(None)>
@@ -1625,7 +1734,7 @@ fn export_dialog(app: App, scope: Option<String>) -> impl IntoView {
             </p>
             {move || {
                 let e = error.get();
-                (!e.is_empty()).then(|| view! { <p style="color:var(--alarm)">{e}</p> })
+                (!e.is_empty()).then(|| view! { <p style="color:var(--warn)">{e}</p> })
             }}
             <div class="actions">
                 <button class="btn" on:click=move |_| app.dialog.set(None)>

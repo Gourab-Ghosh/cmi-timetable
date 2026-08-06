@@ -98,6 +98,24 @@ fn main() -> ExitCode {
         return ExitCode::FAILURE;
     };
 
+    // Skip-if-unchanged: latest.json embeds run timestamps, so compare the
+    // raw pages instead — identical HTML under the same parser means an
+    // identical mirror, and leaving the files untouched lets the workflow's
+    // "skip commit if unchanged" step actually skip.
+    let unchanged = std::fs::read_to_string(format!("{out_dir}/timetable.php.html"))
+        .is_ok_and(|old| old == tt_html)
+        && std::fs::read_to_string(format!("{out_dir}/lecturehalls.php.html"))
+            .is_ok_and(|old| old == halls_html)
+        && std::fs::read_to_string(format!("{out_dir}/latest.json"))
+            .ok()
+            .and_then(|old| serde_json::from_str::<serde_json::Value>(&old).ok())
+            .and_then(|v| v.get("parser_version").and_then(|p| p.as_u64()))
+            == Some(ttcore::PARSER_VERSION as u64);
+    if unchanged {
+        println!("mirror unchanged — nothing to write");
+        return ExitCode::SUCCESS;
+    }
+
     let latest = serde_json::json!({
         "generated_at": now_ms,
         "parser_version": ttcore::PARSER_VERSION,

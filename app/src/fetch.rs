@@ -216,8 +216,11 @@ pub fn adopt(app: &App, new_snapshot: Snapshot, announce: bool) {
     if !merge.diff.is_empty() {
         app.what_changed.set(Some(merge.diff.clone()));
     }
-    if !merge.conflicts.is_empty() {
-        app.conflicts.set(merge.conflicts);
+    // Replace, never accumulate: any still-relevant conflict is re-derived
+    // by every merge, and stale ones referencing resolved overrides vanish.
+    let has_conflicts = !merge.conflicts.is_empty();
+    app.conflicts.set(merge.conflicts);
+    if has_conflicts {
         app.dialog.set(Some(crate::state::Dialog::Conflicts));
     }
     if announce {
@@ -342,12 +345,20 @@ pub async fn run_update(app: App, manual: bool) {
         s.updating = true;
         s.progress = String::new();
     });
+    // A fresh attempt supersedes any earlier failure banner; sticky notices
+    // (corrupt data) and anything set during THIS run (quota) survive.
+    app.clear_transient_banner();
     app.prefs.update(|p| p.last_update_attempt = domx::now_ms());
     app.persist_prefs();
 
     let force = app.force_tier.get_untracked();
     let mut routes_tried = 0usize;
-    let mut gate_failed = false;
+    // Gate failure on DIRECT content is terminal (no proxy or mirror will
+    // see anything different from CMI itself); gate failure on a PROXY
+    // response only means that relay may have mangled the page — the chain
+    // continues to the next proxy and to the mirror.
+    let mut gate_failed_direct = false;
+    let mut gate_failed_any = false;
     let mut adopted = false;
 
     // Tier 1 — direct (kept cheap in case CMI ever enables CORS).
@@ -367,13 +378,16 @@ pub async fn run_update(app: App, manual: bool) {
             TierResult::Adopted => adopted = true,
             // Direct content is authoritative: a gate failure here means the
             // page format changed, and no proxy will see anything different.
-            TierResult::GateFailed => gate_failed = true,
+            TierResult::GateFailed => {
+                gate_failed_direct = true;
+                gate_failed_any = true;
+            }
             TierResult::Unreachable => {}
         }
     }
 
     // Tier 2 — public CORS relays (each sanity-checked before trusting).
-    if !adopted && !gate_failed && (force.is_none() || force.as_deref() == Some("proxy")) {
+    if !adopted && !gate_failed_direct && (force.is_none() || force.as_deref() == Some("proxy")) {
         for (i, proxy) in PROXIES.iter().enumerate() {
             progress(
                 &app,
@@ -394,15 +408,18 @@ pub async fn run_update(app: App, manual: bool) {
                     adopted = true;
                     break;
                 }
-                // A proxy may have mangled the content — try the next one.
-                TierResult::GateFailed => gate_failed = true,
+                // A proxy may have mangled the content — try the next one
+                // (and the mirror after that).
+                TierResult::GateFailed => gate_failed_any = true,
                 TierResult::Unreachable => {}
             }
         }
     }
 
     // Tier 3 — same-origin mirror published by the GitHub Actions cron.
-    if !adopted && !gate_failed && (force.is_none() || force.as_deref() == Some("mirror")) {
+    // Runs even after a proxy gate failure: the mirror is the most reliable
+    // tier and its content is independent of whatever a proxy mangled.
+    if !adopted && !gate_failed_direct && (force.is_none() || force.as_deref() == Some("mirror")) {
         progress(&app, "trying the data mirror…");
         routes_tried += 1;
         if matches!(try_mirror(&app).await, TierResult::Adopted) {
@@ -416,7 +433,6 @@ pub async fn run_update(app: App, manual: bool) {
     });
 
     if adopted {
-        app.banner.set(None);
         return;
     }
 
@@ -427,7 +443,7 @@ pub async fn run_update(app: App, manual: bool) {
         .with_untracked(|s| s.source == SourceTier::Bundled);
     let online = domx::window().navigator().on_line();
 
-    let text = if gate_failed {
+    let text = if gate_failed_any {
         format!(
             "CMI's page looks different than this app expected, so your saved timetable \
              from {saved_date} was kept. Nothing was lost. If this keeps happening, the \
@@ -449,14 +465,7 @@ pub async fn run_update(app: App, manual: bool) {
              You're still seeing your saved timetable from {saved_date}. Try Update again later."
         )
     };
-    app.set_banner(
-        if gate_failed {
-            BannerKind::Alarm
-        } else {
-            BannerKind::Warn
-        },
-        text,
-    );
+    app.set_banner(BannerKind::Warn, text);
     if manual {
         app.toast("Update didn't go through — details are in the banner.");
     }
@@ -550,7 +559,7 @@ pub fn simulate_parse_failure(app: App) {
             let saved_date = domx::fmt_local_date(snapshot.fetched_at);
             assert!(outcome.snapshot.is_none(), "mangled pages must fail the gate");
             app.set_banner(
-                BannerKind::Alarm,
+                BannerKind::Warn,
                 format!(
                     "Simulated a parse failure: CMI's page looks different than this app \
                      expected, so your saved timetable from {saved_date} was kept. Nothing \
