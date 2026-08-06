@@ -50,7 +50,8 @@ for arg in "$@"; do
         --push)        PUSH_MAIN=1 ;;
         --no-verify)   VERIFY=0 ;;
         --republish)   REPUBLISH=1 ;;
-        -h|--help) sed -n '2,28p' "$0"; exit 0 ;;
+        # Print the whole header comment, however long it grows.
+        -h|--help) awk 'NR>1 { if (!/^#/) exit; print }' "$0"; exit 0 ;;
         *) echo "unknown option: $arg (try --help)" >&2; exit 2 ;;
     esac
 done
@@ -78,38 +79,69 @@ if [[ "$ORIGIN" =~ github\.com[:/]([^/]+)/ ]]; then
     SITE="https://$(echo "$owner" | tr '[:upper:]' '[:lower:]').github.io$PUBLIC_URL"
 fi
 
+# What GitHub reports about the last Pages build, for messages only — never
+# as the success signal: right after a push the "latest" build is still the
+# previous one, so its status says nothing about this deploy.
+pages_status() {
+    if [ -n "$SLUG" ] && command -v gh >/dev/null; then
+        gh api "repos/$SLUG/pages/builds/latest" --jq '.status' 2>/dev/null \
+            || echo "unavailable (Pages API returned nothing)"
+    else
+        echo "unknown (no gh CLI)"
+    fi
+}
+
+request_pages_rebuild() {
+    [ -n "$SLUG" ] && command -v gh >/dev/null || return 0
+    gh api -X POST "repos/$SLUG/pages/builds" >/dev/null 2>&1 || true
+}
+
 # Serving the branch is GitHub's job and it can stall or fail during their
-# outages. Wait for the live site to actually show this build; if it does
-# not, ask Pages to rebuild. Our artifact is already on the branch either
-# way, so this never fails the deploy — it only tells the truth about it.
+# outages. The ground truth is the live page itself: poll it for the build we
+# just published, and if it doesn't show up, ask Pages to rebuild and poll
+# once more. Our artifact is on the branch either way, so this never fails
+# the deploy — it only tells the truth about it.
 verify_published() {
-    local expect="$1" tries=0 status="unknown" waited
-    [ -n "$SITE" ] || { echo "==> published (not a GitHub remote — skipping verification)"; return 0; }
-    if ! command -v gh >/dev/null; then
-        echo "==> published. Install the 'gh' CLI to have the live site verified."
+    local expect="$1" attempt=1 waited status
+    if [ -z "$expect" ]; then
+        echo "note: could not fingerprint the build — skipping live verification"
         return 0
     fi
-    while [ "$tries" -lt 2 ]; do
+    [ -n "$SITE" ] || { echo "note: not a GitHub remote — skipping live verification"; return 0; }
+    echo "==> waiting for $SITE to serve it"
+    while :; do
         waited=0
-        while [ "$waited" -lt 180 ]; do   # up to ~3 min per attempt
-            status=$(gh api "repos/$SLUG/pages/builds/latest" --jq '.status' 2>/dev/null || echo unknown)
-            case "$status" in built|errored) break ;; esac
+        while [ "$waited" -lt 180 ]; do   # ~3 min per attempt
+            # Cache-buster: Pages sits behind a CDN, and a cached copy of the
+            # old page would make this check lie in both directions.
+            if curl -fsSL "${SITE}?deploy-check=$waited.$attempt" 2>/dev/null | grep -q "$expect"; then
+                echo "==> live: $SITE is serving this build"
+                return 0
+            fi
             sleep 15
             waited=$((waited + 15))
         done
-        if curl -fsS "$SITE" 2>/dev/null | grep -q "$expect"; then
-            echo "==> live: $SITE is serving this build"
-            return 0
-        fi
-        tries=$((tries + 1))
-        [ "$tries" -lt 2 ] || break
-        echo "!! GitHub has not served it yet (pages build: $status) — asking for a rebuild"
-        gh api -X POST "repos/$SLUG/pages/builds" >/dev/null 2>&1 || true
+        status=$(pages_status)
+        [ "$attempt" = 1 ] || break
+        echo "!! not served after 3 min (pages build: $status) — asking for a rebuild"
+        request_pages_rebuild
+        attempt=2
     done
     echo "!! the build IS published on $BRANCH, but GitHub is not serving it yet"
-    echo "   (pages build: $status). This is their side, not the build."
+    echo "   (pages build: $status). That step is theirs, not the build's."
     echo "   Check https://www.githubstatus.com, then: ./deploy.sh --republish"
     return 0
+}
+
+# Filename of the content-hashed wasm in a directory — the fingerprint the
+# published index.html must reference for the site to be serving this build.
+dist_fingerprint() {
+    local f
+    for f in "$1"/*_bg.wasm; do
+        [ -e "$f" ] || return 1
+        basename "$f"
+        return 0
+    done
 }
 
 # --republish: nudge GitHub into serving what is already on the branch, with
@@ -127,11 +159,14 @@ if [ "$REPUBLISH" = 1 ]; then
     COMMIT=$(git commit-tree "$TREE" -m "republish $(date -u +%Y-%m-%dT%H:%M:%SZ)")
     echo "==> re-pushing $BRANCH (same content) to trigger serving"
     git push -q --force "$ORIGIN" "$COMMIT:refs/heads/$BRANCH"
-    if command -v gh >/dev/null; then
-        gh api -X POST "repos/$SLUG/pages/builds" >/dev/null 2>&1 || true
+    request_pages_rebuild
+    if [ "$VERIFY" = 1 ]; then
+        # No match is normal-ish (someone else published the branch), not a
+        # reason to abort after a successful push — hence the `|| true`.
+        expect=$(git show "$COMMIT:index.html" 2>/dev/null \
+            | grep -o '[A-Za-z0-9_-]*_bg\.wasm' | head -1 || true)
+        verify_published "$expect"
     fi
-    expect=$(git show "$COMMIT:index.html" | grep -o '[A-Za-z0-9_-]*_bg\.wasm' | head -1)
-    verify_published "${expect:-<html>}"
     exit 0
 fi
 
@@ -274,5 +309,5 @@ git push -q --force "$ORIGIN" "$COMMIT:refs/heads/$BRANCH"
 
 echo "==> published $SHA$DIRTY to $BRANCH${SITE:+ — $SITE}"
 if [ "$VERIFY" = 1 ]; then
-    verify_published "$(basename "$(ls "$DIST"/*_bg.wasm | head -1)")"
+    verify_published "$(dist_fingerprint "$DIST" || true)"
 fi

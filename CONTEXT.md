@@ -256,4 +256,13 @@ regenerates the .ics golden.
   triggers Pages, so it works even when the Pages API is unreachable) and
   re-verifies. Gotcha found in testing: bash regexes are POSIX ERE (no lazy
   quantifiers), so `([^/]+?)(\.git)?$` captured `repo.git` and every Pages
-  API call 404'd — the slug now comes from `basename -s .git`.
+  API call 404'd — the slug now comes from `basename -s .git`. A third review
+  round caught 4 more, all fixed: the poll broke on the PREVIOUS build's
+  `built` record (right after a push "latest" is still the old build), so a
+  healthy deploy could be declared unserved — the LIVE PAGE is now the only
+  success signal (cache-busted query; API status used for messages only);
+  `expect=$(git show … | grep -o …)` aborted `--republish` under `set -e`
+  when index.html had no wasm (the `${expect:-<html>}` fallback was dead code
+  AND would have falsely reported "live"); `--republish` ignored
+  `--no-verify` (blocked ~6 min); `--help` truncated the header mid-sentence
+  (now prints the whole comment block via awk).
