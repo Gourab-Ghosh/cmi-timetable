@@ -29,6 +29,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import traceback
@@ -48,6 +49,21 @@ PORT = int(os.environ.get("PORT", "8977"))
 BASE = f"http://127.0.0.1:{PORT}"
 CHROME_BIN = os.environ.get("CHROME_BIN", "/usr/bin/chromium")
 FIXTURES = os.path.join(REPO, "core", "fixtures")
+DOWNLOADS = tempfile.mkdtemp(prefix="cmitt-e2e-dl-")
+
+# TOC's official Tue meeting moved by the user to Wed 17:00, plus a credit
+# change — the canonical "user customised things" seed.
+TOC_OVR = {
+    "next_id": 1,
+    "items": [{
+        "id": 0, "course": "TOC",
+        "base": {"day": "Tue", "slot": {"start_min": 550, "end_min": 625},
+                 "hall": "Lecture Hall 803", "temp_booking": False},
+        "to": {"day": "Wed", "slot": {"start_min": 1020, "end_min": 1095},
+               "hall": "Lecture Hall 803", "temp_booking": False},
+        "created_at": 1754000000000.0}],
+    "credits": [{"course": "TOC", "credits": 3, "created_at": 1754000000000.0}],
+}
 
 # Filled by build_seed() at startup: the parsed mirror-format dict and the
 # ready-to-store snapshot JSON string.
@@ -81,17 +97,28 @@ def build_seed():
     SEED_SNAPSHOT_JSON = json.dumps(snapshot)
 
 
-def write_fake_mirror():
+def write_fake_mirror(mutate=None):
     """Publish the seed as a same-origin mirror (DIST/data/) so a real sync
-    can succeed through the mirror tier — external hosts are blackholed."""
+    can succeed through the mirror tier — external hosts are blackholed.
+    With `mutate`, the snapshot inside latest.json is edited (simulating an
+    upstream CMI change) and the raw HTML copies are omitted so the client
+    adopts the CI-validated snapshot instead of re-parsing raw pages."""
     data_dir = os.path.join(DIST, "data")
     os.makedirs(data_dir, exist_ok=True)
     latest = dict(SEED_LATEST)
     latest["generated_at"] = time.time() * 1000.0
+    if mutate is not None:
+        snap = json.loads(json.dumps(SEED_LATEST["snapshot"]))
+        mutate(snap)
+        latest = dict(latest, snapshot=snap)
     with open(os.path.join(data_dir, "latest.json"), "w") as f:
         json.dump(latest, f)
     for name in ("timetable.php.html", "lecturehalls.php.html"):
-        shutil.copy(os.path.join(FIXTURES, name), os.path.join(data_dir, name))
+        target = os.path.join(data_dir, name)
+        if mutate is None:
+            shutil.copy(os.path.join(FIXTURES, name), target)
+        elif os.path.exists(target):
+            os.remove(target)
 
 
 def remove_fake_mirror():
@@ -126,6 +153,10 @@ def make_driver():
     opts.add_argument(
         "--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE 127.0.0.1"
     )
+    opts.add_experimental_option("prefs", {
+        "download.default_directory": DOWNLOADS,
+        "download.prompt_for_download": False,
+    })
     return webdriver.Chrome(options=opts)
 
 
@@ -136,21 +167,33 @@ class App:
 
     # -- lifecycle ---------------------------------------------------------
 
-    def boot(self, path="/", fresh=True, seed=True):
+    def boot(self, path="/", fresh=True, seed=True, selection=None,
+             overrides=None, raw_snapshot=None):
         """Load the app. fresh=True wipes storage; seed=True (the default)
         pre-loads the fixture-derived snapshot and suppresses the background
         sync, so tests run on deterministic data. seed=False boots the app
-        the way a first-time visitor sees it: empty."""
+        the way a first-time visitor sees it: empty. selection/overrides
+        pre-seed those stores; raw_snapshot stores an arbitrary (e.g.
+        corrupt) blob in the snapshot slot."""
         if fresh:
             self.d.get(f"{BASE}/e2e-blank")  # same-origin 404 page
             if seed:
-                self.d.execute_script(
+                script = (
                     "localStorage.clear();"
                     "localStorage.setItem('cmitt.v1.prefs', arguments[0]);"
-                    "localStorage.setItem('cmitt.v1.snapshot', arguments[1]);",
-                    json.dumps({"last_update_attempt": time.time() * 1000.0}),
-                    SEED_SNAPSHOT_JSON,
+                    "localStorage.setItem('cmitt.v1.snapshot', arguments[1]);"
                 )
+                args = [
+                    json.dumps({"last_update_attempt": time.time() * 1000.0}),
+                    raw_snapshot if raw_snapshot is not None else SEED_SNAPSHOT_JSON,
+                ]
+                if selection is not None:
+                    script += f"localStorage.setItem('cmitt.v1.selection', arguments[{len(args)}]);"
+                    args.append(json.dumps(selection))
+                if overrides is not None:
+                    script += f"localStorage.setItem('cmitt.v1.overrides', arguments[{len(args)}]);"
+                    args.append(json.dumps(overrides))
+                self.d.execute_script(script, *args)
             else:
                 self.d.execute_script("localStorage.clear();")
         self.d.get(f"{BASE}{path}")
@@ -836,6 +879,140 @@ def t28_facet_menu_search_and_select_all(app):
     )
 
 
+def t29_share_link_carries_custom_changes(app):
+    """The 'incl. my custom changes' share URL reproduces the selection,
+    the moved meeting AND the credit change on a fresh browser."""
+    app.boot("/", selection=["TOC"], overrides=TOC_OVR)
+    app.xpath("//button[normalize-space()='Share']").click()
+    app.wait_css(".dialog")
+    url = app.css(
+        "input[aria-label='Share link including custom times']"
+    ).get_attribute("value")
+    assert "?c=" in url and "s=" in url, url
+    app.boot("/?" + url.split("?", 1)[1])  # fresh storage + shared link
+    app.wait_css("td[data-day='2'][data-slot='1020'] button.chip[aria-label^='TOC,']")
+    assert not app.chips("TOC", "td[data-day='1'][data-slot='550']"), \
+        "the shared override must apply — official Tue slot stays empty"
+    app.xpath("//button[contains(.,'2 changes')]")
+    app.open_tab("My courses")
+    section = app.wait_css("section[aria-label='My courses']")
+    assert "Total credits: 3" in section.text, section.text
+
+
+def t30_sync_merge_conflict_flow(app):
+    """Upstream moves a customised meeting → conflict dialog; keep-mine
+    rebases (no re-conflict on the next sync); a removed course gets its
+    badge; the What-changed digest is structured."""
+    def mutate(snap):
+        for c in snap["courses"]:
+            if c["code"] == "TOC":
+                for m in c["meetings"]:
+                    if m["day"] == "Tue":
+                        m["day"] = "Fri"
+                        m["slot"] = {"start_min": 840, "end_min": 915}
+        snap["courses"] = [c for c in snap["courses"] if c["code"] != "QCOM"]
+    write_fake_mirror(mutate)
+    try:
+        app.boot("/", selection=["TOC", "QCOM"], overrides=TOC_OVR)
+        app.xpath("//button[normalize-space()='Sync now']").click()
+        dialog = app.wait_css(".dialog", timeout=30)
+        assert "Keep my time" in dialog.text and "Fri 14:00" in dialog.text, dialog.text
+        # Default is "Use CMI's" — actively keep the user's time instead.
+        dialog.find_element(
+            By.XPATH, ".//button[normalize-space()='Keep mine for all']"
+        ).click()
+        dialog.find_element(By.XPATH, ".//button[normalize-space()='Apply']").click()
+        app.wait_toast("Conflicts resolved")
+        app.wait_css("td[data-day='2'][data-slot='1020'] button.chip[aria-label^='TOC,']")
+        app.wait_toast("QCOM is no longer on CMI's timetable")
+        banner = app.xpath("//div[contains(@class,'banner')][contains(.,'CMI updated')]")
+        banner.find_element(
+            By.XPATH, ".//button[normalize-space()='See what changed']"
+        ).click()
+        dlg = app.wait_css(".dialog")
+        assert "No longer listed" in dlg.text and "QCOM" in dlg.text, dlg.text
+        app.d.find_element(By.TAG_NAME, "body").send_keys(Keys.ESCAPE)
+        app.open_tab("My courses")
+        section = app.wait_css("section[aria-label='My courses']")
+        assert "No longer on CMI's timetable" in section.text, section.text
+        # The rebased override must NOT re-raise the conflict.
+        app.xpath("//button[normalize-space()='Sync now']").click()
+        app.wait_toast("Timetable updated")
+        time.sleep(1.0)
+        assert not app.css_all(".dialog"), \
+            "keep-mine must rebase the override — no repeat conflict"
+    finally:
+        remove_fake_mirror()
+
+
+def t31_keyboard_move_mode(app):
+    """Accessibility path: focus a chip → M → arrows → Enter moves the
+    meeting; Esc cancels a move in progress."""
+    app.boot("/", selection=["TOC"])
+    app.xpath("//button[contains(.,'Edit layout')]").click()
+    chip = app.css("td[data-day='1'][data-slot='550'] button.chip")
+    app.d.execute_script("arguments[0].focus();", chip)
+    chip.send_keys("m")
+    body = app.d.find_element(By.TAG_NAME, "body")
+    body.send_keys(Keys.ARROW_DOWN)
+    body.send_keys(Keys.ENTER)
+    app.wait_toast("Moved TOC")
+    app.wait_css("td[data-day='2'][data-slot='550'] button.chip[aria-label^='TOC,']")
+    announce = app.css(".sr-only[aria-live='polite']").get_attribute("textContent")
+    assert "Dropped TOC" in announce, announce
+    chip2 = app.css("td[data-day='2'][data-slot='550'] button.chip")
+    app.d.execute_script("arguments[0].focus();", chip2)
+    chip2.send_keys("m")
+    body.send_keys(Keys.ARROW_DOWN)
+    body.send_keys(Keys.ESCAPE)
+    time.sleep(0.3)
+    assert app.chips("TOC", "td[data-day='2'][data-slot='550']"), \
+        "Esc must cancel the move without dropping"
+
+
+def t32_corrupt_storage_recovery(app):
+    """An unreadable snapshot blob is backed up (never deleted), the sticky
+    explanation banner survives the automatic sync attempt, and the app
+    falls back to the first-run screen."""
+    app.boot("/", raw_snapshot="not-json{{{")
+    app.wait_css(".welcome-card")
+    banner = app.wait_css(".banner")
+    assert "couldn't be read" in banner.text, banner.text
+    assert "Nothing was deleted" in banner.text, banner.text
+    keys = app.d.execute_script(
+        "return Object.keys(localStorage).filter(k => k.startsWith('cmitt.corrupt.'))"
+    )
+    assert keys, "corrupt blob must be backed up under cmitt.corrupt.*"
+
+
+def t33_export_ics_honors_overrides(app):
+    """Export .ics downloads a calendar whose events reflect the moved
+    meeting, not the overridden official one."""
+    for f in os.listdir(DOWNLOADS):
+        os.remove(os.path.join(DOWNLOADS, f))
+    app.boot("/", selection=["TOC"], overrides=TOC_OVR)
+    app.xpath("//button[normalize-space()='Export .ics']").click()
+    dialog = app.wait_css(".dialog")
+    dialog.find_element(By.XPATH, ".//button[normalize-space()='Download .ics']").click()
+    path = None
+    deadline = time.time() + 10
+    while time.time() < deadline:
+        files = [f for f in os.listdir(DOWNLOADS) if f.endswith(".ics")]
+        if files:
+            path = os.path.join(DOWNLOADS, files[0])
+            break
+        time.sleep(0.3)
+    assert path, "no .ics file downloaded"
+    with open(path) as f:
+        ics = f.read()
+    assert "Theory of Computation" in ics
+    # TOC officially meets Tue+Thu 09:10; the override moved Tue → Wed 17:00.
+    assert ics.count("BEGIN:VEVENT") == 2, ics
+    assert "T170000" in ics, "custom 17:00 meeting missing from the export"
+    assert ics.count("T091000") == 1, "exactly one 09:10 DTSTART (Thu) may remain"
+    assert "RRULE:FREQ=WEEKLY" in ics
+
+
 TESTS = [
     t01_header_sync_button_and_hidden_dev,
     t02_developer_endpoint_only,
@@ -865,6 +1042,11 @@ TESTS = [
     t26_first_sync_populates_from_mirror,
     t27_filters_undo_redo,
     t28_facet_menu_search_and_select_all,
+    t29_share_link_carries_custom_changes,
+    t30_sync_merge_conflict_flow,
+    t31_keyboard_move_mode,
+    t32_corrupt_storage_recovery,
+    t33_export_ics_honors_overrides,
 ]
 
 

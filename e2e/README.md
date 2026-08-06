@@ -23,7 +23,7 @@ Environment knobs: `CHROME_BIN` (default `/usr/bin/chromium`), `DIST_DIR`,
 `PORT`, `CARGO_TARGET_DIR` (for the seed generator; defaults to
 `~/.rust-target-e2e`).
 
-Covered flows (28 tests): Sync-now header + hidden developer mode (URL
+Covered flows (33 tests): Sync-now header + hidden developer mode (URL
 endpoint only), `?c=` selection + clash badges/panel (any casing), unknown-
 code warning, credits defaulting to 4 and per-course credit overwrites,
 master-grid ⚠ would-clash markers and clash toast on add, the ⓘ details
@@ -38,8 +38,12 @@ reload, and drag-back-to-reset), filter menus keeping focus/scroll while
 ticking boxes, the ✓ selected-course marker in the master grid, toasts
 pausing while hovered, the first-run welcome prompt (failed sync → honest
 banner; reachable mirror → auto-populates), filters in the undo history
-(with search-typing coalesced into one step), and the per-dropdown
-search + All/None shortcuts incl. the Course facet.
+(with search-typing coalesced into one step), the per-dropdown
+search + All/None shortcuts incl. the Course facet, share links carrying
+custom changes onto a fresh browser, the full three-way-merge conflict
+flow (keep-mine rebases, removed-course badge, What-changed digest),
+keyboard-only move mode, corrupt-storage recovery (backup + sticky
+banner), and .ics export honoring overrides.
 
 The app ships no timetable data, so the suite derives a snapshot from
 `core/fixtures/` at startup (via core's `snapshot_json` example — cargo must

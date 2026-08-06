@@ -375,6 +375,12 @@ impl App {
     }
 
     pub fn set_banner(&self, kind: BannerKind, text: impl Into<String>) {
+        // A transient banner (e.g. "couldn't sync") must never clobber a
+        // sticky notice (e.g. "your data was set aside — nothing deleted"):
+        // the sticky one carries information the user can't recover.
+        if self.banner.with_untracked(|b| b.as_ref().is_some_and(|b| b.sticky)) {
+            return;
+        }
         self.banner.set(Some(Banner {
             kind,
             text: text.into(),

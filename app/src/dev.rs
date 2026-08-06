@@ -510,8 +510,8 @@ pub fn corrupt_data_banner(app: App) {
     // startup. First two sentences are the exact §2.4 copy.
     app.set_banner_sticky(
         BannerKind::Warn,
-        "Your saved data couldn't be read, so it was set aside and the built-in \
-         timetable loaded. Nothing was deleted. The unreadable copy is kept under \
+        "Your saved data couldn't be read, so it was set aside and the app fell \
+         back to defaults. Nothing was deleted. The unreadable copy is kept under \
          a cmitt.corrupt.* key — see the cache inspector in developer mode.",
     );
 }

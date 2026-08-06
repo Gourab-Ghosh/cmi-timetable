@@ -40,7 +40,8 @@ and no committed mirror (fixtures exist only for tests/e2e seed).
         welcome()), dnd.rs (pointer+keyboard drag), storage.rs, dev.rs,
         domx.rs; styles.css = whole design system (tokens, light+dark).
 /sync   native mirror publisher (CI cron writes app/public/data/).
-/e2e    test_app.py — 28 Selenium tests, self-seeding (see §5).
+/e2e    test_app.py — 33 Selenium tests, self-seeding (see §5); shoot.py —
+        design-review screenshots + print PDFs.
 ```
 
 ## 4. Invariants & hard-won gotchas (violating these re-breaks fixed bugs)
@@ -80,7 +81,7 @@ and no committed mirror (fixtures exist only for tests/e2e seed).
 CARGO_TARGET_DIR=~/.rust-target-e2e cargo test --workspace
 # app build for e2e (never plain dist while trunk serve runs)
 cd app && CARGO_TARGET_DIR=~/.rust-target-e2e trunk build --release --dist dist-e2e
-# e2e (28 tests; self-generates seed via core example, needs cargo on PATH)
+# e2e (33 tests; self-generates seed via core example, needs cargo on PATH)
 cd e2e && DIST_DIR=../app/dist-e2e .venv/bin/python test_app.py
 # screenshots + print PDFs for design review (writes e2e/shots/, gitignored)
 cd e2e && .venv/bin/python shoot.py
@@ -94,7 +95,7 @@ regenerates the .ics golden.
 
 ## 6. Current state
 
-- Tests: 47 native + 28/28 e2e green. Print sheet (`@media print` block in
+- Tests: 47 native + 33/33 e2e green. Print sheet (`@media print` block in
   styles.css + `.print-masthead`/`.print-legend` DOM in views.rs
   my_timetable) is a designed poster: accent-rule masthead, dark time band,
   branch-colored chips filling cells, colorized legend. Header carries a
@@ -120,7 +121,7 @@ regenerates the .ics golden.
 - **R4 (halls DnD + filter scroll + ✓):** halls drag & drop, dropdown
   focus/scroll root-cause fix (reactivity trap, §4), ✓+ring selected
   marker, hover-paused toasts. e2e t21–t24.
-- **R5 (this round):** removed ALL shipped data (bundled snapshot + committed
+- **R5 (no shipped data + fixes):** removed ALL shipped data (bundled snapshot + committed
   mirror) → welcome/first-sync flow (views::welcome, SourceTier::None,
   app.no-data grid fix); fixed halls DnD not re-rendering (arrivals, §4);
   filters into undo/redo (`act_filters`, coalesced search); Course facet,
@@ -146,3 +147,18 @@ regenerates the .ics golden.
   rhythm tightened (td 54px) so 12 courses fit ONE page. Stress PDFs in
   shoot.py: `print-12.pdf` (user's selection) and `print-clash.pdf`
   (TOC+ISS+NLP triple-booked cell, 6 clash lines).
+- **R7 (privacy audit + pre-merge sweep):** removed the tracked
+  `e2e/__pycache__/*.pyc` (bytecode embeds absolute local paths) and purged
+  it from ALL git history (filter-branch; hashes changed); .gitignore covers
+  pycache/venv/shots; shoot.py moved into the repo, machine-independent.
+  Then a 14-scenario interactive sweep beyond the suite (share round-trip,
+  ics export, merge-conflict UI, keyboard move, theme/density/mobile-day
+  view, corrupt storage, custom-time validation, dev simulators, Esc chain,
+  fits-filter, halls details). Two app fixes: corrupt-data banner no longer
+  claims a "built-in timetable" exists, and `set_banner` never clobbers a
+  sticky notice with a transient failure banner. Five scenarios promoted to
+  the permanent suite (t29–t33: share-with-changes, merge-conflict flow
+  incl. keep-mine rebase, keyboard move mode, corrupt-storage recovery,
+  ics-honors-overrides); harness gained boot(selection/overrides/
+  raw_snapshot), a mutable fake mirror, and a downloads dir. The conflict
+  dialog defaulting to "Use CMI's" is by design.
