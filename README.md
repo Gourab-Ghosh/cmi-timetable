@@ -191,10 +191,16 @@ break. If their queue is backed up, the site lags; nothing is lost, because
 the finished artifact is already on the branch.)
 
 ```sh
-./deploy.sh               # test + build + publish the site
+./deploy.sh               # test + build + publish + verify it went live
 ./deploy.sh --push        # push the branch first, then publish (ship both)
 ./deploy.sh --skip-tests  # skip the test suite
+./deploy.sh --republish    # re-trigger serving of what is already published
 ```
+
+After publishing, the script checks that the live URL really serves the new
+build and asks Pages to rebuild if it doesn't (`--no-verify` skips the wait).
+If GitHub is having an incident, the artifact is already on the branch —
+`./deploy.sh --republish` re-triggers serving later without rebuilding.
 
 `--push` is the everyday "ship it" command: it pushes your commits and
 updates the live site in one step. (A bare `git push` no longer touches the

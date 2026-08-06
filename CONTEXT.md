@@ -248,3 +248,12 @@ regenerates the .ics golden.
   managed `pages-build-deployment` (static copy only — no toolchain, no
   third-party actions), so during their outage the SITE can lag even though
   the build never fails; the artifact is already on gh-pages either way.
+  That step DID fail during the outage (19 min, then errored), so deploy.sh
+  now verifies publication: poll `pages/builds/latest`, curl the live URL for
+  the built `*_bg.wasm` filename, and request a rebuild if absent (2 attempts,
+  never fails the deploy — `--no-verify` skips). `--republish` re-points
+  gh-pages at a fresh commit with the SAME tree (a push event is what
+  triggers Pages, so it works even when the Pages API is unreachable) and
+  re-verifies. Gotcha found in testing: bash regexes are POSIX ERE (no lazy
+  quantifiers), so `([^/]+?)(\.git)?$` captured `repo.git` and every Pages
+  API call 404'd — the slug now comes from `basename -s .git`.
