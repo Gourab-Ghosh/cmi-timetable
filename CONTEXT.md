@@ -40,7 +40,7 @@ and no committed mirror (fixtures exist only for tests/e2e seed).
         welcome()), dnd.rs (pointer+keyboard drag), storage.rs, dev.rs,
         domx.rs; styles.css = whole design system (tokens, light+dark).
 /sync   native mirror publisher (CI cron writes app/public/data/).
-/e2e    test_app.py — 33 Selenium tests, self-seeding (see §5); shoot.py —
+/e2e    test_app.py — 34 Selenium tests, self-seeding (see §5); shoot.py —
         design-review screenshots + print PDFs.
 ```
 
@@ -81,7 +81,7 @@ and no committed mirror (fixtures exist only for tests/e2e seed).
 CARGO_TARGET_DIR=~/.rust-target-e2e cargo test --workspace
 # app build for e2e (never plain dist while trunk serve runs)
 cd app && CARGO_TARGET_DIR=~/.rust-target-e2e trunk build --release --dist dist-e2e
-# e2e (33 tests; self-generates seed via core example, needs cargo on PATH)
+# e2e (34 tests; self-generates seed via core example, needs cargo on PATH)
 cd e2e && DIST_DIR=../app/dist-e2e .venv/bin/python test_app.py
 # screenshots + print PDFs for design review (writes e2e/shots/, gitignored)
 cd e2e && .venv/bin/python shoot.py
@@ -95,7 +95,7 @@ regenerates the .ics golden.
 
 ## 6. Current state
 
-- Tests: 47 native + 33/33 e2e green. Print sheet (`@media print` block in
+- Tests: 47 native + 34/34 e2e green. Print sheet (`@media print` block in
   styles.css + `.print-masthead`/`.print-legend` DOM in views.rs
   my_timetable) is a designed poster: accent-rule masthead, dark time band,
   branch-colored chips filling cells, colorized legend. Header carries a
@@ -185,3 +185,22 @@ regenerates the .ics golden.
   emails on attempt 2). Gotcha: deploy.yml's `concurrency: pages,
   cancel-in-progress` means a push while a deploy rerun is in flight cancels
   it — cancelled ≠ failure, so no retry fires for it.
+- **R10 (mobile long-press DnD):** on phones a long-press fired the native
+  context menu (~500 ms, after the 350 ms drag lift-off) → pointercancel
+  killed the drag → the synthesized click toggled the chip and DESELECTED
+  the course. Fix in dnd.rs: document-level contextmenu listener that
+  preventDefault()s whenever `app.drag` is Some (desktop right-click
+  unaffected — mouse right-button never creates drag state), and
+  cancel_drag now sets the 250 ms click-suppression flag when the drag had
+  started; plus `-webkit-touch-callout: none` on chips (iOS). e2e t34
+  simulates the whole gesture with synthetic touch PointerEvents. An
+  adversarial review workflow then confirmed 3 edge-case defects, all fixed:
+  pen barrel-clicks created drag state (now `button != 0` returns for ALL
+  pointer types), Esc-cancel with the button held >250 ms let the release
+  click toggle the chip (CANCELLED_POINTER tombstone re-arms suppression at
+  the matching pointerup), and pointercancel ignored pointer_id (unrelated
+  palm/finger cancels killed the drag). Verified with REAL W3C touch
+  pointer actions (Chrome's actual gesture recognizer): non-passive
+  touchmove preventDefault stops the scroll takeover, drag lands, no
+  deselect. Gotcha: ChromeDriver mobileEmulation misplaces synthesized
+  touches (coordinate transform) — use plain-window touch actions instead.

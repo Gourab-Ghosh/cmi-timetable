@@ -24,6 +24,11 @@ thread_local! {
     /// Set when a drag actually happened, so the click event that fires
     /// right after pointerup doesn't also toggle/open the chip.
     static SUPPRESS_CLICK: RefCell<bool> = const { RefCell::new(false) };
+    /// Pointer id of a drag cancelled mid-gesture (Esc, or the browser
+    /// sending pointercancel). The matching pointerup re-arms the click
+    /// suppression: the 250 ms window armed at cancel time can lapse while
+    /// the button is still held, and the release must not toggle the chip.
+    static CANCELLED_POINTER: RefCell<Option<i32>> = const { RefCell::new(None) };
 }
 
 /// Consume the "a drag just finished" flag (chips call this in on:click).
@@ -39,9 +44,25 @@ fn clear_longpress() {
     });
 }
 
+/// Swallow the click that the browser synthesizes right after a drag ends
+/// (or is cancelled mid-gesture) so it can't toggle/open the source chip.
+/// If no click follows, the flag auto-clears rather than swallowing an
+/// unrelated future click.
+fn suppress_next_click() {
+    SUPPRESS_CLICK.with(|s| *s.borrow_mut() = true);
+    gloo_timers::callback::Timeout::new(250, || {
+        SUPPRESS_CLICK.with(|s| *s.borrow_mut() = false);
+    })
+    .forget();
+}
+
 /// Chip pointerdown entry point.
 pub fn chip_pointer_down(app: App, ev: &web_sys::PointerEvent, spec: DragSpec) {
-    if ev.button() != 0 && ev.pointer_type() == "mouse" {
+    // Only a primary-button contact may begin a drag. Mouse right/middle
+    // clicks AND pen barrel-button presses keep their native behavior —
+    // creating drag state here would make the contextmenu listener below
+    // swallow their context menus.
+    if ev.button() != 0 {
         return;
     }
     let touch = ev.pointer_type() == "touch";
@@ -223,6 +244,14 @@ fn on_pointer_move(app: App, ev: &web_sys::PointerEvent) {
 fn on_pointer_up(app: App, ev: &web_sys::PointerEvent) {
     clear_longpress();
     let Some(d) = app.drag.get_untracked() else {
+        // The release of a cancelled gesture (e.g. Esc mid-drag with the
+        // button still held past the 250 ms window): re-arm suppression so
+        // the click synthesized from this release can't toggle the chip.
+        let was_cancelled = CANCELLED_POINTER
+            .with(|c| c.borrow_mut().take_if(|id| *id == ev.pointer_id()));
+        if was_cancelled.is_some() {
+            suppress_next_click();
+        }
         return;
     };
     if ev.pointer_id() != d.pointer_id {
@@ -230,13 +259,7 @@ fn on_pointer_up(app: App, ev: &web_sys::PointerEvent) {
     }
     app.drag.set(None);
     if d.started {
-        SUPPRESS_CLICK.with(|s| *s.borrow_mut() = true);
-        // If no click follows (the drop landed off the source chip), don't
-        // let the stale flag swallow an unrelated future click.
-        gloo_timers::callback::Timeout::new(250, || {
-            SUPPRESS_CLICK.with(|s| *s.borrow_mut() = false);
-        })
-        .forget();
+        suppress_next_click();
         if let Some((day, slot_start)) = d.over {
             perform_drop(app, &d.spec, day, slot_start, d.over_hall.clone());
         }
@@ -245,7 +268,16 @@ fn on_pointer_up(app: App, ev: &web_sys::PointerEvent) {
 
 fn cancel_drag(app: App) {
     clear_longpress();
-    if app.drag.with_untracked(|d| d.is_some()) {
+    if let Some(d) = app.drag.get_untracked() {
+        // A drag aborted by the browser (pointercancel — e.g. a native
+        // long-press menu or scroll takeover) can still be followed by a
+        // synthesized click on the source chip; don't let it toggle the
+        // course off. The tombstone lets the eventual pointerup re-arm the
+        // suppression if the 250 ms window lapses first.
+        if d.started {
+            suppress_next_click();
+            CANCELLED_POINTER.with(|c| *c.borrow_mut() = Some(d.pointer_id));
+        }
         app.drag.set(None);
     }
 }
@@ -408,8 +440,16 @@ pub fn install_global_handlers(app: App) {
         on_pointer_up(app, &ev);
     });
     let cancel =
-        Closure::<dyn FnMut(web_sys::PointerEvent)>::new(move |_ev: web_sys::PointerEvent| {
-            cancel_drag(app);
+        Closure::<dyn FnMut(web_sys::PointerEvent)>::new(move |ev: web_sys::PointerEvent| {
+            // Only the dragging pointer may abort the drag: a palm or second
+            // finger getting cancelled must not kill an unrelated gesture
+            // (or arm click suppression for it).
+            let is_drag_pointer = app
+                .drag
+                .with_untracked(|d| d.as_ref().is_some_and(|d| d.pointer_id == ev.pointer_id()));
+            if is_drag_pointer {
+                cancel_drag(app);
+            }
         });
     let key = Closure::<dyn FnMut(web_sys::KeyboardEvent)>::new(
         move |ev: web_sys::KeyboardEvent| {
@@ -428,6 +468,18 @@ pub fn install_global_handlers(app: App) {
             }
         },
     );
+    // On touch, the browser's native long-press context menu fires at
+    // ~500 ms — AFTER our 350 ms drag lift-off — cancelling the pointer
+    // stream and killing the drag. Suppress it whenever a drag gesture is
+    // in progress (from pointerdown on). Right/barrel-button presses never
+    // create drag state (chip_pointer_down ignores non-primary buttons),
+    // so normal context menus are unaffected.
+    let ctxmenu = Closure::<dyn FnMut(web_sys::Event)>::new(move |ev: web_sys::Event| {
+        if app.drag.with_untracked(|d| d.is_some()) {
+            ev.prevent_default();
+        }
+    });
+
     // Facet dropdowns are native <details>: they only ever close themselves
     // when their own summary is clicked. Close them on any press outside.
     let facet_close =
@@ -451,6 +503,7 @@ pub fn install_global_handlers(app: App) {
     let _ = doc.add_event_listener_with_callback("pointerup", up.as_ref().unchecked_ref());
     let _ = doc.add_event_listener_with_callback("pointercancel", cancel.as_ref().unchecked_ref());
     let _ = doc.add_event_listener_with_callback("keydown", key.as_ref().unchecked_ref());
+    let _ = doc.add_event_listener_with_callback("contextmenu", ctxmenu.as_ref().unchecked_ref());
     let _ = doc.add_event_listener_with_callback_and_add_event_listener_options(
         "touchmove",
         touchmove.as_ref().unchecked_ref(),
@@ -461,6 +514,7 @@ pub fn install_global_handlers(app: App) {
     up.forget();
     cancel.forget();
     key.forget();
+    ctxmenu.forget();
     touchmove.forget();
     facet_close.forget();
 }

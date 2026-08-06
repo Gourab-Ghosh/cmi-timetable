@@ -1013,6 +1013,95 @@ def t33_export_ics_honors_overrides(app):
     assert "RRULE:FREQ=WEEKLY" in ics
 
 
+def t34_mobile_longpress_drag(app):
+    """Mobile drag & drop: a touch long-press must suppress the native
+    context menu, a browser-cancelled drag must not deselect the course via
+    the synthesized click, an actual touch drag must move the chip, and a
+    plain tap must still toggle."""
+    app.boot("/?c=TOC")
+    app.open_tab("Master grid")
+    app.wait_css("section[aria-label='Master grid'] table.tt")
+    app.xpath("//button[contains(.,'Edit layout')]").click()
+
+    P = 7  # pointerId shared by the whole gesture
+
+    def pointerdown_touch(chip):
+        app.d.execute_script(
+            """
+            const el = arguments[0], id = arguments[1];
+            const r = el.getBoundingClientRect();
+            el.dispatchEvent(new PointerEvent('pointerdown', {
+                pointerId: id, pointerType: 'touch', button: 0,
+                bubbles: true, cancelable: true,
+                clientX: r.left + r.width / 2, clientY: r.top + r.height / 2,
+            }));
+            """,
+            chip, P,
+        )
+
+    # With no drag in progress, context menus stay available (desktop
+    # right-click must keep working).
+    assert app.d.execute_script(
+        "return document.body.dispatchEvent(new MouseEvent('contextmenu',"
+        " {bubbles: true, cancelable: true}));"
+    ), "contextmenu must NOT be suppressed outside a drag gesture"
+
+    # -- The reported bug: long-press → native context menu → pointercancel
+    #    → synthesized click used to deselect the course.
+    chip = app.chip("TOC", "td[data-day='1'][data-slot='550']")
+    assert "selected" in chip.get_attribute("class")
+    pointerdown_touch(chip)
+    time.sleep(0.5)  # past the 350 ms long-press lift-off
+    allowed = app.d.execute_script(
+        "return arguments[0].dispatchEvent(new MouseEvent('contextmenu',"
+        " {bubbles: true, cancelable: true}));",
+        chip,
+    )
+    assert not allowed, "contextmenu must be suppressed during a touch drag"
+    # Even if the browser DOES cancel the drag, the follow-up click must not
+    # toggle the chip (pointercancel and click land within the same beat).
+    app.d.execute_script(
+        """
+        const el = arguments[0], id = arguments[1];
+        document.dispatchEvent(new PointerEvent('pointercancel',
+            {pointerId: id, pointerType: 'touch', bubbles: true}));
+        el.dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true}));
+        """,
+        chip, P,
+    )
+    time.sleep(0.4)
+    chip = app.chip("TOC", "td[data-day='1'][data-slot='550']")
+    assert "selected" in chip.get_attribute("class"), \
+        "cancelled long-press must not deselect the course"
+    assert "Removed TOC" not in app.toasts_text()
+
+    # -- A full touch drag (long-press, move, lift) must move the meeting.
+    pointerdown_touch(chip)
+    time.sleep(0.5)
+    app.d.execute_script(
+        """
+        const cell = arguments[0], id = arguments[1];
+        const r = cell.getBoundingClientRect();
+        const x = r.left + r.width / 2, y = r.top + r.height / 2;
+        for (const type of ['pointermove', 'pointermove', 'pointerup']) {
+            document.dispatchEvent(new PointerEvent(type, {
+                pointerId: id, pointerType: 'touch', bubbles: true,
+                cancelable: true, clientX: x, clientY: y,
+            }));
+        }
+        """,
+        app.cell(2, 1020), P,
+    )
+    app.wait_toast("Moved TOC")
+    assert app.chips("TOC", "td[data-day='2'][data-slot='1020']"), \
+        "touch drag must land the chip on Wed 17:00"
+
+    # -- A plain tap (no long-press) must still toggle the selection.
+    time.sleep(0.4)  # let the click-suppression window lapse
+    app.chip("TOC", "td[data-day='2'][data-slot='1020']").click()
+    app.wait_toast("Removed TOC")
+
+
 TESTS = [
     t01_header_sync_button_and_hidden_dev,
     t02_developer_endpoint_only,
@@ -1047,6 +1136,7 @@ TESTS = [
     t31_keyboard_move_mode,
     t32_corrupt_storage_recovery,
     t33_export_ics_honors_overrides,
+    t34_mobile_longpress_drag,
 ]
 
 

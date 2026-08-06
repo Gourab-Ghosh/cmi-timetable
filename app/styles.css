@@ -394,6 +394,8 @@ button {
   touch-action: manipulation;
   user-select: none;
   -webkit-user-select: none;
+  /* iOS: no long-press callout — long-press on a chip means "drag". */
+  -webkit-touch-callout: none;
 }
 .chip .hall {
   font-weight: 450;
