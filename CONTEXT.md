@@ -176,3 +176,12 @@ regenerates the .ics golden.
   GitHub "Service Unavailable" — `gh run rerun --failed` fixed it). Live
   first-run verified in a real browser: welcome → sync (proxy tier won) →
   data pill; `#/developer` reachable.
+- **R9 (CI failure mail):** the failed runs were a confirmed GitHub Actions
+  incident (githubstatus: Actions partial outage + Pages deployment lag) —
+  "Service Unavailable" at Set up job, then "job not acquired by Runner";
+  nothing in our workflows at fault. Added
+  `.github/workflows/retry.yml`: on failure of deploy/sync, `gh run rerun
+  --failed` ONCE (`run_attempt < 2` guard, so real breakage still fails and
+  emails on attempt 2). Gotcha: deploy.yml's `concurrency: pages,
+  cancel-in-progress` means a push while a deploy rerun is in flight cancels
+  it — cancelled ≠ failure, so no retry fires for it.
