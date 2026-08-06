@@ -581,80 +581,87 @@ fn my_timetable(app: App) -> impl IntoView {
                         view! {
                             <div class="print-legend print-only">
                                 <h3>"Courses"</h3>
-                                <table>
-                                    <thead>
-                                        <tr>
-                                            <th>"Code"</th>
-                                            <th>"Course"</th>
-                                            <th>"Instructor"</th>
-                                            <th>"Cr"</th>
-                                            <th>"Meets"</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody>
-                                        {courses
-                                            .into_iter()
-                                            .map(|course| {
-                                                let eff = app.effective_meetings(&course);
-                                                let meets = if eff.is_empty() {
-                                                    "no fixed slot".to_string()
+                                // Two-column compact list (not a table): a
+                                // 12-course semester must still fit the
+                                // sheet on one page.
+                                <div class="print-courses">
+                                    {courses
+                                        .into_iter()
+                                        .map(|course| {
+                                            let eff = app.effective_meetings(&course);
+                                            let meets: Vec<String> = if eff.is_empty() {
+                                                vec!["no fixed slot".to_string()]
+                                            } else {
+                                                eff.iter()
+                                                    .map(|e| {
+                                                        let mut s = format!(
+                                                            "{} {}",
+                                                            e.meeting.day.short(),
+                                                            e.meeting.slot.label(),
+                                                        );
+                                                        if let Some(hall) = &e.meeting.hall {
+                                                            s.push_str(&format!(" · {hall}"));
+                                                        }
+                                                        if e.overridden {
+                                                            s.push_str(" ✎");
+                                                        }
+                                                        s
+                                                    })
+                                                    .collect()
+                                            };
+                                            let credits = {
+                                                let n = app.course_credits(&course);
+                                                if app.credits_custom(&course.code).is_some() {
+                                                    format!("· {n} cr ✎")
+                                                } else if course.credits_assumed() {
+                                                    format!("· {n} cr*")
                                                 } else {
-                                                    eff.iter()
-                                                        .map(|e| {
-                                                            let mut s = format!(
-                                                                "{} {}",
-                                                                e.meeting.day.short(),
-                                                                e.meeting.slot.label(),
-                                                            );
-                                                            if let Some(hall) = &e.meeting.hall {
-                                                                s.push_str(&format!(" · {hall}"));
-                                                            }
-                                                            if e.overridden {
-                                                                s.push_str(" ✎");
-                                                            }
-                                                            s
-                                                        })
-                                                        .collect::<Vec<_>>()
-                                                        // pre-line: one meeting per line
-                                                        .join("\n")
-                                                };
-                                                let credits = {
-                                                    let n = app.course_credits(&course);
-                                                    if app.credits_custom(&course.code).is_some() {
-                                                        format!("{n} ✎")
-                                                    } else if course.credits_assumed() {
-                                                        format!("{n}*")
-                                                    } else {
-                                                        n.to_string()
-                                                    }
-                                                };
-                                                let hue = crate::hues::course_hue(&course.branches);
-                                                view! {
-                                                    <tr>
-                                                        <td class="code">
-                                                            <span
-                                                                class="code-chip"
-                                                                style=format!("--hue:{hue}")
-                                                            >
-                                                                {course.code.clone()}
-                                                            </span>
-                                                        </td>
-                                                        <td>{course.name.clone()}</td>
-                                                        <td>
-                                                            {if course.instructors.is_empty() {
-                                                                "—".to_string()
-                                                            } else {
-                                                                course.instructors.join(" / ")
-                                                            }}
-                                                        </td>
-                                                        <td>{credits}</td>
-                                                        <td>{meets}</td>
-                                                    </tr>
+                                                    format!("· {n} cr")
                                                 }
-                                            })
-                                            .collect_view()}
-                                    </tbody>
-                                </table>
+                                            };
+                                            let instructor = (!course.instructors.is_empty())
+                                                .then(|| format!(
+                                                    " — {}",
+                                                    course.instructors.join(" / "),
+                                                ));
+                                            let hue = crate::hues::course_hue(&course.branches);
+                                            view! {
+                                                <div class="pc-item">
+                                                    <span
+                                                        class="code-chip"
+                                                        style=format!("--hue:{hue}")
+                                                    >
+                                                        {course.code.clone()}
+                                                    </span>
+                                                    <div class="pc-body">
+                                                        <div class="pc-top">
+                                                            <span class="pc-name">
+                                                                {course.name.clone()}
+                                                            </span>
+                                                            {instructor.map(|i| {
+                                                                view! {
+                                                                    <span class="pc-inst">{i}</span>
+                                                                }
+                                                            })}
+                                                            " "
+                                                            <span class="pc-cr">{credits}</span>
+                                                        </div>
+                                                        <div class="pc-meets">
+                                                            {meets
+                                                                .into_iter()
+                                                                .map(|m| {
+                                                                    view! {
+                                                                        <span class="pc-meet">{m}</span>
+                                                                    }
+                                                                })
+                                                                .collect_view()}
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            }
+                                        })
+                                        .collect_view()}
+                                </div>
                                 <p class="print-footnote">
                                     <span>
                                         {move || {

@@ -1126,9 +1126,9 @@ pre.devpre {
     justify-content: space-between;
     align-items: flex-end;
     gap: 8mm;
-    padding-bottom: 2.4mm;
+    padding-bottom: 2mm;
     border-bottom: 2px solid #3f5bd9;
-    margin-bottom: 4mm;
+    margin-bottom: 3mm;
   }
   .pm-title {
     display: block;
@@ -1203,18 +1203,21 @@ pre.devpre {
   }
   table.tt thead th.corner { background: #232a3a !important; }
   /* Cells stay generous — the sheet should read pinned to a wall. */
-  table.tt td { height: 62px; min-width: 0; vertical-align: middle; overflow: hidden; }
+  table.tt td { height: 54px; min-width: 0; vertical-align: middle; overflow: hidden; }
   table.tt tbody tr { break-inside: avoid; }
   table.tt tbody tr:hover td { background: #fff !important; }
 
   /* Chips fill the whole cell: code large and centered, hall beneath.
-     Several chips in one cell (clashes) share it side by side. */
+     Several chips in one cell (clashes) share it: two sit side by side,
+     three or more wrap onto extra lines — chips may shrink (the hall
+     ellipsizes) but text is never chopped by the cell border. */
   table.tt td .cellstack, table.tt td .sidebyside {
     height: 100%;
     gap: 2px;
-    flex-wrap: nowrap;
+    flex-wrap: wrap;
+    align-content: stretch;
   }
-  .chipwrap { display: flex; width: 100%; height: 100%; min-width: 0; }
+  .chipwrap { display: flex; flex: 1 1 44%; height: auto; min-width: 0; }
   .chip {
     position: relative;
     display: flex;
@@ -1222,9 +1225,10 @@ pre.devpre {
     align-items: center;
     justify-content: center;
     gap: 1px;
-    width: 100%;
-    height: 100%;
-    min-height: 0;
+    flex: 1 1 44%;
+    min-width: 0;
+    height: auto;
+    min-height: 26px;
     padding: 2px 4px;
     border-radius: 7px;
     background: hsl(var(--hue) 60% 91%) !important;
@@ -1265,8 +1269,8 @@ pre.devpre {
      Clashes panel. */
   .print-clashes {
     display: block;
-    margin-top: 3mm;
-    padding: 1.8mm 3mm;
+    margin-top: 2.5mm;
+    padding: 1.5mm 3mm;
     border: 1px solid #c22f41;
     border-left: 3.5px solid #c22f41;
     border-radius: 4px;
@@ -1278,7 +1282,8 @@ pre.devpre {
   .print-clashes strong { color: #c22f41; }
 
   /* --- Legend: colored code chips, airy hairline rows. --- */
-  .print-legend { margin-top: 5.5mm; break-inside: avoid; }
+  .print-legend { margin-top: 4mm; }
+  .print-legend h3 { break-after: avoid; }
   .print-legend h3 {
     font-size: 8.5px;
     font-weight: 750;
@@ -1287,31 +1292,36 @@ pre.devpre {
     color: #5a6170;
     margin: 0 0 1.8mm;
   }
-  .print-legend table {
-    width: 100%;
-    border-collapse: collapse;
-    font-size: 9.8px;
+  /* Course list flows into two columns so a full 12-course semester still
+     fits the sheet. */
+  .print-legend .print-courses {
+    column-count: 2;
+    column-gap: 10mm;
+    border-top: 1.2px solid #232a3a;
+    padding-top: 1mm;
   }
-  .print-legend th {
-    text-align: left;
-    font-size: 8px;
-    font-weight: 700;
-    letter-spacing: 0.12em;
-    text-transform: uppercase;
-    color: #5a6170;
-    border-bottom: 1.2px solid #232a3a;
-    padding: 2px 12px 3px 0;
-  }
-  .print-legend td {
+  .pc-item {
+    break-inside: avoid;
+    display: flex;
+    align-items: flex-start;
+    gap: 2.2mm;
+    padding: 1.2mm 0;
     border-bottom: 0.5px solid #d5d9e2;
-    padding: 4px 12px 4px 0;
-    vertical-align: top;
-    color: #10131b;
-    /* Each meeting on its own line in the Meets column. */
-    white-space: pre-line;
   }
-  .print-legend tr:last-child td { border-bottom: none; }
-  .print-legend .code { white-space: nowrap; }
+  .pc-body { min-width: 0; }
+  .pc-top { font-size: 9.6px; line-height: 1.35; color: #10131b; }
+  .pc-name { font-weight: 650; }
+  .pc-inst { color: #5a6170; }
+  .pc-cr { color: #5a6170; white-space: nowrap; font-size: 8.8px; }
+  .pc-meets {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0 4mm;
+    font-size: 8.6px;
+    color: #39404e;
+    margin-top: 0.4mm;
+  }
+  .pc-meet { white-space: nowrap; }
   .print-legend .code-chip {
     display: inline-block;
     font-family: var(--font-mono);
@@ -1327,8 +1337,8 @@ pre.devpre {
     font-size: 8px;
     color: #8a909c;
     border-top: 0.5px solid #d5d9e2;
-    padding-top: 2mm;
-    margin-top: 3.5mm;
+    padding-top: 1.5mm;
+    margin-top: 2.5mm;
     display: flex;
     justify-content: space-between;
     gap: 8mm;

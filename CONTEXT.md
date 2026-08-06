@@ -133,8 +133,14 @@ cmi-timetable-core --test ics_tests` regenerates the .ics golden.
   branch pastels with corner ✎, colored code chips in legend, hairline
   footnote); `domx::fmt_local_date` now hand-rolled "6 Aug 2026" (was
   locale-numeric) — also improves failure banners.
-- **R6b (print clashes):** clashing chips share their cell side by side
-  (print `.sidebyside` nowrap), carry an alarm-red border + ⚠ corner glyph,
-  and a red `.print-clashes` strip under the grid lists every overlap;
-  footnote copy matches. Verified via a dedicated TOC+ISS clash PDF in
-  shoot.py (`print-clash.pdf`).
+- **R6b (print clashes):** clashing chips share their cell side by side,
+  carry an alarm-red border + ⚠ corner glyph, and a red `.print-clashes`
+  strip under the grid lists every overlap; footnote copy matches.
+- **R6c (dense-print fix):** user's 12-course selection clipped chip text
+  and pushed the legend to page 2. Print cells now `flex-wrap: wrap` with
+  chips `flex: 1 1 44%; min-width: 0` (2 side-by-side, 3+ wrap; halls
+  ellipsize, never chopped); legend rebuilt as a two-column `.print-courses`
+  item list (`.pc-item`, column-count: 2) replacing the table; vertical
+  rhythm tightened (td 54px) so 12 courses fit ONE page. Stress PDFs in
+  shoot.py: `print-12.pdf` (user's selection) and `print-clash.pdf`
+  (TOC+ISS+NLP triple-booked cell, 6 clash lines).
