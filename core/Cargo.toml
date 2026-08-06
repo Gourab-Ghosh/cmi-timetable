@@ -13,6 +13,12 @@ default = []
 # with the browser's DOMParser instead.
 html = ["dep:scraper"]
 
+# Used by the e2e harness to derive its seed data from the fixtures — the
+# app binary itself ships no timetable data.
+[[example]]
+name = "snapshot_json"
+required-features = ["html"]
+
 [dependencies]
 serde.workspace = true
 serde_json.workspace = true

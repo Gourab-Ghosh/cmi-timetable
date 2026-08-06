@@ -18,9 +18,10 @@ DIST_DIR=../app/dist-e2e .venv/bin/python test_app.py
 ```
 
 Environment knobs: `CHROME_BIN` (default `/usr/bin/chromium`), `DIST_DIR`,
-`PORT`.
+`PORT`, `CARGO_TARGET_DIR` (for the seed generator; defaults to
+`~/.rust-target-e2e`).
 
-Covered flows (24 tests): Sync-now header + hidden developer mode (URL
+Covered flows (28 tests): Sync-now header + hidden developer mode (URL
 endpoint only), `?c=` selection + clash badges/panel (any casing), unknown-
 code warning, credits defaulting to 4 and per-course credit overwrites,
 master-grid ⚠ would-clash markers and clash toast on add, the ⓘ details
@@ -30,10 +31,17 @@ My data) with per-item and remove-all restore, filter dropdowns closing
 each other / on outside click / on Esc, adding extra weekly meetings to any
 course, undo/redo, "Give it a time" auto-selecting, the free-hall finder
 requiring an explicit day + slot, hall-and-slot drag & drop in the Halls
-view, filter menus keeping focus/scroll while ticking boxes, the ✓
-selected-course marker in the master grid, and toasts pausing while
-hovered.
+view (including the chip relocating in the halls grid itself, surviving
+reload, and drag-back-to-reset), filter menus keeping focus/scroll while
+ticking boxes, the ✓ selected-course marker in the master grid, toasts
+pausing while hovered, the first-run welcome prompt (failed sync → honest
+banner; reachable mirror → auto-populates), filters in the undo history
+(with search-typing coalesced into one step), and the per-dropdown
+search + All/None shortcuts incl. the Course facet.
 
-Each test starts from a wiped localStorage with the background sync
-suppressed, so everything runs deterministically against the bundled
-snapshot — no network needed.
+The app ships no timetable data, so the suite derives a snapshot from
+`core/fixtures/` at startup (via core's `snapshot_json` example — cargo must
+be on PATH) and seeds it into localStorage before each test. The browser
+runs with all non-localhost DNS blackholed: the direct/proxy tiers fail
+instantly, the first-run tests serve the same seed as a fake same-origin
+mirror, and nothing ever touches the real network.

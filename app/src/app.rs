@@ -10,7 +10,7 @@
 use crate::state::{App, Route, SyncMeta};
 use crate::{dev, dnd, domx, fetch, storage, ui, views};
 use leptos::prelude::*;
-use ttcore::model::{OverridesStore, Snapshot};
+use ttcore::model::{OverridesStore, Snapshot, SourceTier};
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::JsCast;
 
@@ -38,11 +38,13 @@ fn init_app() -> (App, bool) {
     let selection: Vec<String> = load_or(storage::KEY_SELECTION, &mut corrupt, Vec::new);
     let overrides: OverridesStore =
         load_or(storage::KEY_OVERRIDES, &mut corrupt, OverridesStore::default);
-    let snapshot: Snapshot = load_or(
-        storage::KEY_SNAPSHOT,
-        &mut corrupt,
-        crate::state::bundled_snapshot,
-    );
+    let mut snapshot: Snapshot = load_or(storage::KEY_SNAPSHOT, &mut corrupt, Snapshot::placeholder);
+    // Old app versions shipped a snapshot baked in at build time; that data
+    // no longer exists, so a cached copy of it means "never really synced".
+    if snapshot.source == SourceTier::Bundled {
+        storage::remove(storage::KEY_SNAPSHOT);
+        snapshot = Snapshot::placeholder();
+    }
 
     let app = App {
         sync: RwSignal::new(SyncMeta {
@@ -95,6 +97,24 @@ fn apply_url_state(app: App) {
         && app.selection.with_untracked(|sel| *sel == state.selection)
     {
         app.sync_url();
+        return;
+    }
+
+    // Before the first sync there is no catalog to resolve against: keep the
+    // shared codes verbatim and let the first gate-passed sync canonicalize
+    // them (fetch::adopt) — a share link opened on a fresh browser must
+    // survive the "sync first" step.
+    if !app.snapshot.with_untracked(|s| s.has_data()) {
+        let shared_overrides = state.overrides;
+        let selection = state.selection;
+        if app.selection.with_untracked(|s| *s != selection) || shared_overrides.is_some() {
+            app.act("open shared link", move |sel, ovs| {
+                *sel = selection;
+                if let Some(store) = shared_overrides {
+                    *ovs = store;
+                }
+            });
+        }
         return;
     }
 
@@ -195,7 +215,9 @@ pub fn Root() -> impl IntoView {
     fetch::maybe_background_update(app);
 
     view! {
-        <div class="app">
+        // Before the first sync there is no tab rail, so the desktop grid
+        // must not reserve its sidebar column.
+        <div class="app" class:no-data=move || !app.has_data()>
             <ui::Header />
             <ui::Tabs />
             <main class="main">

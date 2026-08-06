@@ -8,6 +8,11 @@ browser** — no backend, no accounts, no analytics. The header's **My data**
 dialog shows exactly what is stored (including which CMI times your custom
 times overwrite) with one-click removal for each piece.
 
+The app **ships no timetable data at all** — no bundled snapshot, no
+checked-in mirror. On first load it shows a welcome screen asking for one
+sync; after that the fetched timetable lives in the browser and everything
+works offline. Nothing about CMI's current pages is hard-coded anywhere.
+
 Data sources (the only two):
 
 - <https://www.cmi.ac.in/practical/timetable.php>
@@ -25,8 +30,8 @@ Built with **Rust → WebAssembly** ([Leptos](https://leptos.dev) CSR +
         (core/fixtures/, fetched 5 Aug 2026).
 /app    Leptos CSR UI (Trunk). Extracts <pre> blocks with the browser's
         DOMParser and feeds them to the same core parsing functions.
-        build.rs bakes a bundled snapshot from the fixtures, so the very
-        first load works even fully offline from CMI.
+        Ships empty: the first load asks for a sync (build.rs only stamps
+        build metadata — no data is baked in).
 /sync   Small native binary (reqwest + core). The optional GitHub Actions
         cron uses it to publish a validated data mirror under
         app/public/data/. One parser everywhere: one source of truth.
@@ -44,8 +49,11 @@ valid response wins:
 1. **direct** — a cheap 4 s attempt at the CMI URLs (in case CORS ever opens up)
 2. **proxy** — public CORS relays raced in parallel (see `app/src/fetch.rs`)
 3. **mirror** — same-origin `data/latest.json` + raw HTML copies committed by
-   the `sync.yml` cron
-4. **bundled** — a snapshot compiled in at build time from the fixtures
+   the `sync.yml` cron (never committed by hand — the repo carries no data)
+
+Until the first sync succeeds the app stays on its welcome screen; a failed
+first sync explains itself in a banner and every later page load retries
+(the usual 12 h background throttle only applies once data exists).
 
 The parser + validation gate are the **only** judges of content — no
 hard-coded shape or wording check can reject a page they would accept, so a
@@ -83,7 +91,14 @@ my custom changes"). When both are present, `s` wins. The query stays
   touch scrolling and clicks stay accident-free. Keyboard alternative while
   editing: focus a chip, press `M`, arrows, `Enter`. In the **Halls** view a
   drop targets a hall row *and* a time column, so one gesture moves a
-  meeting into a different hall and slot.
+  meeting into a different hall and slot — and the grid updates in place:
+  moved meetings render in their new cell (dashed, ✎) and leave the official
+  one; dropping back on the official cell resets the change.
+- **Filters are undoable** like everything else (one step per change, one
+  per burst of typing in the search box), and every filter dropdown has its
+  own search field plus **All** / **None** shortcuts that act on whatever
+  the search currently shows. A **Course** dropdown filters to hand-picked
+  courses.
 - Deselecting a course **keeps** its custom times, so re-adding it (or
   spotting it in the master grid) doesn't silently revert a move. Remove
   custom times explicitly per meeting, per course, or in **My data**.
@@ -124,6 +139,11 @@ load-bearing requirement for GitHub Pages (no server rewrites), so the app
 uses a minimal hand-rolled hash router instead (two routes: `#/` and
 `#/developer`, `hashchange`-driven — see `app/src/app.rs`). `404.html`
 bounces unknown paths back to `index.html` preserving the query string.
+
+A second deliberate deviation: the build spec's bundled snapshot ("first
+load works offline") was **removed by explicit request** — nothing about
+CMI's pages may ship inside the app. First load now asks for a sync; the
+fixtures remain in the repo only for parser tests and the e2e seed.
 
 Two more reality-driven deviations, both verified against the live pages on
 5 Aug 2026 and documented in the code:
@@ -184,8 +204,8 @@ the last good mirror stayed.
 - **Refresh fixtures next semester**: save both pages verbatim over
   `core/fixtures/*.html`, run `cargo test -p cmi-timetable-core`, and update
   the semester-specific expectations in `core/tests/parser_tests.rs`
-  (branch list, course names, the unscheduled set, …). The bundled snapshot
-  regenerates from the fixtures automatically via `app/build.rs`.
+  (branch list, course names, the unscheduled set, …). The fixtures feed
+  only the parser tests and the e2e seed — the shipped app carries no data.
 
 ## Manual acceptance checklist
 

@@ -38,20 +38,22 @@ fn build_info(app: App) -> impl IntoView {
                 <dd>{crate::state::GIT_COMMIT}</dd>
                 <dt>"Built at"</dt>
                 <dd>{crate::state::BUILD_TIME}</dd>
-                <dt>"Bundled snapshot"</dt>
-                <dd>{env!("APP_BUNDLED_SEMESTER")}</dd>
                 <dt>"Current snapshot"</dt>
                 <dd>
                     {move || {
                         app.snapshot
                             .with(|s| {
-                                format!(
-                                    "{} · fetched {} · parser v{} · {}",
-                                    s.semester_label,
-                                    domx::fmt_local(s.fetched_at),
-                                    s.parser_version,
-                                    s.source.label(),
-                                )
+                                if !s.has_data() {
+                                    "none — nothing synced yet".to_string()
+                                } else {
+                                    format!(
+                                        "{} · fetched {} · parser v{} · {}",
+                                        s.semester_label,
+                                        domx::fmt_local(s.fetched_at),
+                                        s.parser_version,
+                                        s.source.label(),
+                                    )
+                                }
                             })
                     }}
                 </dd>
@@ -84,9 +86,6 @@ fn simulators(app: App) -> impl IntoView {
                     });
                 }>
                     "Run sync"
-                </button>
-                <button class="btn small" on:click=move |_| fetch::load_bundled_fixture(app)>
-                    "Load bundled fixture"
                 </button>
                 <button class="btn small" on:click=move |_| fetch::simulate_parse_failure(app)>
                     "Simulate parse failure"
@@ -164,7 +163,7 @@ fn parse_reports(app: App) -> impl IntoView {
                 if reports.is_empty() {
                     view! {
                         <p class="muted small">
-                            "No parses yet this session (the bundled snapshot was parsed at build time)."
+                            "No parses yet this session — run a sync to see one."
                         </p>
                     }
                         .into_any()

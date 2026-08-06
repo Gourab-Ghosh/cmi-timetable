@@ -10,15 +10,24 @@ Environment:
     DIST_DIR    directory to serve   (default: ../app/dist relative to this file)
     CHROME_BIN  browser binary       (default: /usr/bin/chromium)
     PORT        local port           (default: 8977)
+    CARGO_TARGET_DIR  target dir for the seed generator build
+                      (default: ~/.rust-target-e2e, so a running
+                      `trunk serve` can never race it)
 
-Each test boots the app with a fresh localStorage. Background syncing is
-suppressed by seeding `cmitt.v1.prefs.last_update_attempt`, so every test
-runs against the deterministic bundled snapshot.
+The app ships no timetable data, so the suite derives a snapshot from the
+committed fixtures at startup (core's `snapshot_json` example) and seeds it
+into localStorage before each test — every test still runs offline and
+deterministically. The browser is started with all non-localhost DNS
+blackholed, so the direct/proxy sync tiers fail instantly and nothing ever
+touches the real network; the first-run tests serve that same seed as a fake
+same-origin mirror instead.
 """
 
 import http.server
 import json
 import os
+import shutil
+import subprocess
 import sys
 import threading
 import time
@@ -33,10 +42,60 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+REPO = os.path.abspath(os.path.join(HERE, ".."))
 DIST = os.environ.get("DIST_DIR", os.path.join(HERE, "..", "app", "dist"))
 PORT = int(os.environ.get("PORT", "8977"))
 BASE = f"http://127.0.0.1:{PORT}"
 CHROME_BIN = os.environ.get("CHROME_BIN", "/usr/bin/chromium")
+FIXTURES = os.path.join(REPO, "core", "fixtures")
+
+# Filled by build_seed() at startup: the parsed mirror-format dict and the
+# ready-to-store snapshot JSON string.
+SEED_LATEST = None
+SEED_SNAPSHOT_JSON = None
+
+
+def build_seed():
+    """Derive the seed snapshot from the committed fixtures with the exact
+    same parser the app uses (core's `snapshot_json` example)."""
+    global SEED_LATEST, SEED_SNAPSHOT_JSON
+    env = dict(os.environ)
+    env.setdefault(
+        "CARGO_TARGET_DIR", os.path.expanduser("~/.rust-target-e2e")
+    )
+    result = subprocess.run(
+        [
+            "cargo", "run", "-q", "-p", "cmi-timetable-core",
+            "--example", "snapshot_json", "--features", "html", "--",
+            os.path.join(FIXTURES, "timetable.php.html"),
+            os.path.join(FIXTURES, "lecturehalls.php.html"),
+        ],
+        capture_output=True, text=True, cwd=REPO, env=env,
+    )
+    if result.returncode != 0:
+        sys.exit(f"seed generation failed:\n{result.stderr}")
+    SEED_LATEST = json.loads(result.stdout)
+    snapshot = SEED_LATEST["snapshot"]
+    snapshot["fetched_at"] = time.time() * 1000.0
+    snapshot["source"] = "Mirror"
+    SEED_SNAPSHOT_JSON = json.dumps(snapshot)
+
+
+def write_fake_mirror():
+    """Publish the seed as a same-origin mirror (DIST/data/) so a real sync
+    can succeed through the mirror tier — external hosts are blackholed."""
+    data_dir = os.path.join(DIST, "data")
+    os.makedirs(data_dir, exist_ok=True)
+    latest = dict(SEED_LATEST)
+    latest["generated_at"] = time.time() * 1000.0
+    with open(os.path.join(data_dir, "latest.json"), "w") as f:
+        json.dump(latest, f)
+    for name in ("timetable.php.html", "lecturehalls.php.html"):
+        shutil.copy(os.path.join(FIXTURES, name), os.path.join(data_dir, name))
+
+
+def remove_fake_mirror():
+    shutil.rmtree(os.path.join(DIST, "data"), ignore_errors=True)
 
 
 def serve_dist():
@@ -62,6 +121,11 @@ def make_driver():
     # The stylesheet honors prefers-reduced-motion; forcing it here disables
     # entry animations so dialogs are fully visible the moment they mount.
     opts.add_argument("--force-prefers-reduced-motion")
+    # Blackhole every non-localhost hostname: sync's direct/proxy tiers fail
+    # instantly and deterministically, and no test ever touches the network.
+    opts.add_argument(
+        "--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE 127.0.0.1"
+    )
     return webdriver.Chrome(options=opts)
 
 
@@ -72,16 +136,23 @@ class App:
 
     # -- lifecycle ---------------------------------------------------------
 
-    def boot(self, path="/", fresh=True):
-        """Load the app; with fresh=True, wipe storage and suppress the
-        background sync so tests run on the bundled snapshot."""
+    def boot(self, path="/", fresh=True, seed=True):
+        """Load the app. fresh=True wipes storage; seed=True (the default)
+        pre-loads the fixture-derived snapshot and suppresses the background
+        sync, so tests run on deterministic data. seed=False boots the app
+        the way a first-time visitor sees it: empty."""
         if fresh:
             self.d.get(f"{BASE}/e2e-blank")  # same-origin 404 page
-            self.d.execute_script(
-                "localStorage.clear();"
-                "localStorage.setItem('cmitt.v1.prefs', arguments[0]);",
-                json.dumps({"last_update_attempt": time.time() * 1000.0}),
-            )
+            if seed:
+                self.d.execute_script(
+                    "localStorage.clear();"
+                    "localStorage.setItem('cmitt.v1.prefs', arguments[0]);"
+                    "localStorage.setItem('cmitt.v1.snapshot', arguments[1]);",
+                    json.dumps({"last_update_attempt": time.time() * 1000.0}),
+                    SEED_SNAPSHOT_JSON,
+                )
+            else:
+                self.d.execute_script("localStorage.clear();")
         self.d.get(f"{BASE}{path}")
         self.wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, ".header h1")))
 
@@ -553,6 +624,22 @@ def t21_halls_drag_moves_hall_and_slot(app):
     section.find_element(By.XPATH, ".//button[contains(.,'Edit layout')]").click()
     app.drag(app.chip("TOC", src_cell), app.css(dst_cell))
     app.wait_toast("Moved TOC to Tue 14:00–15:15 · Seminar Hall")
+    # THE regression: the halls grid itself must update — the chip renders in
+    # its new cell (dashed = customised) and leaves the official one.
+    landed = app.wait_css(f"{dst_cell} button.chip[aria-label^='TOC,']")
+    assert "overridden" in landed.get_attribute("class"), \
+        "chip in the new cell should render as customised"
+    assert not app.chips("TOC", src_cell), \
+        "the moved chip must leave its official cell"
+    # …and it survives a reload.
+    app.boot("/", fresh=False)
+    app.open_tab("Halls")
+    section = app.wait_css("section[aria-label='Lecture halls']")
+    section.find_element(
+        By.XPATH, ".//div[@role='group'][@aria-label='Day']//button[normalize-space()='Tue']"
+    ).click()
+    app.wait_css(f"{dst_cell} button.chip[aria-label^='TOC,']")
+    assert not app.chips("TOC", src_cell)
     # The timetable reflects the new hall and time.
     app.open_tab("My timetable")
     moved = app.wait_css(
@@ -560,6 +647,19 @@ def t21_halls_drag_moves_hall_and_slot(app):
     )
     assert "Seminar Hall" in moved.get_attribute("aria-label")
     app.xpath("//button[contains(.,'1 change')]")
+    # Dragging the landed chip back onto its official cell resets the
+    # override (reuses it — no stacking).
+    app.open_tab("Halls")
+    section = app.wait_css("section[aria-label='Lecture halls']")
+    section.find_element(
+        By.XPATH, ".//div[@role='group'][@aria-label='Day']//button[normalize-space()='Tue']"
+    ).click()
+    section.find_element(By.XPATH, ".//button[contains(.,'Edit layout')]").click()
+    app.drag(app.chip("TOC", dst_cell), app.css(src_cell))
+    app.wait_toast("TOC back on CMI's time")
+    back = app.wait_css(f"{src_cell} button.chip[aria-label^='TOC,']")
+    assert "overridden" not in back.get_attribute("class")
+    assert not app.chips("TOC", dst_cell)
 
 
 def t22_filter_menu_keeps_focus_and_scroll(app):
@@ -628,6 +728,114 @@ def t24_toast_pauses_while_hovered(app):
     app.wait_gone(".toasts .toast", timeout=10)
 
 
+def t25_first_run_prompt_when_empty(app):
+    """A first-time visitor sees the welcome prompt, no tabs, and an honest
+    failure banner when the sync can't get through (all hosts blackholed)."""
+    remove_fake_mirror()  # ensure the mirror tier 404s
+    app.boot("/", seed=False)
+    welcome = app.wait_css(".welcome-card")
+    assert "Plan your semester" in welcome.text, welcome.text
+    assert "sync every few days" in welcome.text, welcome.text
+    assert not app.css_all(".tabs .tab"), "no tabs before the first sync"
+    assert "Not synced yet" in app.css(".sync-pill").text or \
+        app.css_all(".sync-pill .spinner"), "pill must show the unsynced state"
+    # The automatic first sync fails (no reachable route) → banner + prompt stays.
+    banner = app.wait_css(".banner", timeout=30)
+    assert "couldn't be fetched" in banner.text, banner.text
+    assert app.css_all(".welcome-card"), "prompt must survive a failed sync"
+    app.xpath("//button[contains(.,'Fetch the timetable')]")
+
+
+def t26_first_sync_populates_from_mirror(app):
+    """With a reachable (same-origin) mirror, the automatic first sync fills
+    the app: welcome disappears, tabs appear, data renders."""
+    write_fake_mirror()
+    try:
+        app.boot("/", seed=False)
+        # The auto-sync walks direct (dead) → proxies (dead) → mirror (live).
+        app.wait_css(".tabs .tab", timeout=30)
+        app.wait_gone(".welcome-card")
+        assert "mirror" in app.css(".sync-pill").text, app.css(".sync-pill").text
+        app.open_tab("Master grid")
+        app.wait_css("section[aria-label='Master grid'] table.tt")
+        app.chip("TOC")
+    finally:
+        remove_fake_mirror()
+
+
+def t27_filters_undo_redo(app):
+    """Filter changes are part of the undo history: a ticked facet can be
+    undone/redone, and a burst of typing in the search box is ONE undo step."""
+    app.boot("/")
+    app.open_tab("Catalog")
+    app.wait_css("section[aria-label='Catalog'] .filterbar")
+    app.css_all(".filterbar details.facet > summary")[0].click()  # Branch
+    app.wait_css("details.facet[open] .menu")
+    app.css("details.facet[open] .menu label.opt input").click()
+    app.wait_css(".filterchip")
+    app.xpath("//button[@aria-label='Undo']").click()
+    app.wait_toast("Undid: the")
+    app.wait_gone(".filterchip")
+    assert not app.css_all("details.facet .menu input:checked")
+    app.xpath("//button[@aria-label='Redo']").click()
+    app.wait_css(".filterchip")
+    # Search coalescing: several keystrokes, one undo.
+    search = app.css(".filterbar input[type='search']")
+    search.send_keys("toc")
+    WebDriverWait(app.d, 10).until(
+        lambda d: len(app.css_all(".filterchip")) == 2
+    )
+    app.xpath("//button[@aria-label='Undo']").click()
+    WebDriverWait(app.d, 10).until(
+        lambda d: search.get_attribute("value") == ""
+        and len(app.css_all(".filterchip")) == 1,
+        message="one undo must revert the whole typed burst",
+    )
+
+
+def t28_facet_menu_search_and_select_all(app):
+    """Every dropdown has its own search box + All/None shortcuts, and a
+    Course facet filters to specific courses."""
+    app.boot("/")
+    app.open_tab("Catalog")
+    app.wait_css("section[aria-label='Catalog'] .filterbar")
+    app.xpath(
+        "//details[contains(@class,'facet')]/summary[starts-with(normalize-space(),'Course')]"
+    ).click()
+    app.wait_css("details.facet[open] .menu")
+    total = len(app.css_all("details.facet[open] .menu label.opt"))
+    assert total > 50, f"the Course menu should list the whole catalog, got {total}"
+    search = app.css("details.facet[open] .menu input[type='search']")
+    search.send_keys("theory")
+    WebDriverWait(app.d, 10).until(
+        lambda d: 0 < len(app.css_all("details.facet[open] .menu label.opt")) < total,
+        message="the menu search must narrow the option list",
+    )
+    visible = len(app.css_all("details.facet[open] .menu label.opt"))
+    # "All" ticks exactly the visible options → same number of filter chips.
+    app.xpath(
+        "//details[contains(@class,'facet') and @open]//button[normalize-space()='All']"
+    ).click()
+    WebDriverWait(app.d, 10).until(
+        lambda d: len(app.css_all(".filterchip")) == visible,
+        message="All must select every option the search shows",
+    )
+    # The catalog now shows exactly those courses.
+    matches = app.css("section[aria-label='Catalog'] .filterbar .muted").text
+    assert matches.startswith(f"{visible} match"), matches
+    # "None" clears them again (menu search still narrowing).
+    app.xpath(
+        "//details[contains(@class,'facet') and @open]//button[normalize-space()='None']"
+    ).click()
+    app.wait_gone(".filterchip")
+    # One undo brings the whole "All" pick back... after the None is undone.
+    app.xpath("//button[@aria-label='Undo']").click()
+    WebDriverWait(app.d, 10).until(
+        lambda d: len(app.css_all(".filterchip")) == visible,
+        message="undoing 'clear all in Course' must restore the picks",
+    )
+
+
 TESTS = [
     t01_header_sync_button_and_hidden_dev,
     t02_developer_endpoint_only,
@@ -653,12 +861,17 @@ TESTS = [
     t22_filter_menu_keeps_focus_and_scroll,
     t23_master_grid_marks_selected,
     t24_toast_pauses_while_hovered,
+    t25_first_run_prompt_when_empty,
+    t26_first_sync_populates_from_mirror,
+    t27_filters_undo_redo,
+    t28_facet_menu_search_and_select_all,
 ]
 
 
 def main():
     if not os.path.isdir(DIST):
         sys.exit(f"dist directory not found: {DIST} — run `trunk build --release` first")
+    build_seed()
     server = serve_dist()
     driver = make_driver()
     app = App(driver)

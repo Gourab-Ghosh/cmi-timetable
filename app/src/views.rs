@@ -1,7 +1,8 @@
 //! The five planner views. In every grid, time slots are the top header row
 //! and days/halls run down the left column — never transposed.
 
-use crate::state::{App, Density, Dialog, EffMeeting, Tab};
+use crate::fetch;
+use crate::state::{effective_meetings, App, Density, Dialog, EffMeeting, Tab};
 use crate::ui::{
     branch_chip, chip, custom_changes_pill, edit_toggle, filter_bar, overrides_list, ChipClick,
     ChipProps,
@@ -14,14 +15,80 @@ pub fn planner(app: App) -> impl IntoView {
     // not rebuild the whole tab (that would reset scroll and focus).
     let tab = Memo::new(move |_| app.prefs.with(|p| p.tab));
     view! {
-        {what_changed_panel(app)}
-        {move || match tab.get() {
-            Tab::MyTimetable => my_timetable(app).into_any(),
-            Tab::MyCourses => my_courses(app).into_any(),
-            Tab::MasterGrid => master_grid(app).into_any(),
-            Tab::Catalog => catalog(app).into_any(),
-            Tab::Halls => halls_view(app).into_any(),
+        {move || {
+            if !app.has_data() {
+                // Nothing is shipped with the app: until the first
+                // successful sync, the only thing to show is the invitation
+                // to run one.
+                welcome(app).into_any()
+            } else {
+                view! {
+                    {what_changed_panel(app)}
+                    {move || match tab.get() {
+                        Tab::MyTimetable => my_timetable(app).into_any(),
+                        Tab::MyCourses => my_courses(app).into_any(),
+                        Tab::MasterGrid => master_grid(app).into_any(),
+                        Tab::Catalog => catalog(app).into_any(),
+                        Tab::Halls => halls_view(app).into_any(),
+                    }}
+                }
+                    .into_any()
+            }
         }}
+    }
+}
+
+/// The first-run screen: the app stores nothing about CMI's pages, so before
+/// the first sync there is no timetable to plan with — just the offer to
+/// fetch one.
+fn welcome(app: App) -> impl IntoView {
+    let syncing = move || app.sync.with(|s| s.updating);
+    view! {
+        <section class="welcome" aria-label="Welcome">
+            <div class="welcome-card">
+                <span class="logo welcome-logo" aria-hidden="true"></span>
+                <p class="welcome-eyebrow">"CMI Timetable Planner"</p>
+                <h2>"Plan your semester in minutes"</h2>
+                <p class="welcome-sub">
+                    "Pick courses, spot clashes, move meetings around, and take your \
+                     week with you as a calendar or a printout. Everything runs and \
+                     stays in this browser — nothing you do here leaves your device."
+                </p>
+                <button
+                    class="btn primary big"
+                    disabled=syncing
+                    on:click=move |_| {
+                        leptos::task::spawn_local(async move {
+                            fetch::run_update(app, true).await;
+                        });
+                    }
+                >
+                    {move || if syncing() { "Syncing…" } else { "⟳ Fetch the timetable" }}
+                </button>
+                <p class="welcome-status muted small" aria-live="polite">
+                    {move || {
+                        let s = app.sync.get();
+                        if s.updating {
+                            if s.progress.is_empty() {
+                                "Contacting cmi.ac.in…".to_string()
+                            } else {
+                                s.progress
+                            }
+                        } else {
+                            "Takes a few seconds — after that everything works offline."
+                                .to_string()
+                        }
+                    }}
+                </p>
+                <p class="welcome-note muted small">
+                    "The app never ships a copy of the timetable; it shows CMI's real \
+                     pages, fetched straight from cmi.ac.in. CMI keeps editing them \
+                     through the semester, so sync every few days to stay current — \
+                     the app re-checks on its own too, at most twice a day, and always \
+                     tells you what changed."
+                </p>
+            </div>
+        </section>
     }
 }
 
@@ -1016,6 +1083,24 @@ fn catalog_row(app: App, course: Course) -> impl IntoView {
 
 /// A chip in the Halls grid: draggable (in edit mode) so a meeting can be
 /// moved to another hall row and/or time column in one gesture.
+/// The grid column a meeting lands in: exact start-time match first, then
+/// any column whose range contains the start — custom times don't have to
+/// line up with CMI's slot scheme.
+fn hall_col_of(slot_grid: &[Slot], m: &Meeting) -> Option<u16> {
+    slot_grid
+        .iter()
+        .find(|s| s.start_min == m.slot.start_min)
+        .or_else(|| {
+            slot_grid
+                .iter()
+                .find(|s| (s.start_min..s.end_min).contains(&m.slot.start_min))
+        })
+        .map(|s| s.start_min)
+}
+
+/// Chip for one official hall booking — or `None` when the user moved this
+/// meeting elsewhere: it renders at its new cell instead (see `halls_view`),
+/// so a drop is visible in the grid immediately.
 fn hall_booking_chip(
     app: App,
     snapshot: &Snapshot,
@@ -1023,10 +1108,10 @@ fn hall_booking_chip(
     day: Day,
     slot: Slot,
     hall: &str,
-) -> AnyView {
+) -> Option<AnyView> {
     let Some(course) = snapshot.course(code) else {
         // A booking whose code isn't in the catalog: plain reference chip.
-        return chip(app, ChipProps::list(code)).into_any();
+        return Some(chip(app, ChipProps::list(code)).into_any());
     };
     // The official meeting this booking represents — matched on the override
     // BASE, so an already-customised meeting drags with its existing
@@ -1052,6 +1137,19 @@ fn hall_booking_chip(
             base: Some(booking),
             user_created: false,
         });
+    if eff.overridden {
+        let lands_here = eff.meeting.day == day
+            && eff.meeting.hall.as_deref() == Some(hall)
+            && hall_col_of(&snapshot.slot_grid, &eff.meeting) == Some(slot.start_min);
+        if !lands_here {
+            return None;
+        }
+    }
+    Some(hall_eff_chip(app, code, eff))
+}
+
+/// The common chip styling for anything sitting in a halls-grid cell.
+fn hall_eff_chip(app: App, code: &str, eff: EffMeeting) -> AnyView {
     chip(
         app,
         ChipProps {
@@ -1107,8 +1205,9 @@ fn halls_view(app: App) -> impl IntoView {
                 {edit_toggle(app)}
             </div>
             <p class="muted small" style="margin:0 0 0.6rem">
-                "CMI's official hall allocation · with ✎ Edit layout on, drag a \
-                 course to another hall or time — ✓ marks your courses"
+                "CMI's hall allocation, with your moves shown at their new spot · \
+                 turn on ✎ Edit layout to drag a course to another hall or time · \
+                 ✓ marks your courses"
             </p>
 
             <div class="grid-scroll">
@@ -1129,6 +1228,30 @@ fn halls_view(app: App) -> impl IntoView {
                         {move || {
                             let snapshot = app.snapshot.get();
                             let day = sel_day();
+                            // Custom placements landing on this day (moved or
+                            // user-created meetings with a hall): rendered in
+                            // their new cell so a drop updates the grid, not
+                            // just the toast.
+                            let overrides = app.overrides.get();
+                            let mut arrivals: Vec<(String, u16, String, EffMeeting)> = Vec::new();
+                            for course in &snapshot.courses {
+                                if !overrides.items.iter().any(|o| o.course == course.code) {
+                                    continue;
+                                }
+                                for eff in effective_meetings(course, &overrides) {
+                                    if !eff.overridden || eff.meeting.day != day {
+                                        continue;
+                                    }
+                                    let Some(hall) = eff.meeting.hall.clone() else {
+                                        continue;
+                                    };
+                                    let Some(col) = hall_col_of(&snapshot.slot_grid, &eff.meeting)
+                                    else {
+                                        continue;
+                                    };
+                                    arrivals.push((hall, col, course.code.clone(), eff));
+                                }
+                            }
                             snapshot
                                 .halls
                                 .iter()
@@ -1169,7 +1292,7 @@ fn halls_view(app: App) -> impl IntoView {
                                                         >
                                                             <div class="sidebyside">
                                                                 {bookings
-                                                                    .into_iter()
+                                                                    .iter()
                                                                     .map(|b| {
                                                                         let hall_chip = hall.clone();
                                                                         view! {
@@ -1193,6 +1316,24 @@ fn halls_view(app: App) -> impl IntoView {
                                                                                     }
                                                                                 })}
                                                                         }
+                                                                    })
+                                                                    .collect_view()}
+                                                                {arrivals
+                                                                    .iter()
+                                                                    .filter(|(h, col, code, eff)| {
+                                                                        *h == hall && *col == slot.start_min
+                                                                            // Already rendered above via its
+                                                                            // official booking in this cell.
+                                                                            && !(eff.base.as_ref().is_some_and(|b| {
+                                                                                b.day == day && b.slot == slot
+                                                                                    && b.hall.as_deref() == Some(hall.as_str())
+                                                                            })
+                                                                                && bookings.iter().any(|bk| {
+                                                                                    bk.codes.iter().any(|c| c == code)
+                                                                                }))
+                                                                    })
+                                                                    .map(|(_, _, code, eff)| {
+                                                                        hall_eff_chip(app, code, eff.clone())
                                                                     })
                                                                     .collect_view()}
                                                             </div>

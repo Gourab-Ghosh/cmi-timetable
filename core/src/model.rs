@@ -219,7 +219,11 @@ pub enum SourceTier {
     Direct,
     Proxy(String),
     Mirror,
+    /// Legacy: snapshots baked into pre-1.x app builds. Kept only so those
+    /// caches still deserialize; the app discards them at load time.
     Bundled,
+    /// The empty placeholder before the first successful sync.
+    None,
 }
 
 impl SourceTier {
@@ -229,6 +233,7 @@ impl SourceTier {
             SourceTier::Proxy(name) => format!("via proxy ({name})"),
             SourceTier::Mirror => "via mirror".to_string(),
             SourceTier::Bundled => "bundled with the app".to_string(),
+            SourceTier::None => "nothing synced yet".to_string(),
         }
     }
 
@@ -237,8 +242,8 @@ impl SourceTier {
             SourceTier::Direct => "direct".to_string(),
             SourceTier::Proxy(_) => "proxy".to_string(),
             SourceTier::Mirror => "mirror".to_string(),
-            // Students shouldn't need to know what "bundled" means.
             SourceTier::Bundled => "built-in copy".to_string(),
+            SourceTier::None => "not synced".to_string(),
         }
     }
 }
@@ -288,6 +293,28 @@ pub struct Snapshot {
 }
 
 impl Snapshot {
+    /// The empty state the app boots into before its first successful sync.
+    /// The validation gate rejects anything without courses, so an empty
+    /// course list is unambiguous: `!has_data()` ⇔ never synced.
+    pub fn placeholder() -> Snapshot {
+        Snapshot {
+            semester_label: String::new(),
+            fetched_at: 0.0,
+            source: SourceTier::None,
+            parser_version: crate::PARSER_VERSION,
+            branches: Vec::new(),
+            courses: Vec::new(),
+            halls: Vec::new(),
+            slot_grid: Vec::new(),
+            hall_bookings: Vec::new(),
+            raw_html_gz: None,
+        }
+    }
+
+    pub fn has_data(&self) -> bool {
+        !self.courses.is_empty()
+    }
+
     pub fn course(&self, code: &str) -> Option<&Course> {
         self.courses.iter().find(|c| c.code == code)
     }

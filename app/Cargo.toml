@@ -63,5 +63,5 @@ features = [
 ]
 
 [build-dependencies]
-ttcore = { path = "../core", package = "cmi-timetable-core", features = ["html"] }
-serde_json.workspace = true
+# Only for date formatting in the build-metadata stamp — no parsing, no data.
+ttcore = { path = "../core", package = "cmi-timetable-core" }

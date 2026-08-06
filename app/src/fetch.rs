@@ -1,5 +1,6 @@
 //! The tiered source chain (§2.3): direct → CORS proxies → same-origin
-//! mirror → (bundled, which is always already loaded). A fetched snapshot
+//! mirror. The app ships no timetable data — before the first successful
+//! sync it shows a "sync to start" prompt instead. A fetched snapshot
 //! replaces the cache only after the validation gate passes; any failure
 //! leaves the cache untouched and is explained in plain language.
 
@@ -172,8 +173,34 @@ fn record_report(app: &App, source: &str, report: ttcore::model::ParseReport) {
 /// queue conflicts, refresh the "What changed" digest, persist.
 pub fn adopt(app: &App, new_snapshot: Snapshot, announce: bool) {
     let old = app.snapshot.get_untracked();
-    let selection = app.selection.get_untracked();
+    let first_data = !old.has_data();
+    let mut selection = app.selection.get_untracked();
     let overrides = app.overrides.get_untracked();
+
+    // A share link opened before the first sync stores its codes verbatim
+    // (there was no catalog to resolve against). Now that data exists,
+    // canonicalize them to the catalog's casing; leftovers become the same
+    // dismissible "unknown code" chips a resolved link would produce.
+    if first_data && !selection.is_empty() {
+        let mut known: Vec<String> = Vec::new();
+        let mut unknown: Vec<String> = Vec::new();
+        for code in &selection {
+            match new_snapshot.course_ci(code) {
+                Some(course) => {
+                    if !known.contains(&course.code) {
+                        known.push(course.code.clone());
+                    }
+                }
+                None => unknown.push(code.clone()),
+            }
+        }
+        if !unknown.is_empty() {
+            app.unknown_codes.set(unknown);
+        }
+        selection = known;
+        app.selection.set(selection.clone());
+        app.persist_selection();
+    }
 
     let merge = ttcore::merge::merge_overrides(&old, &new_snapshot, &selection, &overrides);
 
@@ -215,7 +242,9 @@ pub fn adopt(app: &App, new_snapshot: Snapshot, announce: bool) {
     for code in &merge.removed_selected {
         app.toast(format!("{code} is no longer on CMI's timetable."));
     }
-    if !merge.diff.is_empty() {
+    // The very first data isn't a "change" — diffing against the empty
+    // placeholder would announce every course on campus as new.
+    if !first_data && !merge.diff.is_empty() {
         app.what_changed.set(Some(merge.diff.clone()));
     }
     // Replace, never accumulate: any still-relevant conflict is re-derived
@@ -462,21 +491,28 @@ pub async fn run_update(app: App, manual: bool) {
 
     // Failure copy (§6.9): what happened, what the app did instead, what to do.
     let saved_date = domx::fmt_local_date(app.snapshot.with_untracked(|s| s.fetched_at));
-    let first_load = app
-        .snapshot
-        .with_untracked(|s| s.source == SourceTier::Bundled);
+    let no_data = !app.snapshot.with_untracked(|s| s.has_data());
     let online = domx::window().navigator().on_line();
 
-    let text = if gate_failed_any {
+    let text = if gate_failed_any && no_data {
+        "CMI's website answered, but its pages don't look like a timetable this app \
+         knows how to read. Nothing could be loaded. If this keeps happening, the app \
+         itself needs an update."
+            .to_string()
+    } else if gate_failed_any {
         format!(
             "CMI's page looks different than this app expected, so your saved timetable \
              from {saved_date} was kept. Nothing was lost. If this keeps happening, the \
              app needs an update."
         )
-    } else if first_load {
+    } else if no_data && !online {
+        "You appear to be offline. The timetable only needs to be fetched once — \
+         connect to the internet and press Sync now."
+            .to_string()
+    } else if no_data {
         format!(
-            "Couldn't reach CMI yet, so this is the timetable that shipped with the app \
-             ({saved_date}). Tap Sync when you're online."
+            "The timetable couldn't be fetched right now ({routes_tried} routes tried). \
+             Check your connection and press Sync now to try again."
         )
     } else if !online {
         format!(
@@ -495,10 +531,13 @@ pub async fn run_update(app: App, manual: bool) {
     }
 }
 
-/// Throttled background update: at most one attempt per 12 h.
+/// Throttled background update: at most one attempt per 12 h — except while
+/// the app has no data at all, where every load retries (a failed first sync
+/// must not lock the app empty for 12 hours).
 pub fn maybe_background_update(app: App) {
+    let has_data = app.snapshot.with_untracked(|s| s.has_data());
     let last = app.prefs.with_untracked(|p| p.last_update_attempt);
-    if domx::now_ms() - last < AUTO_UPDATE_INTERVAL_MS {
+    if has_data && domx::now_ms() - last < AUTO_UPDATE_INTERVAL_MS {
         return;
     }
     leptos::task::spawn_local(async move {
@@ -596,10 +635,3 @@ pub fn simulate_parse_failure(app: App) {
     }
 }
 
-/// Developer-mode simulator: load the snapshot bundled at build time through
-/// the normal adopt path.
-pub fn load_bundled_fixture(app: App) {
-    let bundled = crate::state::bundled_snapshot();
-    record_report(&app, "bundled-fixture", crate::state::bundled_report());
-    adopt(&app, bundled, true);
-}

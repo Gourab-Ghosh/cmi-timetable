@@ -302,6 +302,8 @@ button {
 
 @media (min-width: 900px) {
   .app { grid-template-rows: auto 1fr; grid-template-columns: 178px 1fr; }
+  /* First run: no tab rail → no sidebar column. */
+  .app.no-data { grid-template-columns: 1fr; }
   .header { grid-column: 1 / -1; }
   .tabs {
     flex-direction: column;
@@ -331,6 +333,10 @@ button {
 }
 
 @media (max-width: 899px) {
+  /* The header wraps into several rows on phones — tighten it so the rows
+     read as one block instead of drifting apart. */
+  .header { gap: 0.4rem; padding: 0.5rem 0.75rem; row-gap: 0.35rem; }
+  .sync-pill { font-size: 0.74rem; }
   .tabs {
     position: sticky;
     bottom: 0;
@@ -383,6 +389,10 @@ button {
   opacity: 0.85;
   font-size: 0.72rem;
   white-space: nowrap;
+  /* Never paint across a grid cell's border: truncate instead. */
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 /* Selected in a shared grid (master grid / halls): unmistakable — accent
    ring + bolder border + a ✓ mark (never color alone). */
@@ -431,7 +441,8 @@ button {
 .chip .wontfit { color: var(--warn); font-weight: 700; }
 
 /* Master grid: chip + its ⓘ details button */
-.chipwrap { display: inline-flex; align-items: center; gap: 2px; max-width: 100%; }
+.chipwrap { display: inline-flex; align-items: center; gap: 2px; max-width: 100%; min-width: 0; }
+.chipwrap .chip { min-width: 0; }
 .chip-info {
   display: inline-flex;
   align-items: center;
@@ -537,6 +548,8 @@ table.tt td {
   min-width: 108px;
   height: 52px;
   transition: background 120ms var(--ease);
+  /* Chips truncate (ellipsis) rather than spill into the next column. */
+  overflow: hidden;
 }
 table.tt tbody tr:hover td { background: var(--surface-2); }
 table.tt td .cellstack {
@@ -698,6 +711,28 @@ details.facet .menu {
 /* Wrapped labels align to the checkbox's first line, not its middle. */
 details.facet .menu label.opt { align-items: flex-start; }
 details.facet .menu label.opt input { margin-top: 0.2rem; flex: none; }
+/* Per-menu search + All/None — sticky so they stay usable while the option
+   list scrolls underneath. */
+details.facet .menu .menu-tools {
+  position: sticky;
+  top: -0.5rem;            /* cancel the menu's own padding */
+  margin: -0.5rem -0.75rem 0.45rem;
+  padding: 0.55rem 0.75rem 0.5rem;
+  background: var(--surface);
+  border-bottom: 1px solid var(--line);
+  display: flex;
+  gap: 0.35rem;
+  align-items: center;
+  z-index: 1;
+}
+details.facet .menu .menu-search {
+  flex: 1;
+  min-width: 0;
+  font-size: 0.82rem;
+  padding: 0.25rem 0.5rem;
+  min-height: 28px;
+}
+details.facet .menu .menu-empty { margin: 0.2rem 0 0; }
 .facet-count { color: var(--accent); font-weight: 650; }
 .chipline { display: flex; flex-wrap: wrap; gap: 0.3rem; align-items: center; }
 .filterchip {
@@ -816,6 +851,27 @@ details.facet .menu label.opt input { margin-top: 0.2rem; flex: none; }
 }
 .dialog .fieldrow { display: flex; gap: 0.6rem; flex-wrap: wrap; margin: 0.5rem 0; align-items: center; }
 .dialog .fieldrow label { min-width: 6.5rem; color: var(--muted); font-size: 0.86rem; }
+.dialog .dialog-lede { margin: -0.25rem 0 0.9rem; }
+
+/* "My data" — one bordered section per stored thing, action in the header */
+.data-section {
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--surface-2);
+  padding: 0.7rem 0.85rem 0.75rem;
+  margin: 0 0 0.65rem;
+}
+.data-section > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  min-height: 28px;
+}
+.data-section > header h3 { margin: 0; }
+.data-section p { margin: 0.3rem 0 0; }
+.data-section ul.meetings { margin-top: 0.45rem; }
+.data-section.danger-zone { border-color: var(--line-strong); background: var(--surface); }
 
 .conflict-item {
   border: 1px solid var(--line);
@@ -907,6 +963,59 @@ pre.devpre {
 }
 .empty .big { font-size: 1.08rem; font-weight: 650; margin-bottom: 0.4rem; color: var(--text); }
 .empty .btn { margin-top: 0.6rem; }
+
+/* First-run welcome — the app ships no data, so this is the whole main area
+   until the first successful sync. */
+.welcome {
+  display: flex;
+  justify-content: center;
+  padding: clamp(1.2rem, 7vh, 4rem) 0.5rem 2rem;
+}
+.welcome-card {
+  max-width: 36rem;
+  text-align: center;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-md);
+  padding: 2.4rem 2.4rem 1.5rem;
+}
+.welcome-logo { display: inline-block; width: 46px; height: 46px; border-radius: 13px; }
+.welcome-eyebrow {
+  margin: 0.9rem 0 0.25rem;
+  font-size: 0.74rem;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+.welcome-card h2 {
+  font-size: 1.55rem;
+  letter-spacing: -0.02em;
+  margin: 0 0 0.75rem;
+  line-height: 1.25;
+}
+.welcome-sub {
+  margin: 0 auto 1.4rem;
+  max-width: 30rem;
+  color: var(--muted);
+  line-height: 1.6;
+}
+.welcome-status { margin: 0.7rem 0 0; min-height: 1.3em; }
+.welcome-note {
+  margin: 1.3rem -0.9rem 0;
+  padding: 0.85rem 0.9rem 0;
+  border-top: 1px solid var(--line);
+  line-height: 1.55;
+  text-align: center;
+}
+.btn.big {
+  font-size: 1rem;
+  padding: 0.6rem 1.6rem;
+  min-height: 46px;
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-md);
+}
 
 /* Mobile per-day segmented view for My timetable */
 .seg {

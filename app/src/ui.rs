@@ -6,7 +6,7 @@ use crate::state::{
 };
 use crate::{dnd, domx, fetch, hues, storage};
 use leptos::prelude::*;
-use ttcore::model::{Course, Day, Meeting, ScheduleStatus, Slot, SourceTier};
+use ttcore::model::{Course, Day, Meeting, ScheduleStatus, Slot, Snapshot, SourceTier};
 
 pub fn parse_hhmm(s: &str) -> Option<u16> {
     let (h, m) = s.trim().split_once(':')?;
@@ -297,17 +297,23 @@ pub fn Header() -> impl IntoView {
             } else {
                 s.progress
             }
+        } else if s.fetched_at <= 0.0 {
+            "Not synced yet".to_string()
         } else {
             format!("Synced {} · {}", domx::rel_time(s.fetched_at), s.source.short_label())
         }
     };
     let pill_title = move || {
         let s = app.sync.get();
-        format!("Fetched {} — {}", domx::fmt_local(s.fetched_at), s.source.label())
+        if s.fetched_at <= 0.0 {
+            "No timetable data yet — press Sync now to fetch it from cmi.ac.in".to_string()
+        } else {
+            format!("Fetched {} — {}", domx::fmt_local(s.fetched_at), s.source.label())
+        }
     };
     let stale = move || {
         let s = app.sync.get();
-        s.source == SourceTier::Bundled || domx::now_ms() - s.fetched_at > 48.0 * 3600e3
+        s.fetched_at <= 0.0 || domx::now_ms() - s.fetched_at > 48.0 * 3600e3
     };
 
     let theme_label = move || match app.prefs.with(|p| p.theme) {
@@ -399,6 +405,14 @@ pub fn Header() -> impl IntoView {
 #[component]
 pub fn Tabs() -> impl IntoView {
     let app = App::use_ctx();
+    view! {
+        // Before the first sync there is nothing to switch between — the
+        // welcome panel owns the whole main area.
+        {move || app.has_data().then(|| tabs_nav(app))}
+    }
+}
+
+fn tabs_nav(app: App) -> impl IntoView {
     view! {
         <nav class="tabs" role="tablist" aria-label="Views">
             {Tab::ALL
@@ -578,6 +592,10 @@ pub fn DragGhost() -> impl IntoView {
 // Filter bar (Catalog + Master grid)
 // ---------------------------------------------------------------------------
 
+/// Reactive option source for one facet: `(key, label)` pairs. Arc'd so the
+/// list closure and the All/None handlers can share it.
+type FacetOptions = std::sync::Arc<dyn Fn() -> Vec<(String, String)> + Send + Sync>;
+
 /// One facet checkbox. The input's checked state is kept in sync by an
 /// ISOLATED Effect that pokes the DOM node directly: a reactive
 /// `prop:checked` closure would subscribe the surrounding menu closure to
@@ -586,18 +604,21 @@ pub fn DragGhost() -> impl IntoView {
 /// (the "page scrolls away while filtering" bug).
 fn facet_checkbox(
     app: App,
+    key: String,
     label: String,
-    checked: impl Fn() -> bool + Send + Sync + 'static,
-    on_toggle: impl Fn(&mut Filters, bool) + Send + Sync + 'static,
+    is_checked: fn(&Filters, &str) -> bool,
+    toggle: fn(&mut Filters, &str, bool),
 ) -> impl IntoView {
     let node = NodeRef::<leptos::html::Input>::new();
-    let initial = untrack(|| checked());
+    let initial = untrack(|| is_checked(&app.filters(), &key));
+    let key_eff = key.clone();
     Effect::new(move |_| {
-        let value = checked();
+        let f = app.filters();
         if let Some(input) = node.get() {
-            input.set_checked(value);
+            input.set_checked(is_checked(&f, &key_eff));
         }
     });
+    let undo_label = format!("the {label} filter");
     view! {
         <label class="opt">
             <input
@@ -606,7 +627,7 @@ fn facet_checkbox(
                 prop:checked=initial
                 on:change=move |ev| {
                     let on = event_target_checked(&ev);
-                    app.update_filters(|f| on_toggle(f, on));
+                    app.act_filters(&undo_label, false, |f| toggle(f, &key, on));
                 }
             />
             <span>{label}</span>
@@ -624,40 +645,118 @@ fn toggle_vec<T: PartialEq>(v: &mut Vec<T>, item: T, on: bool) {
     }
 }
 
-pub fn filter_bar(app: App, result_count: Signal<usize>) -> impl IntoView {
-    let snapshot = move || app.snapshot.get();
+/// One filter dropdown: a searchable option list with its own "All"/"None"
+/// shortcuts (both act on the options currently shown by the menu's search
+/// box, as one undo step). The option list re-renders only when the catalog
+/// or the menu's own search changes — never on a filter tick, which is what
+/// keeps focus and scroll stable while ticking boxes.
+fn facet_menu(
+    app: App,
+    name: &'static str,
+    count: impl Fn() -> usize + Send + Sync + 'static,
+    options: FacetOptions,
+    is_checked: fn(&Filters, &str) -> bool,
+    toggle: fn(&mut Filters, &str, bool),
+) -> impl IntoView {
+    let query = RwSignal::new(String::new());
+    let visible = move || {
+        let q = query.get().trim().to_ascii_lowercase();
+        options()
+            .into_iter()
+            .filter(|(_, label)| q.is_empty() || label.to_ascii_lowercase().contains(&q))
+            .collect::<Vec<_>>()
+    };
+    let visible_all = visible.clone();
+    let visible_none = visible.clone();
 
-    let facet = |name: &'static str,
-                 count: Box<dyn Fn() -> usize + Send + Sync>,
-                 body: AnyView| {
-        view! {
-            // Facets behave like menus: opening one closes the others
-            // (outside clicks and Esc close them via global handlers).
-            <details
-                class="facet"
-                on:toggle=move |ev| {
-                    use wasm_bindgen::JsCast;
-                    if let Some(el) = ev
-                        .target()
-                        .and_then(|t| t.dyn_into::<web_sys::Element>().ok())
-                    {
-                        if el.has_attribute("open") {
-                            crate::domx::close_open_facets(Some(&el));
-                        }
+    view! {
+        // Facets behave like menus: opening one closes the others
+        // (outside clicks and Esc close them via global handlers).
+        <details
+            class="facet"
+            on:toggle=move |ev| {
+                use wasm_bindgen::JsCast;
+                if let Some(el) = ev
+                    .target()
+                    .and_then(|t| t.dyn_into::<web_sys::Element>().ok())
+                {
+                    if el.has_attribute("open") {
+                        crate::domx::close_open_facets(Some(&el));
                     }
                 }
-            >
-                <summary>
-                    {name}
-                    {move || {
-                        let n = count();
-                        (n > 0).then(|| view! { <span class="facet-count">{format!(" {n}")}</span> })
-                    }}
-                </summary>
-                <div class="menu">{body}</div>
-            </details>
-        }
-    };
+            }
+        >
+            <summary>
+                {name}
+                {move || {
+                    let n = count();
+                    (n > 0).then(|| view! { <span class="facet-count">{format!(" {n}")}</span> })
+                }}
+            </summary>
+            <div class="menu">
+                <div class="menu-tools">
+                    <input
+                        type="search"
+                        class="menu-search"
+                        placeholder="Type to narrow…"
+                        aria-label=format!("Search {name} options")
+                        prop:value=move || query.get()
+                        on:input=move |ev| query.set(event_target_value(&ev))
+                    />
+                    <button
+                        class="btn small"
+                        title="Tick every option shown below"
+                        on:click=move |_| {
+                            let picks: Vec<String> = untrack(|| visible_all())
+                                .into_iter()
+                                .map(|(k, _)| k)
+                                .collect();
+                            app.act_filters(&format!("select all in {name}"), false, |f| {
+                                for k in &picks {
+                                    toggle(f, k, true);
+                                }
+                            });
+                        }
+                    >
+                        "All"
+                    </button>
+                    <button
+                        class="btn small"
+                        title="Untick every option shown below"
+                        on:click=move |_| {
+                            let picks: Vec<String> = untrack(|| visible_none())
+                                .into_iter()
+                                .map(|(k, _)| k)
+                                .collect();
+                            app.act_filters(&format!("clear all in {name}"), false, |f| {
+                                for k in &picks {
+                                    toggle(f, k, false);
+                                }
+                            });
+                        }
+                    >
+                        "None"
+                    </button>
+                </div>
+                {move || {
+                    let rows = visible();
+                    if rows.is_empty() {
+                        view! { <p class="muted small menu-empty">"Nothing matches."</p> }
+                            .into_any()
+                    } else {
+                        rows.into_iter()
+                            .map(|(key, label)| facet_checkbox(app, key, label, is_checked, toggle))
+                            .collect_view()
+                            .into_any()
+                    }
+                }}
+            </div>
+        </details>
+    }
+}
+
+pub fn filter_bar(app: App, result_count: Signal<usize>) -> impl IntoView {
+    let snapshot = move || app.snapshot.get();
 
     view! {
         <div class="filterbar" role="group" aria-label="Filters">
@@ -668,180 +767,131 @@ pub fn filter_bar(app: App, result_count: Signal<usize>) -> impl IntoView {
                 prop:value=move || app.filters().text
                 on:input=move |ev| {
                     let text = event_target_value(&ev);
-                    app.update_filters(move |f| f.text = text.clone());
+                    // Coalesced: one undo step per burst of typing.
+                    app.act_filters("the search text", true, move |f| f.text = text.clone());
                 }
             />
-            {facet(
+            {facet_menu(
+                app,
                 "Branch",
-                Box::new(move || app.filters().branches.len()),
-                view! {
-                    {move || {
-                        snapshot()
-                            .branches
-                            .iter()
-                            .map(|b| {
-                                let code = b.code.clone();
-                                let code_checked = code.clone();
-                                let code2 = code.clone();
-                                facet_checkbox(
-                                    app,
-                                    format!("{} — {}", b.code, b.title),
-                                    move || app.filters().branches.contains(&code_checked),
-                                    move |f, on| toggle_vec(&mut f.branches, code2.clone(), on),
-                                )
-                            })
-                            .collect_view()
-                    }}
-                }
-                    .into_any(),
+                move || app.filters().branches.len(),
+                std::sync::Arc::new(move || {
+                    snapshot()
+                        .branches
+                        .iter()
+                        .map(|b| (b.code.clone(), format!("{} — {}", b.code, b.title)))
+                        .collect()
+                }),
+                |f, k| f.branches.iter().any(|x| x == k),
+                |f, k, on| toggle_vec(&mut f.branches, k.to_string(), on),
             )}
-            {facet(
+            {facet_menu(
+                app,
                 "Instructor",
-                Box::new(move || app.filters().instructors.len()),
-                view! {
-                    {move || {
-                        let mut names: Vec<String> = snapshot()
-                            .courses
-                            .iter()
-                            .flat_map(|c| c.instructors.clone())
-                            .collect();
-                        names.sort();
-                        names.dedup();
-                        names
-                            .into_iter()
-                            .map(|name| {
-                                let n_checked = name.clone();
-                                let n2 = name.clone();
-                                facet_checkbox(
-                                    app,
-                                    name.clone(),
-                                    move || app.filters().instructors.contains(&n_checked),
-                                    move |f, on| toggle_vec(&mut f.instructors, n2.clone(), on),
-                                )
-                            })
-                            .collect_view()
-                    }}
-                }
-                    .into_any(),
+                move || app.filters().instructors.len(),
+                std::sync::Arc::new(move || {
+                    let mut names: Vec<String> = snapshot()
+                        .courses
+                        .iter()
+                        .flat_map(|c| c.instructors.clone())
+                        .collect();
+                    names.sort();
+                    names.dedup();
+                    names.into_iter().map(|n| (n.clone(), n)).collect()
+                }),
+                |f, k| f.instructors.iter().any(|x| x == k),
+                |f, k, on| toggle_vec(&mut f.instructors, k.to_string(), on),
             )}
-            {facet(
+            {facet_menu(
+                app,
                 "Day",
-                Box::new(move || app.filters().days.len()),
-                view! {
-                    {move || {
-                        app.grid_days()
-                            .into_iter()
-                            .map(|day| {
-                                facet_checkbox(
-                                    app,
-                                    day.full().to_string(),
-                                    move || app.filters().days.contains(&day),
-                                    move |f, on| toggle_vec(&mut f.days, day, on),
-                                )
-                            })
-                            .collect_view()
-                    }}
-                }
-                    .into_any(),
-            )}
-            {facet(
-                "Time slot",
-                Box::new(move || app.filters().slot_starts.len()),
-                view! {
-                    {move || {
-                        snapshot()
-                            .slot_grid
-                            .iter()
-                            .map(|slot| {
-                                let start = slot.start_min;
-                                facet_checkbox(
-                                    app,
-                                    slot.label(),
-                                    move || app.filters().slot_starts.contains(&start),
-                                    move |f, on| toggle_vec(&mut f.slot_starts, start, on),
-                                )
-                            })
-                            .collect_view()
-                    }}
-                }
-                    .into_any(),
-            )}
-            {facet(
-                "Hall",
-                Box::new(move || app.filters().halls.len()),
-                view! {
-                    {move || {
-                        snapshot()
-                            .halls
-                            .iter()
-                            .map(|hall| {
-                                let h_checked = hall.clone();
-                                let h2 = hall.clone();
-                                facet_checkbox(
-                                    app,
-                                    hall.clone(),
-                                    move || app.filters().halls.contains(&h_checked),
-                                    move |f, on| toggle_vec(&mut f.halls, h2.clone(), on),
-                                )
-                            })
-                            .collect_view()
-                    }}
-                }
-                    .into_any(),
-            )}
-            {facet(
-                "Credits",
-                Box::new(move || app.filters().credits.len()),
-                view! {
-                    {move || {
-                        let mut values: Vec<u8> = snapshot()
-                            .courses
-                            .iter()
-                            .map(|c| app.course_credits(c))
-                            .collect();
-                        values.sort_unstable();
-                        values.dedup();
-                        values
-                            .into_iter()
-                            .map(|n| {
-                                let value = n.to_string();
-                                let v_checked = value.clone();
-                                let v2 = value.clone();
-                                facet_checkbox(
-                                    app,
-                                    format!("{value} credits"),
-                                    move || app.filters().credits.contains(&v_checked),
-                                    move |f, on| toggle_vec(&mut f.credits, v2.clone(), on),
-                                )
-                            })
-                            .collect_view()
-                    }}
-                }
-                    .into_any(),
-            )}
-            {facet(
-                "Flags",
-                Box::new(move || app.filters().flags.len()),
-                view! {
-                    {[
-                        ("optional", "Optional (+)"),
-                        ("unscheduled", "Unscheduled"),
-                        ("custom", "Has custom time"),
-                    ]
+                move || app.filters().days.len(),
+                std::sync::Arc::new(move || {
+                    app.grid_days()
                         .into_iter()
-                        .map(|(key, label)| {
-                            let k_checked = key.to_string();
-                            let k2 = key.to_string();
-                            facet_checkbox(
-                                app,
-                                label.to_string(),
-                                move || app.filters().flags.contains(&k_checked),
-                                move |f, on| toggle_vec(&mut f.flags, k2.clone(), on),
-                            )
-                        })
-                        .collect_view()}
-                }
-                    .into_any(),
+                        .map(|d| (d.index().to_string(), d.full().to_string()))
+                        .collect()
+                }),
+                |f, k| f.days.iter().any(|d| d.index().to_string() == k),
+                |f, k, on| {
+                    if let Some(day) = k.parse::<usize>().ok().and_then(|i| Day::ALL.get(i)) {
+                        toggle_vec(&mut f.days, *day, on);
+                    }
+                },
+            )}
+            {facet_menu(
+                app,
+                "Time slot",
+                move || app.filters().slot_starts.len(),
+                std::sync::Arc::new(move || {
+                    snapshot()
+                        .slot_grid
+                        .iter()
+                        .map(|s| (s.start_min.to_string(), s.label()))
+                        .collect()
+                }),
+                |f, k| f.slot_starts.iter().any(|s| s.to_string() == k),
+                |f, k, on| {
+                    if let Ok(start) = k.parse::<u16>() {
+                        toggle_vec(&mut f.slot_starts, start, on);
+                    }
+                },
+            )}
+            {facet_menu(
+                app,
+                "Hall",
+                move || app.filters().halls.len(),
+                std::sync::Arc::new(move || {
+                    snapshot().halls.iter().map(|h| (h.clone(), h.clone())).collect()
+                }),
+                |f, k| f.halls.iter().any(|x| x == k),
+                |f, k, on| toggle_vec(&mut f.halls, k.to_string(), on),
+            )}
+            {facet_menu(
+                app,
+                "Credits",
+                move || app.filters().credits.len(),
+                std::sync::Arc::new(move || {
+                    let snap = snapshot();
+                    let mut values: Vec<u8> =
+                        snap.courses.iter().map(|c| app.course_credits(c)).collect();
+                    values.sort_unstable();
+                    values.dedup();
+                    values
+                        .into_iter()
+                        .map(|n| (n.to_string(), format!("{n} credits")))
+                        .collect()
+                }),
+                |f, k| f.credits.iter().any(|x| x == k),
+                |f, k, on| toggle_vec(&mut f.credits, k.to_string(), on),
+            )}
+            {facet_menu(
+                app,
+                "Course",
+                move || app.filters().courses.len(),
+                std::sync::Arc::new(move || {
+                    snapshot()
+                        .courses
+                        .iter()
+                        .map(|c| (c.code.clone(), format!("{} — {}", c.code, c.name)))
+                        .collect()
+                }),
+                |f, k| f.courses.iter().any(|x| x == k),
+                |f, k, on| toggle_vec(&mut f.courses, k.to_string(), on),
+            )}
+            {facet_menu(
+                app,
+                "Flags",
+                move || app.filters().flags.len(),
+                std::sync::Arc::new(|| {
+                    vec![
+                        ("optional".to_string(), "Optional (+)".to_string()),
+                        ("unscheduled".to_string(), "Unscheduled".to_string()),
+                        ("custom".to_string(), "Has custom time".to_string()),
+                    ]
+                }),
+                |f, k| f.flags.iter().any(|x| x == k),
+                |f, k, on| toggle_vec(&mut f.flags, k.to_string(), on),
             )}
             <label class="opt" title="Hide anything overlapping your current selection">
                 <input
@@ -849,7 +899,9 @@ pub fn filter_bar(app: App, result_count: Signal<usize>) -> impl IntoView {
                     prop:checked=move || app.filters().fits
                     on:change=move |ev| {
                         let on = event_target_checked(&ev);
-                        app.update_filters(move |f| f.fits = on);
+                        app.act_filters("the “fits my schedule” filter", false, move |f| {
+                            f.fits = on;
+                        });
                     }
                 />
                 <span>"Fits my schedule"</span>
@@ -864,7 +916,11 @@ pub fn filter_bar(app: App, result_count: Signal<usize>) -> impl IntoView {
                         view! {
                             <button
                                 class="btn small"
-                                on:click=move |_| app.update_filters(|f| *f = Filters::default())
+                                on:click=move |_| {
+                                    app.act_filters("clear all filters", false, |f| {
+                                        *f = Filters::default();
+                                    });
+                                }
                             >
                                 "Clear all"
                             </button>
@@ -913,6 +969,10 @@ fn active_filter_chips(app: App) -> impl IntoView {
         let f2 = flag.clone();
         chips.push((flag.clone(), Box::new(move |f| f.flags.retain(|x| x != &f2))));
     }
+    for c in f.courses.clone() {
+        let c2 = c.clone();
+        chips.push((c.clone(), Box::new(move |f| f.courses.retain(|x| x != &c2))));
+    }
     if !f.text.trim().is_empty() {
         chips.push((format!("“{}”", f.text.trim()), Box::new(|f| f.text.clear())));
     }
@@ -923,12 +983,15 @@ fn active_filter_chips(app: App) -> impl IntoView {
     chips
         .into_iter()
         .map(|(label, remove)| {
+            let undo_label = format!("remove the {label} filter");
             view! {
                 <span class="filterchip">
                     {label.clone()}
                     <button
                         aria-label=format!("Remove filter {label}")
-                        on:click=move |_| app.update_filters(|f| remove(f))
+                        on:click=move |_| {
+                            app.act_filters(&undo_label, false, |f| remove(f));
+                        }
                     >
                         "✕"
                     </button>
@@ -1635,15 +1698,14 @@ pub fn overrides_list(app: App) -> impl IntoView {
 fn my_data_dialog(app: App) -> impl IntoView {
     let clear_snapshot = move |_| {
         storage::remove(storage::KEY_SNAPSHOT);
-        let bundled = crate::state::bundled_snapshot();
         app.sync.update(|s| {
-            s.fetched_at = bundled.fetched_at;
-            s.source = bundled.source.clone();
+            s.fetched_at = 0.0;
+            s.source = SourceTier::None;
         });
-        app.snapshot.set(bundled);
+        app.snapshot.set(Snapshot::placeholder());
         app.what_changed.set(None);
         app.conflicts.set(Vec::new());
-        app.toast("Cached timetable cleared — using the built-in copy. Sync to refresh.");
+        app.toast("Cached timetable cleared — press Sync now when you want it back.");
     };
 
     let delete_everything = move |_| {
@@ -1662,90 +1724,129 @@ fn my_data_dialog(app: App) -> impl IntoView {
     };
 
     view! {
-        <div>
+        <div class="my-data">
             <h2>"My data"</h2>
-            <p class="muted small">
-                "Everything below is saved in your browser only — nothing is ever \
-                 stored on a server."
+            <p class="muted small dialog-lede">
+                "Everything the app knows lives in this browser — this list is the \
+                 complete inventory, nothing is ever sent to a server, and every \
+                 piece can be removed right here."
             </p>
 
             // Every custom change together: exactly which CMI data it
             // replaces — moved/created meetings and changed credits.
-            <h3>"Your changes"</h3>
-            {overrides_list(app)}
+            <section class="data-section">
+                <header>
+                    <h3>"Your changes"</h3>
+                </header>
+                {overrides_list(app)}
+            </section>
 
-            <h3 style="margin-top:0.9rem">"Your course selection"</h3>
-            <p class="small">
-                {move || {
-                    let n = app.selection.with(|s| s.len());
-                    if n == 0 {
-                        "No courses selected.".to_string()
-                    } else {
-                        format!(
-                            "{n} course{} selected: {}",
-                            if n == 1 { "" } else { "s" },
-                            app.selection.with(|s| s.join(", ")),
-                        )
-                    }
-                }}
-            </p>
-            {move || {
-                (!app.selection.with(|s| s.is_empty()))
-                    .then(|| {
-                        view! {
-                            <button
-                                class="btn small"
-                                on:click=move |_| {
-                                    app.act("clear selection", |sel, _| sel.clear());
-                                    app.toast_undo("Selection cleared");
+            <section class="data-section">
+                <header>
+                    <h3>"Course selection"</h3>
+                    {move || {
+                        (!app.selection.with(|s| s.is_empty()))
+                            .then(|| {
+                                view! {
+                                    <button
+                                        class="btn small"
+                                        on:click=move |_| {
+                                            app.act("clear selection", |sel, _| sel.clear());
+                                            app.toast_undo("Selection cleared");
+                                        }
+                                    >
+                                        "Clear selection"
+                                    </button>
                                 }
-                            >
-                                "Clear selection"
-                            </button>
-                        }
-                    })
-            }}
-
-            <h3 style="margin-top:0.9rem">"Cached timetable"</h3>
-            <p class="small">
-                {move || {
-                    app.snapshot
-                        .with(|s| {
+                            })
+                    }}
+                </header>
+                <p class="small">
+                    {move || {
+                        let n = app.selection.with(|s| s.len());
+                        if n == 0 {
+                            "No courses picked yet.".to_string()
+                        } else {
                             format!(
-                                "{} · fetched {} · {}",
-                                s.semester_label_display(),
-                                domx::fmt_local(s.fetched_at),
-                                s.source.label(),
+                                "{n} course{}: {}",
+                                if n == 1 { "" } else { "s" },
+                                app.selection.with(|s| s.join(", ")),
                             )
-                        })
-                }}
-            </p>
-            <button class="btn small" on:click=clear_snapshot>
-                "Clear cached timetable"
-            </button>
+                        }
+                    }}
+                </p>
+            </section>
 
-            <h3 style="margin-top:0.9rem">"Preferences"</h3>
-            <p class="muted small">"Theme, density, filters and the current tab."</p>
-            <button
-                class="btn small"
-                on:click=move |_| {
-                    app.prefs.set(Default::default());
-                    app.persist_prefs();
-                    crate::apply_theme(app);
-                    app.toast("Preferences reset.");
-                }
-            >
-                "Reset preferences"
-            </button>
+            <section class="data-section">
+                <header>
+                    <h3>"Cached timetable"</h3>
+                    {move || {
+                        app.has_data()
+                            .then(|| {
+                                view! {
+                                    <button class="btn small" on:click=clear_snapshot>
+                                        "Clear"
+                                    </button>
+                                }
+                            })
+                    }}
+                </header>
+                <p class="small">
+                    {move || {
+                        app.snapshot
+                            .with(|s| {
+                                if !s.has_data() {
+                                    "Nothing synced yet — the planner stays empty until \
+                                     the first sync."
+                                        .to_string()
+                                } else {
+                                    format!(
+                                        "{} · fetched {} · {}",
+                                        s.semester_label_display(),
+                                        domx::fmt_local(s.fetched_at),
+                                        s.source.label(),
+                                    )
+                                }
+                            })
+                    }}
+                </p>
+                <p class="muted small">
+                    "CMI keeps editing its timetable through the semester — sync every \
+                     few days to stay current. The app re-checks on its own too, at \
+                     most twice a day."
+                </p>
+            </section>
 
-            <h3 style="margin-top:0.9rem">"Start fresh"</h3>
-            <p class="muted small">
-                "Removes your changes, selection, cached timetable and preferences \
-                 from this browser."
-            </p>
-            <button class="btn small danger" on:click=delete_everything>
-                "Delete all app data"
-            </button>
+            <section class="data-section">
+                <header>
+                    <h3>"Preferences"</h3>
+                    <button
+                        class="btn small"
+                        on:click=move |_| {
+                            app.prefs.set(Default::default());
+                            app.persist_prefs();
+                            crate::apply_theme(app);
+                            app.toast("Preferences reset.");
+                        }
+                    >
+                        "Reset"
+                    </button>
+                </header>
+                <p class="muted small">"Theme, density, filters and the current tab."</p>
+            </section>
+
+            <section class="data-section danger-zone">
+                <header>
+                    <h3>"Start fresh"</h3>
+                    <button class="btn small danger" on:click=delete_everything>
+                        "Delete all app data"
+                    </button>
+                </header>
+                <p class="muted small">
+                    "Removes your changes, selection, cached timetable and preferences \
+                     from this browser. There is no undo for this one."
+                </p>
+            </section>
 
             <div class="actions">{close_button(app)}</div>
         </div>
