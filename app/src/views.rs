@@ -136,8 +136,10 @@ fn what_changed_panel(app: App) -> impl IntoView {
     }
 }
 
-/// Which column a meeting renders in: exact start match, else the column
-/// containing its start (for free-form override times), else the nearest.
+/// Which column a meeting renders in: exact start match, else the tightest
+/// column containing its start (for free-form override times), else the
+/// nearest. With `display_slot_grid` the personal grid always has an exact
+/// or containing column; the nearest-fallback remains for other callers.
 fn column_for(slot_grid: &[Slot], meeting: &Meeting) -> Option<u16> {
     let start = meeting.slot.start_min;
     if let Some(s) = slot_grid.iter().find(|s| s.start_min == start) {
@@ -145,7 +147,8 @@ fn column_for(slot_grid: &[Slot], meeting: &Meeting) -> Option<u16> {
     }
     if let Some(s) = slot_grid
         .iter()
-        .find(|s| start >= s.start_min && start < s.end_min)
+        .filter(|s| start >= s.start_min && start < s.end_min)
+        .max_by_key(|s| s.start_min)
     {
         return Some(s.start_min);
     }
@@ -155,10 +158,17 @@ fn column_for(slot_grid: &[Slot], meeting: &Meeting) -> Option<u16> {
         .map(|s| s.start_min)
 }
 
+/// See `App::display_slot_grid` — official columns plus synthetic ones for
+/// out-of-grid meetings.
+fn display_slot_grid(app: App) -> Vec<(Slot, bool)> {
+    app.display_slot_grid()
+}
+
 fn grid_cell(
     app: App,
     day: Day,
     slot: Slot,
+    extra: bool,
     content: impl IntoView + 'static,
 ) -> impl IntoView {
     let start = slot.start_min;
@@ -166,6 +176,7 @@ fn grid_cell(
         <td
             data-day=day.index().to_string()
             data-slot=start.to_string()
+            class:extra=extra
             class:drop-ok=move || {
                 app.drag.with(|d| {
                     d.as_ref().is_some_and(|d| d.started && d.over == Some((day, start)))
@@ -198,14 +209,14 @@ fn my_timetable(app: App) -> impl IntoView {
     };
 
     let cell_chips = move |day: Day, slot: Slot| -> Vec<AnyView> {
-        let slot_grid = app.snapshot.with(|s| s.slot_grid.clone());
+        let columns: Vec<Slot> = display_slot_grid(app).into_iter().map(|(s, _)| s).collect();
         selected_effs()
             .into_iter()
             .flat_map(|(course, effs)| {
                 effs.into_iter()
                     .filter(|e| {
                         e.meeting.day == day
-                            && column_for(&slot_grid, &e.meeting) == Some(slot.start_min)
+                            && column_for(&columns, &e.meeting) == Some(slot.start_min)
                     })
                     .map(|e| {
                         let sublabel = (e.meeting.slot != slot)
@@ -234,9 +245,14 @@ fn my_timetable(app: App) -> impl IntoView {
         app.selected_courses()
             .into_iter()
             // Courses removed upstream get the "No longer on CMI's
-            // timetable" flow (My courses), not the unscheduled tray.
+            // timetable" flow (My courses), not the unscheduled tray. A
+            // course whose meetings the USER removed isn't unscheduled
+            // either — CMI did schedule it; its removals live in Your
+            // changes with Restore buttons.
             .filter(|c| {
-                app.effective_meetings(c).is_empty() && !app.is_removed_upstream(&c.code)
+                c.meetings.is_empty()
+                    && app.effective_meetings(c).is_empty()
+                    && !app.is_removed_upstream(&c.code)
             })
             .collect()
     };
@@ -355,10 +371,24 @@ fn my_timetable(app: App) -> impl IntoView {
                                             <span aria-hidden="true"></span>
                                         </th>
                                         {move || {
-                                            app.snapshot
-                                                .with(|s| s.slot_grid.clone())
+                                            display_slot_grid(app)
                                                 .into_iter()
-                                                .map(|s| view! { <th scope="col">{s.label()}</th> })
+                                                .map(|(s, extra)| {
+                                                    view! {
+                                                        <th
+                                                            scope="col"
+                                                            class:extra=extra
+                                                            title=extra
+                                                                .then_some(
+                                                                    "Outside CMI's regular grid — \
+                                                                     this column exists because one \
+                                                                     of your meetings needs it",
+                                                                )
+                                                        >
+                                                            {s.label()}
+                                                        </th>
+                                                    }
+                                                })
                                                 .collect_view()
                                         }}
                                     </tr>
@@ -371,14 +401,14 @@ fn my_timetable(app: App) -> impl IntoView {
                                                 view! {
                                                     <tr>
                                                         <th class="rowhead" scope="row">{day.short()}</th>
-                                                        {app.snapshot
-                                                            .with(|s| s.slot_grid.clone())
+                                                        {display_slot_grid(app)
                                                             .into_iter()
-                                                            .map(|slot| {
+                                                            .map(|(slot, extra)| {
                                                                 grid_cell(
                                                                         app,
                                                                         day,
                                                                         slot,
+                                                                        extra,
                                                                         view! {
                                                                             {move || cell_chips(day, slot)}
                                                                         },
@@ -402,12 +432,11 @@ fn my_timetable(app: App) -> impl IntoView {
                                 .map(|day| {
                                     view! {
                                         <div class="day-list mobile-only" style="margin-top:0.6rem">
-                                            {app.snapshot
-                                                .with(|s| s.slot_grid.clone())
+                                            {display_slot_grid(app)
                                                 .into_iter()
-                                                .map(|slot| {
+                                                .map(|(slot, extra)| {
                                                     view! {
-                                                        <div class="slotrow">
+                                                        <div class="slotrow" class:extra=extra>
                                                             <span class="when">{slot.label()}</span>
                                                             <div class="sidebyside">
                                                                 {cell_chips(day, slot)}
@@ -916,6 +945,11 @@ fn master_grid(app: App) -> impl IntoView {
                     })
                     .map(|e| {
                         let info_code = course.code.clone();
+                        // The master grid keeps CMI's official columns, so a
+                        // custom time lands in the nearest one — say the real
+                        // time on the chip rather than let the column lie.
+                        let sublabel =
+                            (e.meeting.slot != slot).then(|| e.meeting.slot.label());
                         view! {
                             <span class="chipwrap">
                                 {chip(
@@ -927,7 +961,7 @@ fn master_grid(app: App) -> impl IntoView {
                                         draggable: true,
                                         from_master: true,
                                         click: ChipClick::Toggle,
-                                        sublabel: None,
+                                        sublabel,
                                         warn_wont_fit,
                                     },
                                 )}
@@ -1015,6 +1049,11 @@ fn master_grid(app: App) -> impl IntoView {
                                                             app,
                                                             day,
                                                             slot,
+                                                            // The master grid keeps CMI's
+                                                            // official columns; custom times
+                                                            // clamp to the nearest column and
+                                                            // sublabel their real time.
+                                                            false,
                                                             view! { {move || cell_chips(day, slot)} },
                                                         )
                                                         .into_any()
@@ -1182,6 +1221,20 @@ fn hall_booking_chip(
         hall: Some(hall.to_string()),
         temp_booking: false,
     };
+    // A removed meeting has no effective meeting at all, so it would fall
+    // through to the "untouched" default below and wrongly keep its chip —
+    // check the overrides directly and leave the cell empty.
+    let removed = app.overrides.with(|ovs| {
+        ovs.for_course(&course.code).any(|o| {
+            o.is_removal()
+                && o.base
+                    .as_ref()
+                    .is_some_and(|b| b.same_place_time(&booking))
+        })
+    });
+    if removed {
+        return None;
+    }
     let eff = app
         .effective_meetings(course)
         .into_iter()

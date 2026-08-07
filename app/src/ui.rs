@@ -1232,6 +1232,28 @@ pub fn meeting_row(app: App, course: &Course, eff: EffMeeting) -> impl IntoView 
                         </button>
                     }
                 })}
+            // The counterpart to "Add a meeting": strike this one from the
+            // timetable. Restorable from Your changes / My data, undoable.
+            {
+                let remove_code = code.clone();
+                let remove_eff = eff.clone();
+                view! {
+                    <button
+                        class="btn small danger"
+                        title="Take this meeting off your timetable — restorable \
+                               from Your changes at any time"
+                        on:click=move |_| {
+                            app.remove_meeting(
+                                &remove_code,
+                                remove_eff.ov_id,
+                                remove_eff.base.clone(),
+                            );
+                        }
+                    >
+                        "Remove this meeting"
+                    </button>
+                }
+            }
         </li>
     }
 }
@@ -1472,12 +1494,22 @@ fn details_dialog(app: App, code: String) -> impl IntoView {
             </div>
             <h3 style="margin-top:0.8rem">"Meetings"</h3>
             {if eff.is_empty() {
-                view! {
-                    <p class="muted">
-                        "CMI lists this course but hasn't put it on the timetable."
-                    </p>
+                if course.meetings.is_empty() {
+                    view! {
+                        <p class="muted">
+                            "CMI lists this course but hasn't put it on the timetable."
+                        </p>
+                    }
+                        .into_any()
+                } else {
+                    view! {
+                        <p class="muted">
+                            "You've removed all of this course's meetings — restore \
+                             them from the ✎ changes list whenever you want them back."
+                        </p>
+                    }
+                        .into_any()
                 }
-                    .into_any()
             } else {
                 view! {
                     <ul class="meetings">
@@ -1605,13 +1637,23 @@ pub fn overrides_list(app: App) -> impl IntoView {
                 .map(|o| {
                     let id = o.id;
                     let course = o.course.clone();
-                    let line = match &o.base {
-                        Some(base) => {
-                            format!("{} → {}", base.describe(), o.to.describe())
+                    let line = match (&o.base, &o.to) {
+                        (Some(base), Some(to)) => {
+                            format!("{} → {}", base.describe(), to.describe())
                         }
-                        None => format!("added a meeting — {}", o.to.describe()),
+                        (Some(base), None) => {
+                            format!("removed CMI's {}", base.describe())
+                        }
+                        (None, Some(to)) => format!("added a meeting — {}", to.describe()),
+                        // Unreachable: removing a user-created meeting
+                        // deletes its override outright.
+                        (None, None) => "removed a meeting".to_string(),
                     };
                     let selected = app.is_selected(&course);
+                    // Undoing a removal RESTORES a meeting; undoing a move or
+                    // an added meeting removes the change. Same action, but
+                    // the button must say what will happen.
+                    let action_label = if o.is_removal() { "Restore" } else { "Remove" };
                     view! {
                         <li>
                             {chip(app, ChipProps::list(&course))}
@@ -1631,7 +1673,7 @@ pub fn overrides_list(app: App) -> impl IntoView {
                                     );
                                 }
                             >
-                                "Remove"
+                                {action_label}
                             </button>
                         </li>
                     }
@@ -2127,7 +2169,10 @@ fn conflicts_dialog(app: App) -> impl IntoView {
                 .iter()
                 .enumerate()
                 .map(|(i, c)| {
-                    let mine_label = format!("Keep my time: {}", c.mine.describe());
+                    let mine_label = match &c.mine {
+                        Some(m) => format!("Keep my time: {}", m.describe()),
+                        None => "Keep it removed (you had removed this meeting)".to_string(),
+                    };
                     let theirs_label = match c.theirs.len() {
                         0 => "Use CMI's version: this meeting was removed".to_string(),
                         1 => format!("Use CMI's new time: {}", c.theirs[0].describe()),

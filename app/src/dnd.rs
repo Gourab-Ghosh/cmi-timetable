@@ -139,18 +139,25 @@ fn edge_autoscroll(x: f64, y: f64) {
 /// The drop action shared by pointer drops and keyboard move mode.
 /// `target_hall` is set when dropping onto a Halls-view row: the meeting
 /// moves into that hall as well as that time.
+/// Returns false when the drop target could not be resolved (the column no
+/// longer exists) — callers must not claim success then.
 pub fn perform_drop(
     app: App,
     spec: &DragSpec,
     day: Day,
     slot_start: u16,
     target_hall: Option<String>,
-) {
+) -> bool {
+    // Resolve against the DISPLAY grid, not just the official one: cells in
+    // synthetic (out-of-grid) columns carry starts the official grid doesn't
+    // know, and a cell that lights up as a drop target must accept the drop.
     let Some(slot) = app
-        .snapshot
-        .with_untracked(|s| s.slot_grid.iter().copied().find(|s| s.start_min == slot_start))
+        .display_slot_grid()
+        .into_iter()
+        .map(|(s, _)| s)
+        .find(|s| s.start_min == slot_start)
     else {
-        return;
+        return false;
     };
     let hall = target_hall.clone().or_else(|| spec.hall.clone());
     let to = Meeting {
@@ -175,7 +182,7 @@ pub fn perform_drop(
             if let Some(id) = spec.ov_id {
                 app.reset_override(id, Some(format!("{} back on CMI's time", spec.code)));
             }
-            return;
+            return true;
         }
     }
 
@@ -196,6 +203,7 @@ pub fn perform_drop(
             Some(format!("Moved {} to {where_label}", spec.code)),
         );
     }
+    true
 }
 
 fn on_pointer_move(app: App, ev: &web_sys::PointerEvent) {
@@ -302,7 +310,9 @@ pub fn enter_move_mode(app: App, spec: DragSpec, from: Option<Meeting>) {
 
 fn move_cursor(app: App, dx: i32, dy: i32) {
     let days = app.grid_days();
-    let slots = app.snapshot.with_untracked(|s| s.slot_grid.clone());
+    // The display grid, so chips in synthetic (out-of-grid) columns are
+    // reachable and can be moved back out again by keyboard.
+    let slots: Vec<Slot> = app.display_slot_grid().into_iter().map(|(s, _)| s).collect();
     if days.is_empty() || slots.is_empty() {
         return;
     }
@@ -399,8 +409,11 @@ fn on_key_down(app: App, ev: &web_sys::KeyboardEvent) {
             "Enter" => {
                 if let Some(mm) = app.move_mode.get_untracked() {
                     app.move_mode.set(None);
-                    perform_drop(app, &mm.spec, mm.cursor.0, mm.cursor.1, None);
-                    app.say(format!("Dropped {}.", mm.spec.code));
+                    if perform_drop(app, &mm.spec, mm.cursor.0, mm.cursor.1, None) {
+                        app.say(format!("Dropped {}.", mm.spec.code));
+                    } else {
+                        app.say("That time slot no longer exists — move cancelled.");
+                    }
                 }
                 ev.prevent_default();
                 return;

@@ -1102,6 +1102,107 @@ def t34_mobile_longpress_drag(app):
     app.wait_toast("Removed TOC")
 
 
+def t35_remove_meeting(app):
+    """A meeting can be removed from the timetable (the counterpart to 'Add
+    a meeting'): the chip leaves the grid, the removal is listed as a change
+    with a Restore action, and it survives reloads."""
+    app.boot("/?c=TOC")  # Tue + Thu 09:10-10:25 in the fixture
+    assert app.chips("TOC", "td[data-day='1'][data-slot='550']"), "sanity: Tue chip"
+    assert app.chips("TOC", "td[data-day='3'][data-slot='550']"), "sanity: Thu chip"
+
+    # Details dialog -> first meeting row (Tue) -> Remove this meeting.
+    app.chip("TOC", "td[data-day='1'][data-slot='550']").click()
+    dialog = app.wait_css(".dialog")
+    rows = dialog.find_elements(By.CSS_SELECTOR, "ul.meetings li")
+    assert len(rows) == 2, f"expected 2 meeting rows, got {len(rows)}"
+    tue = next(r for r in rows if "Tue" in r.text)
+    tue.find_element(By.XPATH, ".//button[normalize-space()='Remove this meeting']").click()
+    app.wait_toast("Removed a TOC meeting")
+    # The open dialog re-renders reactively: one meeting row left.
+    WebDriverWait(app.d, 5).until(
+        lambda d: len(d.find_elements(By.CSS_SELECTOR, ".dialog ul.meetings li")) == 1,
+        message="dialog should drop to one meeting row",
+    )
+    app.d.find_element(By.CSS_SELECTOR, "body").send_keys(Keys.ESCAPE)
+
+    assert not app.chips("TOC", "td[data-day='1'][data-slot='550']"), \
+        "removed meeting must leave the Tuesday cell"
+    assert app.chips("TOC", "td[data-day='3'][data-slot='550']"), \
+        "the Thursday meeting must be untouched"
+
+    # Listed as a change, and restorable.
+    pill = app.xpath("//button[contains(.,'change')]")
+    assert "1 change" in pill.text, pill.text
+    app.d.get(f"{BASE}/")  # reload: persists
+    app.wait_css(".header h1")
+    time.sleep(0.5)
+    assert not app.chips("TOC", "td[data-day='1'][data-slot='550']"), \
+        "removal must survive a reload"
+    app.xpath("//button[contains(.,'change')]").click()
+    dialog_text = app.wait_css(".dialog").text
+    assert "removed CMI's Tue" in dialog_text, dialog_text[:300]
+    app.xpath("//div[@class='dialog']//button[normalize-space()='Restore']").click()
+    app.wait_toast("TOC back on CMI's time")
+    app.d.find_element(By.CSS_SELECTOR, "body").send_keys(Keys.ESCAPE)
+    assert app.chips("TOC", "td[data-day='1'][data-slot='550']"), \
+        "Restore must bring the meeting back"
+
+
+def t36_out_of_grid_meeting_gets_its_own_column(app):
+    """A meeting outside CMI's hours (e.g. 19:30-20:30) renders in its own
+    clearly-marked column with its real times — never squeezed into the last
+    official slot."""
+    evening = {
+        "next_id": 1,
+        "items": [{
+            "id": 0, "course": "TOC",
+            "base": {"day": "Tue", "slot": {"start_min": 550, "end_min": 625},
+                     "hall": "Lecture Hall 803", "temp_booking": False},
+            "to": {"day": "Tue", "slot": {"start_min": 1170, "end_min": 1230},
+                   "hall": None, "temp_booking": False},
+            "created_at": 1754000000000.0}],
+        "credits": [],
+    }
+    app.boot("/", selection=["TOC"], overrides=evening)
+
+    header = app.css("section[aria-label='My timetable'] table.tt thead")
+    assert "19:30–20:30" in header.text, header.text
+    extra_th = app.css("section[aria-label='My timetable'] th.extra")
+    assert "19:30" in extra_th.text
+
+    # The chip sits in the synthetic 19:30 column on Tuesday…
+    assert app.chips("TOC", "td[data-day='1'][data-slot='1170']"), \
+        "chip must render in the synthetic column"
+    # …not clamped into the last official slot (17:00), and not on its old time.
+    assert not app.chips("TOC", "td[data-day='1'][data-slot='1020']"), \
+        "chip must NOT be squeezed into the last official column"
+    assert not app.chips("TOC", "td[data-day='1'][data-slot='550']")
+    # Thursday's official 09:10 meeting is untouched, in an official column.
+    assert app.chips("TOC", "td[data-day='3'][data-slot='550']")
+
+    # Synthetic columns are REAL drop targets: drag the Thursday meeting
+    # into the 19:30 column and it must land there (not silently no-op).
+    app.xpath("//button[contains(.,'Edit layout')]").click()
+    app.drag(
+        app.chip("TOC", "td[data-day='3'][data-slot='550']"),
+        app.cell(3, 1170),
+    )
+    app.wait_toast("Moved TOC to Thu 19:30")
+    assert app.chips("TOC", "td[data-day='3'][data-slot='1170']"), \
+        "drop onto a synthetic column must apply"
+
+    # Restoring CMI's times makes the synthetic column disappear entirely.
+    app.xpath("//button[contains(.,'change')]").click()
+    for _ in range(2):
+        app.xpath("//div[@class='dialog']//button[normalize-space()='Remove']").click()
+        app.wait_toast("TOC back on CMI's time")
+        time.sleep(0.3)
+    app.d.find_element(By.CSS_SELECTOR, "body").send_keys(Keys.ESCAPE)
+    time.sleep(0.3)
+    assert not app.css_all("section[aria-label='My timetable'] th.extra"), \
+        "the synthetic column must vanish with its meetings"
+
+
 TESTS = [
     t01_header_sync_button_and_hidden_dev,
     t02_developer_endpoint_only,
@@ -1137,6 +1238,8 @@ TESTS = [
     t32_corrupt_storage_recovery,
     t33_export_ics_honors_overrides,
     t34_mobile_longpress_drag,
+    t35_remove_meeting,
+    t36_out_of_grid_meeting_gets_its_own_column,
 ]
 
 

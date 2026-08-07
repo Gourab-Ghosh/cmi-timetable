@@ -51,7 +51,7 @@ fn snap(courses: Vec<Course>) -> Snapshot {
 
 fn store_with(course: &str, base: Option<Meeting>, to: Meeting) -> OverridesStore {
     let mut store = OverridesStore::default();
-    store.add(course, base, to, 0.0);
+    store.add(course, base, Some(to), 0.0);
     store
 }
 
@@ -125,7 +125,7 @@ fn row5_conflict_queued() {
     assert_eq!(r.conflicts.len(), 1);
     let c = &r.conflicts[0];
     assert_eq!(c.course, "MFD");
-    assert_eq!(c.mine, mine);
+    assert_eq!(c.mine, Some(mine));
     assert_eq!(c.theirs, vec![cmi_new]);
     // The override stays until the user decides.
     assert_eq!(r.overrides.items.len(), 1);
@@ -206,7 +206,7 @@ fn user_created_meeting_conflicting_upstream() {
     let store = store_with("SVA", None, mine.clone());
     let r = merge_overrides(&old, &new, &[], &store);
     assert_eq!(r.conflicts.len(), 1);
-    assert_eq!(r.conflicts[0].mine, mine);
+    assert_eq!(r.conflicts[0].mine, Some(mine));
     assert_eq!(r.conflicts[0].theirs, vec![cmi]);
     // While the course stays unscheduled, the created meeting is left alone.
     let r2 = merge_overrides(&old, &old, &[], &store);
@@ -250,4 +250,97 @@ fn hall_change_is_a_change() {
     let r = merge_overrides(&old, &new, &[], &store);
     assert_eq!(r.conflicts.len(), 1);
     assert_eq!(r.conflicts[0].theirs, vec![rehalled]);
+}
+
+// ---------------------------------------------------------------------------
+// Meeting removals (to == None)
+// ---------------------------------------------------------------------------
+
+fn removal_store(course: &str, base: Meeting) -> OverridesStore {
+    let mut store = OverridesStore::default();
+    store.add(course, Some(base), None, 0.0);
+    store
+}
+
+/// CMI unchanged: the removal stays in force, silently.
+#[test]
+fn removal_kept_while_cmi_unchanged() {
+    let official = WED_OFFICIAL();
+    let old = snap(vec![course("MFD", vec![official.clone()])]);
+    let store = removal_store("MFD", official);
+    let r = merge_overrides(&old, &old, &[], &store);
+    assert!(r.conflicts.is_empty());
+    assert!(r.dropped_matching.is_empty());
+    assert_eq!(r.overrides.items.len(), 1);
+    assert!(r.overrides.items[0].is_removal());
+}
+
+/// CMI deleted the meeting the user had removed: both sides agree — the
+/// override is dropped without a conflict.
+#[test]
+fn removal_auto_resolves_when_cmi_deletes_too() {
+    let official = WED_OFFICIAL();
+    let other = mtg(Day::Fri, 840, 915, "Lecture Hall 6");
+    let old = snap(vec![course("MFD", vec![official.clone(), other.clone()])]);
+    let new = snap(vec![course("MFD", vec![other])]);
+    let store = removal_store("MFD", official);
+    let r = merge_overrides(&old, &new, &[], &store);
+    assert!(r.conflicts.is_empty());
+    assert_eq!(r.dropped_matching.len(), 1);
+    assert!(r.overrides.items.is_empty());
+}
+
+/// CMI moved the meeting the user had removed: a real question — the move
+/// may fix whatever made them remove it. Keep-mine rebases the removal onto
+/// the new meeting so it doesn't re-conflict on the next sync.
+#[test]
+fn removal_conflicts_when_cmi_moves_the_meeting() {
+    let official = WED_OFFICIAL();
+    let cmi_new = mtg(Day::Wed, 930, 1005, "Lecture Hall 803");
+    let old = snap(vec![course("MFD", vec![official.clone()])]);
+    let new = snap(vec![course("MFD", vec![cmi_new.clone()])]);
+    let store = removal_store("MFD", official);
+
+    let r = merge_overrides(&old, &new, &[], &store);
+    assert_eq!(r.conflicts.len(), 1);
+    assert_eq!(r.conflicts[0].mine, None);
+    assert_eq!(r.conflicts[0].theirs, vec![cmi_new.clone()]);
+
+    let mut kept = r.overrides.clone();
+    resolve_conflict(&mut kept, &r.conflicts[0], true);
+    assert_eq!(kept.items.len(), 1);
+    assert!(kept.items[0].is_removal());
+    assert_eq!(kept.items[0].base, Some(cmi_new));
+    let r2 = merge_overrides(&new, &new, &[], &kept);
+    assert!(r2.conflicts.is_empty(), "keep-mine must not re-conflict");
+
+    let mut dropped = r.overrides.clone();
+    resolve_conflict(&mut dropped, &r.conflicts[0], false);
+    assert!(dropped.items.is_empty(), "use-CMI's restores the meeting");
+}
+
+/// A removal whose base is in NEITHER snapshot is inert (suppresses
+/// nothing): dropped silently, no conflict. One whose base still matches a
+/// CURRENT official meeting (e.g. share-imported against fresher data)
+/// keeps suppressing it and must survive.
+#[test]
+fn stale_removals_drop_only_when_truly_inert() {
+    let phantom = mtg(Day::Mon, 550, 625, "Lecture Hall 1");
+    let real = WED_OFFICIAL();
+
+    // Inert: base matches nothing anywhere.
+    let old = snap(vec![course("MFD", vec![real.clone()])]);
+    let store = removal_store("MFD", phantom);
+    let r = merge_overrides(&old, &old, &[], &store);
+    assert!(r.conflicts.is_empty());
+    assert!(r.overrides.items.is_empty(), "inert removal must be dropped");
+
+    // Meaningful: base missing from the OLD snapshot but present in the new.
+    let old_without = snap(vec![course("MFD", vec![])]);
+    let new_with = snap(vec![course("MFD", vec![real.clone()])]);
+    let store = removal_store("MFD", real);
+    let r = merge_overrides(&old_without, &new_with, &[], &store);
+    assert!(r.conflicts.is_empty());
+    assert_eq!(r.overrides.items.len(), 1, "active removal must survive");
+    assert!(r.overrides.items[0].is_removal());
 }

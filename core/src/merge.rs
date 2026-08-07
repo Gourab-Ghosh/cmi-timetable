@@ -21,8 +21,9 @@ use serde::{Deserialize, Serialize};
 pub struct Conflict {
     pub override_id: u64,
     pub course: String,
-    /// The user's meeting ("Keep my time: …").
-    pub mine: Meeting,
+    /// The user's side: their meeting ("Keep my time: …"), or `None` when
+    /// they had REMOVED the meeting ("Keep it removed").
+    pub mine: Option<Meeting>,
     /// CMI's new meeting(s) ("Use CMI's new time: …"). Usually one; empty
     /// when CMI deleted the meeting entirely; several when CMI scheduled a
     /// previously unscheduled course the user had placed manually.
@@ -115,11 +116,14 @@ pub fn merge_overrides(
                     Ok(Some(cmi_new)) => {
                         if cmi_new.same_place_time(base) {
                             // CMI unchanged → keep override.
-                        } else if cmi_new.same_place_time(&ov.to) {
+                        } else if ov.to.as_ref().is_some_and(|to| cmi_new.same_place_time(to)) {
                             // CMI now matches the user's change → drop silently.
                             drop_ids.push(ov.id);
                             result.dropped_matching.push(ov.clone());
                         } else {
+                            // CMI moved a meeting the user had moved — or one
+                            // they had removed ("keep it removed?" is a real
+                            // question: the move may fix why they removed it).
                             result.conflicts.push(Conflict {
                                 override_id: ov.id,
                                 course: ov.course.clone(),
@@ -129,23 +133,45 @@ pub fn merge_overrides(
                         }
                     }
                     Ok(None) => {
-                        // CMI deleted the meeting the user had moved.
-                        result.conflicts.push(Conflict {
-                            override_id: ov.id,
-                            course: ov.course.clone(),
-                            mine: ov.to.clone(),
-                            theirs: Vec::new(),
-                        });
+                        if ov.is_removal() {
+                            // CMI deleted the meeting the user had removed —
+                            // both sides agree; drop silently.
+                            drop_ids.push(ov.id);
+                            result.dropped_matching.push(ov.clone());
+                        } else {
+                            // CMI deleted the meeting the user had moved.
+                            result.conflicts.push(Conflict {
+                                override_id: ov.id,
+                                course: ov.course.clone(),
+                                mine: ov.to.clone(),
+                                theirs: Vec::new(),
+                            });
+                        }
                     }
                     Err(()) => {
-                        // Stale base (not in the old snapshot). Offer the new
-                        // official meetings as candidates.
-                        result.conflicts.push(Conflict {
-                            override_id: ov.id,
-                            course: ov.course.clone(),
-                            mine: ov.to.clone(),
-                            theirs: new_m.to_vec(),
-                        });
+                        if ov.is_removal() {
+                            // Base missing from the OLD snapshot. If it still
+                            // matches a CURRENT official meeting (overrides
+                            // imported via a share link against fresher
+                            // data), the removal is meaningful — keep it. If
+                            // not, it is inert: it suppresses nothing, there
+                            // is nothing to "keep", and rebasing onto an
+                            // arbitrary candidate could strike a meeting the
+                            // user never touched. Drop it silently; the
+                            // visible timetable is unchanged either way.
+                            if !new_m.iter().any(|m| m.same_place_time(base)) {
+                                drop_ids.push(ov.id);
+                            }
+                        } else {
+                            // Stale base (not in the old snapshot). Offer the
+                            // new official meetings as candidates.
+                            result.conflicts.push(Conflict {
+                                override_id: ov.id,
+                                course: ov.course.clone(),
+                                mine: ov.to.clone(),
+                                theirs: new_m.to_vec(),
+                            });
+                        }
                     }
                 }
             }
@@ -155,7 +181,11 @@ pub fn merge_overrides(
                     && old_meetings.map_or(true, |m| m.is_empty());
                 if newly_scheduled {
                     let new_m = new_meetings.unwrap();
-                    if new_m.iter().any(|m| m.same_place_time(&ov.to)) {
+                    let matches_mine = ov
+                        .to
+                        .as_ref()
+                        .is_some_and(|to| new_m.iter().any(|m| m.same_place_time(to)));
+                    if matches_mine {
                         drop_ids.push(ov.id);
                         result.dropped_matching.push(ov.clone());
                     } else {
@@ -184,6 +214,7 @@ pub fn merge_overrides(
 /// override so CMI's official time shows through.
 pub fn resolve_conflict(store: &mut OverridesStore, conflict: &Conflict, keep_mine: bool) {
     if keep_mine {
+        let mut drop = false;
         if let Some(ov) = store.items.iter_mut().find(|o| o.id == conflict.override_id) {
             ov.base = if conflict.theirs.len() == 1 {
                 Some(conflict.theirs[0].clone())
@@ -192,6 +223,12 @@ pub fn resolve_conflict(store: &mut OverridesStore, conflict: &Conflict, keep_mi
                 // user's meeting is now effectively user-created.
                 None
             };
+            // "Keep it removed" of a meeting that no longer exists is a
+            // no-op override — the removal is already a fact; drop it.
+            drop = ov.is_removal() && ov.base.is_none();
+        }
+        if drop {
+            store.remove(conflict.override_id);
         }
     } else {
         store.remove(conflict.override_id);

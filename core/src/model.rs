@@ -350,9 +350,19 @@ pub struct MeetingOverride {
     /// The official meeting AT THE TIME the override was made
     /// (`None` ⇒ user-created meeting for an unscheduled course).
     pub base: Option<Meeting>,
-    /// What the user wants.
-    pub to: Meeting,
+    /// What the user wants: a different time/place, or `None` to remove the
+    /// meeting from their timetable entirely. Stored data and share links
+    /// from before removals existed always carry a meeting here, so they
+    /// deserialize unchanged.
+    pub to: Option<Meeting>,
     pub created_at: f64,
+}
+
+impl MeetingOverride {
+    /// A removal: the user struck the base meeting from their timetable.
+    pub fn is_removal(&self) -> bool {
+        self.to.is_none()
+    }
 }
 
 /// A user-set credit value for one course. The official value (stated by
@@ -375,7 +385,7 @@ pub struct OverridesStore {
 }
 
 impl OverridesStore {
-    pub fn add(&mut self, course: &str, base: Option<Meeting>, to: Meeting, now: f64) -> u64 {
+    pub fn add(&mut self, course: &str, base: Option<Meeting>, to: Option<Meeting>, now: f64) -> u64 {
         let id = self.next_id;
         self.next_id += 1;
         self.items.push(MeetingOverride {

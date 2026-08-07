@@ -40,6 +40,10 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
+# Every push this script makes (gh-pages, --push) must not re-trigger the
+# pre-push deploy hook.
+export CMITT_IN_DEPLOY=1
+
 TRUNK_VERSION="${TRUNK_VERSION:-v0.21.14}"
 DOCKER_IMAGE="${DOCKER_IMAGE:-rust:1}"
 CACHE="$PWD/.build-cache"

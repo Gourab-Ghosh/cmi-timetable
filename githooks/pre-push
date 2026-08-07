@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# Deploy on push — and only on push. Commits never touch the site; whenever
+# main is pushed to GitHub, this builds and publishes the matching site so
+# the code and the live page can't drift apart.
+#
+# One-time setup per clone:   git config core.hooksPath githooks
+# Push without deploying:     CMITT_SKIP_DEPLOY=1 git push
+#
+# The hook stays out of the way for everything else: pushes of other
+# branches, the gh-pages publish that deploy.sh itself performs, and any
+# push made from inside a running deploy.
+
+set -euo pipefail
+
+# deploy.sh pushes gh-pages (and, with --push, main) itself — never recurse.
+[ "${CMITT_IN_DEPLOY:-0}" = 1 ] && exit 0
+[ "${CMITT_SKIP_DEPLOY:-0}" = 1 ] && exit 0
+
+deploy=0
+while read -r _local_ref _local_sha remote_ref _remote_sha; do
+    [ "$remote_ref" = "refs/heads/main" ] && deploy=1
+done
+
+[ "$deploy" = 1 ] || exit 0
+
+echo "pre-push: main is being pushed — building and publishing the site"
+echo "          (skip once with: CMITT_SKIP_DEPLOY=1 git push)"
+if ! ./deploy.sh --no-verify ${CMITT_DEPLOY_FLAGS:-}; then
+    echo "pre-push: the deploy failed, so the push was aborted." >&2
+    echo "Fix the build, or push without deploying: CMITT_SKIP_DEPLOY=1 git push" >&2
+    exit 1
+fi

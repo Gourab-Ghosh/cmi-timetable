@@ -4,9 +4,11 @@
 
 A **100% client-side** timetable planner for students of the Chennai
 Mathematical Institute. It parses CMI's two public timetable pages, lets you
-assemble your personal timetable (drag meetings around in edit mode, resolve
-clashes, export to your calendar), and keeps everything **saved in your
-browser** — no backend, no accounts, no analytics. The header's **My data**
+assemble your personal timetable (drag meetings around in edit mode, add or
+remove individual meetings, resolve clashes, export to your calendar), and
+keeps everything **saved in your browser** — no backend, no accounts, no
+analytics. Meetings at unusual hours get their own clearly-marked column
+rather than being squeezed into the nearest official slot. The header's **My data**
 dialog shows exactly what is stored (including which CMI times your custom
 times overwrite) with one-click removal for each piece.
 
@@ -186,6 +188,16 @@ cargo run -p cmi-timetable-sync
 Everything runs on your machine. **This repo has no GitHub Actions
 workflows at all** — nothing on GitHub's side builds, tests, or schedules
 anything, so no CI job can fail, stall, or mail you about it.
+
+Committing never deploys. Pushing does: a `pre-push` git hook runs
+`deploy.sh` whenever `main` is pushed, so the code on GitHub and the live
+site can't drift apart. One-time setup per clone:
+
+```sh
+git config core.hooksPath githooks   # activate the deploy-on-push hook
+```
+
+Push without deploying once: `CMITT_SKIP_DEPLOY=1 git push`.
 
 ```sh
 ./deploy.sh               # test + build + publish + verify it went live

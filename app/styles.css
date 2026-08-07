@@ -538,6 +538,17 @@ table.tt thead th {
   white-space: nowrap;
   border-bottom: 1px solid var(--line-strong);
 }
+/* Columns that exist only because one of the user's meetings falls outside
+   CMI's regular hours (evening slots, lunch-gap times). Tinted so nobody
+   mistakes them for part of the official grid. */
+table.tt thead th.extra {
+  background: var(--accent-wash);
+  color: var(--accent);
+  font-style: italic;
+}
+table.tt td.extra { background: var(--accent-wash); }
+.day-list .slotrow.extra { border-color: var(--accent); border-style: dashed; }
+
 table.tt th.rowhead {
   position: sticky;
   left: 0;

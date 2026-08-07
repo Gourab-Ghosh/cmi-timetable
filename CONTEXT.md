@@ -19,6 +19,10 @@ and no committed mirror (fixtures exist only for tests/e2e seed).
 
 ## 2. Standing user rules (verbatim intent, do not violate)
 
+- **LOCAL COMMITS ONLY (from R13 on): never `git push`, never deploy or
+  touch GitHub Pages, unless the user explicitly says to in that prompt.**
+  Deploys happen through the user's own `git push` (pre-push hook) or their
+  explicit ask. Committing must never trigger a deploy.
 - "Don't access anything outside this folder" (temp files live outside the
   repo and must never be committed).
 - Package installs: pacman first, `cargo install` only on failure.
@@ -40,8 +44,12 @@ and no committed mirror (fixtures exist only for tests/e2e seed).
         welcome()), dnd.rs (pointer+keyboard drag), storage.rs, dev.rs,
         domx.rs; styles.css = whole design system (tokens, light+dark).
 /sync   native mirror publisher (CI cron writes app/public/data/).
-/e2e    test_app.py — 34 Selenium tests, self-seeding (see §5); shoot.py —
+/e2e    test_app.py — 36 Selenium tests, self-seeding (see §5); shoot.py —
         design-review screenshots + print PDFs.
+/githooks  pre-push — builds+publishes via deploy.sh when main is pushed
+        (activate per clone: `git config core.hooksPath githooks`; skip
+        once: CMITT_SKIP_DEPLOY=1; deploy.sh sets CMITT_IN_DEPLOY=1 so its
+        own pushes never recurse).
 ```
 
 ## 4. Invariants & hard-won gotchas (violating these re-breaks fixed bugs)
@@ -81,7 +89,7 @@ and no committed mirror (fixtures exist only for tests/e2e seed).
 CARGO_TARGET_DIR=~/.rust-target-e2e cargo test --workspace
 # app build for e2e (never plain dist while trunk serve runs)
 cd app && CARGO_TARGET_DIR=~/.rust-target-e2e trunk build --release --dist dist-e2e
-# e2e (34 tests; self-generates seed via core example, needs cargo on PATH)
+# e2e (36 tests; self-generates seed via core example, needs cargo on PATH)
 cd e2e && DIST_DIR=../app/dist-e2e .venv/bin/python test_app.py
 # screenshots + print PDFs for design review (writes e2e/shots/, gitignored)
 cd e2e && .venv/bin/python shoot.py
@@ -97,7 +105,13 @@ regenerates the .ics golden.
 
 ## 6. Current state
 
-- Tests: 47 native + 34/34 e2e green. Print sheet (`@media print` block in
+- Tests: 52 native + 36/36 e2e green. Meeting removals: `MeetingOverride.to`
+  is `Option<Meeting>` (None = removed; legacy JSON/share payloads still
+  load — present meeting ⇒ Some). Out-of-grid times: `display_slot_grid()`
+  (views.rs) = official slots + synthetic `.extra` columns; `column_for`
+  prefers the tightest containing slot; master grid always extra=false.
+  Removed meetings produce NO EffMeeting — halls view checks removals
+  explicitly (hall_booking_chip) or the official chip would reappear. Print sheet (`@media print` block in
   styles.css + `.print-masthead`/`.print-legend` DOM in views.rs
   my_timetable) is a designed poster: accent-rule masthead, dark time band,
   branch-colored chips filling cells, colorized legend. Header carries a
@@ -268,6 +282,35 @@ regenerates the .ics golden.
   AND would have falsely reported "live"); `--republish` ignored
   `--no-verify` (blocked ~6 min); `--help` truncated the header mid-sentence
   (now prints the whole comment block via awk).
+- **R13 (remove meetings + honest out-of-grid rendering + push-only
+  deploys):** STANDING RULE ADDED to §2 — local commits only, push/deploy
+  only on the user's explicit ask. Features: (1) every meeting row in the
+  details dialog gets "Remove this meeting" (counterpart of Add a meeting):
+  `MeetingOverride.to: Option<Meeting>` (None = removed), remove_meeting()
+  folds into an existing override / deletes user-created ones, changes list
+  says "removed CMI's …" with a Restore button, merge treats CMI-deleted as
+  auto-agree and CMI-moved as a conflict ("Keep it removed" rebases). Legacy
+  storage/share payloads keep loading; old apps opening NEW links fall back
+  to `?c=`. (2) Meetings outside CMI's hours (e.g. 19:30) used to clamp into
+  the last grid column (column_for's nearest-fallback); now
+  display_slot_grid() adds tinted `.extra` columns with the real times (also
+  fixes lunch-gap times). (3) githooks/pre-push runs deploy.sh on pushes of
+  main only — commits never deploy (user requirement); recursion guarded by
+  CMITT_IN_DEPLOY; skip with CMITT_SKIP_DEPLOY=1. e2e t35/t36; merge/share/
+  legacy-compat native tests. An adversarial review then confirmed 5 more
+  defects, all fixed: drops onto synthetic columns silently no-opped while
+  highlighted (perform_drop/move_cursor now resolve via App::display_slot_grid
+  — moved to state.rs; perform_drop returns bool so keyboard Enter can't
+  announce a false "Dropped"); "Keep it removed" on a stale-base removal
+  deleted the override and silently RESTORED the meeting (stale removals are
+  now dropped in merge as inert — UNLESS their base still matches a current
+  official meeting, which keeps suppressing it); master grid clamped custom
+  times into the nearest column with no time shown (now sublabels the real
+  time; the false "official meetings only" comment fixed); a fully-removed
+  course was mislabeled "CMI hasn't put it on the timetable" (tray now
+  requires officially-empty meetings; details dialog says "You've removed
+  all of this course's meetings"). 52 native + 36/36 e2e after fixes. All
+  committed LOCALLY, not pushed.
 - **R12 (no GitHub-side processes):** user aborted an in-progress switch to
   committing build output into `docs/` on main (uncommitted work reverted with
   `git checkout --`) and instead asked that nothing on GitHub be able to

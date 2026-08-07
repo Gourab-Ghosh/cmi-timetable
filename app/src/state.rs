@@ -608,9 +608,9 @@ impl App {
                 None => o.course == course && o.base == base,
             });
             match existing {
-                Some(o) => o.to = to.clone(),
+                Some(o) => o.to = Some(to.clone()),
                 None => {
-                    ovs.add(&course, base.clone(), to.clone(), now);
+                    ovs.add(&course, base.clone(), Some(to.clone()), now);
                 }
             }
         });
@@ -634,7 +634,7 @@ impl App {
             if !sel.iter().any(|c| c == &course) {
                 sel.push(course.clone());
             }
-            ovs.add(&course, base.clone(), to.clone(), now);
+            ovs.add(&course, base.clone(), Some(to.clone()), now);
         });
         self.toast_undo(toast);
     }
@@ -646,9 +646,42 @@ impl App {
         let course = course.to_string();
         let now = domx::now_ms();
         self.act(&format!("add a meeting to {course}"), |_, ovs| {
-            ovs.add(&course, None, to.clone(), now);
+            ovs.add(&course, None, Some(to.clone()), now);
         });
         self.toast_undo(toast);
+    }
+
+    /// Remove one meeting from the user's timetable. Removing a meeting the
+    /// user created (or already moved) folds into its existing override;
+    /// removing an official meeting records a removal override, restorable
+    /// from Your changes / My data like any other change.
+    pub fn remove_meeting(&self, course: &str, ov_id: Option<u64>, base: Option<Meeting>) {
+        let course = course.to_string();
+        let now = domx::now_ms();
+        let when = base
+            .as_ref()
+            .map(|b| format!(" ({})", b.describe()))
+            .unwrap_or_default();
+        self.act(&format!("remove a meeting from {course}"), |_, ovs| {
+            match (ov_id, &base) {
+                // A meeting the user created out of thin air: removing it
+                // just deletes the override — nothing of CMI's is hidden.
+                (Some(id), None) => ovs.remove(id),
+                // A meeting the user had already moved: the same override
+                // now records the removal (base identity preserved).
+                (Some(id), Some(_)) => {
+                    if let Some(o) = ovs.items.iter_mut().find(|o| o.id == id) {
+                        o.to = None;
+                    }
+                }
+                // An untouched official meeting.
+                (None, Some(_)) => {
+                    ovs.add(&course, base.clone(), None, now);
+                }
+                (None, None) => {}
+            }
+        });
+        self.toast_undo(format!("Removed a {course} meeting{when}"));
     }
 
     /// Starting point for newly created meetings: the grid's first day and
@@ -839,6 +872,39 @@ impl App {
         })
     }
 
+    /// The personal grid's columns: CMI's slot grid PLUS a synthetic column
+    /// for every selected meeting that fits inside no official slot —
+    /// evening courses, times in the lunch gap, anything custom. Synthetic
+    /// columns carry the meeting's real times, so nothing is silently
+    /// squeezed into the nearest official slot. Also the slot resolver for
+    /// drag & drop and keyboard move (dnd.rs), so a column that exists on
+    /// screen is always a real drop target. Returns (slot, is_outside_grid).
+    pub fn display_slot_grid(&self) -> Vec<(Slot, bool)> {
+        let official = self.snapshot.with(|s| s.slot_grid.clone());
+        let mut extra: Vec<Slot> = Vec::new();
+        for course in self.selected_courses() {
+            for e in self.effective_meetings(&course) {
+                let start = e.meeting.slot.start_min;
+                let covered = official
+                    .iter()
+                    .any(|s| s.start_min == start || (start >= s.start_min && start < s.end_min));
+                if covered {
+                    continue;
+                }
+                match extra.iter_mut().find(|s| s.start_min == start) {
+                    // Same start, different lengths: one column, widest
+                    // range; chips whose times differ sublabel themselves.
+                    Some(s) => s.end_min = s.end_min.max(e.meeting.slot.end_min),
+                    None => extra.push(e.meeting.slot),
+                }
+            }
+        }
+        let mut all: Vec<(Slot, bool)> = official.into_iter().map(|s| (s, false)).collect();
+        all.extend(extra.into_iter().map(|s| (s, true)));
+        all.sort_by_key(|(s, _)| s.start_min);
+        all
+    }
+
     /// The day rows shown in grids: Mon–Fri always, Sat/Sun only when data
     /// mentions them.
     pub fn grid_days(&self) -> Vec<Day> {
@@ -933,13 +999,17 @@ pub fn effective_meetings(course: &Course, overrides: &OverridesStore) -> Vec<Ef
         }) {
             Some(o) => {
                 replaced_ids.push(o.id);
-                out.push(EffMeeting {
-                    meeting: o.to.clone(),
-                    overridden: true,
-                    ov_id: Some(o.id),
-                    base: o.base.clone(),
-                    user_created: false,
-                });
+                // A removal (`to == None`) claims its official meeting and
+                // renders nothing in its place.
+                if let Some(to) = &o.to {
+                    out.push(EffMeeting {
+                        meeting: to.clone(),
+                        overridden: true,
+                        ov_id: Some(o.id),
+                        base: o.base.clone(),
+                        user_created: false,
+                    });
+                }
             }
             None => out.push(EffMeeting {
                 meeting: official.clone(),
@@ -953,12 +1023,14 @@ pub fn effective_meetings(course: &Course, overrides: &OverridesStore) -> Vec<Ef
 
     // User-created meetings (base = None) and stale overrides whose base no
     // longer matches an official meeting still show up as custom meetings.
+    // Stale removals have nothing to show — the meeting is gone either way.
     for o in course_ovs {
         if replaced_ids.contains(&o.id) {
             continue;
         }
+        let Some(to) = &o.to else { continue };
         out.push(EffMeeting {
-            meeting: o.to.clone(),
+            meeting: to.clone(),
             overridden: true,
             ov_id: Some(o.id),
             base: o.base.clone(),

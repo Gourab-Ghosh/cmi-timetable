@@ -48,12 +48,12 @@ fn share_payload_round_trip() {
                 hall: Some("Lecture Hall 6".to_string()),
                 temp_booking: false,
             }),
-            to: Meeting {
+            to: Some(Meeting {
                 day: Day::Thu,
                 slot: Slot::new(840, 915),
                 hall: Some("Lecture Hall 6".to_string()),
                 temp_booking: false,
-            },
+            }),
             created_at: 1_754_000_000_000.0,
         }],
         credits: vec![CreditOverride {
@@ -117,4 +117,37 @@ fn no_params_is_empty_state() {
     let state = resolve_url_state(None, None);
     assert!(state.selection.is_empty());
     assert!(state.overrides.is_none());
+}
+
+/// Removals (`to: null`) survive the share round trip, and pre-removal data
+/// — every stored override and share link made before removals existed —
+/// still deserializes: a present meeting simply becomes `Some`.
+#[test]
+fn removals_round_trip_and_old_payloads_still_load() {
+    use cmi_timetable_core::model::{Meeting, MeetingOverride, OverridesStore};
+
+    let base = Meeting {
+        day: Day::Wed,
+        slot: Slot::new(840, 915),
+        hall: Some("Lecture Hall 6".to_string()),
+        temp_booking: false,
+    };
+    let mut overrides = OverridesStore::default();
+    overrides.add("MFD", Some(base), None, 0.0);
+    let encoded = encode_share(&["MFD".to_string()], &overrides);
+    let payload = decode_share(&encoded).expect("removal payload decodes");
+    assert_eq!(payload.o.len(), 1);
+    assert!(payload.o[0].is_removal());
+
+    // The exact JSON shape written before `to` became optional.
+    let legacy = r#"{
+        "id": 3, "course": "TOC",
+        "base": null,
+        "to": {"day":"Tue","slot":{"start_min":550,"end_min":625},
+               "hall":"Lecture Hall 803","temp_booking":false},
+        "created_at": 0.0
+    }"#;
+    let o: MeetingOverride = serde_json::from_str(legacy).expect("legacy JSON loads");
+    assert!(!o.is_removal());
+    assert_eq!(o.to.as_ref().and_then(|m| m.hall.clone()).as_deref(), Some("Lecture Hall 803"));
 }
