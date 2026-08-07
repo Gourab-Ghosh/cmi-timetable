@@ -193,6 +193,7 @@ anything, so no CI job can fail, stall, or mail you about it.
 ./deploy.sh --push        # push your commits too (ship code + site)
 ./deploy.sh --skip-tests  # skip the test suite
 ./deploy.sh --republish   # re-trigger serving of what is already published
+./deploy.sh --build-only  # rehearse a release: build + test, publish nothing
 ```
 
 The script builds with Trunk inside a **temporary Docker container**

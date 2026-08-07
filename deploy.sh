@@ -10,6 +10,7 @@
 #   ./deploy.sh --allow-stale    # publish even if origin/main is ahead
 #   ./deploy.sh --no-verify      # don't wait for GitHub to serve the build
 #   ./deploy.sh --republish      # re-trigger serving of what's already there
+#   ./deploy.sh --build-only     # rehearse: build (and test), publish nothing
 #
 # Nothing about the release runs on GitHub's infrastructure: there are no
 # workflows in this repo, so no CI job can fail, stall or send failure mail.
@@ -51,6 +52,7 @@ PUSH_MAIN=0
 VERIFY=1
 REPUBLISH=0
 SYNC_DATA=0
+BUILD_ONLY=0
 for arg in "$@"; do
     case "$arg" in
         --skip-tests)  SKIP_TESTS=1 ;;
@@ -59,6 +61,7 @@ for arg in "$@"; do
         --no-verify)   VERIFY=0 ;;
         --republish)   REPUBLISH=1 ;;
         --sync)        SYNC_DATA=1 ;;
+        --build-only)  BUILD_ONLY=1 ;;
         # Print the whole header comment, however long it grows.
         -h|--help) awk 'NR>1 { if (!/^#/) exit; print }' "$0"; exit 0 ;;
         *) echo "unknown option: $arg (try --help)" >&2; exit 2 ;;
@@ -301,8 +304,16 @@ if [ "${FORCE_LOCAL:-0}" != 1 ] && docker info >/dev/null 2>&1; then
 else
     echo "==> Docker unavailable — building locally"
     command -v cargo >/dev/null || { echo "need cargo on PATH (or Docker)" >&2; exit 1; }
-    rustup target list --installed 2>/dev/null | grep -q wasm32-unknown-unknown \
-        || rustup target add wasm32-unknown-unknown
+    # Distro toolchains (Arch, Fedora, …) ship the wasm target and have no
+    # rustup at all, so only ask rustup for it when rustup is actually here.
+    if command -v rustup >/dev/null; then
+        rustup target list --installed 2>/dev/null | grep -q wasm32-unknown-unknown \
+            || rustup target add wasm32-unknown-unknown
+    elif ! rustc --print target-libdir --target wasm32-unknown-unknown >/dev/null 2>&1; then
+        echo "this toolchain has no wasm32-unknown-unknown target — install it" >&2
+        echo "(Arch: pacman -S rust-wasm · rustup: rustup target add wasm32-unknown-unknown)" >&2
+        exit 1
+    fi
     # A dedicated target dir so a running `trunk serve` can't race this build.
     export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$CACHE/target}"
     export TRUNK_VERSION PUBLIC_URL SKIP_TESTS
@@ -310,6 +321,11 @@ else
 fi
 
 [ -f "$DIST/index.html" ] || { echo "build produced no $DIST/index.html" >&2; exit 1; }
+
+if [ "$BUILD_ONLY" = 1 ]; then
+    echo "==> build ok ($(dist_fingerprint "$DIST" || echo "?")) — publishing nothing (--build-only)"
+    exit 0
+fi
 
 echo "==> publishing to the $BRANCH branch (single orphan commit)"
 touch "$DIST/.nojekyll"   # skip Pages' Jekyll pass

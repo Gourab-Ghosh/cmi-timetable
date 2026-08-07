@@ -293,3 +293,11 @@ regenerates the .ics golden.
   real URL confirms welcome → sync (76 courses, proxy tier) → touch
   long-press drag lands without deselecting → Ctrl+Z reverts → hidden
   `#/developer` reachable → 0 unexpected console errors.
+  Follow-up hardening (asked "can the next publish fail?"): the no-Docker
+  fallback called `rustup` unconditionally, but this machine has NO rustup
+  (Arch ships rust via pacman) — under `set -e` that aborted the whole
+  fallback. It now uses rustup only when present and otherwise probes
+  `rustc --print target-libdir --target wasm32-unknown-unknown`. New
+  `--build-only` rehearses a release without publishing; both paths verified
+  with it (local: 555f09fc…, docker: 778cad60…). Note each build has a unique
+  wasm hash (APP_BUILD_TIME), which is what makes verify_published exact.
