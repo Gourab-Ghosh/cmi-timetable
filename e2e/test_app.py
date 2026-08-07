@@ -1203,6 +1203,96 @@ def t36_out_of_grid_meeting_gets_its_own_column(app):
         "the synthetic column must vanish with its meetings"
 
 
+def t37_catalog_updates_live(app):
+    """Catalog rows update in place — no reload, no tab switch: clash marks
+    appear/disappear as courses are added and removed, a changed meeting
+    time updates the row's times, and 'Clear selection' in My data clears
+    every mark at once. (Rows live in a keyed <For>, so they are never
+    remounted by these changes — the state must be reactive inside them.)"""
+    app.boot("/")
+    app.open_tab("Catalog")
+    app.wait_css("section[aria-label='Catalog'] .filterbar")
+    CAT = "section[aria-label='Catalog']"
+
+    def row_button(code, label):
+        el = app.xpath(
+            f"//section[@aria-label='Catalog']"
+            f"//button[contains(@class,'chip') and starts-with(@aria-label,'{code},')]"
+            f"/ancestor::div[contains(@class,'card')]"
+            f"//button[normalize-space()='{label}']"
+        )
+        # Selenium's auto-scroll puts the element flush under the sticky
+        # header; center it so the click isn't intercepted.
+        app.d.execute_script("arguments[0].scrollIntoView({block:'center'});", el)
+        return el
+
+    def chip_classes(code):
+        return app.chip(code, CAT).get_attribute("class")
+
+    def row_times(code):
+        return app.xpath(
+            f"//section[@aria-label='Catalog']"
+            f"//button[contains(@class,'chip') and starts-with(@aria-label,'{code},')]"
+            f"/ancestor::div[contains(@class,'card')]//span[contains(@class,'mono')]"
+        ).text
+
+    # TOC and ISS both meet Tue+Thu 09:10 in the fixture. Neither is
+    # selected: no clash marks anywhere in the catalog.
+    assert "clash" not in chip_classes("TOC")
+    assert "Tue 09:10" in row_times("TOC"), row_times("TOC")
+
+    # Add both from the catalog itself: the moment the second lands, BOTH
+    # rows must show the clash — same page, no refresh.
+    row_button("TOC", "Add").click()
+    app.wait_toast("Added TOC")
+    assert "clash" not in chip_classes("TOC"), "one course alone cannot clash"
+    row_button("ISS", "Add").click()
+    for code in ("TOC", "ISS"):
+        WebDriverWait(app.d, 5).until(
+            lambda d, c=code: "clash" in chip_classes(c),
+            message=f"{code}'s catalog chip must turn clashing live",
+        )
+    aria = app.chip("TOC", CAT).get_attribute("aria-label")
+    assert "in your timetable" in aria and "clashes with ISS" in aria, aria
+
+    # Change a time while the catalog stays mounted: removing TOC's Tuesday
+    # meeting (details dialog opens over the catalog) must update the row's
+    # printed times in place.
+    toc_chip = app.chip("TOC", CAT)
+    app.d.execute_script("arguments[0].scrollIntoView({block:'center'});", toc_chip)
+    toc_chip.click()
+    dialog = app.wait_css(".dialog")
+    tue = next(r for r in dialog.find_elements(By.CSS_SELECTOR, "ul.meetings li")
+               if "Tue" in r.text)
+    tue.find_element(By.XPATH, ".//button[normalize-space()='Remove this meeting']").click()
+    app.wait_toast("Removed a TOC meeting")
+    app.d.find_element(By.CSS_SELECTOR, "body").send_keys(Keys.ESCAPE)
+    # NB: keep the message static — an f-string here would capture the
+    # PRE-wait value and mislead on timeout.
+    WebDriverWait(app.d, 5).until(
+        lambda d: row_times("TOC") == "Thu 09:10",
+        message="row times must drop Tuesday live",
+    )
+    assert "clash" in chip_classes("TOC"), "Thu 09:10 still clashes with ISS"
+
+    # 'Clear selection' in My data (dialog over the same catalog): every
+    # clash mark and selection marker must vanish at once.
+    app.xpath("//button[normalize-space()='My data']").click()
+    app.wait_css(".dialog")
+    app.xpath("//div[@class='dialog']//button[normalize-space()='Clear selection']").click()
+    app.wait_toast("Selection cleared")
+    app.d.find_element(By.CSS_SELECTOR, "body").send_keys(Keys.ESCAPE)
+    for code in ("TOC", "ISS"):
+        WebDriverWait(app.d, 5).until(
+            lambda d, c=code: "clash" not in chip_classes(c),
+            message=f"{code}'s clash mark must clear live",
+        )
+    assert "in your timetable" not in app.chip("TOC", CAT).get_attribute("aria-label")
+    # The removal override survives a selection clear by design — the row
+    # keeps showing Thursday only.
+    assert row_times("TOC") == "Thu 09:10", row_times("TOC")
+
+
 TESTS = [
     t01_header_sync_button_and_hidden_dev,
     t02_developer_endpoint_only,
@@ -1240,6 +1330,7 @@ TESTS = [
     t34_mobile_longpress_drag,
     t35_remove_meeting,
     t36_out_of_grid_meeting_gets_its_own_column,
+    t37_catalog_updates_live,
 ]
 
 

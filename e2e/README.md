@@ -23,7 +23,7 @@ Environment knobs: `CHROME_BIN` (default `/usr/bin/chromium`), `DIST_DIR`,
 `PORT`, `CARGO_TARGET_DIR` (for the seed generator; defaults to
 `~/.rust-target-e2e`).
 
-Covered flows (36 tests): Sync-now header + hidden developer mode (URL
+Covered flows (37 tests): Sync-now header + hidden developer mode (URL
 endpoint only), `?c=` selection + clash badges/panel (any casing), unknown-
 code warning, credits defaulting to 4 and per-course credit overwrites,
 master-grid ⚠ would-clash markers and clash toast on add, the ⓘ details
@@ -48,7 +48,10 @@ native context menu is suppressed mid-gesture, a browser-cancelled drag
 can't deselect the course, touch drags land, plain taps still toggle),
 removing a meeting (chip leaves the grid, listed as a restorable change,
 survives reloads), and out-of-grid times getting their own clearly-marked
-column instead of being squeezed into the last official slot.
+column instead of being squeezed into the last official slot, and the
+catalog updating in place — clash marks, meeting times and selection state
+change live as courses are added/removed/edited or the whole selection is
+cleared, with no reload or tab switch.
 
 The app ships no timetable data, so the suite derives a snapshot from
 `core/fixtures/` at startup (via core's `snapshot_json` example — cargo must

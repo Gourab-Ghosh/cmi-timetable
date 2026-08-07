@@ -63,7 +63,16 @@ and no committed mirror (fixtures exist only for tests/e2e seed).
   isolated `Effect::new` poking the DOM node, `untrack` for the initial
   value, plain `prop:checked=initial`. Facet option lists must NEVER read
   the filters signal.
-- Planner tab is memoized (`Memo<Tab>`); catalog `<For>` is keyed. Keep it.
+- Planner tab is memoized (`Memo<Tab>`); catalog `<For>` is keyed. Keep it —
+  BUT keyed `<For>` children run once per key in a non-tracked scope, so any
+  selection/override-derived value inside a catalog row must be a
+  Memo/closure (chip()'s selected/clash/aria and catalog_row's times/temp
+  are), or it silently freezes until a remount (R14). Dialogs: DialogHost's
+  closure tracks whatever a dialog body reads at build → stateless dialogs
+  (details, my-data, share, what-changed) rebuild live; export_dialog reads
+  UNTRACKED deliberately (local form state; its download re-reads live).
+- `snapshot.with(…)`, never `snapshot.get()`, in per-chip/per-check paths:
+  the Snapshot carries the gzipped raw pages, and `.get()` deep-clones it.
 - Empty snapshot (`courses.is_empty()`) ⇔ "never synced" (gate guarantees
   non-empty otherwise). `SourceTier::Bundled` is legacy: discard on load.
 - First sync: `adopt()` canonicalizes verbatim URL codes, skips the
@@ -85,11 +94,11 @@ and no committed mirror (fixtures exist only for tests/e2e seed).
 ## 5. Build & test commands (exact)
 
 ```sh
-# native tests (47)
+# native tests (52)
 CARGO_TARGET_DIR=~/.rust-target-e2e cargo test --workspace
 # app build for e2e (never plain dist while trunk serve runs)
 cd app && CARGO_TARGET_DIR=~/.rust-target-e2e trunk build --release --dist dist-e2e
-# e2e (36 tests; self-generates seed via core example, needs cargo on PATH)
+# e2e (37 tests; self-generates seed via core example, needs cargo on PATH)
 cd e2e && DIST_DIR=../app/dist-e2e .venv/bin/python test_app.py
 # screenshots + print PDFs for design review (writes e2e/shots/, gitignored)
 cd e2e && .venv/bin/python shoot.py
@@ -105,7 +114,7 @@ regenerates the .ics golden.
 
 ## 6. Current state
 
-- Tests: 52 native + 36/36 e2e green. Meeting removals: `MeetingOverride.to`
+- Tests: 52 native + 37/37 e2e green. Meeting removals: `MeetingOverride.to`
   is `Option<Meeting>` (None = removed; legacy JSON/share payloads still
   load — present meeting ⇒ Some). Out-of-grid times: `display_slot_grid()`
   (views.rs) = official slots + synthetic `.extra` columns; `column_for`
@@ -282,35 +291,6 @@ regenerates the .ics golden.
   AND would have falsely reported "live"); `--republish` ignored
   `--no-verify` (blocked ~6 min); `--help` truncated the header mid-sentence
   (now prints the whole comment block via awk).
-- **R13 (remove meetings + honest out-of-grid rendering + push-only
-  deploys):** STANDING RULE ADDED to §2 — local commits only, push/deploy
-  only on the user's explicit ask. Features: (1) every meeting row in the
-  details dialog gets "Remove this meeting" (counterpart of Add a meeting):
-  `MeetingOverride.to: Option<Meeting>` (None = removed), remove_meeting()
-  folds into an existing override / deletes user-created ones, changes list
-  says "removed CMI's …" with a Restore button, merge treats CMI-deleted as
-  auto-agree and CMI-moved as a conflict ("Keep it removed" rebases). Legacy
-  storage/share payloads keep loading; old apps opening NEW links fall back
-  to `?c=`. (2) Meetings outside CMI's hours (e.g. 19:30) used to clamp into
-  the last grid column (column_for's nearest-fallback); now
-  display_slot_grid() adds tinted `.extra` columns with the real times (also
-  fixes lunch-gap times). (3) githooks/pre-push runs deploy.sh on pushes of
-  main only — commits never deploy (user requirement); recursion guarded by
-  CMITT_IN_DEPLOY; skip with CMITT_SKIP_DEPLOY=1. e2e t35/t36; merge/share/
-  legacy-compat native tests. An adversarial review then confirmed 5 more
-  defects, all fixed: drops onto synthetic columns silently no-opped while
-  highlighted (perform_drop/move_cursor now resolve via App::display_slot_grid
-  — moved to state.rs; perform_drop returns bool so keyboard Enter can't
-  announce a false "Dropped"); "Keep it removed" on a stale-base removal
-  deleted the override and silently RESTORED the meeting (stale removals are
-  now dropped in merge as inert — UNLESS their base still matches a current
-  official meeting, which keeps suppressing it); master grid clamped custom
-  times into the nearest column with no time shown (now sublabels the real
-  time; the false "official meetings only" comment fixed); a fully-removed
-  course was mislabeled "CMI hasn't put it on the timetable" (tray now
-  requires officially-empty meetings; details dialog says "You've removed
-  all of this course's meetings"). 52 native + 36/36 e2e after fixes. All
-  committed LOCALLY, not pushed.
 - **R12 (no GitHub-side processes):** user aborted an in-progress switch to
   committing build output into `docs/` on main (uncommitted work reverted with
   `git checkout --`) and instead asked that nothing on GitHub be able to
@@ -344,3 +324,53 @@ regenerates the .ics golden.
   `--build-only` rehearses a release without publishing; both paths verified
   with it (local: 555f09fc…, docker: 778cad60…). Note each build has a unique
   wasm hash (APP_BUILD_TIME), which is what makes verify_published exact.
+- **R13 (remove meetings + honest out-of-grid rendering + push-only
+  deploys):** STANDING RULE ADDED to §2 — local commits only, push/deploy
+  only on the user's explicit ask. Features: (1) every meeting row in the
+  details dialog gets "Remove this meeting" (counterpart of Add a meeting):
+  `MeetingOverride.to: Option<Meeting>` (None = removed), remove_meeting()
+  folds into an existing override / deletes user-created ones, changes list
+  says "removed CMI's …" with a Restore button, merge treats CMI-deleted as
+  auto-agree and CMI-moved as a conflict ("Keep it removed" rebases). Legacy
+  storage/share payloads keep loading; old apps opening NEW links fall back
+  to `?c=`. (2) Meetings outside CMI's hours (e.g. 19:30) used to clamp into
+  the last grid column (column_for's nearest-fallback); now
+  display_slot_grid() adds tinted `.extra` columns with the real times (also
+  fixes lunch-gap times). (3) githooks/pre-push runs deploy.sh on pushes of
+  main only — commits never deploy (user requirement); recursion guarded by
+  CMITT_IN_DEPLOY; skip with CMITT_SKIP_DEPLOY=1. e2e t35/t36; merge/share/
+  legacy-compat native tests. An adversarial review then confirmed 5 more
+  defects, all fixed: drops onto synthetic columns silently no-opped while
+  highlighted (perform_drop/move_cursor now resolve via App::display_slot_grid
+  — moved to state.rs; perform_drop returns bool so keyboard Enter can't
+  announce a false "Dropped"); "Keep it removed" on a stale-base removal
+  deleted the override and silently RESTORED the meeting (stale removals are
+  now dropped in merge as inert — UNLESS their base still matches a current
+  official meeting, which keeps suppressing it); master grid clamped custom
+  times into the nearest column with no time shown (now sublabels the real
+  time; the false "official meetings only" comment fixed); a fully-removed
+  course was mislabeled "CMI hasn't put it on the timetable" (tray now
+  requires officially-empty meetings; details dialog says "You've removed
+  all of this course's meetings"). 52 native + 36/36 e2e after fixes. All
+  committed LOCALLY, not pushed.
+- **R14 (catalog updates live):** user report: clash marks in the Catalog
+  only appeared after a refresh. Root cause: catalog rows live in a keyed
+  `<For>` (key = the course's Debug repr) whose children run ONCE per key in
+  a non-tracked scope — chip() froze `selected`/`clash`/aria-label at build
+  time and catalog_row froze the meeting-times text + temp badge. Every
+  other view (grids, halls, My courses, dialogs) builds chips inside
+  reactive closures, which is why only the Catalog went stale. Fix: chip()
+  holds `selected`/`clash`/`aria` as Memos (aria also dedupes clash partners
+  now — two shared meetings used to read "clashes with ISS, ISS");
+  catalog_row memoizes effective_meetings for its times text and temp badge.
+  Covers every mutation path: Add/Remove buttons, master-grid toggles, drag
+  or dialog time changes, meeting removals, and My data → Clear selection.
+  Review extras fixed alongside: branch_chip titles are reactive (a sync can
+  rename a branch without touching any course — retained rows kept the old
+  tooltip); share_dialog + what_changed_dialog read state TRACKED so an
+  undo while they're open rebuilds them (both stateless; export_dialog stays
+  frozen deliberately — it has local form state and its download re-reads
+  live state anyway); selected_courses() and chip() use snapshot.with()
+  instead of .get() (the Snapshot carries gzipped raw pages — a full clone
+  per clash check / per chip was real cost). e2e t37 (verified to FAIL on
+  the pre-fix build). 52 native + 37/37 e2e. Committed locally, not pushed.

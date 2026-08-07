@@ -784,29 +784,33 @@ impl App {
     }
 
     pub fn selected_courses(&self) -> Vec<Course> {
-        let snapshot = self.snapshot.get();
-        self.selection
-            .get()
-            .iter()
-            .map(|code| {
-                snapshot.course(code).cloned().unwrap_or_else(|| {
-                    // Removed upstream but still selected: synthesize a stub
-                    // so it stays visible with its badge.
-                    Course {
-                        code: code.clone(),
-                        name: code.clone(),
-                        instructors: vec![],
-                        branches: vec![],
-                        credits: None,
-                        starts: None,
-                        part_of_semester: None,
-                        optional_flag: false,
-                        status: ScheduleStatus::UnscheduledListed,
-                        meetings: vec![],
-                    }
-                })
+        // `with`, not `get`: this runs per clash/fit check, and cloning the
+        // whole snapshot (raw gzipped pages included) each time is real cost.
+        self.snapshot.with(|snapshot| {
+            self.selection.with(|selection| {
+                selection
+                    .iter()
+                    .map(|code| {
+                        snapshot.course(code).cloned().unwrap_or_else(|| {
+                            // Removed upstream but still selected: synthesize
+                            // a stub so it stays visible with its badge.
+                            Course {
+                                code: code.clone(),
+                                name: code.clone(),
+                                instructors: vec![],
+                                branches: vec![],
+                                credits: None,
+                                starts: None,
+                                part_of_semester: None,
+                                optional_flag: false,
+                                status: ScheduleStatus::UnscheduledListed,
+                                meetings: vec![],
+                            }
+                        })
+                    })
+                    .collect()
             })
-            .collect()
+        })
     }
 
     /// Interval-overlap clash detection across all selected meetings, after

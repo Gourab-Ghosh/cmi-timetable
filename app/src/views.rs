@@ -1126,16 +1126,29 @@ fn catalog(app: App) -> impl IntoView {
 fn catalog_row(app: App, course: Course) -> impl IntoView {
     let code = course.code.clone();
     let toggle_code = code.clone();
-    let eff = app.effective_meetings(&course);
-    let meetings_text = if eff.is_empty() {
-        "no fixed slot".to_string()
-    } else {
-        eff.iter()
-            .map(|e| format!("{} {}", e.meeting.day.short(), e.meeting.slot.start_label()))
-            .collect::<Vec<_>>()
-            .join(" · ")
+    // Rows live in a keyed <For>, so this body runs once per course and is
+    // NOT re-run when selection or overrides change — anything derived from
+    // those signals must be a memo/closure, or it stays frozen until the
+    // page is reloaded (the chip handles its own selection/clash state).
+    let eff = {
+        let course = course.clone();
+        Memo::new(move |_| app.effective_meetings(&course))
     };
-    let temp = eff.iter().any(|e| e.meeting.temp_booking);
+    let meetings_text = move || {
+        eff.with(|eff| {
+            if eff.is_empty() {
+                "no fixed slot".to_string()
+            } else {
+                eff.iter()
+                    .map(|e| {
+                        format!("{} {}", e.meeting.day.short(), e.meeting.slot.start_label())
+                    })
+                    .collect::<Vec<_>>()
+                    .join(" · ")
+            }
+        })
+    };
+    let temp = move || eff.with(|eff| eff.iter().any(|e| e.meeting.temp_booking));
 
     view! {
         <div class="card">
@@ -1157,7 +1170,9 @@ fn catalog_row(app: App, course: Course) -> impl IntoView {
                     .then(|| view! { <span class="badge warn">"unscheduled"</span> })}
                 {(course.status == ScheduleStatus::ScheduledNoBranch)
                     .then(|| view! { <span class="badge warn">"no branch"</span> })}
-                {temp.then(|| view! { <span class="badge warn">"temporary booking"</span> })}
+                {move || {
+                    temp().then(|| view! { <span class="badge warn">"temporary booking"</span> })
+                }}
                 <button
                     class="btn small"
                     class:ghost-accent=move || !app.is_selected(&toggle_code)

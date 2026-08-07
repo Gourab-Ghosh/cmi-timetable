@@ -60,19 +60,31 @@ impl ChipProps {
 }
 
 pub fn chip(app: App, p: ChipProps) -> impl IntoView {
-    let snapshot = app.snapshot.get();
-    let course = snapshot.course(&p.code);
-    let name = course.map(|c| c.name.clone()).unwrap_or_default();
-    let branches = course.map(|c| c.branches.clone()).unwrap_or_default();
+    // `with`, not `get`: the snapshot carries the gzipped raw pages, and a
+    // full clone per chip (hundreds per grid rebuild) is real jank.
+    let (name, branches) = app.snapshot.with(|s| {
+        let course = s.course(&p.code);
+        (
+            course.map(|c| c.name.clone()).unwrap_or_default(),
+            course.map(|c| c.branches.clone()).unwrap_or_default(),
+        )
+    });
     let hue = hues::course_hue(&branches);
     let neutral = branches.is_empty();
-    let selected = app.is_selected(&p.code);
 
-    let (clash, overridden, user_created, aria_when, hall_text, temp) = match &p.eff {
+    // Selection and clash state are memos, not values: in keyed lists (the
+    // catalog's <For>) a chip outlives the render that built it, so anything
+    // frozen here would go stale until a remount. Grid chips are rebuilt on
+    // every change anyway; there the memos are just a cheap indirection.
+    let selected = {
+        let code = p.code.clone();
+        Memo::new(move |_| app.is_selected(&code))
+    };
+
+    let (overridden, user_created, aria_when, hall_text, temp) = match &p.eff {
         Some(eff) => {
             let m = &eff.meeting;
             (
-                selected && app.meeting_has_clash(&p.code, m),
                 eff.overridden,
                 eff.user_created,
                 format!(
@@ -85,29 +97,26 @@ pub fn chip(app: App, p: ChipProps) -> impl IntoView {
                 m.temp_booking,
             )
         }
-        None => (
-            selected && app.course_has_clash(&p.code),
-            false,
-            false,
-            String::new(),
-            String::new(),
-            false,
-        ),
+        None => (false, false, String::new(), String::new(), false),
     };
 
-    let clash_with: Vec<String> = if clash {
-        app.clashes()
-            .iter()
-            .filter(|c| c.a == p.code || c.b == p.code)
-            .map(|c| if c.a == p.code { c.b.clone() } else { c.a.clone() })
-            .collect()
-    } else {
-        Vec::new()
+    let clash = {
+        let code = p.code.clone();
+        let meeting = p.eff.as_ref().map(|e| e.meeting.clone());
+        Memo::new(move |_| {
+            selected.get()
+                && match &meeting {
+                    Some(m) => app.meeting_has_clash(&code, m),
+                    None => app.course_has_clash(&code),
+                }
+        })
     };
 
-    let mut aria = format!("{}, {}{}", p.code, name, aria_when);
+    // Static aria prefix (facts about this chip's meeting); the dynamic
+    // suffix — selection and clash partners — is appended in the memo below.
+    let mut aria_pre = format!("{}, {}{}", p.code, name, aria_when);
     if p.eff.is_some() {
-        aria.push_str(&format!(
+        aria_pre.push_str(&format!(
             ", {}",
             if hall_text == "TBA" {
                 "hall to be announced".to_string()
@@ -117,29 +126,54 @@ pub fn chip(app: App, p: ChipProps) -> impl IntoView {
         ));
     }
     if temp {
-        aria.push_str(", temporary booking");
+        aria_pre.push_str(", temporary booking");
     }
     if overridden {
         if user_created {
-            aria.push_str(", your custom meeting (not on CMI's timetable)");
+            aria_pre.push_str(", your custom meeting (not on CMI's timetable)");
         } else if let Some(base) = p.eff.as_ref().and_then(|e| e.base.as_ref()) {
-            aria.push_str(&format!(
+            aria_pre.push_str(&format!(
                 ", your custom time — overwrites CMI's {}",
                 base.describe()
             ));
         } else {
-            aria.push_str(", overridden");
+            aria_pre.push_str(", overridden");
         }
     }
-    if selected {
-        aria.push_str(", in your timetable");
-    }
-    if !clash_with.is_empty() {
-        aria.push_str(&format!(", clashes with {}", clash_with.join(", ")));
-    }
-    if p.warn_wont_fit {
-        aria.push_str(", would clash with your current timetable");
-    }
+    let aria = {
+        let code = p.code.clone();
+        let warn_wont_fit = p.warn_wont_fit;
+        Memo::new(move |_| {
+            let mut aria = aria_pre.clone();
+            if selected.get() {
+                aria.push_str(", in your timetable");
+            }
+            if clash.get() {
+                // Distinct partners: two shared meetings = two ClashPairs,
+                // but "clashes with ISS, ISS" helps nobody.
+                let mut clash_with: Vec<String> = Vec::new();
+                for c in app.clashes() {
+                    let other = if c.a == code {
+                        c.b
+                    } else if c.b == code {
+                        c.a
+                    } else {
+                        continue;
+                    };
+                    if !clash_with.contains(&other) {
+                        clash_with.push(other);
+                    }
+                }
+                if !clash_with.is_empty() {
+                    aria.push_str(&format!(", clashes with {}", clash_with.join(", ")));
+                }
+            }
+            if warn_wont_fit {
+                aria.push_str(", would clash with your current timetable");
+            }
+            aria
+        })
+    };
 
     let spec = DragSpec {
         code: p.code.clone(),
@@ -169,17 +203,18 @@ pub fn chip(app: App, p: ChipProps) -> impl IntoView {
         p.sublabel.clone()
     };
 
+    let from_master = p.from_master;
     view! {
         <button
             class="chip"
-            class:clash=clash
+            class:clash=move || clash.get()
             class:overridden=overridden
-            class:selected=selected && p.from_master
+            class:selected=move || selected.get() && from_master
             class:neutral=neutral
             style=format!("--hue:{hue}")
             class:draggable=move || draggable && app.edit_mode.get()
-            aria-label=aria.clone()
-            title=aria
+            aria-label=move || aria.get()
+            title=move || aria.get()
             on:pointerdown=move |ev| {
                 if draggable && app.edit_mode.get_untracked() {
                     dnd::chip_pointer_down(app, &ev, spec.clone());
@@ -210,8 +245,10 @@ pub fn chip(app: App, p: ChipProps) -> impl IntoView {
                 }
             }
         >
-            {(selected && p.from_master)
-                .then(|| view! { <span class="sel-mark" aria-hidden="true">"✓"</span> })}
+            {move || {
+                (selected.get() && from_master)
+                    .then(|| view! { <span class="sel-mark" aria-hidden="true">"✓"</span> })
+            }}
             {p.warn_wont_fit
                 .then(|| view! { <span class="wontfit" aria-hidden="true">"⚠"</span> })}
             <span class="code">{p.code.clone()}</span>
@@ -222,15 +259,28 @@ pub fn chip(app: App, p: ChipProps) -> impl IntoView {
 }
 
 pub fn branch_chip(app: App, code: &str) -> impl IntoView {
-    let title = app
-        .snapshot
-        .with(|s| s.branch(code).map(|b| b.title.clone()))
-        .unwrap_or_default();
-    let hue = hues::branch_hue(code);
-    let label = format!("{code} · {title}");
+    let code = code.to_string();
+    let hue = hues::branch_hue(&code);
+    // Reactive: a sync can rename a branch without touching any course, and
+    // retained rows (catalog <For>) would otherwise keep the old tooltip.
+    let label = {
+        let code = code.clone();
+        Memo::new(move |_| {
+            let title = app
+                .snapshot
+                .with(|s| s.branch(&code).map(|b| b.title.clone()))
+                .unwrap_or_default();
+            format!("{code} · {title}")
+        })
+    };
     view! {
-        <span class="chip" style=format!("--hue:{hue}") title=label.clone() aria-label=label>
-            {code.to_string()}
+        <span
+            class="chip"
+            style=format!("--hue:{hue}")
+            title=move || label.get()
+            aria-label=move || label.get()
+        >
+            {code.clone()}
         </span>
     }
 }
@@ -2390,8 +2440,11 @@ fn export_dialog(app: App, scope: Option<String>) -> impl IntoView {
 // ---------------------------------------------------------------------------
 
 fn share_dialog(app: App) -> impl IntoView {
-    let selection = app.selection.get_untracked();
-    let overrides = app.overrides.get_untracked();
+    // Tracked: the dialog is stateless, so if the state changes while it is
+    // open (Ctrl+Z reaches the document handler), DialogHost rebuilds it and
+    // the copy buttons can never hand out a link to an undone timetable.
+    let selection = app.selection.get();
+    let overrides = app.overrides.get();
     let c_param = ttcore::share::selection_to_c_param(&selection);
     let plain = domx::share_url(&format!("?c={c_param}"));
     let with_times = domx::share_url(&format!(
@@ -2456,9 +2509,11 @@ fn share_dialog(app: App) -> impl IntoView {
 // ---------------------------------------------------------------------------
 
 fn what_changed_dialog(app: App) -> impl IntoView {
-    let diff = app.what_changed.get_untracked().unwrap_or_default();
-    let snapshot = app.snapshot.get_untracked();
-    let selection = app.selection.get_untracked();
+    // Tracked (stateless dialog): undo while open must not leave the
+    // "in your timetable" badges disagreeing with the live chips beside them.
+    let diff = app.what_changed.get().unwrap_or_default();
+    let snapshot = app.snapshot.get();
+    let selection = app.selection.get();
     let mine = move |code: &str| selection.iter().any(|c| c == code);
 
     // Courses in the user's own timetable always come first.
