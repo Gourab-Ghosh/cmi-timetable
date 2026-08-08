@@ -720,7 +720,8 @@ impl App {
     // -- credits -------------------------------------------------------------
 
     /// Credits used everywhere: your override, else CMI's stated value,
-    /// else the campus default of 4.
+    /// else the duration-aware assumption (1 credit per month for
+    /// sub-semester spans, otherwise the campus default of 4).
     pub fn course_credits(&self, course: &Course) -> u8 {
         self.overrides
             .with(|o| o.credits_for(&course.code))

@@ -1293,6 +1293,41 @@ def t37_catalog_updates_live(app):
     assert row_times("TOC") == "Thu 09:10", row_times("TOC")
 
 
+def t38_duration_based_credits(app):
+    """A course annotated '(Oct-Nov)' runs 2 months, so its unstated credits
+    are assumed at 2 (one per month) instead of the campus default 4;
+    stated credits are never second-guessed. My courses breaks the
+    selection down by credit value."""
+    app.boot("/?c=MATH,TOC,RDBM")  # MATH (Oct-Nov, unstated) TOC (unstated) RDBM (2 credits)
+    app.open_tab("My courses")
+    section = app.wait_css("section[aria-label='My courses']")
+    # TOC assumed 4 + MATH assumed 2 (Oct-Nov) + RDBM stated 2 = 8.
+    assert "Total credits: 8" in section.text, section.text
+    # Counts of courses at each credit value, heaviest first.
+    assert "1 × 4 cr" in section.text, section.text
+    assert "2 × 2 cr" in section.text, section.text
+    # Two courses carry assumptions (at different values), one is stated.
+    assert "2 courses with assumed credits" in section.text, section.text
+
+    # The MATH card's credits badge says 2 and explains why.
+    badge = app.xpath(
+        "//section[@aria-label='My courses']//div[contains(@class,'card')]"
+        "[.//button[starts-with(@aria-label,'MATH,')]]"
+        "//span[contains(@class,'badge')][contains(normalize-space(),'cr')]"
+    )
+    assert badge.text.strip() == "2 cr", badge.text
+    assert "Oct-Nov duration" in badge.get_attribute("title"), \
+        badge.get_attribute("title")
+
+    # The details dialog spells the same assumption out.
+    chip = app.chip("MATH", "section[aria-label='My courses']")
+    app.d.execute_script("arguments[0].scrollIntoView({block:'center'});", chip)
+    chip.click()
+    dialog = app.wait_css(".dialog")
+    assert "assumed from its Oct-Nov duration" in dialog.text, dialog.text[:400]
+    app.d.find_element(By.CSS_SELECTOR, "body").send_keys(Keys.ESCAPE)
+
+
 TESTS = [
     t01_header_sync_button_and_hidden_dev,
     t02_developer_endpoint_only,
@@ -1331,6 +1366,7 @@ TESTS = [
     t35_remove_meeting,
     t36_out_of_grid_meeting_gets_its_own_column,
     t37_catalog_updates_live,
+    t38_duration_based_credits,
 ]
 
 

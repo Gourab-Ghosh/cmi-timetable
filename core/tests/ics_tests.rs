@@ -115,6 +115,35 @@ fn part_of_semester_clamps_range() {
 }
 
 #[test]
+fn single_month_note_clamps_both_ends() {
+    // "(Sep)" runs September only: events start at the first matching
+    // weekday in September AND stop recurring at its end — not the
+    // semester's.
+    let course = IcsCourse {
+        code: "SEPT".to_string(),
+        name: "September Topics(Sep)".to_string(),
+        instructors: vec![],
+        branches: vec![],
+        meetings: vec![mtg(Day::Mon, 550, 625, "Lecture Hall 1")],
+        starts: None,
+        part_of_semester: Some("Sep".to_string()),
+    };
+    let opts = IcsOptions {
+        range_start: CivilDate::new(2026, 8, 3),
+        range_end: CivilDate::new(2026, 11, 30),
+        alarm: false,
+        app_url: String::new(),
+        dtstamp: "20260805T120000Z".to_string(),
+        calendar_name: "test".to_string(),
+    };
+    let ics = build_ics(&[course], &opts);
+    // First Monday on/after 1 Sep 2026 is 7 Sep.
+    assert!(ics.contains("DTSTART;TZID=Asia/Kolkata:20260907T091000"), "{ics}");
+    // Recurrence ends with September, not on 30 Nov.
+    assert!(ics.contains("UNTIL=20260930T182959Z"), "{ics}");
+}
+
+#[test]
 fn year_crossing_semester_keeps_events() {
     // A Dec–Mar semester crosses the calendar year: a "(Jan-Feb)" course
     // must resolve its months into the FOLLOWING year, not vanish.

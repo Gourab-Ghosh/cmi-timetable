@@ -11,13 +11,11 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::LazyLock;
 
 static STARTS_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?i)\(\s*starts?\s+(\d{1,2})\s+([A-Za-z]{3,})\s*\)").unwrap()
+    Regex::new(r"(?i)\(\s*starts?\s+(\d{1,2})(?:st|nd|rd|th)?\s+([A-Za-z]{3,})\.?\s*\)").unwrap()
 });
 static CREDITS_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?i)\(\s*(\d+)\s*credits?\s*\)").unwrap());
-static PART_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"\(\s*([A-Z][a-z]{2})\s*[-\u{2013}]\s*([A-Z][a-z]{2})\s*\)").unwrap()
-});
+static PAREN_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\(([^()]*)\)").unwrap());
 
 /// Structured fields extracted from a verbatim course name. The name itself
 /// is always preserved for display.
@@ -26,6 +24,40 @@ pub struct NameNotes {
     pub starts: Option<(u8, String)>,
     pub credits: Option<u8>,
     pub part_of_semester: Option<String>,
+}
+
+/// Read a parenthesized note as a month span. Accepts what a hand-edited
+/// page might plausibly say — "Oct-Nov", "Oct – Nov", "October to November",
+/// "Sept." — and rejects everything else by requiring every token to BE a
+/// month word (so "(Haskell)" and "(Maroon)" never match). Normalized to
+/// the app's "Oct-Nov" / "Oct" form, which date-consuming code (ics) and
+/// `Course::months_span` both understand.
+fn parse_month_span(inner: &str) -> Option<String> {
+    let trimmed = inner.trim();
+    // A dangling separator ("Oct-", "-Nov", "until Nov") is an INCOMPLETE
+    // range, not a one-month note — misreading it would shrink the course
+    // to one month of credits and calendar. Leave it unparsed.
+    if trimmed.starts_with(['-', '\u{2013}', '\u{2014}'])
+        || trimmed.ends_with(['-', '\u{2013}', '\u{2014}'])
+    {
+        return None;
+    }
+    let tokens: Vec<&str> = trimmed
+        .split(|c: char| c == '-' || c == '\u{2013}' || c == '\u{2014}' || c.is_whitespace())
+        .filter(|t| !t.is_empty())
+        .collect();
+    let month = crate::date::month_from_word;
+    let name = crate::date::month_short_name;
+    match tokens.as_slice() {
+        [a] => Some(name(month(a)?).to_string()),
+        [a, b] => Some(format!("{}-{}", name(month(a)?), name(month(b)?))),
+        [a, sep, b] if ["to", "till", "until", "through"]
+            .contains(&sep.to_ascii_lowercase().as_str()) =>
+        {
+            Some(format!("{}-{}", name(month(a)?), name(month(b)?)))
+        }
+        _ => None,
+    }
 }
 
 pub fn extract_name_notes(name: &str) -> NameNotes {
@@ -38,12 +70,14 @@ pub fn extract_name_notes(name: &str) -> NameNotes {
     if let Some(caps) = CREDITS_RE.captures(name) {
         notes.credits = caps.get(1).unwrap().as_str().parse::<u8>().ok();
     }
-    if let Some(caps) = PART_RE.captures(name) {
-        notes.part_of_semester = Some(format!(
-            "{}-{}",
-            caps.get(1).unwrap().as_str(),
-            caps.get(2).unwrap().as_str()
-        ));
+    // Month spans: check every parenthesized note, not one rigid "(Xxx-Yyy)"
+    // shape. The starts/credits notes never parse as pure month spans (they
+    // carry digits/words), so order doesn't matter.
+    for caps in PAREN_RE.captures_iter(name) {
+        if let Some(span) = parse_month_span(caps.get(1).unwrap().as_str()) {
+            notes.part_of_semester = Some(span);
+            break;
+        }
     }
     notes
 }
@@ -206,13 +240,39 @@ pub fn join_pages(tt: &TimetablePage, hp: &HallsPage) -> Joined {
                     (Some(halls[0].0.clone()), halls[0].1)
                 }
                 None => {
-                    warnings.push(format!(
-                        "{code}: no hall found for {} {} — shown as Hall TBA",
-                        day.short(),
-                        slot.label()
-                    ));
-                    stats.meetings_without_hall += 1;
-                    (None, false)
+                    // The two pages are edited independently, so their slot
+                    // times can drift by a few minutes. Before giving up,
+                    // take the nearest OVERLAPPING booking for the same
+                    // course and day (and mark it consumed so it isn't
+                    // re-reported as an ignored extra).
+                    let overlap = hall_by_key
+                        .iter()
+                        .filter(|((c, d, s), _)| {
+                            c == code && d == day && s.overlaps(slot)
+                        })
+                        .min_by_key(|((_, _, s), _)| s.start_min.abs_diff(slot.start_min))
+                        .map(|(k, v)| (k.clone(), v.clone()));
+                    match overlap {
+                        Some((k, halls)) => {
+                            warnings.push(format!(
+                                "{code}: hall matched by overlap for {} — pages say {} vs {}",
+                                day.short(),
+                                k.2.label(),
+                                slot.label()
+                            ));
+                            consumed.insert(k);
+                            (Some(halls[0].0.clone()), halls[0].1)
+                        }
+                        None => {
+                            warnings.push(format!(
+                                "{code}: no hall found for {} {} — shown as Hall TBA",
+                                day.short(),
+                                slot.label()
+                            ));
+                            stats.meetings_without_hall += 1;
+                            (None, false)
+                        }
+                    }
                 }
             };
             meetings.push(crate::model::Meeting {

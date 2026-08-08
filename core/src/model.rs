@@ -5,7 +5,13 @@ use serde::{Deserialize, Serialize};
 /// Bump whenever parsing logic changes in a way that should trigger a
 /// re-parse of the raw HTML stored inside a cached snapshot.
 /// v2: looser semester-label detection + last-colon halls-legend split.
-pub const PARSER_VERSION: u32 = 2;
+/// v3: drift-tolerant parsing — day-name variants (Tues/Thurs/case/
+/// decoration), composition-based grid classification, dot/am-pm/"to" time
+/// formats, pipe-less space-aligned grids, ragged-row nudging, month-span
+/// notes in more forms (single month, full names), duration-aware assumed
+/// credits, semantic semester-label comparison, garbage-detection gate
+/// floors, hall matching by overlap.
+pub const PARSER_VERSION: u32 = 3;
 
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
@@ -55,6 +61,54 @@ impl Day {
             "Sunday" => Some(Day::Sun),
             _ => None,
         }
+    }
+
+    /// Tolerant matcher for grid ROW LABELS (from_short/from_full stay exact
+    /// for canonical tokens): case-insensitive, accepts the full name, the
+    /// 3-letter form and the common English variants (Tues/Weds/Thur/Thurs),
+    /// and allows only decoration after the day word — "Monday (10 Aug)" and
+    /// "Mon." match, "Monitor Room" and a "Mon-Fri" RANGE never do.
+    pub fn from_label(label: &str) -> Option<Day> {
+        let trimmed = label.trim();
+        let word: String = trimmed
+            .chars()
+            .take_while(|c| c.is_ascii_alphabetic())
+            .collect();
+        let day = match word.to_ascii_lowercase().as_str() {
+            "mon" | "monday" => Day::Mon,
+            "tue" | "tues" | "tuesday" => Day::Tue,
+            "wed" | "weds" | "wednesday" => Day::Wed,
+            "thu" | "thur" | "thurs" | "thursday" => Day::Thu,
+            "fri" | "friday" => Day::Fri,
+            "sat" | "saturday" => Day::Sat,
+            "sun" | "sunday" => Day::Sun,
+            _ => return None,
+        };
+        // Only decoration may follow the day word: punctuation, digits, a
+        // parenthetical. A joiner means a RANGE of days ("Mon-Fri"), a
+        // following word means this isn't a day row at all, and a SECOND
+        // day word anywhere ("Mon, Wed") means a list — claiming such a
+        // row for one day would silently drop the other's classes.
+        let rest = trimmed[word.len()..].trim_start();
+        match rest.chars().next() {
+            Some('-' | '\u{2013}' | '\u{2014}' | '/' | '&' | '+') => return None,
+            Some(c) if c.is_ascii_alphabetic() => return None,
+            _ => {}
+        }
+        let names_second_day = rest
+            .split(|c: char| !c.is_ascii_alphabetic())
+            .any(|w| {
+                matches!(
+                    w.to_ascii_lowercase().as_str(),
+                    "mon" | "monday" | "tue" | "tues" | "tuesday" | "wed" | "weds"
+                        | "wednesday" | "thu" | "thur" | "thurs" | "thursday" | "fri"
+                        | "friday" | "sat" | "saturday" | "sun" | "sunday"
+                )
+            });
+        if names_second_day {
+            return None;
+        }
+        Some(day)
     }
 
     pub fn short(&self) -> &'static str {
@@ -183,8 +237,9 @@ pub struct Course {
     /// May be empty for `ScheduledNoBranch`.
     pub branches: Vec<BranchCode>,
     /// From "(2 credits)"; `None` when CMI doesn't state it — display code
-    /// should use [`Course::effective_credits`], which assumes the campus
-    /// default of 4.
+    /// should use [`Course::effective_credits`], which assumes one credit
+    /// per month for month-span courses and the campus default of 4
+    /// otherwise.
     pub credits: Option<u8>,
     /// From "(starts 12 Aug)" → `(12, "Aug")`.
     pub starts: Option<(u8, String)>,
@@ -202,14 +257,52 @@ impl Course {
     /// courses default to 4.
     pub const DEFAULT_CREDITS: u8 = 4;
 
-    /// The stated credits, or the campus default of 4.
-    pub fn effective_credits(&self) -> u8 {
-        self.credits.unwrap_or(Self::DEFAULT_CREDITS)
+    /// How many calendar months a "(Oct-Nov)" / "(Sep)" note spans,
+    /// inclusive; wraps across December ("Nov-Jan" → 3). `None` without a
+    /// parseable note.
+    pub fn months_span(&self) -> Option<u8> {
+        let part = self.part_of_semester.as_deref()?;
+        let mut months = part.split(['-', '\u{2013}']);
+        let first = crate::date::month_from_token(months.next()?)?;
+        match months.next() {
+            None => Some(1),
+            Some(tok) => {
+                let second = crate::date::month_from_token(tok)?;
+                Some((i16::from(second) - i16::from(first)).rem_euclid(12) as u8 + 1)
+            }
+        }
     }
 
-    /// True when the credits are the assumed default rather than stated.
+    /// The credit value assumed when CMI states none: a course annotated
+    /// with a month span shorter than a full semester counts one credit per
+    /// month ("(Oct-Nov)" → 2, "(Sep)" → 1) — CMI's credits track contact
+    /// time; a longer or absent span gets the campus default of 4.
+    pub fn assumed_credits(&self) -> u8 {
+        match self.months_span() {
+            Some(n) if n < Self::DEFAULT_CREDITS => n.max(1),
+            _ => Self::DEFAULT_CREDITS,
+        }
+    }
+
+    /// The stated credits, or the duration-aware assumption above.
+    pub fn effective_credits(&self) -> u8 {
+        self.credits.unwrap_or_else(|| self.assumed_credits())
+    }
+
+    /// True when the credits are the assumed value rather than stated.
     pub fn credits_assumed(&self) -> bool {
         self.credits.is_none()
+    }
+
+    /// The month-span note ("Oct-Nov") when it is what determined the
+    /// assumed credits — for UI copy explaining WHY the assumption isn't 4.
+    pub fn duration_note(&self) -> Option<&str> {
+        (self.credits.is_none()
+            && self
+                .months_span()
+                .is_some_and(|n| n < Self::DEFAULT_CREDITS))
+        .then(|| self.part_of_semester.as_deref())
+        .flatten()
     }
 }
 

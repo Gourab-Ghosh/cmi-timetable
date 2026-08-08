@@ -730,20 +730,42 @@ fn my_courses(app: App) -> impl IntoView {
             .iter()
             .map(|c| u32::from(app.course_credits(c)))
             .sum();
+        // How many courses at each credit value (user overrides included),
+        // heaviest first: "2 × 4 cr · 1 × 2 cr".
+        let mut by_credit: std::collections::BTreeMap<u8, usize> =
+            std::collections::BTreeMap::new();
+        for c in &courses {
+            *by_credit.entry(app.course_credits(c)).or_default() += 1;
+        }
         let custom = courses
             .iter()
             .filter(|c| app.credits_custom(&c.code).is_some())
             .count();
-        let assumed = courses
+        // The assumed value now varies (month-span courses assume 1/month),
+        // so group the disclaimer by value instead of hardcoding "at 4".
+        let assumed_vals: Vec<u8> = courses
             .iter()
             .filter(|c| c.credits_assumed() && app.credits_custom(&c.code).is_none())
-            .count();
-        let mut notes: Vec<String> = Vec::new();
-        if assumed > 0 {
-            notes.push(format!(
-                "{assumed} course{} assumed at 4 (CMI doesn't list credits)",
-                if assumed == 1 { "" } else { "s" },
-            ));
+            .map(|c| c.assumed_credits())
+            .collect();
+        let mut notes: Vec<String> = by_credit
+            .iter()
+            .rev()
+            .map(|(cr, n)| format!("{n} × {cr} cr"))
+            .collect();
+        match assumed_vals.as_slice() {
+            [] => {}
+            [first, rest @ ..] if rest.iter().all(|v| v == first) => {
+                let n = assumed_vals.len();
+                notes.push(format!(
+                    "{n} course{} assumed at {first} (CMI doesn't list credits)",
+                    if n == 1 { "" } else { "s" },
+                ));
+            }
+            _ => notes.push(format!(
+                "{} courses with assumed credits (CMI doesn't list them)",
+                assumed_vals.len(),
+            )),
         }
         if custom > 0 {
             notes.push(format!("{custom} set by you"));
@@ -803,6 +825,7 @@ fn course_card(app: App, course: Course) -> impl IntoView {
     let cr_code_title = code.clone();
     let cr_official = course.effective_credits();
     let cr_assumed = course.credits_assumed();
+    let cr_duration = course.duration_note().map(str::to_string);
     let notes = {
         let mut notes: Vec<String> = Vec::new();
         if let Some((d, m)) = &course.starts {
@@ -830,6 +853,8 @@ fn course_card(app: App, course: Course) -> impl IntoView {
                                 "set by you — CMI: {cr_official}{}",
                                 if cr_assumed { " (assumed)" } else { "" },
                             )
+                        } else if let Some(span) = &cr_duration {
+                            format!("assumed from its {span} duration — CMI doesn't state credits")
                         } else if cr_assumed {
                             "assumed — CMI doesn't state it".to_string()
                         } else {

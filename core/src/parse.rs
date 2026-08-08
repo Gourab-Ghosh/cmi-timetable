@@ -6,7 +6,7 @@
 //! extraction in /app) and natively (scraper extraction in /sync and tests).
 
 use crate::model::{Branch, Day, PreClassification, Slot};
-use crate::textgrid::{parse_cell, parse_grid, RawGrid};
+use crate::textgrid::{parse_cell, parse_grid, RawGrid, RawRow};
 use regex_lite::Regex;
 use std::sync::LazyLock;
 
@@ -68,31 +68,73 @@ pub fn find_semester_label(text: &str) -> Option<String> {
 }
 
 /// Classify a `<pre>` by content, never by DOM position or CSS.
+///
+/// Grid kind is decided by COMPOSITION, not by which spelling of the day
+/// name appears (a page edit from "Mon" to "Monday" must not flip the
+/// kind): in a branch grid the day-labeled rows carry the cell data; in the
+/// hall grid the day lines are bare section headers and the data lives in
+/// the (more numerous) hall-labeled rows beneath them.
 pub fn classify(text: &str) -> (PreKind, Option<RawGrid>) {
     if let Some(grid) = parse_grid(text) {
-        let has_full_day = grid
+        let has_data = |r: &&RawRow| r.cells.iter().any(|c| !c.trim().is_empty());
+        let day_rows = grid
             .rows
             .iter()
-            .any(|r| Day::from_full(&r.label).is_some());
-        let has_short_day = grid
+            .filter(|r| Day::from_label(&r.label).is_some())
+            .count();
+        if day_rows == 0 {
+            return (PreKind::Other, None);
+        }
+        let day_data_rows = grid
             .rows
             .iter()
-            .any(|r| Day::from_short(&r.label).is_some());
-        if has_full_day {
+            .filter(|r| Day::from_label(&r.label).is_some())
+            .filter(has_data)
+            .count();
+        let non_day_data_rows = grid
+            .rows
+            .iter()
+            .filter(|r| !r.label.is_empty() && Day::from_label(&r.label).is_none())
+            .filter(has_data)
+            .count();
+        // Whoever carries MORE of the data names the kind; ties go to the
+        // day rows, so a stray non-day row in a branch grid (skipped with a
+        // warning downstream) can't flip it, while one accidental cell on a
+        // hall grid's day line (warned + ignored downstream) can't either.
+        if day_data_rows < non_day_data_rows {
             return (PreKind::HallGrid, Some(grid));
         }
-        if has_short_day {
-            return (PreKind::BranchGrid, Some(grid));
-        }
-        return (PreKind::Other, None);
+        return (PreKind::BranchGrid, Some(grid));
     }
     let non_empty: Vec<&str> = text.lines().filter(|l| !l.trim().is_empty()).collect();
-    if !non_empty.is_empty() {
-        let matching = non_empty
+    // Decoration lines ("* Note …", "+ Optional course.") are neither
+    // legend entries nor evidence against a legend — keep them out of the
+    // ratio's denominator so a short legend with a footnote still counts.
+    let substantive: Vec<&str> = non_empty
+        .iter()
+        .filter(|l| !matches!(l.trim_start().chars().next(), Some('*' | '+')))
+        .copied()
+        .collect();
+    if !substantive.is_empty() {
+        let matching = substantive
             .iter()
             .filter(|l| LEGEND_LINE_RE.is_match(l))
             .count();
-        if matching >= 2 && matching * 10 >= non_empty.len() * 6 {
+        let single_clean = matching == 1 && non_empty.len() <= 2 && {
+            // One-line legends exist (a branch with one course): accept a
+            // lone match only when the code LOOKS like a course code —
+            // all caps/digits ("TOC", "C01"), never a prose word, so a
+            // stray "Note: rooms may change" block can't become a course.
+            substantive.iter().any(|l| {
+                LEGEND_LINE_RE.captures(l).is_some_and(|c| {
+                    let code = c.get(1).unwrap().as_str();
+                    let name = c.get(2).unwrap().as_str();
+                    code.chars().all(|ch| ch.is_ascii_uppercase() || ch.is_ascii_digit())
+                        && !name.trim().is_empty()
+                })
+            })
+        };
+        if (matching >= 2 && matching * 10 >= substantive.len() * 6) || single_clean {
             return (PreKind::Legend, None);
         }
     }
@@ -261,7 +303,7 @@ pub fn parse_timetable_page(blocks: &[PreBlock]) -> TimetablePage {
                 let mut days = Vec::new();
                 let mut occurrences = Vec::new();
                 for row in &grid.rows {
-                    let Some(day) = Day::from_short(&row.label) else {
+                    let Some(day) = Day::from_label(&row.label) else {
                         page.warnings.push(format!(
                             "branch {code}: row label {:?} is not a day; row skipped",
                             row.label
@@ -406,7 +448,7 @@ pub fn parse_halls_page(blocks: &[PreBlock]) -> HallsPage {
 
                 let mut current_day: Option<Day> = None;
                 for row in &grid.rows {
-                    if let Some(day) = Day::from_full(&row.label) {
+                    if let Some(day) = Day::from_label(&row.label) {
                         current_day = Some(day);
                         if !page.days.contains(&day) {
                             page.days.push(day);

@@ -914,7 +914,11 @@ pub fn filter_bar(app: App, result_count: Signal<usize>) -> impl IntoView {
                     values.dedup();
                     values
                         .into_iter()
-                        .map(|n| (n.to_string(), format!("{n} credits")))
+                        .map(|n| {
+                            let label =
+                                format!("{n} credit{}", if n == 1 { "" } else { "s" });
+                            (n.to_string(), label)
+                        })
                         .collect()
                 }),
                 |f, k| f.credits.iter().any(|x| x == k),
@@ -1016,7 +1020,7 @@ fn active_filter_chips(app: App) -> impl IntoView {
     for c in f.credits.clone() {
         let c2 = c.clone();
         chips.push((
-            format!("{c} credits"),
+            format!("{c} credit{}", if c == "1" { "" } else { "s" }),
             Box::new(move |f| f.credits.retain(|x| x != &c2)),
         ));
     }
@@ -1314,7 +1318,9 @@ fn credits_editor(app: App, course: &Course) -> impl IntoView {
     let code = course.code.clone();
     let official = course.effective_credits();
     let official_assumed = course.credits_assumed();
-    let official_label = if official_assumed {
+    let official_label = if let Some(span) = course.duration_note() {
+        format!("{official} (assumed from its {span} duration — CMI doesn't state it)")
+    } else if official_assumed {
         format!("{official} (assumed — CMI doesn't state it)")
     } else {
         official.to_string()

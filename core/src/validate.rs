@@ -23,12 +23,50 @@ pub struct ParseOutcome {
 }
 
 fn norm_label(label: &str) -> String {
-    label
-        .to_ascii_lowercase()
-        .replace('\u{2013}', "--")
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
+    // Any run of dash characters compares equal — "August--November",
+    // "August–November" and "August-November" are the same label.
+    let mut out = String::with_capacity(label.len());
+    let mut prev_dash = false;
+    for c in label.to_ascii_lowercase().chars() {
+        let is_dash = matches!(c, '-' | '\u{2012}' | '\u{2013}' | '\u{2014}');
+        if is_dash {
+            if !prev_dash {
+                out.push('-');
+            }
+        } else {
+            out.push(c);
+        }
+        prev_dash = is_dash;
+    }
+    out.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// The meaning of a semester label: its month set and year. Lets rule 1
+/// accept two pages that PHRASE the same semester differently ("Aug--Nov
+/// 2026" vs "August-November 2026") while still failing when they genuinely
+/// name different terms — the real stale-page signal.
+fn label_semantics(label: &str) -> Option<(Vec<u8>, i32)> {
+    let mut months: Vec<u8> = Vec::new();
+    let mut year: Option<i32> = None;
+    for token in label.split(|c: char| !c.is_ascii_alphanumeric()) {
+        if token.is_empty() {
+            continue;
+        }
+        if let Some(m) = crate::date::month_from_word(token) {
+            if !months.contains(&m) {
+                months.push(m);
+            }
+        } else if let Ok(y) = token.parse::<i32>() {
+            if (1900..2200).contains(&y) {
+                year = Some(y);
+            }
+        }
+    }
+    months.sort_unstable();
+    match (months.is_empty(), year) {
+        (false, Some(y)) => Some((months, y)),
+        _ => None,
+    }
 }
 
 /// Parse both pages' pre-extracted `<pre>` blocks, join them, run the
@@ -128,6 +166,22 @@ fn run_gate(
                     passed: true,
                     detail: format!("{t:?} ≈ {h:?}"),
                 }
+            } else if label_semantics(t).is_some()
+                && label_semantics(t) == label_semantics(h)
+            {
+                // Same months, same year, different phrasing (independently
+                // edited pages) — pass with a warning. If semantics can't be
+                // extracted from BOTH labels, fall through to the hard fail:
+                // never pass-by-default.
+                report.warnings.push(format!(
+                    "semester labels are phrased differently but name the same \
+                     term: {t:?} vs {h:?}"
+                ));
+                GateCheck {
+                    rule: "semester label".into(),
+                    passed: true,
+                    detail: format!("{t:?} ≈ {h:?} (same months and year)"),
+                }
             } else {
                 GateCheck {
                     rule: "semester label".into(),
@@ -178,20 +232,25 @@ fn run_gate(
     report.gate.push(rule1);
 
     // Rule 2 — enough branch grids (per-grid substance is a separate check,
-    // appended by the caller via `per_grid_checks`).
+    // appended by the caller via `per_grid_checks`). The floors here are
+    // garbage detectors, not semester-size estimates: an error page or a
+    // half-rendered fetch parses to zeros, while a legitimately small term
+    // (a January minisemester) must not be rejected for being small — the
+    // scale-free rules (legend resolution, per-grid substance, slot sanity)
+    // carry the data-quality burden.
     let grids = joined.stats.branch_grids;
     report.gate.push(GateCheck {
         rule: "branch grid count".into(),
-        passed: grids >= 10,
-        detail: format!("{grids} branch grids parsed (need ≥ 10)"),
+        passed: grids >= 3,
+        detail: format!("{grids} branch grids parsed (need ≥ 3)"),
     });
 
     // Rule 3 — enough courses.
     report.gate.push(GateCheck {
         rule: "course count".into(),
-        passed: joined.stats.unique_courses >= 40,
+        passed: joined.stats.unique_courses >= 10,
         detail: format!(
-            "{} unique courses after merging legends (need ≥ 40)",
+            "{} unique courses after merging legends (need ≥ 10)",
             joined.stats.unique_courses
         ),
     });
@@ -205,13 +264,39 @@ fn run_gate(
         detail: format!("{resolved}/{total} grid codes have a legend entry (need ≥ 90%)"),
     });
 
-    // Rule 5 — hall grid substance.
+    // Rule 5 — hall grid substance (same garbage-detection sizing as
+    // rules 2–3).
     report.gate.push(GateCheck {
         rule: "hall grid".into(),
-        passed: joined.stats.hall_days >= 4 && joined.stats.halls >= 8,
+        passed: joined.stats.hall_days >= 3 && joined.stats.halls >= 3,
         detail: format!(
-            "{} days and {} halls parsed (need ≥ 4 days, ≥ 8 halls)",
+            "{} days and {} halls parsed (need ≥ 3 days, ≥ 3 halls)",
             joined.stats.hall_days, joined.stats.halls
+        ),
+    });
+
+    // Rule 7 (order kept after rule 5 for display) — cross-page
+    // consistency: courses scheduled ONLY via the hall grid
+    // (ScheduledNoBranch) are legitimate in ones and twos (DSEM), but when
+    // a large share of the schedule has no branch grid behind it, the
+    // timetable page was truncated mid-transfer while the halls page
+    // survived — a shape the count floors can't catch at any size.
+    let scheduled_total = joined
+        .courses
+        .iter()
+        .filter(|c| !c.meetings.is_empty())
+        .count();
+    let no_branch = joined
+        .courses
+        .iter()
+        .filter(|c| c.status == crate::model::ScheduleStatus::ScheduledNoBranch)
+        .count();
+    report.gate.push(GateCheck {
+        rule: "cross-page consistency".into(),
+        passed: no_branch * 4 <= scheduled_total,
+        detail: format!(
+            "{no_branch}/{scheduled_total} scheduled courses appear in no branch grid \
+             (need ≤ 25% — more means a truncated timetable page)",
         ),
     });
 
@@ -225,7 +310,10 @@ fn run_gate(
         }
     }
     for pair in joined.slot_grid.windows(2) {
-        if pair[0].start_min >= pair[1].start_min {
+        // Lexicographic (start, end): two branches can legitimately share a
+        // start with different end times (join keeps the union), but exact
+        // duplicates and decreasing order are still parse garbage.
+        if (pair[0].start_min, pair[0].end_min) >= (pair[1].start_min, pair[1].end_min) {
             slots_ok = false;
             detail = format!(
                 "slots {} and {} are not in increasing order",
@@ -245,6 +333,36 @@ fn run_gate(
         passed: slots_ok,
         detail,
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn labels_normalize_dashes() {
+        assert_eq!(norm_label("Aug–Nov 2026"), norm_label("aug-nov 2026"));
+        assert_eq!(norm_label("Aug--Nov 2026"), norm_label("Aug-Nov 2026"));
+        assert_eq!(norm_label("Aug\u{2014}Nov  2026"), norm_label("AUG-NOV 2026"));
+        assert_ne!(norm_label("Aug-Nov 2026"), norm_label("Aug-Nov 2027"));
+    }
+
+    #[test]
+    fn label_semantics_compare_terms_not_phrasing() {
+        let s = label_semantics;
+        assert_eq!(
+            s("Timetable for August--November 2026"),
+            s("aug to nov 2026")
+        );
+        assert_eq!(s("August--November 2026"), Some((vec![8, 11], 2026)));
+        // Different year or different months: genuinely different terms.
+        assert_ne!(s("Aug-Nov 2026"), s("Aug-Nov 2027"));
+        assert_ne!(s("Aug-Nov 2026"), s("Jan-Apr 2026"));
+        // No months or no year → no semantics (rule 1 then hard-fails on
+        // mismatch, never passes by default).
+        assert_eq!(s("Timetable 2026"), None);
+        assert_eq!(s("August--November"), None);
+    }
 }
 
 /// Extra rule-2 detail: verify every branch grid has ≥ 3 day rows and ≥ 4

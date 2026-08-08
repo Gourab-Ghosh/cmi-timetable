@@ -122,9 +122,13 @@ my custom changes"). When both are present, `s` wins. The query stays
   (never blocks). Notifications pause their auto-dismiss while hovered or
   focused, so there's always time to read (and hit Undo).
 - Credits: CMI states credits only exceptionally; unstated courses count as
-  **4 credits** (marked "assumed"). The details dialog lets you **overwrite
-  credits** per course (totals, filters and the catalog follow suit), with a
-  one-click reset to CMI's value.
+  **4 credits** (marked "assumed") — unless the course is annotated with a
+  shorter month span, in which case the assumption is **one credit per
+  month** ("(Oct-Nov)" ⇒ 2 credits, "(Sep)" ⇒ 1; the tooltip explains).
+  Stated credits are never second-guessed. My courses shows the total plus
+  a per-value breakdown ("1 × 4 cr · 2 × 2 cr"). The details dialog lets
+  you **overwrite credits** per course (totals, filters and the catalog
+  follow suit), with a one-click reset to CMI's value.
 
 ### Developer mode (hidden endpoint)
 

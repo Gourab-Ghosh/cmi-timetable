@@ -127,6 +127,46 @@ pub const MONTH_SHORT: [&str; 12] = [
     "jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec",
 ];
 
+pub const MONTH_FULL: [&str; 12] = [
+    "january",
+    "february",
+    "march",
+    "april",
+    "may",
+    "june",
+    "july",
+    "august",
+    "september",
+    "october",
+    "november",
+    "december",
+];
+
+/// Like [`month_from_token`], but the token must BE a month name — the
+/// 3-letter short form (optional trailing dot), "sept", or the full name.
+/// Prefix matching would turn "(Maroon)" into March; word matching won't.
+pub fn month_from_word(token: &str) -> Option<u8> {
+    let t = token.trim().trim_end_matches('.').to_ascii_lowercase();
+    if t == "sept" {
+        return Some(9);
+    }
+    if let Some(i) = MONTH_SHORT.iter().position(|m| *m == t) {
+        return Some(i as u8 + 1);
+    }
+    MONTH_FULL
+        .iter()
+        .position(|m| *m == t)
+        .map(|i| i as u8 + 1)
+}
+
+/// "Oct" / "Nov" … with the app's display capitalization.
+pub fn month_short_name(m: u8) -> &'static str {
+    const CAP: [&str; 12] = [
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+    ];
+    CAP[usize::from(m.clamp(1, 12)) - 1]
+}
+
 /// "August--November 2026" → (1 Aug 2026, 30 Nov 2026). Tolerates `--`, en
 /// dash or a single hyphen between the months. The range deliberately
 /// starts on the 1st — assuming a Monday start would silently drop real

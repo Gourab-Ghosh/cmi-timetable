@@ -184,6 +184,222 @@ fn t08_name_notes() {
     );
 }
 
+/// Test 8b — duration-based credit assumption, proven end-to-end through
+/// the real fixture parse: "(Oct-Nov)" ⇒ 2 months ⇒ assume 2 credits.
+#[test]
+fn t08b_duration_assumed_credits() {
+    let math = SNAPSHOT.course("MATH").unwrap();
+    assert!(math.credits_assumed());
+    assert_eq!(math.months_span(), Some(2));
+    assert_eq!(math.effective_credits(), 2);
+    assert_eq!(math.duration_note(), Some("Oct-Nov"));
+
+    // Stated credits are never second-guessed.
+    let rdbm = SNAPSHOT.course("RDBM").unwrap();
+    assert_eq!(rdbm.effective_credits(), 2);
+    assert!(!rdbm.credits_assumed());
+
+    // No note → the campus default of 4; a "(starts …)" note alone doesn't
+    // shorten anything.
+    let toc = SNAPSHOT.course("TOC").unwrap();
+    assert_eq!((toc.months_span(), toc.effective_credits()), (None, 4));
+    let cm1 = SNAPSHOT.course("CM1").unwrap();
+    assert_eq!((cm1.months_span(), cm1.effective_credits()), (None, 4));
+}
+
+/// Test 8c — month-span notes in every plausible hand-edited form, and the
+/// words that must never count as months.
+#[test]
+fn t08c_month_span_note_forms() {
+    use cmi_timetable_core::join::extract_name_notes;
+    let part = |name: &str| extract_name_notes(name).part_of_semester;
+
+    for name in [
+        "Matroid Theory(Oct-Nov)",
+        "Matroid Theory (Oct \u{2013} Nov)",
+        "Matroid Theory (October-November)",
+        "Matroid Theory (October to November)",
+        "Matroid Theory (OCT-NOV)",
+        "Matroid Theory (Oct. - Nov.)",
+    ] {
+        assert_eq!(part(name).as_deref(), Some("Oct-Nov"), "{name}");
+    }
+    // Single-month notes ("runs one month" ⇒ 1 credit downstream).
+    assert_eq!(part("Topics (Sep)").as_deref(), Some("Sep"));
+    assert_eq!(part("Topics (Sept.)").as_deref(), Some("Sep"));
+    assert_eq!(part("Topics (November)").as_deref(), Some("Nov"));
+    // Words that merely START like a month must never match…
+    assert_eq!(part("Introduction to Programming(Haskell)"), None);
+    assert_eq!(part("Colour Theory (Maroon)"), None);
+    assert_eq!(part("Culture (Mayhem-Decorum)"), None);
+    // …and neither do the other note kinds.
+    assert_eq!(part("Mechanics(starts 12 Aug)"), None);
+    assert_eq!(part("Visualization(2 credits)"), None);
+    // Notes coexist within one name.
+    let n = extract_name_notes("Course(2 credits)(Oct-Nov)");
+    assert_eq!(n.credits, Some(2));
+    assert_eq!(n.part_of_semester.as_deref(), Some("Oct-Nov"));
+
+    // Span math: inclusive, December-wrapping, capped by the default.
+    let course = |p: &str| cmi_timetable_core::model::Course {
+        code: "X".into(),
+        name: "X".into(),
+        instructors: vec![],
+        branches: vec![],
+        credits: None,
+        starts: None,
+        part_of_semester: Some(p.to_string()),
+        optional_flag: false,
+        status: cmi_timetable_core::model::ScheduleStatus::Scheduled,
+        meetings: vec![],
+    };
+    assert_eq!(course("Sep").effective_credits(), 1);
+    assert_eq!(course("Nov-Jan").months_span(), Some(3));
+    assert_eq!(course("Nov-Jan").effective_credits(), 3);
+    assert_eq!(course("Aug-Nov").months_span(), Some(4));
+    assert_eq!(course("Aug-Nov").effective_credits(), 4);
+}
+
+/// Test 8d — tolerant day-label matching, and the labels that must never
+/// count as days.
+#[test]
+fn t08d_day_label_variants() {
+    for (s, d) in [
+        ("Mon", Day::Mon),
+        ("MONDAY", Day::Mon),
+        ("Tues", Day::Tue),
+        ("weds", Day::Wed),
+        ("Thur", Day::Thu),
+        ("Thurs.", Day::Thu),
+        ("Friday (10 Oct)", Day::Fri),
+        ("  sat ", Day::Sat),
+    ] {
+        assert_eq!(Day::from_label(s), Some(d), "{s:?}");
+    }
+    for s in [
+        "Monitor Room",
+        "Mon-Fri",
+        "Mon/Wed",
+        "Mon, Wed",
+        "Mon & Wed",
+        "Lecture Hall 803",
+        "Seminar Hall",
+        "Sunset",
+        "",
+    ] {
+        assert_eq!(Day::from_label(s), None, "{s:?}");
+    }
+}
+
+/// Test 8e — realistic hand-edit drift must not zero the parse: day-name
+/// variants on BOTH pages plus rewritten header times, same data out.
+#[test]
+fn t08e_drift_tolerant_parsing() {
+    let tt = TT
+        .replace("Mon</b>", "MONDAY</b>")
+        .replace("Tue</b>", "Tues</b>")
+        .replace("Wed</b>", "weds.</b>")
+        .replace("Thu</b>", "Thurs</b>")
+        .replace("Fri</b>", "FRIDAY</b>")
+        .replace("9:10-10:25", "9.10 to 10.25");
+    let halls = HALLS
+        .replace("Tuesday", "Tues")
+        .replace("Thursday", "THURSDAY.")
+        .replace("9:10-10:25", "09.10-10.25");
+    let out = parse_html_pages(&tt, &halls, 0.0, SourceTier::Mirror, false);
+    assert!(
+        out.report.gate_passed(),
+        "drifted pages must still pass: {:#?}",
+        out.report.gate
+    );
+    let snap = out.snapshot.unwrap();
+    assert_eq!(snap.slot_grid, SNAPSHOT.slot_grid, "same slots from 9.10-to-10.25");
+    assert_eq!(snap.courses.len(), SNAPSHOT.courses.len());
+    let toc = snap.course("TOC").unwrap();
+    assert_eq!(
+        toc.meetings,
+        SNAPSHOT.course("TOC").unwrap().meetings,
+        "TOC keeps its Tue+Thu meetings and halls"
+    );
+}
+
+/// Test 8f — the gate is a garbage detector, not a semester-size estimate:
+/// a legitimately small term passes; an error page still fails closed.
+#[test]
+fn t08f_gate_accepts_small_term_rejects_garbage() {
+    let branch = |code: &str, c: [&str; 4]| {
+        format!(
+            "<pre>\nTimetable for Toy Term 2027\n{code} Programme\n\
+             {code} |9:10-10:25|10:30-11:45|11:50-13:05|14:00-15:15|\n\
+             ======+==========+===========+===========+===========+\n\
+             Mon   | {}       |           | {}        |           |\n\
+             Wed   |          | {}        |           | {}        |\n\
+             Fri   | {}       |           |           |           |\n\
+             </pre>\n<pre>\n\
+             {} : Course {}        Prof A\n\
+             {} : Course {}        Prof B\n\
+             {} : Course {}        Prof C\n\
+             {} : Course {}        Prof D\n</pre>",
+            c[0], c[1], c[2], c[3], c[0],
+            c[0], c[0], c[1], c[1], c[2], c[2], c[3], c[3],
+        )
+    };
+    let tt = format!(
+        "<html><body>{}{}{}</body></html>",
+        branch("AA", ["C01", "C02", "C03", "C04"]),
+        branch("BB", ["C05", "C06", "C07", "C08"]),
+        branch("CC", ["C09", "C10", "C11", "C12"]),
+    );
+    let halls = "<html><body><pre>\n\
+        \u{20}     |9:10-10:25|10:30-11:45|11:50-13:05|14:00-15:15|\n\
+        ======+==========+===========+===========+===========+\n\
+        Monday|          |           |           |           |\n\
+        LH1   | C01      |           | C02       |           |\n\
+        LH2   | C05      |           | C06       |           |\n\
+        LH3   | C09      |           | C10       |           |\n\
+        Wednesday|       |           |           |           |\n\
+        LH1   |          | C03       |           | C04       |\n\
+        LH2   |          | C07       |           | C08       |\n\
+        LH3   |          | C11       |           | C12       |\n\
+        Friday|          |           |           |           |\n\
+        LH1   | C01      |           |           |           |\n\
+        LH2   | C05      |           |           |           |\n\
+        LH3   | C09      |           |           |           |\n\
+        </pre>\n<pre>\n\
+        C01 : Course C01 : Prof A\nC02 : Course C02 : Prof B\n\
+        C03 : Course C03 : Prof C\nC04 : Course C04 : Prof D\n\
+        C05 : Course C05 : Prof A\nC06 : Course C06 : Prof B\n\
+        C07 : Course C07 : Prof C\nC08 : Course C08 : Prof D\n\
+        C09 : Course C09 : Prof A\nC10 : Course C10 : Prof B\n\
+        C11 : Course C11 : Prof C\nC12 : Course C12 : Prof D\n</pre>\
+        </body></html>"
+        .to_string();
+    let out = parse_html_pages(&tt, &halls, 0.0, SourceTier::Mirror, false);
+    assert!(
+        out.report.gate_passed(),
+        "a small term must pass the gate: {:#?}",
+        out.report.gate
+    );
+    let snap = out.snapshot.unwrap();
+    assert_eq!(snap.courses.len(), 12);
+    assert_eq!(snap.halls.len(), 3);
+    assert_eq!(
+        snap.course("C01").unwrap().meetings[0].hall.as_deref(),
+        Some("LH1")
+    );
+
+    // An outage page parses to zeros and stays rejected.
+    let err = parse_html_pages(
+        "<html><body><h1>503 Service Unavailable</h1></body></html>",
+        "<html><body><p>oops</p></body></html>",
+        0.0,
+        SourceTier::Mirror,
+        false,
+    );
+    assert!(!err.report.gate_passed());
+    assert!(err.snapshot.is_none());
+}
+
 /// Test 9 — the slot columns are derived from the header, in order.
 #[test]
 fn t09_slot_grid() {
@@ -280,14 +496,16 @@ fn t11_fail_closed() {
     assert!(out.snapshot.is_none());
     assert!(!out.report.errors.is_empty());
 
-    // Mangled timetable page: every '|' gone — no grids parse at all.
-    let mangled = TT.replace('|', " ");
+    // NOTE: stripping ONLY the pipes no longer fails — column alignment
+    // survives, and the space-aligned fallback recovers the grids by
+    // design (see t11b). Genuinely mangled means the times are gone too.
+    let mangled = TT.replace('|', " ").replace(':', "");
     let out = parse_html_pages(&mangled, HALLS, 0.0, SourceTier::Direct, false);
     assert!(!out.report.gate_passed(), "mangled page must fail the gate");
     assert!(out.snapshot.is_none());
 
     // Mangled halls page only: the hall-grid rule must fail.
-    let mangled_halls = HALLS.replace('|', " ");
+    let mangled_halls = HALLS.replace('|', " ").replace(':', "");
     let out = parse_html_pages(TT, &mangled_halls, 0.0, SourceTier::Direct, false);
     assert!(!out.report.gate_passed(), "mangled halls page must fail the gate");
     assert!(out.snapshot.is_none());
@@ -296,6 +514,50 @@ fn t11_fail_closed() {
     let out = parse_html_pages("", "", 0.0, SourceTier::Direct, false);
     assert!(!out.report.gate_passed());
     assert!(out.snapshot.is_none());
+}
+
+/// Test 11c — a PARTIALLY truncated timetable page (a few branch grids
+/// survive; the halls page is intact) must still fail closed. The halls
+/// legend supplies the whole catalog, so no count floor can catch this at
+/// any size — the cross-page consistency rule does: most of the schedule
+/// suddenly exists only in the hall grid.
+#[test]
+fn t11c_partial_truncation_fails_closed() {
+    let mut idx = 0;
+    for _ in 0..8 {
+        idx = TT[idx..]
+            .find("</pre>")
+            .map(|i| idx + i + "</pre>".len())
+            .expect("fixture has at least 8 pre blocks");
+    }
+    let truncated = format!("{}</body></html>", &TT[..idx]);
+    let out = parse_html_pages(&truncated, HALLS, 0.0, SourceTier::Direct, false);
+    assert!(
+        !out.report.gate_passed(),
+        "partial truncation must fail the gate: {:#?}",
+        out.report.gate
+    );
+    assert!(out.snapshot.is_none());
+}
+
+/// Test 11b — losing ONLY the vertical rules is recoverable drift, not
+/// mangling: column alignment still describes the same grid, and the
+/// space-aligned fallback must reconstruct the same catalog from it.
+#[test]
+fn t11b_pipeless_pages_recover() {
+    let tt = TT.replace('|', " ");
+    let halls = HALLS.replace('|', " ");
+    let out = parse_html_pages(&tt, &halls, 0.0, SourceTier::Direct, false);
+    assert!(
+        out.report.gate_passed(),
+        "pipe-less pages must still pass: {:#?}",
+        out.report.gate
+    );
+    let snap = out.snapshot.unwrap();
+    assert_eq!(snap.slot_grid, SNAPSHOT.slot_grid);
+    assert_eq!(snap.courses.len(), SNAPSHOT.courses.len());
+    let toc = snap.course("TOC").unwrap();
+    assert_eq!(toc.meetings, SNAPSHOT.course("TOC").unwrap().meetings);
 }
 
 /// The stored raw HTML round-trips, enabling the re-parse path.

@@ -37,14 +37,14 @@ and no committed mirror (fixtures exist only for tests/e2e seed).
 /core   parsers, model, validate (gate), merge (3-way), diff, ics, share,
         date; feature `html` = native scraper path (sync/tests/e2e seed).
         core/examples/snapshot_json.rs → fixtures → latest.json (e2e seed).
-        PARSER_VERSION=2 in core/src/model.rs. Fixtures: core/fixtures/.
+        PARSER_VERSION=3 in core/src/model.rs. Fixtures: core/fixtures/.
 /app    Leptos UI. src/app.rs (boot/routing), state.rs (App handle, undo,
         filters), fetch.rs (tier chain direct→proxy→mirror, adopt/merge),
         ui.rs (header/tabs/facets/dialogs/chips), views.rs (5 tabs +
         welcome()), dnd.rs (pointer+keyboard drag), storage.rs, dev.rs,
         domx.rs; styles.css = whole design system (tokens, light+dark).
 /sync   native mirror publisher (CI cron writes app/public/data/).
-/e2e    test_app.py — 36 Selenium tests, self-seeding (see §5); shoot.py —
+/e2e    test_app.py — 38 Selenium tests, self-seeding (see §5); shoot.py —
         design-review screenshots + print PDFs.
 /githooks  pre-push — builds+publishes via deploy.sh when main is pushed
         (activate per clone: `git config core.hooksPath githooks`; skip
@@ -80,6 +80,23 @@ and no committed mirror (fixtures exist only for tests/e2e seed).
   throttle while empty.
 - Gate + parser are the ONLY content judges; `looks_like_cmi()` only picks
   error copy on proxy tiers AFTER a gate failure.
+- The gate is FAIL-CLOSED but its count floors are garbage detectors
+  (≥3 grids, ≥10 courses, ≥3 halls/days), NOT semester-size estimates — a
+  small term must pass; error pages parse to zeros and still fail. Never
+  "fix" a parse problem by weakening the scale-free rules (legend ≥90%,
+  per-grid substance, slot sanity).
+- Parser drift-tolerance is deliberate and test-pinned (PARSER_VERSION 3):
+  day labels via `Day::from_label` (variants/case/decoration; rejects
+  ranges and glued words), grid KIND by which rows carry the data (never
+  by day-name spelling), times accept dots/am-pm/"to" (bare hours 1–6 =
+  afternoon), pipe-stripped pages are RECOVERABLE (space-aligned fallback,
+  t11b proves byte-identical recovery) — so "mangled" in fail-closed tests
+  must destroy the times, not just the pipes. Month notes are validated as
+  month WORDS (`month_from_word`) so "(Haskell)"/"(Maroon)" can't match.
+- Credits: stated > user-override precedence is unchanged, but the ASSUMED
+  default is duration-aware (`assumed_credits`: 1 credit/month for
+  sub-4-month spans, else 4). Anything displaying credits must go through
+  `course_credits`/`effective_credits`, never hardcode "assumed at 4".
 - Undo history entries = (selection, overrides, **filters**); search box
   coalesces by identical label via `act_filters(label, coalesce=true, …)`.
 - Halls grid renders official bookings MINUS moved-away meetings PLUS
@@ -94,11 +111,11 @@ and no committed mirror (fixtures exist only for tests/e2e seed).
 ## 5. Build & test commands (exact)
 
 ```sh
-# native tests (52)
-CARGO_TARGET_DIR=~/.rust-target-e2e cargo test --workspace
+# native tests (65; --features html for the fixture-driven parser tests)
+CARGO_TARGET_DIR=~/.rust-target-e2e cargo test --workspace --features html
 # app build for e2e (never plain dist while trunk serve runs)
 cd app && CARGO_TARGET_DIR=~/.rust-target-e2e trunk build --release --dist dist-e2e
-# e2e (37 tests; self-generates seed via core example, needs cargo on PATH)
+# e2e (38 tests; self-generates seed via core example, needs cargo on PATH)
 cd e2e && DIST_DIR=../app/dist-e2e .venv/bin/python test_app.py
 # screenshots + print PDFs for design review (writes e2e/shots/, gitignored)
 cd e2e && .venv/bin/python shoot.py
@@ -114,7 +131,7 @@ regenerates the .ics golden.
 
 ## 6. Current state
 
-- Tests: 52 native + 37/37 e2e green. Meeting removals: `MeetingOverride.to`
+- Tests: 65 native + 38/38 e2e green. Meeting removals: `MeetingOverride.to`
   is `Option<Meeting>` (None = removed; legacy JSON/share payloads still
   load — present meeting ⇒ Some). Out-of-grid times: `display_slot_grid()`
   (views.rs) = official slots + synthetic `.extra` columns; `column_for`
@@ -374,3 +391,38 @@ regenerates the .ics golden.
   instead of .get() (the Snapshot carries gzipped raw pages — a full clone
   per clash check / per chip was real cost). e2e t37 (verified to FAIL on
   the pre-fix build). 52 native + 37/37 e2e. Committed locally, not pushed.
+- **R15 (duration-aware credits + drift-proof parser + credit counts):**
+  user: 2-month courses ("(Oct-Nov)", e.g. MATH in the fixture) must assume
+  2 credits and 1-month 1 credit instead of the blanket 4; generalize every
+  hardcoded structure assumption so parsing "never errors" and extracts as
+  much as possible; show counts of 2-/4-credit selected courses under My
+  courses. Implemented: `assumed_credits` = 1 credit/month for
+  sub-4-month spans (stated credits and user overrides always win);
+  `extract_name_notes` accepts single months and full names/`to`
+  separators via `month_from_word` (exact word — "(Haskell)"/"(Maroon)"
+  can never match; dangling "(Oct-)" rejected as incomplete, not 1 month);
+  ics clamps single-month notes at both ends; My courses now reads "Total
+  credits: 8 · 1 × 4 cr · 2 × 2 cr · …" with value-aware assumed notes;
+  badges/dialog say "assumed from its Oct-Nov duration". Parser audit (18
+  agents, 15 confirmed findings) implemented: Day::from_label +
+  data-carrying-rows classification, dot/am-pm/"to"/bare-afternoon times
+  (backwards ranges re-joined, "6:30-7:45" = evening), pipe-neutral
+  separators, nudged slicing (label cut extends through straddling tokens
+  — "Lecture Hall 803" keeps its number), pipe-less space-aligned fallback
+  (t11b: fixture with EVERY pipe stripped parses byte-identically),
+  garbage-detection gate floors (small term passes; NEW cross-page
+  consistency rule fails a partially truncated timetable page — ≤25%
+  ScheduledNoBranch — since no count floor catches that shape), semantic
+  semester-label compare + dash normalization, hall matching by overlap,
+  legend thresholds (decoration excluded; single-line legends need
+  all-caps/digit codes so "Note: …" can't become a course),
+  PARSER_VERSION 3 (cached raw HTML re-parses on load; mirror files
+  regenerate on next --sync). Review pass fixed 10 more findings:
+  map_sparse_row DELETED (moved aligned cells to wrong slots — nudged
+  byte-slicing is correct), time-range inversion, "Mon, Wed" half-accept,
+  prose guards in the pipe-less path, "1 credits" grammar, stale docs.
+  Rejected as designed: overlap fallback re-matching one merged booking
+  for two meetings (real double-slot bookings need it); "(May)" as a
+  name-note false positive (context-free parser; badge self-explains;
+  credit override available). 65 native + 38/38 e2e. Committed locally,
+  NOT pushed (standing rule).
