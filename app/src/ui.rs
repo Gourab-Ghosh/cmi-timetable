@@ -343,7 +343,7 @@ pub fn Header() -> impl IntoView {
         let s = app.sync.get();
         if s.updating {
             if s.progress.is_empty() {
-                "updating…".to_string()
+                "Updating…".to_string()
             } else {
                 s.progress
             }
@@ -358,7 +358,7 @@ pub fn Header() -> impl IntoView {
         if s.fetched_at <= 0.0 {
             "No timetable data yet — press Sync now to fetch it from cmi.ac.in".to_string()
         } else {
-            format!("Fetched {} — {}", domx::fmt_local(s.fetched_at), s.source.label())
+            format!("Synced {} — {}", domx::fmt_local(s.fetched_at), s.source.label())
         }
     };
     let stale = move || {
@@ -1830,9 +1830,9 @@ fn my_data_dialog(app: App) -> impl IntoView {
         <div class="my-data">
             <h2>"My data"</h2>
             <p class="muted small dialog-lede">
-                "Everything the app knows lives in this browser — this list is the \
-                 complete inventory, nothing is ever sent to a server, and every \
-                 piece can be removed right here."
+                "Everything the app knows lives in this browser. This list is the \
+                 complete inventory — nothing is ever sent to a server, and every \
+                 item can be removed right here."
             </p>
 
             // Every custom change together: exactly which CMI data it
@@ -1868,7 +1868,7 @@ fn my_data_dialog(app: App) -> impl IntoView {
                     {move || {
                         let n = app.selection.with(|s| s.len());
                         if n == 0 {
-                            "No courses picked yet.".to_string()
+                            "No courses selected yet.".to_string()
                         } else {
                             format!(
                                 "{n} course{}: {}",
@@ -1915,7 +1915,7 @@ fn my_data_dialog(app: App) -> impl IntoView {
                 </p>
                 <p class="muted small">
                     "CMI keeps editing its timetable through the semester — sync every \
-                     few days to stay current. The app re-checks on its own too, at \
+                     few days to stay current. The app also re-checks on its own, at \
                      most twice a day."
                 </p>
             </section>
@@ -1947,7 +1947,7 @@ fn my_data_dialog(app: App) -> impl IntoView {
                 </header>
                 <p class="muted small">
                     "Removes your changes, selection, cached timetable and preferences \
-                     from this browser. There is no undo for this one."
+                     from this browser. This cannot be undone."
                 </p>
             </section>
 
@@ -2057,7 +2057,7 @@ fn edit_meeting_dialog(
             }
         } else {
             let toast = format!(
-                "Moved {course_save} on {} {}",
+                "Moved {course_save} to {} {}",
                 day.short(),
                 to.slot.label(),
             );
@@ -2203,7 +2203,7 @@ fn conflicts_dialog(app: App) -> impl IntoView {
 
     view! {
         <div>
-            <h2>"CMI changed times you had customised"</h2>
+            <h2>"CMI changed times you customised"</h2>
             <p class="muted">
                 "Pick what to keep for each course. Nothing changes until you apply."
             </p>
@@ -2227,7 +2227,7 @@ fn conflicts_dialog(app: App) -> impl IntoView {
                 .map(|(i, c)| {
                     let mine_label = match &c.mine {
                         Some(m) => format!("Keep my time: {}", m.describe()),
-                        None => "Keep it removed (you had removed this meeting)".to_string(),
+                        None => "Keep it removed (you removed this meeting)".to_string(),
                     };
                     let theirs_label = match c.theirs.len() {
                         0 => "Use CMI's version: this meeting was removed".to_string(),
@@ -2494,7 +2494,7 @@ fn share_dialog(app: App) -> impl IntoView {
                     title=if has_overrides {
                         "Includes your moved/created meetings and credit changes"
                     } else {
-                        "You have no overwrites yet"
+                        "You have no custom changes yet"
                     }
                     on:click=move |_| {
                         let url = with2.clone();
@@ -2502,7 +2502,7 @@ fn share_dialog(app: App) -> impl IntoView {
                         app.toast("Link with your custom changes copied.");
                     }
                 >
-                    "Copy incl. my custom changes"
+                    "Copy link with custom changes"
                 </button>
             </div>
             <div class="actions">{close_button(app)}</div>

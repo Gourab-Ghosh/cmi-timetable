@@ -721,17 +721,18 @@ fn my_timetable(app: App) -> impl IntoView {
 // ---------------------------------------------------------------------------
 
 fn my_courses(app: App) -> impl IntoView {
-    let credits_line = move || {
+    // The credit summary, structured for reading — a headline total, one
+    // plain-English pill per credit value, and full-sentence footnotes —
+    // instead of the old dot-separated one-liner.
+    let credit_summary = move || {
         let courses = app.selected_courses();
         if courses.is_empty() {
-            return "No courses selected.".to_string();
+            return None;
         }
         let total: u32 = courses
             .iter()
             .map(|c| u32::from(app.course_credits(c)))
             .sum();
-        // How many courses at each credit value (user overrides included),
-        // heaviest first: "2 × 4 cr · 1 × 2 cr".
         let mut by_credit: std::collections::BTreeMap<u8, usize> =
             std::collections::BTreeMap::new();
         for c in &courses {
@@ -741,40 +742,63 @@ fn my_courses(app: App) -> impl IntoView {
             .iter()
             .filter(|c| app.credits_custom(&c.code).is_some())
             .count();
-        // The assumed value now varies (month-span courses assume 1/month),
-        // so group the disclaimer by value instead of hardcoding "at 4".
         let assumed_vals: Vec<u8> = courses
             .iter()
             .filter(|c| c.credits_assumed() && app.credits_custom(&c.code).is_none())
             .map(|c| c.assumed_credits())
             .collect();
-        let mut notes: Vec<String> = by_credit
+
+        let pills = by_credit
             .iter()
             .rev()
-            .map(|(cr, n)| format!("{n} × {cr} cr"))
-            .collect();
+            .map(|(cr, n)| {
+                view! {
+                    <span class="cs-pill">
+                        <b>{*n}</b>
+                        {if *n == 1 { " course at " } else { " courses at " }}
+                        <b>{*cr}</b>
+                        {if *cr == 1 { " credit" } else { " credits" }}
+                    </span>
+                }
+            })
+            .collect_view();
+
+        let mut notes: Vec<String> = Vec::new();
         match assumed_vals.as_slice() {
             [] => {}
-            [first, rest @ ..] if rest.iter().all(|v| v == first) => {
-                let n = assumed_vals.len();
-                notes.push(format!(
-                    "{n} course{} assumed at {first} (CMI doesn't list credits)",
-                    if n == 1 { "" } else { "s" },
-                ));
-            }
+            [only] if assumed_vals.len() == 1 => notes.push(format!(
+                "CMI doesn't list credits for 1 course — counted as {only} here."
+            )),
+            [first, rest @ ..] if rest.iter().all(|v| v == first) => notes.push(format!(
+                "CMI doesn't list credits for {} courses — counted as {first} each here.",
+                assumed_vals.len(),
+            )),
             _ => notes.push(format!(
-                "{} courses with assumed credits (CMI doesn't list them)",
+                "CMI doesn't list credits for {} courses — each is counted from \
+                 its duration, or the usual 4.",
                 assumed_vals.len(),
             )),
         }
         if custom > 0 {
-            notes.push(format!("{custom} set by you"));
+            notes.push(format!(
+                "{custom} credit value{} set by you.",
+                if custom == 1 { "" } else { "s" },
+            ));
         }
-        if notes.is_empty() {
-            format!("Total credits: {total}")
-        } else {
-            format!("Total credits: {total} · {}", notes.join(" · "))
-        }
+
+        Some(view! {
+            <div class="credit-summary" role="group" aria-label="Credit summary">
+                <div class="cs-total">
+                    <span class="cs-num">{total}</span>
+                    <span class="cs-cap">
+                        {if total == 1 { "credit in total" } else { "credits in total" }}
+                    </span>
+                </div>
+                <div class="cs-pills">{pills}</div>
+                {(!notes.is_empty())
+                    .then(|| view! { <p class="cs-note">{notes.join(" ")}</p> })}
+            </div>
+        })
     };
 
     view! {
@@ -782,8 +806,8 @@ fn my_courses(app: App) -> impl IntoView {
             <div class="toolbar">
                 <h2 style="margin:0">"My courses"</h2>
                 <div class="grow"></div>
-                <span class="muted">{credits_line}</span>
             </div>
+            {credit_summary}
             {move || {
                 let courses = app.selected_courses();
                 if courses.is_empty() {

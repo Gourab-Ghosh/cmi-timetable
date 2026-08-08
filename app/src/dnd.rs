@@ -332,14 +332,15 @@ fn move_cursor(app: App, dx: i32, dy: i32) {
         }
     });
     if let Some(mm) = app.move_mode.get_untracked() {
-        // The cursor always comes from the slot grid; if it somehow doesn't
+        // Spoken, not printed: "Tuesday, 09:10 to 10:25" reads far better
+        // aloud than a bare en-dash range. If the cursor somehow doesn't
         // resolve, announce just the start time rather than inventing an end.
         let label = slots
             .iter()
             .find(|s| s.start_min == mm.cursor.1)
-            .map(|s| s.label())
+            .map(|s| format!("{} to {}", s.start_label(), s.end_label()))
             .unwrap_or_else(|| Slot::new(mm.cursor.1, mm.cursor.1).start_label());
-        app.say(format!("{} {}", mm.cursor.0.full(), label));
+        app.say(format!("{}, {}", mm.cursor.0.full(), label));
     }
 }
 

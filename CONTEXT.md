@@ -102,7 +102,18 @@ and no committed mirror (fixtures exist only for tests/e2e seed).
 - Halls grid renders official bookings MINUS moved-away meetings PLUS
   "arrivals" (overridden/user-created meetings landing in a cell, matched
   via `hall_col_of`); re-drags reuse the override matched on its BASE.
-- `--alarm` color is reserved EXCLUSIVELY for clashes.
+- `--alarm` color is reserved EXCLUSIVELY for clashes — and that includes
+  VOLUME: `.btn.danger` is quiet (muted) at rest and turns alarm only on
+  hover/focus; standing red exists solely in the My-data danger zone. One
+  documented exception: `.diff-del` keeps red (universal diff convention,
+  glyph-scale). Second accent `--accent2` (violet) + `--grad` carry the
+  brand: header hairline, active nav, h2 kickers, primary buttons, toast
+  edge, welcome hero, credit-summary total. Ambience lives on a fixed
+  `body::before` (iOS ignores background-attachment). `.main` has
+  min-width:0 and the app grid uses minmax(0,1fr) — WITHOUT these the
+  720px grid table widens the whole page on phones instead of scrolling
+  in its container. The mobile sync-hint stays VISIBLE (user requirement,
+  R6) — reclaim header space by other means only.
 - Toast auto-dismiss pauses while hovered/focused (`HOVERED_TOASTS`
   thread_local, deliberately NOT a signal).
 - e2e Chrome flags: `--force-prefers-reduced-motion` (dialog animations) and
@@ -426,3 +437,28 @@ regenerates the .ics golden.
   name-note false positive (context-free parser; badge self-explains;
   credit override available). 65 native + 38/38 e2e. Committed locally,
   NOT pushed (standing rule).
+- **R16 (beauty + copy pass):** user: make it "extremely good, as
+  beautiful and colorful as possible", texts professional, everything
+  readable — "Total credits: 8 · 1 × 4 cr · 2 × 2 cr" called out as hard
+  to read. Credits line → structured `.credit-summary` (big gradient
+  total + "N courses at M credits" pills + full-sentence footnotes;
+  t05/t17/t29/t38 assertions rewritten). Design system gained --accent2
+  (violet) + --grad: see the §4 entry for every gradient moment, the
+  quiet-danger rule and the mobile layout guards. Copy audit (27 agents,
+  24 confirmed fixes, 3 contradictory pairs resolved by hand): "different
+  from", "(tried N routes)", capitalized progress lines, "Synced" pill
+  title, "Moved X to", "Copy link with custom changes", "This cannot be
+  undone.", My-data lede restructured, keyboard-move announcements read
+  "Tuesday, 09:10 to 10:25" aloud. Screenshot-driven design critique (19
+  agents, 16 confirmed) fixed: alarm-red flood from danger buttons
+  (major), mobile page blowout via min-width:auto (major), 200px sticky
+  mobile header → static+packed (major, sync-hint KEPT per R6), fake
+  per-cell thead "gradient" → honest flat tint, ragged row-action
+  alignment (:first-of-type never matched — chips are buttons),
+  invisible ghost-accent/ⓘ borders (→ color-mix ring + --ctl-ring
+  tokens), dark-toast gradient edge, toast shrink-wrap, halls rowhead
+  accent overload, compact touch targets, ambience on body::before.
+  shoot.py fixed: welcome shots now served WITHOUT /data (same-origin
+  mirror silently auto-populated before — 12/13/17 never showed the
+  hero), compact shot targets the Master grid, new 07b light my-courses
+  shot. 65 native + 38/38 e2e. Committed locally, NOT pushed.

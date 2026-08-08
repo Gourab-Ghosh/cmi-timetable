@@ -403,7 +403,7 @@ pub async fn run_update(app: App, manual: bool) {
     // Tier 1 — direct (both pages in parallel; kept cheap in case CMI ever
     // enables CORS — a CORS rejection fails within one round trip).
     if force.is_none() || force.as_deref() == Some("direct") {
-        progress(&app, "syncing directly from cmi.ac.in…");
+        progress(&app, "Syncing directly from cmi.ac.in…");
         routes_tried += 1;
         match fetch_pages_tier(
             app,
@@ -435,7 +435,7 @@ pub async fn run_update(app: App, manual: bool) {
     if !adopted && !gate_failed_direct && (force.is_none() || force.as_deref() == Some("proxy")) {
         progress(
             &app,
-            &format!("trying {} proxies in parallel…", PROXIES.len()),
+            &format!("Trying {} proxies at once…", PROXIES.len()),
         );
         routes_tried += PROXIES.len();
         let mut pending: Vec<futures::future::LocalBoxFuture<'static, TierResult>> = PROXIES
@@ -472,7 +472,7 @@ pub async fn run_update(app: App, manual: bool) {
     // Runs even after a proxy gate failure: the mirror is the most reliable
     // tier and its content is independent of whatever a proxy mangled.
     if !adopted && !gate_failed_direct && (force.is_none() || force.as_deref() == Some("mirror")) {
-        progress(&app, "trying the data mirror…");
+        progress(&app, "Trying the data mirror…");
         routes_tried += 1;
         if let TierResult::Snapshot(snapshot) = try_mirror(app).await {
             adopt(&app, *snapshot, true);
@@ -501,7 +501,7 @@ pub async fn run_update(app: App, manual: bool) {
             .to_string()
     } else if gate_failed_any {
         format!(
-            "CMI's page looks different than this app expected, so your saved timetable \
+            "CMI's page looks different from what this app expected, so your saved timetable \
              from {saved_date} was kept. Nothing was lost. If this keeps happening, the \
              app needs an update."
         )
@@ -511,7 +511,7 @@ pub async fn run_update(app: App, manual: bool) {
             .to_string()
     } else if no_data {
         format!(
-            "The timetable couldn't be fetched right now ({routes_tried} routes tried). \
+            "The timetable couldn't be fetched right now (tried {routes_tried} routes). \
              Check your connection and press Sync now to try again."
         )
     } else if !online {
@@ -521,8 +521,8 @@ pub async fn run_update(app: App, manual: bool) {
         )
     } else {
         format!(
-            "The CMI website couldn't be reached right now (tried {routes_tried} routes). \
-             You're still seeing your saved timetable from {saved_date}. Try Sync again later."
+            "CMI's website couldn't be reached right now (tried {routes_tried} routes). \
+             You're still seeing your saved timetable from {saved_date}. Try syncing again later."
         )
     };
     app.set_banner(BannerKind::Warn, text);
@@ -624,7 +624,7 @@ pub fn simulate_parse_failure(app: App) {
             app.set_banner(
                 BannerKind::Warn,
                 format!(
-                    "Simulated a parse failure: CMI's page looks different than this app \
+                    "Simulated a parse failure: CMI's page looks different from what this app \
                      expected, so your saved timetable from {saved_date} was kept. Nothing \
                      was lost."
                 ),

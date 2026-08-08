@@ -314,8 +314,11 @@ def t05_credits_default_four(app):
     app.boot("/?c=TOC,RDBM")
     app.open_tab("My courses")
     section = app.wait_css("section[aria-label='My courses']")
-    assert "Total credits: 6" in section.text, section.text  # 4 (assumed) + 2
-    assert "1 course assumed at 4" in section.text, section.text
+    total = app.css("section[aria-label='My courses'] .credit-summary .cs-num").text
+    assert total == "6", total  # 4 (assumed) + 2
+    assert "credits in total" in section.text, section.text
+    assert "CMI doesn't list credits for 1 course" in section.text, section.text
+    assert "counted as 4 here" in section.text, section.text
     # Details dialog marks the assumption.
     app.chip("TOC").click()
     dialog = app.wait_css(".dialog")
@@ -535,7 +538,7 @@ def t17_credit_override(app):
     app.boot("/?c=TOC,RDBM")
     app.open_tab("My courses")
     section = app.wait_css("section[aria-label='My courses']")
-    assert "Total credits: 6" in section.text  # 4 assumed + 2 stated
+    assert app.css("section[aria-label='My courses'] .credit-summary .cs-num").text == "6"  # 4 assumed + 2 stated
     app.chip("TOC").click()
     dialog = app.wait_css(".dialog")
     dialog.find_element(By.XPATH, ".//dd//button[normalize-space()='Edit']").click()
@@ -549,8 +552,8 @@ def t17_credit_override(app):
     )
     app.xpath("//div[@class='dialog']//button[normalize-space()='Close']").click()
     section = app.css("section[aria-label='My courses']")
-    assert "Total credits: 5" in section.text, section.text
-    assert "1 set by you" in section.text, section.text
+    assert app.css("section[aria-label='My courses'] .credit-summary .cs-num").text == "5", section.text
+    assert "1 credit value set by you." in section.text, section.text
     # The 'Your changes' panel shows official → yours; removing it restores.
     app.open_tab("My timetable")
     panel = app.wait_css("[data-testid='your-changes']")
@@ -562,7 +565,7 @@ def t17_credit_override(app):
     app.wait_toast("TOC back on official credits")
     app.wait_gone("[data-testid='your-changes']")
     app.open_tab("My courses")
-    assert "Total credits: 6" in app.css("section[aria-label='My courses']").text
+    assert app.css("section[aria-label='My courses'] .credit-summary .cs-num").text == "6"
 
 
 def t18_overwrites_panel_and_remove_all(app):
@@ -896,7 +899,7 @@ def t29_share_link_carries_custom_changes(app):
     app.xpath("//button[contains(.,'2 changes')]")
     app.open_tab("My courses")
     section = app.wait_css("section[aria-label='My courses']")
-    assert "Total credits: 3" in section.text, section.text
+    assert app.css("section[aria-label='My courses'] .credit-summary .cs-num").text == "3", section.text
 
 
 def t30_sync_merge_conflict_flow(app):
@@ -1302,12 +1305,13 @@ def t38_duration_based_credits(app):
     app.open_tab("My courses")
     section = app.wait_css("section[aria-label='My courses']")
     # TOC assumed 4 + MATH assumed 2 (Oct-Nov) + RDBM stated 2 = 8.
-    assert "Total credits: 8" in section.text, section.text
-    # Counts of courses at each credit value, heaviest first.
-    assert "1 × 4 cr" in section.text, section.text
-    assert "2 × 2 cr" in section.text, section.text
+    assert app.css("section[aria-label='My courses'] .credit-summary .cs-num").text == "8", section.text
+    assert "credits in total" in section.text, section.text
+    # One readable pill per credit value, heaviest first.
+    pills = [p.text for p in app.css_all("section[aria-label='My courses'] .credit-summary .cs-pill")]
+    assert pills == ["1 course at 4 credits", "2 courses at 2 credits"], pills
     # Two courses carry assumptions (at different values), one is stated.
-    assert "2 courses with assumed credits" in section.text, section.text
+    assert "CMI doesn't list credits for 2 courses" in section.text, section.text
 
     # The MATH card's credits badge says 2 and explains why.
     badge = app.xpath(

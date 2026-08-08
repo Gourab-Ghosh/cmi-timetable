@@ -62,6 +62,24 @@ srv = http.server.ThreadingHTTPServer(
 )
 threading.Thread(target=srv.serve_forever, daemon=True).start()
 
+
+class NoData(Quiet):
+    """404 the mirror files so true first-run states are capturable —
+    same-origin /data always succeeds otherwise (DNS blackhole excludes
+    127.0.0.1)."""
+    def send_head(self):
+        if self.path.startswith("/data/"):
+            self.send_error(404)
+            return None
+        return super().send_head()
+
+
+NODATA_PORT = PORT + 1
+srv2 = http.server.ThreadingHTTPServer(
+    ("127.0.0.1", NODATA_PORT), lambda *a, **k: NoData(*a, directory=DIST, **k)
+)
+threading.Thread(target=srv2.serve_forever, daemon=True).start()
+
 opts = Options()
 opts.binary_location = CHROME_BIN
 opts.add_argument("--headless=new")
@@ -93,8 +111,9 @@ OVERRIDES = {
 }
 
 
-def boot(theme, tab, query="", seed=True, prefs_extra=None, selection=None):
-    d.get(f"http://127.0.0.1:{PORT}/e2e-blank")
+def boot(theme, tab, query="", seed=True, prefs_extra=None, selection=None,
+         port=PORT):
+    d.get(f"http://127.0.0.1:{port}/e2e-blank")
     if seed:
         prefs = {
             "last_update_attempt": time.time() * 1000.0,
@@ -119,7 +138,7 @@ def boot(theme, tab, query="", seed=True, prefs_extra=None, selection=None):
             "localStorage.setItem('cmitt.v1.prefs', arguments[0]);",
             json.dumps({"theme": theme, "last_update_attempt": 0}),
         )
-    d.get(f"http://127.0.0.1:{PORT}/{query}")
+    d.get(f"http://127.0.0.1:{port}/{query}")
     wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, ".header h1")))
     time.sleep(0.9)  # fonts/layout settle
 
@@ -192,16 +211,21 @@ d.find_element(By.XPATH, "//button[normalize-space()='My data']").click()
 time.sleep(0.5)
 shot("11-light-my-data-dialog")
 
-# First-run welcome (all hosts blackholed → auto-sync fails → banner state)
-boot("Light", "MyTimetable", seed=False)
+boot("Light", "MyCourses")
+shot("07b-light-my-courses")
+
+# First-run welcome: served WITHOUT /data so the mirror tier fails too and
+# the real hero card renders (all other hosts are blackholed already).
+boot("Light", "MyTimetable", seed=False, port=NODATA_PORT)
 time.sleep(2.5)
 shot("12-light-welcome")
-boot("Dark", "MyTimetable", seed=False)
+boot("Dark", "MyTimetable", seed=False, port=NODATA_PORT)
 time.sleep(2.5)
 shot("13-dark-welcome")
 
-# Compact density
-boot("Light", "MyTimetable", prefs_extra={"density": "Compact"})
+# Compact density lives on the Master grid (that's where the toggle is).
+boot("Light", "MasterGrid", prefs_extra={"density": "Compact"})
+wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, ".density-compact")))
 shot("14-light-compact")
 
 # Mobile width
@@ -210,7 +234,7 @@ boot("Light", "MyTimetable")
 shot("15-mobile-my-timetable")
 boot("Light", "Catalog")
 shot("16-mobile-catalog")
-boot("Light", "MyTimetable", seed=False)
+boot("Light", "MyTimetable", seed=False, port=NODATA_PORT)
 time.sleep(2.5)
 shot("17-mobile-welcome")
 d.set_window_size(1440, 900)
@@ -235,3 +259,4 @@ print_pdf("print-clash.pdf")
 
 d.quit()
 srv.shutdown()
+srv2.shutdown()
