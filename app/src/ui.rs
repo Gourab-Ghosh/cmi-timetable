@@ -7,6 +7,8 @@ use crate::state::{
 use crate::{dnd, domx, fetch, hues, storage};
 use leptos::prelude::*;
 use ttcore::model::{Course, Day, Meeting, ScheduleStatus, Slot, Snapshot, SourceTier};
+use wasm_bindgen::closure::Closure;
+use wasm_bindgen::JsCast;
 
 pub fn parse_hhmm(s: &str) -> Option<u16> {
     let (h, m) = s.trim().split_once(':')?;
@@ -339,6 +341,19 @@ pub fn edit_toggle(app: App) -> impl IntoView {
 pub fn Header() -> impl IntoView {
     let app = App::use_ctx();
 
+    // "Synced 12 min ago" is wall-clock text: nothing reactive changes as
+    // time passes, so drive it from a ticking signal. A slow interval covers
+    // the open-tab case; the visibilitychange hook catches up instantly when
+    // a throttled background tab comes back. Header mounts once for the
+    // page's lifetime, so forgetting both handles leaks nothing that
+    // wouldn't live forever anyway.
+    let now = RwSignal::new(domx::now_ms());
+    gloo_timers::callback::Interval::new(30_000, move || now.set(domx::now_ms())).forget();
+    let refresh = Closure::<dyn FnMut()>::new(move || now.set(domx::now_ms()));
+    let _ = domx::document()
+        .add_event_listener_with_callback("visibilitychange", refresh.as_ref().unchecked_ref());
+    refresh.forget();
+
     let pill_text = move || {
         let s = app.sync.get();
         if s.updating {
@@ -350,7 +365,11 @@ pub fn Header() -> impl IntoView {
         } else if s.fetched_at <= 0.0 {
             "Not synced yet".to_string()
         } else {
-            format!("Synced {} · {}", domx::rel_time(s.fetched_at), s.source.short_label())
+            format!(
+                "Synced {} · {}",
+                domx::rel_time(s.fetched_at, now.get()),
+                s.source.short_label(),
+            )
         }
     };
     let pill_title = move || {
@@ -363,7 +382,7 @@ pub fn Header() -> impl IntoView {
     };
     let stale = move || {
         let s = app.sync.get();
-        s.fetched_at <= 0.0 || domx::now_ms() - s.fetched_at > 48.0 * 3600e3
+        s.fetched_at <= 0.0 || now.get() - s.fetched_at > 48.0 * 3600e3
     };
 
     let theme_label = move || match app.prefs.with(|p| p.theme) {
@@ -405,7 +424,7 @@ pub fn Header() -> impl IntoView {
             // Visible on every page: the data is only as fresh as the last
             // sync, and CMI edits its timetable all semester long.
             <span class="sync-hint">
-                "CMI keeps editing the timetable — sync every few days to stay current."
+                "CMI keeps editing the timetable — sync every few days to stay up to date."
             </span>
             <div class="spacer"></div>
             <button
@@ -1915,8 +1934,8 @@ fn my_data_dialog(app: App) -> impl IntoView {
                 </p>
                 <p class="muted small">
                     "CMI keeps editing its timetable through the semester — sync every \
-                     few days to stay current. The app also re-checks on its own, at \
-                     most twice a day."
+                     few days to stay up to date. The app also re-checks on its own, \
+                     at most twice a day."
                 </p>
             </section>
 

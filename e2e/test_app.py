@@ -1332,6 +1332,43 @@ def t38_duration_based_credits(app):
     app.d.find_element(By.CSS_SELECTOR, "body").send_keys(Keys.ESCAPE)
 
 
+def t39_sync_pill_ticks_live(app):
+    """The header's 'Synced … ago' text and its stale tint keep up with the
+    wall clock on their own — no reload, no new sync. The header re-renders
+    on a 30 s interval and instantly on visibilitychange, so a throttled
+    background tab catches up the moment it comes back."""
+    snap = json.loads(SEED_SNAPSHOT_JSON)
+    snap["fetched_at"] = time.time() * 1000.0
+    app.boot("/", raw_snapshot=json.dumps(snap))
+    pill = app.css(".sync-pill")
+    assert "Synced just now" in pill.text, pill.text
+    assert "stale" not in pill.get_attribute("class"), pill.get_attribute("class")
+
+    # Jump the page's wall clock forward, then poke the visibility hook the
+    # header listens on — the deterministic stand-in for waiting 30 s.
+    def jump(minutes):
+        app.d.execute_script(
+            "window.__realNow = window.__realNow || Date.now.bind(Date);"
+            f"Date.now = () => window.__realNow() + {minutes} * 60000;"
+            "document.dispatchEvent(new Event('visibilitychange'));"
+        )
+
+    jump(7)
+    WebDriverWait(app.d, 5).until(
+        lambda d: "7 min ago" in app.css(".sync-pill").text,
+        message=f"pill should tick to '7 min ago'; got {app.css('.sync-pill').text!r}",
+    )
+
+    # 49 h out it crosses the 48 h staleness line — text and tint together.
+    jump(49 * 60)
+    WebDriverWait(app.d, 5).until(
+        lambda d: "2 days ago" in app.css(".sync-pill").text
+        and "stale" in app.css(".sync-pill").get_attribute("class"),
+        message=f"pill should go stale at 49 h; got {app.css('.sync-pill').text!r}",
+    )
+    app.d.execute_script("Date.now = window.__realNow; delete window.__realNow;")
+
+
 TESTS = [
     t01_header_sync_button_and_hidden_dev,
     t02_developer_endpoint_only,
@@ -1371,6 +1408,7 @@ TESTS = [
     t36_out_of_grid_meeting_gets_its_own_column,
     t37_catalog_updates_live,
     t38_duration_based_credits,
+    t39_sync_pill_ticks_live,
 ]
 
 

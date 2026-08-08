@@ -116,6 +116,14 @@ and no committed mirror (fixtures exist only for tests/e2e seed).
   R6) — reclaim header space by other means only.
 - Toast auto-dismiss pauses while hovered/focused (`HOVERED_TOASTS`
   thread_local, deliberately NOT a signal).
+- The header's "Synced … ago" pill and its 48 h stale tint tick on their
+  own: Header owns a `now: RwSignal<f64>` bumped by a 30 s
+  `gloo_timers::callback::Interval` plus a `visibilitychange` listener
+  (throttled background tabs catch up instantly on return). `domx::rel_time`
+  takes `now` as a parameter so the text is reactive — never call it with a
+  bare `now_ms()` from render code, that freezes the label until an
+  unrelated re-render. Header mounts once (outside the route switch), so
+  the forgotten handles are page-lifetime, not leaks-per-mount.
 - e2e Chrome flags: `--force-prefers-reduced-motion` (dialog animations) and
   `--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE 127.0.0.1` (no network).
 
@@ -126,7 +134,7 @@ and no committed mirror (fixtures exist only for tests/e2e seed).
 CARGO_TARGET_DIR=~/.rust-target-e2e cargo test --workspace --features html
 # app build for e2e (never plain dist while trunk serve runs)
 cd app && CARGO_TARGET_DIR=~/.rust-target-e2e trunk build --release --dist dist-e2e
-# e2e (38 tests; self-generates seed via core example, needs cargo on PATH)
+# e2e (39 tests; self-generates seed via core example, needs cargo on PATH)
 cd e2e && DIST_DIR=../app/dist-e2e .venv/bin/python test_app.py
 # screenshots + print PDFs for design review (writes e2e/shots/, gitignored)
 cd e2e && .venv/bin/python shoot.py
@@ -142,7 +150,7 @@ regenerates the .ics golden.
 
 ## 6. Current state
 
-- Tests: 65 native + 38/38 e2e green. Meeting removals: `MeetingOverride.to`
+- Tests: 65 native + 39/39 e2e green. Meeting removals: `MeetingOverride.to`
   is `Option<Meeting>` (None = removed; legacy JSON/share payloads still
   load — present meeting ⇒ Some). Out-of-grid times: `display_slot_grid()`
   (views.rs) = official slots + synthetic `.extra` columns; `column_for`
@@ -462,3 +470,19 @@ regenerates the .ics golden.
   mirror silently auto-populated before — 12/13/17 never showed the
   hero), compact shot targets the Master grid, new 07b light my-courses
   shot. 65 native + 38/38 e2e. Committed locally, NOT pushed.
+- **R17 (live sync pill + hint copy):** user: the "Synced …" text only
+  updated after a refresh — make it update on its own; and reword the
+  header hint ("stay current" → suggested "stay updated", final wording
+  my choice). Root cause: `rel_time` read the wall clock non-reactively,
+  so nothing re-rendered as time passed. Fix: Header-owned
+  `now: RwSignal` bumped by a 30 s `gloo_timers::callback::Interval` +
+  a `visibilitychange` listener (instant catch-up after tab throttling);
+  `rel_time(ms, now)` now takes the clock as a parameter; the 48 h
+  `stale` class reads the same signal, so the tint flips live too.
+  Copy: "sync every few days to stay up to date" across all three sites
+  (header hint, My-data note, welcome note). New e2e t39 overrides
+  `Date.now` (wasm-bindgen glue resolves it call-time) and dispatches a
+  synthetic `visibilitychange`: pill → "7 min ago" → "2 days ago" +
+  `.stale`, no reload. NOTE: e2e must run via `e2e/.venv/bin/python`
+  (system python has no selenium). 65 native + 39/39 e2e. Committed
+  locally, NOT pushed.

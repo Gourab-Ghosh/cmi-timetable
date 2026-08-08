@@ -83,7 +83,7 @@ fn welcome(app: App) -> impl IntoView {
                 <p class="welcome-note muted small">
                     "The app never ships a copy of the timetable; it shows CMI's real \
                      pages, fetched straight from cmi.ac.in. CMI keeps editing them \
-                     through the semester, so sync every few days to stay current — \
+                     through the semester, so sync every few days to stay up to date — \
                      the app re-checks on its own too, at most twice a day, and always \
                      tells you what changed."
                 </p>

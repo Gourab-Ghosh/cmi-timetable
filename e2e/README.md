@@ -23,7 +23,7 @@ Environment knobs: `CHROME_BIN` (default `/usr/bin/chromium`), `DIST_DIR`,
 `PORT`, `CARGO_TARGET_DIR` (for the seed generator; defaults to
 `~/.rust-target-e2e`).
 
-Covered flows (38 tests): Sync-now header + hidden developer mode (URL
+Covered flows (39 tests): Sync-now header + hidden developer mode (URL
 endpoint only), `?c=` selection + clash badges/panel (any casing), unknown-
 code warning, credits defaulting to 4 and per-course credit overwrites,
 master-grid ⚠ would-clash markers and clash toast on add, the ⓘ details
@@ -51,9 +51,12 @@ survives reloads), and out-of-grid times getting their own clearly-marked
 column instead of being squeezed into the last official slot, and the
 catalog updating in place — clash marks, meeting times and selection state
 change live as courses are added/removed/edited or the whole selection is
-cleared, with no reload or tab switch — and duration-based credit
+cleared, with no reload or tab switch — duration-based credit
 assumptions (a "(Oct-Nov)" course counts 2 credits, stated credits win,
-My courses breaks the selection down by credit value).
+My courses breaks the selection down by credit value), and the header's
+"Synced … ago" pill ticking with the wall clock on its own (30 s interval
+plus an instant visibilitychange catch-up, crossing into the stale tint
+at 48 h without any reload).
 
 The app ships no timetable data, so the suite derives a snapshot from
 `core/fixtures/` at startup (via core's `snapshot_json` example — cargo must

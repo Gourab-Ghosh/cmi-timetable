@@ -208,8 +208,11 @@ pub fn fmt_local_date(ms: f64) -> String {
 }
 
 /// "just now" / "12 min ago" / "2 h ago" / "3 days ago".
-pub fn rel_time(ms: f64) -> String {
-    let delta = (now_ms() - ms).max(0.0);
+///
+/// Takes `now` as a parameter so callers can drive it from a ticking signal
+/// and the text re-renders as time passes, not only when `ms` changes.
+pub fn rel_time(ms: f64, now: f64) -> String {
+    let delta = (now - ms).max(0.0);
     let mins = delta / 60_000.0;
     if mins < 1.0 {
         "just now".to_string()
