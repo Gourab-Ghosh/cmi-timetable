@@ -112,7 +112,7 @@ OVERRIDES = {
 
 
 def boot(theme, tab, query="", seed=True, prefs_extra=None, selection=None,
-         port=PORT):
+         port=PORT, customs=None):
     d.get(f"http://127.0.0.1:{port}/e2e-blank")
     if seed:
         prefs = {
@@ -121,17 +121,23 @@ def boot(theme, tab, query="", seed=True, prefs_extra=None, selection=None,
             "tab": tab,
         }
         prefs.update(prefs_extra or {})
-        d.execute_script(
+        script = (
             "localStorage.clear();"
             "localStorage.setItem('cmitt.v1.prefs', arguments[0]);"
             "localStorage.setItem('cmitt.v1.selection', arguments[1]);"
             "localStorage.setItem('cmitt.v1.overrides', arguments[2]);"
-            "localStorage.setItem('cmitt.v1.snapshot', arguments[3]);",
+            "localStorage.setItem('cmitt.v1.snapshot', arguments[3]);"
+        )
+        args = [
             json.dumps(prefs),
             json.dumps(selection or ["TOC", "QCOM", "MFD", "RFLR", "SVA"]),
             json.dumps(OVERRIDES),
             SNAPSHOT_JSON,
-        )
+        ]
+        if customs is not None:
+            script += "localStorage.setItem('cmitt.v1.custom', arguments[4]);"
+            args.append(json.dumps(customs))
+        d.execute_script(script, *args)
     else:
         d.execute_script(
             "localStorage.clear();"
@@ -228,12 +234,116 @@ boot("Light", "MasterGrid", prefs_extra={"density": "Compact"})
 wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, ".density-compact")))
 shot("14-light-compact")
 
+# Custom courses: a scheduled one (GERMAN, on the grid) and a parked one
+# (RG, kept but off the timetable).
+CUSTOMS = {
+    "courses": [
+        {
+            "code": "GERMAN",
+            "name": "German A1",
+            "instructors": ["Goethe-Institut"],
+            "branches": [],
+            "credits": 2,
+            "starts": None,
+            "part_of_semester": None,
+            "optional_flag": False,
+            "status": "Scheduled",
+            "meetings": [
+                {"day": "Tue", "slot": {"start_min": 550, "end_min": 625},
+                 "hall": None, "temp_booking": False},
+                {"day": "Mon", "slot": {"start_min": 1110, "end_min": 1185},
+                 "hall": "Sports annexe", "temp_booking": False},
+            ],
+        },
+        {
+            "code": "RG",
+            "name": "Algebra reading group",
+            "instructors": [],
+            "branches": [],
+            "credits": 0,
+            "starts": None,
+            "part_of_semester": None,
+            "optional_flag": False,
+            "status": "UnscheduledListed",
+            "meetings": [],
+        },
+    ]
+}
+CUSTOM_SEL = ["TOC", "QCOM", "MFD", "GERMAN"]
+
+boot("Light", "MyCourses", selection=CUSTOM_SEL, customs=CUSTOMS)
+shot("18-light-my-courses-custom")
+boot("Dark", "MyCourses", selection=CUSTOM_SEL, customs=CUSTOMS)
+shot("19-dark-my-courses-custom")
+
+# The create form, with one official-slot row and one custom-time row.
+boot("Light", "MyCourses", selection=CUSTOM_SEL, customs=CUSTOMS)
+d.find_element(By.CSS_SELECTOR, ".add-own-card").click()
+time.sleep(0.4)
+d.find_element(By.CSS_SELECTOR, "#cc-name").send_keys("Music lesson")
+d.find_element(By.CSS_SELECTOR, "#cc-add-meeting").click()
+time.sleep(0.3)
+d.find_element(
+    By.CSS_SELECTOR, ".meeting-draft select[aria-label='Time'] option[value='custom']"
+).click()
+time.sleep(0.4)
+shot("20-light-custom-form")
+d.find_element(By.XPATH, "//button[normalize-space()='Cancel']").click()
+
+boot("Dark", "MyCourses", selection=CUSTOM_SEL, customs=CUSTOMS)
+d.find_element(By.CSS_SELECTOR, ".add-own-card").click()
+time.sleep(0.4)
+d.find_element(By.CSS_SELECTOR, "#cc-add-meeting").click()
+time.sleep(0.4)
+shot("21-dark-custom-form")
+d.find_element(By.XPATH, "//button[normalize-space()='Cancel']").click()
+
+# Edit mode: prefilled rows + the quiet-danger delete in the footer.
+boot("Light", "MyCourses", selection=CUSTOM_SEL, customs=CUSTOMS)
+d.find_element(By.XPATH, "//button[normalize-space()='Edit course']").click()
+time.sleep(0.4)
+shot("22-light-custom-form-edit")
+d.find_element(By.XPATH, "//button[normalize-space()='Cancel']").click()
+
+# My timetable with a custom evening column AND both under-grid panels
+# (clashes + your changes) — the gap regression's home ground. GERMAN's
+# Tue 09:10 intentionally clashes with TOC.
+boot("Light", "MyTimetable", selection=CUSTOM_SEL, customs=CUSTOMS)
+shot("23-light-tt-custom-panels")
+
+# The foot of My courses: the create tile and the parked group (RG is in
+# the custom store but not in the selection).
+boot("Light", "MyCourses", selection=CUSTOM_SEL, customs=CUSTOMS)
+d.execute_script("window.scrollTo(0, document.body.scrollHeight);")
+time.sleep(0.5)
+shot("25-light-parked-and-tile")
+
+# A custom course whose code CMI later listed too: the shadow note and its
+# one-click way out.
+SHADOW = {"courses": [dict(CUSTOMS["courses"][0], code="TOC", name="My own TOC notes")]}
+boot("Light", "MyCourses", selection=["TOC", "MFD"], customs=SHADOW)
+d.find_element(By.CSS_SELECTOR, "button.chip[aria-label^='TOC,']").click()
+time.sleep(0.5)
+shot("26-light-shadow-note")
+d.find_element(By.XPATH, "//button[normalize-space()='Close']").click()
+
 # Mobile width
 d.set_window_size(390, 850)
 boot("Light", "MyTimetable")
 shot("15-mobile-my-timetable")
 boot("Light", "Catalog")
 shot("16-mobile-catalog")
+# The custom-course form at phone width — sticky actions, wrapping rows.
+boot("Light", "MyCourses", selection=CUSTOM_SEL, customs=CUSTOMS)
+tile = d.find_element(By.CSS_SELECTOR, ".add-own-card")
+d.execute_script("arguments[0].scrollIntoView({block:'center'});", tile)
+time.sleep(0.2)
+tile.click()
+time.sleep(0.4)
+d.find_element(By.CSS_SELECTOR, "#cc-add-meeting").click()
+time.sleep(0.4)
+shot("24-mobile-custom-form")
+d.find_element(By.XPATH, "//button[normalize-space()='Cancel']").click()
 boot("Light", "MyTimetable", seed=False, port=NODATA_PORT)
 time.sleep(2.5)
 shot("17-mobile-welcome")

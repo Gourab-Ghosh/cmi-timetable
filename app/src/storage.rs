@@ -13,6 +13,7 @@ pub const KEY_SNAPSHOT: &str = "cmitt.v1.snapshot";
 pub const KEY_SELECTION: &str = "cmitt.v1.selection";
 pub const KEY_OVERRIDES: &str = "cmitt.v1.overrides";
 pub const KEY_PREFS: &str = "cmitt.v1.prefs";
+pub const KEY_CUSTOM: &str = "cmitt.v1.custom";
 
 fn raw() -> Option<web_sys::Storage> {
     web_sys::window()?.local_storage().ok().flatten()

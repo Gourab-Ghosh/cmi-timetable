@@ -653,7 +653,11 @@ fn my_timetable(app: App) -> impl IntoView {
                                                     " — {}",
                                                     course.instructors.join(" / "),
                                                 ));
-                                            let hue = crate::hues::course_hue(&course.branches);
+                                            let hue = if app.is_custom(&course.code) {
+                                                crate::hues::branch_hue(&course.code)
+                                            } else {
+                                                crate::hues::course_hue(&course.branches)
+                                            };
                                             view! {
                                                 <div class="pc-item">
                                                     <span
@@ -818,9 +822,28 @@ fn my_courses(app: App) -> impl IntoView {
                                 "Courses you add appear here with their instructors, credits, \
                                  meeting times and your customisations."
                             </p>
-                            <button class="btn primary" on:click=move |_| app.set_tab(Tab::Catalog)>
-                                "Open the catalog"
-                            </button>
+                            <div class="row" style="justify-content:center;gap:0.5rem">
+                                <button
+                                    class="btn primary"
+                                    on:click=move |_| app.set_tab(Tab::Catalog)
+                                >
+                                    "Open the catalog"
+                                </button>
+                                <button
+                                    class="btn ghost-accent"
+                                    on:click=move |_| {
+                                        app.dialog
+                                            .set(
+                                                Some(Dialog::CustomCourse {
+                                                    edit: None,
+                                                    prefill: None,
+                                                }),
+                                            );
+                                    }
+                                >
+                                    "Add your own course"
+                                </button>
+                            </div>
                         </div>
                     }
                         .into_any()
@@ -832,12 +855,105 @@ fn my_courses(app: App) -> impl IntoView {
                         .into_any()
                 }
             }}
+            {move || {
+                // The create tile earns its place only once the list exists —
+                // the empty state above already offers the same action.
+                (!app.selection.with(|s| s.is_empty()))
+                    .then(|| {
+                        view! {
+                            <button
+                                class="add-own-card"
+                                on:click=move |_| {
+                                    app.dialog
+                                        .set(
+                                            Some(Dialog::CustomCourse {
+                                                edit: None,
+                                                prefill: None,
+                                            }),
+                                        );
+                                }
+                            >
+                                <span class="aoc-plus" aria-hidden="true">"＋"</span>
+                                <span class="aoc-text">
+                                    <b>"Add your own course"</b>
+                                    <span>
+                                        "Seminars, reading groups, anything CMI's pages \
+                                         don't list."
+                                    </span>
+                                </span>
+                            </button>
+                        }
+                    })
+            }}
+            {move || {
+                let parked = app.parked_customs();
+                (!parked.is_empty())
+                    .then(|| {
+                        view! {
+                            <div class="parked" role="group" aria-label="Your courses, off the timetable">
+                                <h3>"Your courses, off the timetable"</h3>
+                                <p class="muted small">
+                                    "Removed but kept — add one back whenever you need it."
+                                </p>
+                                {parked
+                                    .into_iter()
+                                    .map(|c| {
+                                        let add_code = c.code.clone();
+                                        let edit_code = c.code.clone();
+                                        let when = c
+                                            .meetings
+                                            .iter()
+                                            .map(|m| m.describe())
+                                            .collect::<Vec<_>>()
+                                            .join(" · ");
+                                        view! {
+                                            <div class="row parked-row">
+                                                {crate::ui::chip(app, crate::ui::ChipProps::list(&c.code))}
+                                                <strong>{c.name.clone()}</strong>
+                                                <span class="muted small">
+                                                    {if when.is_empty() {
+                                                        "no fixed time".to_string()
+                                                    } else {
+                                                        when
+                                                    }}
+                                                </span>
+                                                <div class="grow"></div>
+                                                <button
+                                                    class="btn small"
+                                                    on:click=move |_| app.add_course(&add_code)
+                                                >
+                                                    "Add back"
+                                                </button>
+                                                <button
+                                                    class="btn small"
+                                                    on:click=move |_| {
+                                                        app.dialog
+                                                            .set(
+                                                                Some(Dialog::CustomCourse {
+                                                                    edit: Some(edit_code.clone()),
+                                                                    prefill: None,
+                                                                }),
+                                                            );
+                                                    }
+                                                >
+                                                    "Edit"
+                                                </button>
+                                            </div>
+                                        }
+                                    })
+                                    .collect_view()}
+                            </div>
+                        }
+                    })
+            }}
         </section>
     }
 }
 
 fn course_card(app: App, course: Course) -> impl IntoView {
     let code = course.code.clone();
+    let is_custom = app.is_custom(&code);
+    let shadows = is_custom && app.custom_shadows_official(&code);
     let eff = app.effective_meetings(&course);
     let has_overrides = eff.iter().any(|e| e.overridden);
     let clash = app.course_has_clash(&code);
@@ -890,6 +1006,26 @@ fn course_card(app: App, course: Course) -> impl IntoView {
                 </span>
             </div>
             <div class="row" style="margin-top:0.3rem">
+                {is_custom
+                    .then(|| {
+                        view! {
+                            <span class="badge custom" title="Added by you — not on CMI's pages">
+                                "Custom"
+                            </span>
+                        }
+                    })}
+                {shadows
+                    .then(|| {
+                        view! {
+                            <span
+                                class="badge warn"
+                                title="CMI's timetable now lists this code too — open the \
+                                       course to compare or switch to CMI's version"
+                            >
+                                "also on CMI now"
+                            </span>
+                        }
+                    })}
                 {course.branches.iter().map(|b| branch_chip(app, b)).collect_view()}
                 {course
                     .optional_flag
@@ -917,6 +1053,27 @@ fn course_card(app: App, course: Course) -> impl IntoView {
                     }
                 })}
             <div class="row" style="margin-top:0.4rem">
+                {is_custom
+                    .then(|| {
+                        let edit_code = code.clone();
+                        view! {
+                            <button
+                                class="btn small"
+                                title="Change this course's name, code, credits or times"
+                                on:click=move |_| {
+                                    app.dialog
+                                        .set(
+                                            Some(Dialog::CustomCourse {
+                                                edit: Some(edit_code.clone()),
+                                                prefill: None,
+                                            }),
+                                        );
+                                }
+                            >
+                                "Edit course"
+                            </button>
+                        }
+                    })}
                 <button
                     class="btn small"
                     title="Give this course an extra weekly time slot"
@@ -1146,6 +1303,17 @@ fn catalog(app: App) -> impl IntoView {
                         app.snapshot.with(|s| format!("{} courses this semester", s.courses.len()))
                     }}
                 </span>
+                <div class="grow"></div>
+                <button
+                    class="btn small ghost-accent"
+                    title="Add a course CMI's pages don't list"
+                    on:click=move |_| {
+                        app.dialog
+                            .set(Some(Dialog::CustomCourse { edit: None, prefill: None }));
+                    }
+                >
+                    "＋ Add your own course"
+                </button>
             </div>
             {filter_bar(app, count)}
             // Keyed list: rows persist across filter changes, so the page
@@ -1160,10 +1328,31 @@ fn catalog(app: App) -> impl IntoView {
                 filtered
                     .with(|c| c.is_empty())
                     .then(|| {
+                        let search = app.filters().text.trim().to_string();
                         view! {
                             <div class="empty panel">
                                 <p class="big">"No courses match."</p>
                                 <p>"Loosen a filter or clear the search to see more."</p>
+                                {(!search.is_empty())
+                                    .then(|| {
+                                        let prefill = search.clone();
+                                        view! {
+                                            <button
+                                                class="btn ghost-accent"
+                                                on:click=move |_| {
+                                                    app.dialog
+                                                        .set(
+                                                            Some(Dialog::CustomCourse {
+                                                                edit: None,
+                                                                prefill: Some(prefill.clone()),
+                                                            }),
+                                                        );
+                                                }
+                                            >
+                                                {format!("Add “{search}” as your own course")}
+                                            </button>
+                                        }
+                                    })}
                             </div>
                         }
                     })

@@ -44,7 +44,7 @@ and no committed mirror (fixtures exist only for tests/e2e seed).
         welcome()), dnd.rs (pointer+keyboard drag), storage.rs, dev.rs,
         domx.rs; styles.css = whole design system (tokens, light+dark).
 /sync   native mirror publisher (CI cron writes app/public/data/).
-/e2e    test_app.py — 38 Selenium tests, self-seeding (see §5); shoot.py —
+/e2e    test_app.py — 42 Selenium tests, self-seeding (see §5); shoot.py —
         design-review screenshots + print PDFs.
 /githooks  pre-push — builds+publishes via deploy.sh when main is pushed
         (activate per clone: `git config core.hooksPath githooks`; skip
@@ -113,9 +113,35 @@ and no committed mirror (fixtures exist only for tests/e2e seed).
   min-width:0 and the app grid uses minmax(0,1fr) — WITHOUT these the
   720px grid table widens the whole page on phones instead of scrolling
   in its container. The mobile sync-hint stays VISIBLE (user requirement,
-  R6) — reclaim header space by other means only.
+  R6) — reclaim header space by other means only. `.row` is a GLOBAL flex
+  utility: it was once scoped `.card .row`, which silently left every other
+  `.row` (details-dialog header, override lists, data rows) a BLOCK — chips
+  stacked above their titles and inline `gap`/`align-items` did nothing;
+  several call sites had patched around it with inline `display:flex`.
+  `.grid-scroll` owns the gap under every grid (`.panel` has no margin-top,
+  so without it the clashes/changes panels sit flush against the table).
+  `.dialog .actions` is sticky (long forms) and `.dialog` sizes with `dvh`
+  (phone keyboards don't shrink the layout viewport).
 - Toast auto-dismiss pauses while hovered/focused (`HOVERED_TOASTS`
   thread_local, deliberately NOT a signal).
+- **Custom (user-created) courses** reuse `Course` wholesale in a
+  `CustomStore` (`cmitt.v1.custom`), so clashes/grids/credits/ics/share all
+  work unchanged. Two rules carry the whole feature: (1) customs resolve
+  BEFORE the snapshot everywhere (`App::course_by_code`, selected_courses,
+  chip, details, export) — a later CMI sync that introduces the same code
+  never replaces user data, it just lights up `custom_shadows_official`
+  plus a one-click "Use CMI's version instead"; (2) a custom course NEVER
+  carries overrides — its definition IS its schedule, so apply_override /
+  select_and_override / add_meeting / remove_meeting / set_credit_override
+  all branch to `edit_custom_meetings` (which re-sorts + re-derives
+  status), and every writer purges overrides under a custom code
+  (save/delete in state.rs, `purge_custom_overrides` on share import —
+  a shared store is written wholesale and can aim at a code the recipient
+  owns). Customs are undoable like everything else: `UndoEntry.customs` +
+  `act_customs`. They never appear on CMI's pages (Catalog/Master/Halls).
+  "Remove" parks them (`parked_customs`, still in the store, off the
+  selection); only Delete destroys. Renames rewrite the selection entry
+  and then dedupe it (a code CMI dropped can still hold a slot).
 - The header's "Synced … ago" pill and its 48 h stale tint tick on their
   own: Header owns a `now: RwSignal<f64>` bumped by a 30 s
   `gloo_timers::callback::Interval` plus a `visibilitychange` listener
@@ -130,11 +156,11 @@ and no committed mirror (fixtures exist only for tests/e2e seed).
 ## 5. Build & test commands (exact)
 
 ```sh
-# native tests (65; --features html for the fixture-driven parser tests)
+# native tests (66; --features html for the fixture-driven parser tests)
 CARGO_TARGET_DIR=~/.rust-target-e2e cargo test --workspace --features html
 # app build for e2e (never plain dist while trunk serve runs)
 cd app && CARGO_TARGET_DIR=~/.rust-target-e2e trunk build --release --dist dist-e2e
-# e2e (39 tests; self-generates seed via core example, needs cargo on PATH)
+# e2e (42 tests; self-generates seed via core example, needs cargo on PATH)
 cd e2e && DIST_DIR=../app/dist-e2e .venv/bin/python test_app.py
 # screenshots + print PDFs for design review (writes e2e/shots/, gitignored)
 cd e2e && .venv/bin/python shoot.py
@@ -150,7 +176,7 @@ regenerates the .ics golden.
 
 ## 6. Current state
 
-- Tests: 65 native + 39/39 e2e green. Meeting removals: `MeetingOverride.to`
+- Tests: 66 native + 42/42 e2e green. Meeting removals: `MeetingOverride.to`
   is `Option<Meeting>` (None = removed; legacy JSON/share payloads still
   load — present meeting ⇒ Some). Out-of-grid times: `display_slot_grid()`
   (views.rs) = official slots + synthetic `.extra` columns; `column_for`
@@ -486,3 +512,33 @@ regenerates the .ics golden.
   `.stale`, no reload. NOTE: e2e must run via `e2e/.venv/bin/python`
   (system python has no selenium). 65 native + 39/39 e2e. Committed
   locally, NOT pushed.
+- **R18 (your own courses + spacing bugs):** user: "Add an option to add
+  custom courses… be smart on how to design it… make sure it looks
+  extremely good"; mid-round: no gap between the grid and the clash panel
+  (and the same with the changes panel). Feature: `CustomStore`
+  (`cmitt.v1.custom`) reusing `Course`, `Course::custom`, share field `x`,
+  `Dialog::CustomCourse`, name-first form (auto-suggested code, credits
+  0–4 + Other 0–20, repeating meeting rows with official slots or custom
+  times, per-row live clash line, focus moves to new/next row), entry
+  points in My courses (dashed tile + empty state), the catalog toolbar and
+  its empty-search state ("Add “X” as your own course"). See the §4 entry
+  for the two rules the design rests on. 3-lens UX panel (first-timer /
+  power-user / consistency) reshaped it before coding: credits start at 0,
+  code is derived from the name instead of demanded, Remove parks instead
+  of deleting, the shadow note got an action, the hall field became a
+  datalist input (also fixed for the existing EditMeeting dialog — a
+  `<select>` silently dropped free-text halls), and the dialog got a sticky
+  footer + dvh sizing for phones. SPACING BUGS (the user's report, then a
+  sweep): `.grid-scroll` had no bottom margin and `.panel` has no
+  margin-top → every panel under a grid sat flush; and `.row` was scoped
+  `.card .row`, so `.row` everywhere else was a block (details-dialog chip
+  stacked above the title — visible in the shipped app; several call sites
+  had inline `display:flex` patches). 21-agent review (8 verifiers + both
+  design critics died on session limits; those findings verified by hand):
+  fixed a selection duplicate on rename, share-import overrides landing on
+  custom codes (`purge_custom_overrides`), the collision banner being wiped
+  by the load-time sync (now sticky), chip identity frozen in keyed
+  catalog rows (now a Memo — t42 pins the live refresh), the
+  keep_selected casing mismatch, and the credits editor citing a "CMI
+  value" for a course CMI never had. 66 native + 42/42 e2e; shots 18–26 +
+  24-mobile. Committed locally, NOT pushed.

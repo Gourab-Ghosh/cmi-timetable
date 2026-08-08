@@ -62,17 +62,33 @@ impl ChipProps {
 }
 
 pub fn chip(app: App, p: ChipProps) -> impl IntoView {
-    // `with`, not `get`: the snapshot carries the gzipped raw pages, and a
-    // full clone per chip (hundreds per grid rebuild) is real jank.
-    let (name, branches) = app.snapshot.with(|s| {
-        let course = s.course(&p.code);
-        (
-            course.map(|c| c.name.clone()).unwrap_or_default(),
-            course.map(|c| c.branches.clone()).unwrap_or_default(),
-        )
-    });
-    let hue = hues::course_hue(&branches);
-    let neutral = branches.is_empty();
+    // Identity — name, hue, whether this is one of the user's own courses —
+    // is a memo for the same reason selection and clash are (below): in the
+    // catalog's keyed <For> a chip outlives the render that built it, and
+    // deleting a custom that shadowed a CMI code (or undoing that) changes
+    // customs without touching the snapshot, so a frozen copy would keep
+    // showing the deleted course's name and colour until a remount.
+    // The user's own courses resolve first (same precedence as everywhere
+    // else); their chips take a per-code hashed hue so two customs stay
+    // tellable apart — violet is the badge's job, not the chip's.
+    // Fields: (name, hue, neutral).
+    let identity = {
+        let code = p.code.clone();
+        Memo::new(move |_| {
+            // `with`, not `get`: the snapshot carries the gzipped raw pages,
+            // and a full clone per chip (hundreds per grid rebuild) is jank.
+            let own = app.customs.with(|cs| cs.get(&code).map(|c| c.name.clone()));
+            match own {
+                Some(name) => (name, hues::branch_hue(&code), false),
+                None => app.snapshot.with(|s| {
+                    let course = s.course(&code);
+                    let name = course.map(|c| c.name.clone()).unwrap_or_default();
+                    let branches = course.map(|c| c.branches.clone()).unwrap_or_default();
+                    (name, hues::course_hue(&branches), branches.is_empty())
+                }),
+            }
+        })
+    };
 
     // Selection and clash state are memos, not values: in keyed lists (the
     // catalog's <For>) a chip outlives the render that built it, so anything
@@ -114,9 +130,10 @@ pub fn chip(app: App, p: ChipProps) -> impl IntoView {
         })
     };
 
-    // Static aria prefix (facts about this chip's meeting); the dynamic
-    // suffix — selection and clash partners — is appended in the memo below.
-    let mut aria_pre = format!("{}, {}{}", p.code, name, aria_when);
+    // Aria prefix (facts about this chip's meeting). The name is filled in
+    // by the memo below, so a renamed/deleted custom doesn't leave a stale
+    // label behind; the tail is static.
+    let mut aria_pre = String::new();
     if p.eff.is_some() {
         aria_pre.push_str(&format!(
             ", {}",
@@ -145,8 +162,10 @@ pub fn chip(app: App, p: ChipProps) -> impl IntoView {
     let aria = {
         let code = p.code.clone();
         let warn_wont_fit = p.warn_wont_fit;
+        let aria_when = aria_when.clone();
         Memo::new(move |_| {
-            let mut aria = aria_pre.clone();
+            let name = identity.with(|(n, _, _)| n.clone());
+            let mut aria = format!("{code}, {name}{aria_when}{aria_pre}");
             if selected.get() {
                 aria.push_str(", in your timetable");
             }
@@ -212,8 +231,8 @@ pub fn chip(app: App, p: ChipProps) -> impl IntoView {
             class:clash=move || clash.get()
             class:overridden=overridden
             class:selected=move || selected.get() && from_master
-            class:neutral=neutral
-            style=format!("--hue:{hue}")
+            class:neutral=move || identity.with(|(_, _, n)| *n)
+            style=move || format!("--hue:{}", identity.with(|(_, h, _)| *h))
             class:draggable=move || draggable && app.edit_mode.get()
             aria-label=move || aria.get()
             title=move || aria.get()
@@ -617,7 +636,10 @@ pub fn BannerView() -> impl IntoView {
                         <div class="banner warn" role="status">
                             <span>
                                 {format!(
-                                    "Unknown course code{}: {} — {} may be from an older timetable.",
+                                    "Unknown course code{}: {} — {} may be from an older \
+                                     timetable, or someone's own course. Self-made courses \
+                                     only travel with the full share link (the one \"with \
+                                     custom changes\").",
                                     if unknown.len() == 1 { "" } else { "s" },
                                     unknown.join(", "),
                                     if unknown.len() == 1 { "it" } else { "they" },
@@ -643,11 +665,15 @@ pub fn DragGhost() -> impl IntoView {
                 .get()
                 .filter(|d| d.started)
                 .map(|d| {
-                    let snapshot = app.snapshot.get();
-                    let hue = snapshot
-                        .course(&d.spec.code)
-                        .map(|c| hues::course_hue(&c.branches))
-                        .unwrap_or(215);
+                    let hue = if app.is_custom(&d.spec.code) {
+                        hues::branch_hue(&d.spec.code)
+                    } else {
+                        app.snapshot.with(|s| {
+                            s.course(&d.spec.code)
+                                .map(|c| hues::course_hue(&c.branches))
+                                .unwrap_or(215)
+                        })
+                    };
                     view! {
                         <div
                             class="chip drag-ghost"
@@ -1146,6 +1172,9 @@ pub fn DialogHost() -> impl IntoView {
                         Dialog::Export { scope } => export_dialog(app, scope).into_any(),
                         Dialog::Share => share_dialog(app).into_any(),
                         Dialog::WhatChanged => what_changed_dialog(app).into_any(),
+                        Dialog::CustomCourse { edit, prefill } => {
+                            custom_course_dialog(app, edit, prefill).into_any()
+                        }
                     };
                     view! {
                         <div class="overlay" on:click=move |_| app.dialog.set(None)>
@@ -1332,7 +1361,9 @@ pub fn meeting_row(app: App, course: &Course, eff: EffMeeting) -> impl IntoView 
 }
 
 /// Inline credits display + editor (details dialog). Shows the official
-/// value, lets the user overwrite it, and always offers a one-click reset.
+/// value, lets the user overwrite it, and offers a one-click reset back to
+/// it. For the user's own courses there is no official value: editing
+/// writes the definition, so no comparison and no reset are shown.
 fn credits_editor(app: App, course: &Course) -> impl IntoView {
     let code = course.code.clone();
     let official = course.effective_credits();
@@ -1410,7 +1441,11 @@ fn credits_editor(app: App, course: &Course) -> impl IntoView {
                     }
                         .into_any()
                 } else {
-                    let custom = app.credits_custom(&code);
+                    // The user's own course has no "official" value behind
+                    // it: editing changes the definition, so there is
+                    // nothing to compare against or reset to.
+                    let own = app.is_custom(&code);
+                    let custom = (!own).then(|| app.credits_custom(&code)).flatten();
                     let shown = match custom {
                         Some(n) => format!("{n} (set by you — CMI: {official_short})"),
                         None => official_label,
@@ -1451,7 +1486,12 @@ fn credits_editor(app: App, course: &Course) -> impl IntoView {
 
 fn details_dialog(app: App, code: String) -> impl IntoView {
     let snapshot = app.snapshot.get();
-    let Some(course) = snapshot.course(&code).cloned() else {
+    // The user's own definition wins, as everywhere else.
+    let is_custom = app.is_custom(&code);
+    let Some(course) = app
+        .custom_course(&code)
+        .or_else(|| snapshot.course(&code).cloned())
+    else {
         let selected = app.is_selected(&code);
         let remove_code = code.clone();
         return view! {
@@ -1540,7 +1580,9 @@ fn details_dialog(app: App, code: String) -> impl IntoView {
                 </dd>
                 <dt>"Branches"</dt>
                 <dd class="chipline">
-                    {if course.branches.is_empty() {
+                    {if is_custom {
+                        view! { <span class="muted">"— your own course"</span> }.into_any()
+                    } else if course.branches.is_empty() {
                         view! { <span class="muted">"none (listed only in the hall grid)"</span> }
                             .into_any()
                     } else {
@@ -1563,10 +1605,39 @@ fn details_dialog(app: App, code: String) -> impl IntoView {
                     })}
             </dl>
             <div class="chipline">
+                {is_custom
+                    .then(|| {
+                        view! {
+                            <span class="badge custom" title="Added by you — not on CMI's pages">
+                                "Custom"
+                            </span>
+                        }
+                    })}
                 {status_badges(&course)}
                 {removed
                     .then(|| view! { <span class="badge warn">"No longer on CMI's timetable"</span> })}
             </div>
+            {(is_custom && app.custom_shadows_official(&code))
+                .then(|| {
+                    let switch_code = code.clone();
+                    view! {
+                        <div class="shadow-note" role="note">
+                            <p>
+                                "CMI's timetable now lists a course with this code too. \
+                                 You're seeing your own version."
+                            </p>
+                            <button
+                                class="btn small"
+                                on:click=move |_| {
+                                    app.delete_custom_course(&switch_code, true);
+                                    app.dialog.set(None);
+                                }
+                            >
+                                "Use CMI's version instead"
+                            </button>
+                        </div>
+                    }
+                })}
             <h3 style="margin-top:0.8rem">"Meetings"</h3>
             {if eff.is_empty() {
                 if course.meetings.is_empty() {
@@ -1605,6 +1676,26 @@ fn details_dialog(app: App, code: String) -> impl IntoView {
                     }
                 })}
             <div class="actions">
+                {is_custom
+                    .then(|| {
+                        let edit_code = code.clone();
+                        view! {
+                            <button
+                                class="btn"
+                                on:click=move |_| {
+                                    app.dialog
+                                        .set(
+                                            Some(Dialog::CustomCourse {
+                                                edit: Some(edit_code.clone()),
+                                                prefill: None,
+                                            }),
+                                        );
+                                }
+                            >
+                                "Edit this course"
+                            </button>
+                        }
+                    })}
                 // Any course can gain extra time slots — the button is only
                 // labeled differently when CMI gave it none to begin with.
                 {
@@ -1901,6 +1992,54 @@ fn my_data_dialog(app: App) -> impl IntoView {
 
             <section class="data-section">
                 <header>
+                    <h3>"Your own courses"</h3>
+                </header>
+                {move || {
+                    let customs = app.customs.with(|cs| cs.courses.clone());
+                    if customs.is_empty() {
+                        view! {
+                            <p class="small muted">
+                                "None yet — create one from My courses or the catalog."
+                            </p>
+                        }
+                            .into_any()
+                    } else {
+                        customs
+                            .into_iter()
+                            .map(|c| {
+                                let del_code = c.code.clone();
+                                let on_grid = app.is_selected(&c.code);
+                                view! {
+                                    <div class="row data-row">
+                                        <span class="mono">{c.code.clone()}</span>
+                                        <span>{c.name.clone()}</span>
+                                        <span class="muted small">
+                                            {if on_grid {
+                                                "on your timetable"
+                                            } else {
+                                                "off the timetable, kept"
+                                            }}
+                                        </span>
+                                        <div class="grow"></div>
+                                        <button
+                                            class="btn small danger"
+                                            on:click=move |_| {
+                                                app.delete_custom_course(&del_code, false);
+                                            }
+                                        >
+                                            "Delete"
+                                        </button>
+                                    </div>
+                                }
+                            })
+                            .collect_view()
+                            .into_any()
+                    }
+                }}
+            </section>
+
+            <section class="data-section">
+                <header>
                     <h3>"Cached timetable"</h3>
                     {move || {
                         app.has_data()
@@ -2002,9 +2141,9 @@ fn edit_meeting_dialog(
     let slots_for_save = slots.clone();
     let course_save = course.clone();
     let title = if create {
-        let already_meets = snapshot
-            .course(&course)
-            .map(|c| !app.effective_meetings(c).is_empty())
+        let already_meets = app
+            .course_by_code(&course)
+            .map(|c| !app.effective_meetings(&c).is_empty())
             .unwrap_or(false);
         if already_meets {
             format!("Add a meeting — {course}")
@@ -2176,24 +2315,23 @@ fn edit_meeting_dialog(
             </div>
             <div class="fieldrow">
                 <label for="em-hall">"Hall"</label>
-                <select
+                // Free text with the official halls one keystroke away —
+                // rooms outside CMI's list ("Seminar room", "Online") are
+                // as legitimate as LH803. Empty = hall to be announced.
+                <input
                     id="em-hall"
-                    on:change=move |ev| hall.set(event_target_value(&ev))
-                >
-                    <option value="" selected=hall.get_untracked().is_empty()>
-                        "Hall TBA"
-                    </option>
+                    type="text"
+                    list="em-halls"
+                    placeholder="Hall TBA"
+                    prop:value=hall.get_untracked()
+                    on:input=move |ev| hall.set(event_target_value(&ev))
+                />
+                <datalist id="em-halls">
                     {halls
                         .iter()
-                        .map(|h| {
-                            view! {
-                                <option value=h.clone() selected=*h == hall.get_untracked()>
-                                    {h.clone()}
-                                </option>
-                            }
-                        })
+                        .map(|h| view! { <option value=h.clone()></option> })
                         .collect_view()}
-                </select>
+                </datalist>
             </div>
             {move || {
                 let e = error.get();
@@ -2209,6 +2347,666 @@ fn edit_meeting_dialog(
             </div>
         </div>
     }
+}
+
+// ---------------------------------------------------------------------------
+// Your own course — create & edit
+// ---------------------------------------------------------------------------
+
+/// One editable meeting row in the custom-course form. The row list only
+/// changes on add/remove; each field is its own signal, so typing in one
+/// input never rebuilds the others.
+#[derive(Clone, Copy)]
+struct MeetRowDraft {
+    key: u64,
+    day: RwSignal<usize>,
+    /// `Some(start_min)` = an official CMI slot; `None` = custom times.
+    preset: RwSignal<Option<u16>>,
+    start: RwSignal<String>,
+    end: RwSignal<String>,
+    hall: RwSignal<String>,
+}
+
+impl MeetRowDraft {
+    fn blank(key: u64, first_slot: Option<Slot>) -> MeetRowDraft {
+        MeetRowDraft {
+            key,
+            day: RwSignal::new(0),
+            preset: RwSignal::new(first_slot.map(|s| s.start_min)),
+            start: RwSignal::new(first_slot.map(|s| s.start_label()).unwrap_or_default()),
+            end: RwSignal::new(first_slot.map(|s| s.end_label()).unwrap_or_default()),
+            hall: RwSignal::new(String::new()),
+        }
+    }
+
+    fn from_meeting(key: u64, m: &Meeting, slots: &[Slot]) -> MeetRowDraft {
+        let official = slots.iter().any(|s| *s == m.slot);
+        MeetRowDraft {
+            key,
+            day: RwSignal::new(m.day.index()),
+            preset: RwSignal::new(official.then_some(m.slot.start_min)),
+            start: RwSignal::new(m.slot.start_label()),
+            end: RwSignal::new(m.slot.end_label()),
+            hall: RwSignal::new(m.hall.clone().unwrap_or_default()),
+        }
+    }
+
+    /// The row's meeting, if its fields parse. `Err` carries what's wrong.
+    fn to_meeting(&self, slots: &[Slot]) -> Result<Meeting, String> {
+        let day = Day::ALL[self.day.get_untracked().min(Day::ALL.len() - 1)];
+        let slot = match self.preset.get_untracked() {
+            Some(start) => *slots
+                .iter()
+                .find(|s| s.start_min == start)
+                .ok_or_else(|| "pick a time slot".to_string())?,
+            None => {
+                let (Some(start), Some(end)) = (
+                    parse_hhmm(&self.start.get_untracked()),
+                    parse_hhmm(&self.end.get_untracked()),
+                ) else {
+                    return Err("enter times as HH:MM, e.g. 18:00".to_string());
+                };
+                if start >= end {
+                    return Err("the start time must be before the end time".to_string());
+                }
+                Slot::new(start, end)
+            }
+        };
+        let hall = self.hall.get_untracked().trim().to_string();
+        Ok(Meeting {
+            day,
+            slot,
+            hall: (!hall.is_empty()).then_some(hall),
+            temp_booking: false,
+        })
+    }
+}
+
+/// Suggest a grid-sized code from the course name: the first word,
+/// uppercased, letters and digits only. "German A1" → "GERMAN".
+fn suggest_code(name: &str) -> String {
+    name.split_whitespace()
+        .next()
+        .unwrap_or("")
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric())
+        .map(|c| c.to_ascii_uppercase())
+        .take(8)
+        .collect()
+}
+
+fn custom_course_dialog(
+    app: App,
+    edit: Option<String>,
+    prefill: Option<String>,
+) -> impl IntoView {
+    let editing = edit.clone();
+    let existing = edit.as_deref().and_then(|c| app.custom_course(c));
+    let slots = app.snapshot.with_untracked(|s| s.slot_grid.clone());
+    let halls = app.snapshot.with_untracked(|s| s.halls.clone());
+    let first_slot = slots.first().copied();
+
+    let name = RwSignal::new(
+        existing
+            .as_ref()
+            .map(|c| c.name.clone())
+            .or(prefill)
+            .unwrap_or_default(),
+    );
+    let code = RwSignal::new(
+        existing
+            .as_ref()
+            .map(|c| c.code.clone())
+            .unwrap_or_else(|| suggest_code(&name.get_untracked())),
+    );
+    // The code follows the name until the user takes it over.
+    let code_touched = RwSignal::new(existing.is_some());
+    let instructor = RwSignal::new(
+        existing
+            .as_ref()
+            .map(|c| c.instructors.join(" / "))
+            .unwrap_or_default(),
+    );
+    let credits = RwSignal::new(
+        existing
+            .as_ref()
+            .map(|c| c.effective_credits())
+            .unwrap_or(4),
+    );
+    let credits_other = RwSignal::new(
+        existing
+            .as_ref()
+            .is_some_and(|c| c.effective_credits() > 4),
+    );
+    let credits_text = RwSignal::new(credits.get_untracked().to_string());
+
+    let row_seq = RwSignal::new(0u64);
+    let next_key = move || {
+        let k = row_seq.get_untracked();
+        row_seq.set(k + 1);
+        k
+    };
+    let initial_rows: Vec<MeetRowDraft> = existing
+        .as_ref()
+        .map(|c| {
+            c.meetings
+                .iter()
+                .enumerate()
+                .map(|(i, m)| MeetRowDraft::from_meeting(i as u64, m, &slots))
+                .collect()
+        })
+        .unwrap_or_default();
+    row_seq.set(initial_rows.len() as u64);
+    let rows = RwSignal::new(initial_rows);
+    let error = RwSignal::new(String::new());
+
+    // Live, per-row clash preview against everything else on the timetable.
+    // Non-blocking, like every clash in this app.
+    let own_code = edit.clone().unwrap_or_default();
+    let clash_text = {
+        let slots = slots.clone();
+        move |row: &MeetRowDraft| {
+            let row = row.clone();
+            let slots = slots.clone();
+            let own = own_code.clone();
+            Memo::new(move |_| {
+                // Track the row's fields.
+                let _ = (row.day.get(), row.preset.get(), row.start.get(), row.end.get());
+                let Ok(m) = row.to_meeting(&slots) else {
+                    return String::new();
+                };
+                let mut partners: Vec<String> = Vec::new();
+                for c in app.selected_courses() {
+                    if c.code.eq_ignore_ascii_case(&own) {
+                        continue;
+                    }
+                    for e in app.effective_meetings(&c) {
+                        if e.meeting.day == m.day
+                            && e.meeting.slot.overlaps(&m.slot)
+                            && !partners.contains(&c.code)
+                        {
+                            partners.push(c.code.clone());
+                        }
+                    }
+                }
+                if partners.is_empty() {
+                    String::new()
+                } else {
+                    format!(
+                        "{} {} clashes with {} — you can still {}.",
+                        m.day.short(),
+                        m.slot.label(),
+                        partners.join(", "),
+                        if row_is_edit(&own) { "save" } else { "add it" },
+                    )
+                }
+            })
+        }
+    };
+
+    let title = if let Some(c) = &editing {
+        format!("Edit {c}")
+    } else {
+        "Add your own course".to_string()
+    };
+    let shadows = editing
+        .as_deref()
+        .map(|c| app.custom_shadows_official(c))
+        .unwrap_or(false);
+
+    let add_row = move |_| {
+        let key = next_key();
+        rows.update(|r| r.push(MeetRowDraft::blank(key, first_slot)));
+        focus_later(format!("cc-day-{key}"));
+    };
+
+    let save = {
+        let slots = slots.clone();
+        let editing = editing.clone();
+        move |_| {
+            let name_v = name.get_untracked().trim().to_string();
+            if name_v.is_empty() {
+                error.set("Give the course a name.".to_string());
+                return;
+            }
+            let code_v: String = code
+                .get_untracked()
+                .trim()
+                .chars()
+                .filter(|c| !c.is_whitespace())
+                .map(|c| c.to_ascii_uppercase())
+                .collect();
+            if code_v.is_empty() {
+                error.set(
+                    "Give it a short code — that's the label shown on your timetable."
+                        .to_string(),
+                );
+                return;
+            }
+            if code_v.chars().count() > 12 {
+                error.set("Keep the code to 12 characters or fewer.".to_string());
+                return;
+            }
+            let renaming_from = editing.as_deref();
+            let taken_official = renaming_from
+                .map(|orig| !orig.eq_ignore_ascii_case(&code_v))
+                .unwrap_or(true)
+                && app.snapshot.with_untracked(|s| s.course_ci(&code_v).is_some());
+            if taken_official {
+                error.set(format!(
+                    "{code_v} is already on CMI's timetable — pick a different code, \
+                     or just add the official course from the catalog."
+                ));
+                return;
+            }
+            let taken_custom = app.customs.with_untracked(|cs| {
+                cs.get(&code_v).is_some()
+                    && renaming_from
+                        .map(|orig| !orig.eq_ignore_ascii_case(&code_v))
+                        .unwrap_or(true)
+            });
+            if taken_custom {
+                error.set(format!("You already have a course called {code_v}."));
+                return;
+            }
+            let credits_v = if credits_other.get_untracked() {
+                match credits_text.get_untracked().trim().parse::<u8>() {
+                    Ok(v) if v <= 20 => v,
+                    _ => {
+                        error.set("Enter a whole number from 0 to 20.".to_string());
+                        return;
+                    }
+                }
+            } else {
+                credits.get_untracked()
+            };
+            let mut meetings: Vec<Meeting> = Vec::new();
+            for (i, row) in rows.get_untracked().iter().enumerate() {
+                match row.to_meeting(&slots) {
+                    Ok(m) => meetings.push(m),
+                    Err(e) => {
+                        error.set(format!("Meeting {}: {e}.", i + 1));
+                        return;
+                    }
+                }
+            }
+            let instructors: Vec<String> = instructor
+                .get_untracked()
+                .split('/')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect();
+            let no_meetings = meetings.is_empty();
+            let course =
+                Course::custom(code_v.clone(), name_v, instructors, credits_v, meetings);
+            let creating = editing.is_none();
+            app.save_custom_course(editing.as_deref(), course);
+            if creating {
+                if no_meetings {
+                    app.toast_undo(format!(
+                        "Added {code_v} — it's waiting in “No fixed slot yet” on My timetable."
+                    ));
+                } else {
+                    app.toast_undo(format!("Added {code_v} to your timetable"));
+                }
+            } else {
+                app.toast_undo(format!("Saved your changes to {code_v}"));
+            }
+            app.dialog.set(None);
+        }
+    };
+
+    view! {
+        <div class="custom-form">
+            <h2>{title}</h2>
+            <p class="muted small form-lede">
+                {if editing.is_some() {
+                    "This is your own course — everything here is yours to change."
+                } else {
+                    "Seminars, reading groups, a class from another institute — \
+                     anything CMI's pages don't list."
+                }}
+            </p>
+            {shadows
+                .then(|| {
+                    let switch_code = editing.clone().unwrap_or_default();
+                    view! {
+                        <div class="shadow-note" role="note">
+                            <p>
+                                "CMI's timetable now lists a course with this code too. \
+                                 You're seeing your own version."
+                            </p>
+                            <button
+                                class="btn small"
+                                on:click=move |_| {
+                                    app.delete_custom_course(&switch_code, true);
+                                    app.dialog.set(None);
+                                }
+                            >
+                                "Use CMI's version instead"
+                            </button>
+                        </div>
+                    }
+                })}
+            <div class="fieldrow">
+                <label for="cc-name">"Name"</label>
+                <input
+                    id="cc-name"
+                    type="text"
+                    placeholder="German A1, Algebra reading group…"
+                    prop:value=name.get_untracked()
+                    on:input=move |ev| {
+                        name.set(event_target_value(&ev));
+                        if !code_touched.get_untracked() {
+                            code.set(suggest_code(&name.get_untracked()));
+                        }
+                    }
+                />
+            </div>
+            <div class="fieldrow">
+                <label for="cc-code">"Code"</label>
+                <input
+                    id="cc-code"
+                    type="text"
+                    class="code-input"
+                    aria-describedby="cc-code-help"
+                    prop:value=move || code.get()
+                    on:input=move |ev| {
+                        code_touched.set(true);
+                        code.set(event_target_value(&ev).to_ascii_uppercase());
+                    }
+                />
+                <span id="cc-code-help" class="muted small">
+                    "The short label shown on your timetable."
+                </span>
+            </div>
+            <div class="fieldrow">
+                <label for="cc-instructor">"Taught by"</label>
+                <input
+                    id="cc-instructor"
+                    type="text"
+                    placeholder="optional"
+                    prop:value=instructor.get_untracked()
+                    on:input=move |ev| instructor.set(event_target_value(&ev))
+                />
+            </div>
+            <div class="fieldrow">
+                <span class="fieldlabel" id="cc-credits-label">"Credits"</span>
+                <div class="seg" role="group" aria-labelledby="cc-credits-label">
+                    {[0u8, 1, 2, 3, 4]
+                        .into_iter()
+                        .map(|v| {
+                            view! {
+                                <button
+                                    type="button"
+                                    aria-pressed=move || {
+                                        if !credits_other.get() && credits.get() == v {
+                                            "true"
+                                        } else {
+                                            "false"
+                                        }
+                                    }
+                                    on:click=move |_| {
+                                        credits_other.set(false);
+                                        credits.set(v);
+                                    }
+                                >
+                                    {v}
+                                </button>
+                            }
+                        })
+                        .collect_view()}
+                    <button
+                        type="button"
+                        aria-pressed=move || if credits_other.get() { "true" } else { "false" }
+                        on:click=move |_| credits_other.set(true)
+                    >
+                        "Other…"
+                    </button>
+                </div>
+                {move || {
+                    credits_other
+                        .get()
+                        .then(|| {
+                            view! {
+                                <input
+                                    type="number"
+                                    min="0"
+                                    max="20"
+                                    aria-label="Credits"
+                                    style="width:5rem"
+                                    prop:value=credits_text.get_untracked()
+                                    on:input=move |ev| credits_text.set(event_target_value(&ev))
+                                />
+                            }
+                        })
+                }}
+            </div>
+
+            <h3 class="meetings-title">"Weekly meetings"</h3>
+            <For
+                each=move || rows.get()
+                key=|row| row.key
+                children={
+                    let slots = slots.clone();
+                    move |row| {
+                        let clash = clash_text(&row);
+                        let row_key = row.key;
+                        let remove = move |_| {
+                            rows.update(|r| r.retain(|x| x.key != row_key));
+                            focus_later("cc-add-meeting".to_string());
+                        };
+                        let day_id = format!("cc-day-{row_key}");
+                        let row_n = move || {
+                            rows.with(|r| {
+                                r.iter().position(|x| x.key == row_key).map(|i| i + 1)
+                            })
+                            .unwrap_or(0)
+                        };
+                        view! {
+                            <div
+                                class="meeting-draft"
+                                role="group"
+                                aria-label=move || format!("Meeting {}", row_n())
+                            >
+                                <select
+                                    id=day_id.clone()
+                                    aria-label="Day"
+                                    on:change=move |ev| {
+                                        if let Ok(i) = event_target_value(&ev).parse::<usize>() {
+                                            row.day.set(i);
+                                        }
+                                    }
+                                >
+                                    {Day::ALL
+                                        .iter()
+                                        .map(|d| {
+                                            view! {
+                                                <option
+                                                    value=d.index().to_string()
+                                                    selected=d.index() == row.day.get_untracked()
+                                                >
+                                                    {d.full()}
+                                                </option>
+                                            }
+                                        })
+                                        .collect_view()}
+                                </select>
+                                <select
+                                    aria-label="Time"
+                                    on:change={
+                                        let slots = slots.clone();
+                                        move |ev| {
+                                            let v = event_target_value(&ev);
+                                            if v == "custom" {
+                                                row.preset.set(None);
+                                            } else if let Ok(start) = v.parse::<u16>() {
+                                                row.preset.set(Some(start));
+                                                if let Some(s) =
+                                                    slots.iter().find(|s| s.start_min == start)
+                                                {
+                                                    row.start.set(s.start_label());
+                                                    row.end.set(s.end_label());
+                                                }
+                                            }
+                                        }
+                                    }
+                                >
+                                    {slots
+                                        .iter()
+                                        .map(|s| {
+                                            view! {
+                                                <option
+                                                    value=s.start_min.to_string()
+                                                    selected=row.preset.get_untracked()
+                                                        == Some(s.start_min)
+                                                >
+                                                    {s.label()}
+                                                </option>
+                                            }
+                                        })
+                                        .collect_view()}
+                                    <option
+                                        value="custom"
+                                        selected=row.preset.get_untracked().is_none()
+                                    >
+                                        "Custom time…"
+                                    </option>
+                                </select>
+                                {move || {
+                                    row.preset
+                                        .get()
+                                        .is_none()
+                                        .then(|| {
+                                            view! {
+                                                <span class="timepair">
+                                                    <input
+                                                        type="time"
+                                                        aria-label="Start time"
+                                                        prop:value=row.start.get_untracked()
+                                                        on:input=move |ev| {
+                                                            row.start.set(event_target_value(&ev))
+                                                        }
+                                                    />
+                                                    <span aria-hidden="true">"–"</span>
+                                                    <input
+                                                        type="time"
+                                                        aria-label="End time"
+                                                        prop:value=row.end.get_untracked()
+                                                        on:input=move |ev| {
+                                                            row.end.set(event_target_value(&ev))
+                                                        }
+                                                    />
+                                                </span>
+                                            }
+                                        })
+                                }}
+                                <input
+                                    type="text"
+                                    class="hall-input"
+                                    list="cc-halls"
+                                    placeholder="Where? (optional)"
+                                    aria-label="Hall or place"
+                                    prop:value=row.hall.get_untracked()
+                                    on:input=move |ev| row.hall.set(event_target_value(&ev))
+                                />
+                                <button
+                                    type="button"
+                                    class="btn small icon"
+                                    aria-label=move || format!("Remove meeting {}", row_n())
+                                    title="Remove this meeting"
+                                    on:click=remove
+                                >
+                                    "✕"
+                                </button>
+                                {move || {
+                                    let text = clash.get();
+                                    view! {
+                                        <p class="clash-note" aria-live="polite">
+                                            {(!text.is_empty()).then(|| format!("⚠ {text}"))}
+                                        </p>
+                                    }
+                                }}
+                            </div>
+                        }
+                    }
+                }
+            />
+            {move || {
+                rows.with(|r| r.is_empty())
+                    .then(|| {
+                        view! {
+                            <p class="muted small">
+                                "No meetings yet — the course will wait in \
+                                 “No fixed slot yet” on My timetable until you give it \
+                                 a time."
+                            </p>
+                        }
+                    })
+            }}
+            <button id="cc-add-meeting" type="button" class="btn small" on:click=add_row>
+                "＋ Add a weekly meeting"
+            </button>
+            <datalist id="cc-halls">
+                {halls
+                    .iter()
+                    .map(|h| view! { <option value=h.clone()></option> })
+                    .collect_view()}
+            </datalist>
+
+            {move || {
+                let e = error.get();
+                view! {
+                    <p class="form-error" aria-live="polite">
+                        {(!e.is_empty()).then_some(e)}
+                    </p>
+                }
+            }}
+            <div class="actions">
+                {editing
+                    .clone()
+                    .map(|del_code| {
+                        view! {
+                            <button
+                                class="btn danger"
+                                on:click=move |_| {
+                                    app.delete_custom_course(&del_code, false);
+                                    app.dialog.set(None);
+                                }
+                            >
+                                "Delete this course"
+                            </button>
+                            <div class="grow"></div>
+                        }
+                    })}
+                <button class="btn" on:click=move |_| app.dialog.set(None)>
+                    "Cancel"
+                </button>
+                <button class="btn primary" on:click=save>
+                    {if editing.is_some() { "Save changes" } else { "Add to my timetable" }}
+                </button>
+            </div>
+        </div>
+    }
+}
+
+/// Whether the clash-note verb should read "save" (editing) or "add".
+fn row_is_edit(own_code: &str) -> bool {
+    !own_code.is_empty()
+}
+
+/// Focus an element by id on the next tick — for rows that don't exist yet
+/// when the click that creates them is handled.
+fn focus_later(id: String) {
+    gloo_timers::callback::Timeout::new(0, move || {
+        if let Some(el) = domx::document()
+            .get_element_by_id(&id)
+            .and_then(|el| el.dyn_into::<web_sys::HtmlElement>().ok())
+        {
+            let _ = el.focus();
+        }
+    })
+    .forget();
 }
 
 // ---------------------------------------------------------------------------
@@ -2355,15 +3153,20 @@ fn export_dialog(app: App, scope: Option<String>) -> impl IntoView {
         } else {
             vec![scope_v]
         };
+        // The user's own courses export like any other (they resolve first,
+        // as everywhere).
         let courses: Vec<ttcore::ics::IcsCourse> = codes
             .iter()
-            .filter_map(|code| snapshot.course(code))
+            .filter_map(|code| {
+                app.custom_course(code)
+                    .or_else(|| snapshot.course(code).cloned())
+            })
             .map(|course| {
-                let meetings = crate::state::effective_meetings(course, &overrides)
+                let meetings = crate::state::effective_meetings(&course, &overrides)
                     .into_iter()
                     .map(|e| e.meeting)
                     .collect();
-                ttcore::ics::IcsCourse::from_course(course, meetings)
+                ttcore::ics::IcsCourse::from_course(&course, meetings)
             })
             .collect();
         if courses.is_empty() {
@@ -2470,13 +3273,23 @@ fn share_dialog(app: App) -> impl IntoView {
     // the copy buttons can never hand out a link to an undone timetable.
     let selection = app.selection.get();
     let overrides = app.overrides.get();
+    // The selection's custom courses ride the full link — the plain ?c=
+    // link can only carry codes, which mean nothing to another browser.
+    let shared_customs: Vec<Course> = app.customs.with(|cs| {
+        selection
+            .iter()
+            .filter_map(|code| cs.get(code).cloned())
+            .collect()
+    });
+    let custom_codes: Vec<String> =
+        shared_customs.iter().map(|c| c.code.clone()).collect();
     let c_param = ttcore::share::selection_to_c_param(&selection);
     let plain = domx::share_url(&format!("?c={c_param}"));
     let with_times = domx::share_url(&format!(
         "?c={c_param}&s={}",
-        ttcore::share::encode_share(&selection, &overrides)
+        ttcore::share::encode_share(&selection, &overrides, &shared_customs)
     ));
-    let has_overrides = !overrides.is_empty();
+    let has_extras = !overrides.is_empty() || !shared_customs.is_empty();
     let plain2 = plain.clone();
     let with2 = with_times.clone();
 
@@ -2487,6 +3300,25 @@ fn share_dialog(app: App) -> impl IntoView {
                 "Anyone opening the link sees the same course selection. "
                 "Your data itself stays saved in your browser."
             </p>
+            {(!custom_codes.is_empty())
+                .then(|| {
+                    view! {
+                        <p class="muted small">
+                            {format!(
+                                "Your own course{} ({}) travel{} only with the second \
+                                 link — the plain one can't carry {}.",
+                                if custom_codes.len() == 1 { "" } else { "s" },
+                                custom_codes.join(", "),
+                                if custom_codes.len() == 1 { "s" } else { "" },
+                                if custom_codes.len() == 1 {
+                                    "its details"
+                                } else {
+                                    "their details"
+                                },
+                            )}
+                        </p>
+                    }
+                })}
             <div class="fieldrow">
                 <input type="text" readonly prop:value=plain.clone() style="flex:1" aria-label="Share link" />
                 <button
@@ -2509,9 +3341,10 @@ fn share_dialog(app: App) -> impl IntoView {
                 />
                 <button
                     class="btn"
-                    disabled=!has_overrides
-                    title=if has_overrides {
-                        "Includes your moved/created meetings and credit changes"
+                    disabled=!has_extras
+                    title=if has_extras {
+                        "Includes your moved/created meetings, credit changes and \
+                         your own courses"
                     } else {
                         "You have no custom changes yet"
                     }

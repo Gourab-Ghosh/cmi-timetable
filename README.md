@@ -129,6 +129,20 @@ my custom changes"). When both are present, `s` wins. The query stays
   a per-value breakdown ("1 × 4 cr · 2 × 2 cr"). The details dialog lets
   you **overwrite credits** per course (totals, filters and the catalog
   follow suit), with a one-click reset to CMI's value.
+- **Your own courses**: "Add your own course" (My courses, or the catalog —
+  including straight from a failed search) creates anything CMI's pages
+  don't list: seminars, reading groups, classes from other institutes.
+  Name first, code auto-suggested, credits 0–20, any number of weekly
+  meetings on official slots or fully custom times (evenings and weekends
+  get their own grid columns/rows), with a live clash line while you type.
+  They behave like real courses everywhere — clash detection, drag & drop,
+  credit totals, .ics export — but their definition is yours: drags and
+  edits change the course itself (no override bookkeeping), a violet
+  **Custom** badge marks them, "Remove" parks them under "off the
+  timetable" with the definition intact, and the full share link carries
+  them whole to other browsers. If a later CMI sync introduces the same
+  code, your version keeps winning and a note offers a one-click switch
+  to CMI's.
 
 ### Developer mode (hidden endpoint)
 

@@ -555,6 +555,8 @@ button {
 .badge.warn { border-color: transparent; color: var(--warn); background: var(--warn-wash); }
 .badge.alarm { border-color: transparent; color: var(--alarm); background: var(--alarm-wash); }
 .badge.accent { border-color: transparent; color: var(--accent); background: var(--accent-wash); }
+/* "Added by you" — the second accent marks user-authored data. */
+.badge.custom { border-color: transparent; color: var(--accent2); background: var(--accent2-wash); }
 
 /* ==========================================================================
    Grids: time slots across the top, days/halls down the left. Sticky both.
@@ -570,6 +572,9 @@ button {
   /* Vertical scrolling happens inside this container so the sticky slot
      header actually engages (sticky is relative to the scroll container). */
   max-height: calc(100vh - 13rem);
+  /* Panels (.panel has no margin-top) and other blocks follow the grid
+     directly in every view — without this they sit flush against it. */
+  margin-bottom: 0.9rem;
 }
 
 table.tt {
@@ -702,7 +707,11 @@ table.tt td.kbd-cursor { box-shadow: inset 0 0 0 2px var(--accent); }
   box-shadow: var(--shadow-md);
   transform: translateY(-1px);
 }
-.card .row { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
+/* General row utility. This was once scoped to `.card`, which silently left
+   every .row elsewhere (dialog headers, override lists, data rows) as a
+   block — chips stacked above their titles and inline gap/align-items did
+   nothing. Several call sites had patched it with inline display:flex. */
+.row { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
 /* Meeting/overwrite rows — used in cards, dialogs AND panels. */
 ul.meetings { margin: 0.45rem 0 0; padding: 0; list-style: none; }
 ul.meetings li {
@@ -732,7 +741,8 @@ ul.meetings .when {
   flex-wrap: wrap;
   margin-bottom: 0.75rem;
 }
-.toolbar .grow { flex: 1; }
+/* Generic flexible spacer — toolbars, card rows, dialog action rows. */
+.grow { flex: 1; }
 /* Section headings carry a small gradient kicker — a consistent dab of
    color that marks "you are here" without shouting. */
 .toolbar h2 {
@@ -1033,7 +1043,10 @@ details.facet .menu .menu-empty { margin: 0.2rem 0 0; }
   border-radius: var(--r-lg);
   box-shadow: var(--shadow-lg);
   width: min(640px, 100%);
+  /* dvh where supported: the layout viewport lies when a phone keyboard is
+     up, and the actions row must stay reachable. */
   max-height: min(85vh, 720px);
+  max-height: min(85dvh, 720px);
   overflow: auto;
   padding: 1.15rem 1.3rem;
   animation: dialog-in 160ms var(--ease);
@@ -1050,6 +1063,11 @@ details.facet .menu .menu-empty { margin: 0.2rem 0 0; }
   margin-top: 1rem;
   padding-top: 0.85rem;
   border-top: 1px solid var(--line);
+  /* Long forms scroll; the buttons don't leave. */
+  position: sticky;
+  bottom: 0;
+  background: var(--surface);
+  padding-bottom: 0.15rem;
   flex-wrap: wrap;
 }
 .dialog .fieldrow { display: flex; gap: 0.6rem; flex-wrap: wrap; margin: 0.5rem 0; align-items: center; }
@@ -1295,6 +1313,118 @@ pre.devpre {
   white-space: nowrap;
   border: 0;
 }
+
+/* ==========================================================================
+   Your own courses: the create tile, the form, the parked group
+   ========================================================================== */
+
+/* Invitation tile at the end of My courses — clearly an action, not a
+   course: dashed, quiet, warms up on hover. */
+.add-own-card {
+  display: flex;
+  align-items: center;
+  gap: 0.8rem;
+  width: 100%;
+  text-align: left;
+  border: 2px dashed color-mix(in srgb, var(--accent2) 38%, var(--line));
+  border-radius: var(--r-md);
+  background: transparent;
+  padding: 0.8rem 1rem;
+  margin-bottom: 0.9rem;
+  cursor: pointer;
+  transition: border-color 140ms var(--ease), background 140ms var(--ease),
+    transform 140ms var(--ease);
+}
+.add-own-card:hover, .add-own-card:focus-visible {
+  border-color: var(--accent2);
+  background: var(--accent2-wash);
+  transform: translateY(-1px);
+}
+.add-own-card .aoc-plus {
+  font-size: 1.5rem;
+  font-weight: 800;
+  line-height: 1;
+  background: var(--grad);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+.add-own-card .aoc-text { display: flex; flex-direction: column; gap: 0.1rem; }
+.add-own-card .aoc-text b { font-size: 0.95rem; }
+.add-own-card .aoc-text span { color: var(--muted); font-size: 0.82rem; }
+
+/* Parked customs — kept, off the grid. */
+.parked {
+  border: 1px solid color-mix(in srgb, var(--accent2) 22%, var(--line));
+  border-radius: var(--r-md);
+  background: color-mix(in srgb, var(--accent2-wash) 45%, var(--surface));
+  padding: 0.75rem 1rem;
+  margin-bottom: 0.9rem;
+}
+.parked h3 { margin: 0 0 0.15rem; font-size: 0.95rem; }
+.parked > p { margin: 0 0 0.5rem; }
+.parked .parked-row {
+  align-items: center;
+  gap: 0.55rem;
+  padding: 0.4rem 0;
+  border-top: 1px solid color-mix(in srgb, var(--line) 60%, transparent);
+}
+
+/* The create/edit form. */
+.custom-form .form-lede { margin: -0.4rem 0 0.8rem; }
+.custom-form .fieldrow { flex-wrap: wrap; }
+.custom-form .code-input {
+  font-family: var(--font-mono);
+  text-transform: uppercase;
+  width: 9rem;
+}
+.custom-form .meetings-title { margin: 0.9rem 0 0.45rem; font-size: 0.95rem; }
+.custom-form .meeting-draft {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.45rem;
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: var(--surface-2);
+  padding: 0.5rem 0.6rem;
+  margin-bottom: 0.5rem;
+}
+.custom-form .meeting-draft .timepair {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+.custom-form .meeting-draft .hall-input { min-width: 10rem; flex: 1; }
+.custom-form .meeting-draft .btn.icon { margin-left: auto; }
+/* The clash line owns its own row inside the meeting box. */
+.custom-form .clash-note {
+  flex-basis: 100%;
+  margin: 0;
+  font-size: 0.82rem;
+  color: var(--alarm);
+}
+.custom-form .clash-note:empty { display: none; }
+.custom-form .form-error { color: var(--warn); margin: 0.5rem 0 0; }
+.custom-form .form-error:empty { display: none; }
+.custom-form #cc-add-meeting { margin-top: 0.1rem; }
+
+/* "CMI lists this code too" — a decision point, gently boxed. */
+.shadow-note {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  flex-wrap: wrap;
+  border: 1px solid color-mix(in srgb, var(--warn) 35%, var(--line));
+  background: var(--warn-wash);
+  border-radius: var(--r-sm);
+  padding: 0.5rem 0.75rem;
+  margin: 0 0 0.75rem;
+}
+.shadow-note p { margin: 0; flex: 1; min-width: 12rem; font-size: 0.85rem; }
+
+/* My-data rows for customs. */
+.data-row { align-items: center; gap: 0.5rem; padding: 0.25rem 0; }
 
 /* ==========================================================================
    Print: "My timetable" on one landscape A4 — a poster-style sheet. Chips

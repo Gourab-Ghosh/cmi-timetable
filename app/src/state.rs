@@ -7,8 +7,8 @@ use serde::{Deserialize, Serialize};
 use ttcore::diff::SnapshotDiff;
 use ttcore::merge::Conflict;
 use ttcore::model::{
-    Course, Day, Meeting, OverridesStore, ParseReport, ScheduleStatus, Slot, Snapshot,
-    SourceTier,
+    Course, CustomStore, Day, Meeting, OverridesStore, ParseReport, ScheduleStatus, Slot,
+    Snapshot, SourceTier,
 };
 
 pub const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -195,6 +195,12 @@ pub enum Dialog {
     Export { scope: Option<String> },
     Share,
     WhatChanged,
+    /// Create (`edit: None`) or edit one of the user's own courses.
+    /// `prefill` seeds the name field from a failed catalog search.
+    CustomCourse {
+        edit: Option<String>,
+        prefill: Option<String>,
+    },
 }
 
 /// An in-flight pointer drag.
@@ -244,6 +250,9 @@ pub struct UndoEntry {
     /// Filter changes are undoable too, so every entry carries the filter
     /// state alongside selection + overrides.
     pub filters: Filters,
+    /// The user's own courses ride the history too, so deleting or editing
+    /// one is as undoable as any other change.
+    pub customs: CustomStore,
 }
 
 #[derive(Clone, Default)]
@@ -301,6 +310,8 @@ pub struct App {
     pub sync: RwSignal<SyncMeta>,
     pub selection: RwSignal<Vec<String>>,
     pub overrides: RwSignal<OverridesStore>,
+    /// Courses the user created themselves (always selected while they exist).
+    pub customs: RwSignal<CustomStore>,
     pub prefs: RwSignal<Prefs>,
     pub undo_stack: RwSignal<UndoStack>,
     pub toasts: RwSignal<Vec<Toast>>,
@@ -420,6 +431,10 @@ impl App {
         let _ = storage::save(storage::KEY_OVERRIDES, &self.overrides.get_untracked());
     }
 
+    pub fn persist_customs(&self) {
+        let _ = storage::save(storage::KEY_CUSTOM, &self.customs.get_untracked());
+    }
+
     pub fn persist_prefs(&self) {
         let _ = storage::save(storage::KEY_PREFS, &self.prefs.get_untracked());
     }
@@ -446,6 +461,7 @@ impl App {
             selection: self.selection.get_untracked(),
             overrides: self.overrides.get_untracked(),
             filters: self.prefs.with_untracked(|p| p.filters.clone()),
+            customs: self.customs.get_untracked(),
         };
         self.undo_stack.update(|s| {
             s.undo.push(entry);
@@ -463,6 +479,7 @@ impl App {
             selection: self.selection.get_untracked(),
             overrides: self.overrides.get_untracked(),
             filters: self.prefs.with_untracked(|p| p.filters.clone()),
+            customs: self.customs.get_untracked(),
         }
     }
 
@@ -471,9 +488,11 @@ impl App {
         self.selection.set(entry.selection.clone());
         self.overrides.set(entry.overrides.clone());
         self.prefs.update(|p| p.filters = entry.filters.clone());
+        self.customs.set(entry.customs.clone());
         self.persist_selection();
         self.persist_overrides();
         self.persist_prefs();
+        self.persist_customs();
     }
 
     pub fn can_undo(&self) -> bool {
@@ -493,6 +512,25 @@ impl App {
         f(&mut selection, &mut overrides);
         self.selection.set(selection);
         self.overrides.set(overrides);
+        self.persist_selection();
+        self.persist_overrides();
+    }
+
+    /// `act` for mutations that also touch the user's own courses.
+    pub fn act_customs(
+        &self,
+        label: &str,
+        f: impl FnOnce(&mut CustomStore, &mut Vec<String>, &mut OverridesStore),
+    ) {
+        self.push_undo(label);
+        let mut customs = self.customs.get_untracked();
+        let mut selection = self.selection.get_untracked();
+        let mut overrides = self.overrides.get_untracked();
+        f(&mut customs, &mut selection, &mut overrides);
+        self.customs.set(customs);
+        self.selection.set(selection);
+        self.overrides.set(overrides);
+        self.persist_customs();
         self.persist_selection();
         self.persist_overrides();
     }
@@ -587,6 +625,149 @@ impl App {
         }
     }
 
+    // -- custom courses --------------------------------------------------------
+
+    /// The user's own definition for a code, if they created one.
+    pub fn custom_course(&self, code: &str) -> Option<Course> {
+        self.customs.with(|cs| cs.get(code).cloned())
+    }
+
+    pub fn is_custom(&self, code: &str) -> bool {
+        self.customs.with(|cs| cs.get(code).is_some())
+    }
+
+    /// Resolve a code to its course: the user's own courses first (their
+    /// data must never be shadowed by a later CMI sync), then the catalog.
+    pub fn course_by_code(&self, code: &str) -> Option<Course> {
+        self.custom_course(code)
+            .or_else(|| self.snapshot.with(|s| s.course_ci(code).cloned()))
+    }
+
+    /// A custom course whose code CMI's catalog ALSO lists now (it appeared
+    /// in a sync after the course was created) — surfaced as a quiet note,
+    /// the user's own definition keeps winning.
+    pub fn custom_shadows_official(&self, code: &str) -> bool {
+        self.is_custom(code) && self.snapshot.with(|s| s.course_ci(code).is_some())
+    }
+
+    /// Create a course of the user's own, or save edits to one.
+    /// `original_code` is the code it had before an edit (a rename follows
+    /// through into the selection). A custom course's definition is the
+    /// single source of truth for its times — it never carries overrides
+    /// (drags and edits write the definition directly), so saving purges
+    /// any foreign override that targets its code. Creating selects the
+    /// course; editing leaves its selected/parked state alone.
+    pub fn save_custom_course(&self, original_code: Option<&str>, course: Course) {
+        let creating = original_code.is_none();
+        let new_code = course.code.clone();
+        let old_code = original_code.unwrap_or(&new_code).to_string();
+        let label = if creating {
+            format!("add your course {new_code}")
+        } else {
+            format!("edit your course {old_code}")
+        };
+        self.act_customs(&label, |customs, sel, ovs| {
+            if !old_code.eq_ignore_ascii_case(&new_code) {
+                customs.remove(&old_code);
+                for entry in sel.iter_mut() {
+                    if entry.eq_ignore_ascii_case(&old_code) {
+                        *entry = new_code.clone();
+                    }
+                }
+                // The new code may already sit in the selection — a course
+                // CMI dropped keeps its slot there, and the form can't
+                // reject a code the catalog no longer has. Keep the first.
+                let mut seen: Vec<String> = Vec::new();
+                sel.retain(|c| {
+                    let dup = seen.iter().any(|s: &String| s.eq_ignore_ascii_case(c));
+                    if !dup {
+                        seen.push(c.clone());
+                    }
+                    !dup
+                });
+            }
+            for code in [&old_code, &new_code] {
+                ovs.items.retain(|o| !o.course.eq_ignore_ascii_case(code));
+                ovs.credits.retain(|c| !c.course.eq_ignore_ascii_case(code));
+            }
+            customs.upsert(course);
+            if creating && !sel.iter().any(|c| c.eq_ignore_ascii_case(&new_code)) {
+                sel.push(new_code.clone());
+            }
+        });
+    }
+
+    /// Delete one of the user's own courses: store entry, selection slot and
+    /// any overrides under its code go together. Fully undoable (the history
+    /// carries the custom store). When the code ALSO exists in CMI's catalog
+    /// (it appeared in a sync after the course was created), `keep_selected`
+    /// turns deletion into "use CMI's version instead": the code stays
+    /// selected and now resolves to the official course.
+    pub fn delete_custom_course(&self, code: &str, keep_selected: bool) {
+        if !self.is_custom(code) {
+            return;
+        }
+        let code = code.to_string();
+        let label = if keep_selected {
+            format!("switch {code} to CMI's version")
+        } else {
+            format!("delete your course {code}")
+        };
+        // Switching to CMI's version: the selection entry carries the
+        // custom's (always uppercased) code, but every snapshot lookup is
+        // exact-match — hand it the catalog's own casing or the course
+        // would read as "no longer on CMI's timetable".
+        let official = self
+            .snapshot
+            .with_untracked(|s| s.course_ci(&code).map(|c| c.code.clone()));
+        self.act_customs(&label, |customs, sel, ovs| {
+            customs.remove(&code);
+            if keep_selected {
+                if let Some(official) = &official {
+                    for entry in sel.iter_mut() {
+                        if entry.eq_ignore_ascii_case(&code) {
+                            *entry = official.clone();
+                        }
+                    }
+                }
+            } else {
+                sel.retain(|c| !c.eq_ignore_ascii_case(&code));
+            }
+            ovs.items.retain(|o| !o.course.eq_ignore_ascii_case(&code));
+            ovs.credits.retain(|c| !c.course.eq_ignore_ascii_case(&code));
+        });
+        self.removed_upstream.update(|r| r.retain(|c| c != &code));
+        if keep_selected {
+            self.toast_undo(format!("{code} now uses CMI's version"));
+        } else {
+            self.toast_undo(format!("Deleted {code}"));
+        }
+    }
+
+    /// Mutate one custom course's meeting list in place (the definition IS
+    /// the schedule for customs — no override layer). Keeps the meeting
+    /// order and schedule status consistent afterwards.
+    fn edit_custom_meetings(&self, code: &str, label: &str, f: impl FnOnce(&mut Vec<Meeting>)) {
+        let code = code.to_string();
+        self.act_customs(label, |customs, _, _| {
+            if let Some(course) = customs
+                .courses
+                .iter_mut()
+                .find(|c| c.code.eq_ignore_ascii_case(&code))
+            {
+                f(&mut course.meetings);
+                course
+                    .meetings
+                    .sort_by_key(|m| (m.day.index(), m.slot.start_min, m.slot.end_min));
+                course.status = if course.meetings.is_empty() {
+                    ScheduleStatus::UnscheduledListed
+                } else {
+                    ScheduleStatus::Scheduled
+                };
+            }
+        });
+    }
+
     // -- overrides -----------------------------------------------------------
 
     /// Create or update an override. `ov_id` targets an existing override;
@@ -600,6 +781,20 @@ impl App {
         label: &str,
         toast: Option<String>,
     ) {
+        // A custom course owns its schedule outright: a move edits the
+        // definition itself, no override bookkeeping.
+        if self.is_custom(course) {
+            self.edit_custom_meetings(course, label, |meetings| {
+                match base.as_ref().and_then(|b| meetings.iter().position(|m| m == b)) {
+                    Some(i) => meetings[i] = to.clone(),
+                    None => meetings.push(to.clone()),
+                }
+            });
+            if let Some(text) = toast {
+                self.toast_undo(text);
+            }
+            return;
+        }
         let course = course.to_string();
         let now = domx::now_ms();
         self.act(label, |_, ovs| {
@@ -628,6 +823,29 @@ impl App {
         to: Meeting,
         toast: String,
     ) {
+        if self.is_custom(course) {
+            let code = course.to_string();
+            self.act_customs(&format!("add & move {code}"), |customs, sel, _| {
+                if let Some(c) = customs
+                    .courses
+                    .iter_mut()
+                    .find(|c| c.code.eq_ignore_ascii_case(&code))
+                {
+                    match base.as_ref().and_then(|b| c.meetings.iter().position(|m| m == b)) {
+                        Some(i) => c.meetings[i] = to.clone(),
+                        None => c.meetings.push(to.clone()),
+                    }
+                    c.meetings
+                        .sort_by_key(|m| (m.day.index(), m.slot.start_min, m.slot.end_min));
+                    c.status = ScheduleStatus::Scheduled;
+                }
+                if !sel.iter().any(|s| s.eq_ignore_ascii_case(&code)) {
+                    sel.push(code.clone());
+                }
+            });
+            self.toast_undo(toast);
+            return;
+        }
         let course = course.to_string();
         let now = domx::now_ms();
         self.act(&format!("add & move {course}"), |sel, ovs| {
@@ -643,6 +861,15 @@ impl App {
     /// Unlike `apply_override`, this ALWAYS creates a new entry, so a course
     /// can gain any number of additional time slots.
     pub fn add_meeting(&self, course: &str, to: Meeting, toast: String) {
+        if self.is_custom(course) {
+            self.edit_custom_meetings(
+                course,
+                &format!("add a meeting to {course}"),
+                |meetings| meetings.push(to.clone()),
+            );
+            self.toast_undo(toast);
+            return;
+        }
         let course = course.to_string();
         let now = domx::now_ms();
         self.act(&format!("add a meeting to {course}"), |_, ovs| {
@@ -656,12 +883,30 @@ impl App {
     /// removing an official meeting records a removal override, restorable
     /// from Your changes / My data like any other change.
     pub fn remove_meeting(&self, course: &str, ov_id: Option<u64>, base: Option<Meeting>) {
-        let course = course.to_string();
-        let now = domx::now_ms();
         let when = base
             .as_ref()
             .map(|b| format!(" ({})", b.describe()))
             .unwrap_or_default();
+        // A custom course's meeting is deleted from the definition itself —
+        // there is no official version underneath to hide.
+        if self.is_custom(course) {
+            let course_name = course.to_string();
+            self.edit_custom_meetings(
+                course,
+                &format!("remove a meeting from {course_name}"),
+                |meetings| {
+                    if let Some(b) = &base {
+                        if let Some(i) = meetings.iter().position(|m| m == b) {
+                            meetings.remove(i);
+                        }
+                    }
+                },
+            );
+            self.toast_undo(format!("Removed a {course_name} meeting{when}"));
+            return;
+        }
+        let course = course.to_string();
+        let now = domx::now_ms();
         self.act(&format!("remove a meeting from {course}"), |_, ovs| {
             match (ov_id, &base) {
                 // A meeting the user created out of thin air: removing it
@@ -734,6 +979,28 @@ impl App {
     }
 
     pub fn set_credit_override(&self, code: &str, credits: u8) {
+        // For the user's own course there is no "official" value to keep
+        // around: the definition itself is edited.
+        if self.is_custom(code) {
+            let code_own = code.to_string();
+            self.act_customs(
+                &format!("set {code_own} to {credits} credits"),
+                |customs, _, _| {
+                    if let Some(c) = customs
+                        .courses
+                        .iter_mut()
+                        .find(|c| c.code.eq_ignore_ascii_case(&code_own))
+                    {
+                        c.credits = Some(credits);
+                    }
+                },
+            );
+            self.toast_undo(format!(
+                "{code_own} now counts as {credits} credit{}",
+                if credits == 1 { "" } else { "s" },
+            ));
+            return;
+        }
         let code = code.to_string();
         let now = domx::now_ms();
         self.act(&format!("set {code} to {credits} credits"), |_, ovs| {
@@ -779,36 +1046,65 @@ impl App {
     }
 
     /// A selected course no longer present upstream ("No longer on CMI's
-    /// timetable"). Derived from the snapshot so it survives reloads.
+    /// timetable"). Derived from the snapshot so it survives reloads. The
+    /// user's own courses were never upstream, so they can't be removed
+    /// from there.
     pub fn is_removed_upstream(&self, code: &str) -> bool {
-        self.is_selected(code) && self.snapshot.with(|s| s.course(code).is_none())
+        self.is_selected(code)
+            && !self.is_custom(code)
+            && self.snapshot.with(|s| s.course(code).is_none())
     }
 
     pub fn selected_courses(&self) -> Vec<Course> {
         // `with`, not `get`: this runs per clash/fit check, and cloning the
         // whole snapshot (raw gzipped pages included) each time is real cost.
+        // Custom courses resolve FIRST: if a later sync brings an official
+        // course with the same code, the user's own definition keeps winning
+        // instead of being silently replaced.
         self.snapshot.with(|snapshot| {
-            self.selection.with(|selection| {
-                selection
-                    .iter()
-                    .map(|code| {
-                        snapshot.course(code).cloned().unwrap_or_else(|| {
-                            // Removed upstream but still selected: synthesize
-                            // a stub so it stays visible with its badge.
-                            Course {
-                                code: code.clone(),
-                                name: code.clone(),
-                                instructors: vec![],
-                                branches: vec![],
-                                credits: None,
-                                starts: None,
-                                part_of_semester: None,
-                                optional_flag: false,
-                                status: ScheduleStatus::UnscheduledListed,
-                                meetings: vec![],
-                            }
+            self.customs.with(|customs| {
+                self.selection.with(|selection| {
+                    selection
+                        .iter()
+                        .map(|code| {
+                            customs
+                                .get(code)
+                                .or_else(|| snapshot.course(code))
+                                .cloned()
+                                .unwrap_or_else(|| {
+                                    // Removed upstream but still selected:
+                                    // synthesize a stub so it stays visible
+                                    // with its badge.
+                                    Course {
+                                        code: code.clone(),
+                                        name: code.clone(),
+                                        instructors: vec![],
+                                        branches: vec![],
+                                        credits: None,
+                                        starts: None,
+                                        part_of_semester: None,
+                                        optional_flag: false,
+                                        status: ScheduleStatus::UnscheduledListed,
+                                        meetings: vec![],
+                                    }
+                                })
                         })
-                    })
+                        .collect()
+                })
+            })
+        })
+    }
+
+    /// The user's own courses that are NOT currently on the timetable —
+    /// parked (say, over exam weeks). Their definitions stay intact and one
+    /// click puts them back.
+    pub fn parked_customs(&self) -> Vec<Course> {
+        self.customs.with(|cs| {
+            self.selection.with(|sel| {
+                cs.courses
+                    .iter()
+                    .filter(|c| !sel.iter().any(|s| s.eq_ignore_ascii_case(&c.code)))
+                    .cloned()
                     .collect()
             })
         })
@@ -911,13 +1207,23 @@ impl App {
     }
 
     /// The day rows shown in grids: Mon–Fri always, Sat/Sun only when data
-    /// mentions them.
+    /// mentions them — CMI's pages, an override, or one of the user's own
+    /// courses (a Saturday class must get its row, or it would be saved yet
+    /// invisible). One list for every grid AND for drag/keyboard-move
+    /// targets, so a row that exists on screen is always reachable.
     pub fn grid_days(&self) -> Vec<Day> {
         let snapshot = self.snapshot.get();
         let overrides = self.overrides.get();
         let mut days = vec![Day::Mon, Day::Tue, Day::Wed, Day::Thu, Day::Fri];
         for c in &snapshot.courses {
             for e in effective_meetings(c, &overrides) {
+                if !days.contains(&e.meeting.day) {
+                    days.push(e.meeting.day);
+                }
+            }
+        }
+        for c in self.selected_courses() {
+            for e in effective_meetings(&c, &overrides) {
                 if !days.contains(&e.meeting.day) {
                     days.push(e.meeting.day);
                 }

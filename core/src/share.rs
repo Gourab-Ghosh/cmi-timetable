@@ -1,7 +1,7 @@
 //! URL state: the `?c=` course-code list and the `&s=` compressed share
 //! payload (selection + overrides). When both are present, `s` wins.
 
-use crate::model::{CreditOverride, MeetingOverride, OverridesStore};
+use crate::model::{Course, CreditOverride, MeetingOverride, OverridesStore};
 use serde::{Deserialize, Serialize};
 
 /// Canonical `?c=` value: uppercase codes, comma-separated, order preserved.
@@ -33,15 +33,26 @@ pub struct SharePayload {
     /// Credit overrides — absent in payloads made before they existed.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub k: Vec<CreditOverride>,
+    /// Custom (user-created) courses riding along, so a shared timetable
+    /// renders complete on the recipient's browser — absent in payloads
+    /// made before customs existed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub x: Vec<Course>,
 }
 
-/// Compress selection + overrides into a URI-component-safe string.
-pub fn encode_share(selection: &[String], overrides: &OverridesStore) -> String {
+/// Compress selection + overrides + the selection's custom courses into a
+/// URI-component-safe string.
+pub fn encode_share(
+    selection: &[String],
+    overrides: &OverridesStore,
+    customs: &[Course],
+) -> String {
     let payload = SharePayload {
         v: 1,
         c: selection.to_vec(),
         o: overrides.items.clone(),
         k: overrides.credits.clone(),
+        x: customs.to_vec(),
     };
     let json = serde_json::to_string(&payload).expect("share payload serializes");
     lz_str::compress_to_encoded_uri_component(json.as_str())
@@ -62,6 +73,8 @@ pub struct UrlState {
     pub selection: Vec<String>,
     /// `Some` only when a valid `s=` payload was present (it wins over `c=`).
     pub overrides: Option<OverridesStore>,
+    /// Custom courses carried by an `s=` payload (empty for `c=`-only URLs).
+    pub customs: Vec<Course>,
 }
 
 /// Resolve the two query parameters into one state. A malformed `s=` falls
@@ -86,11 +99,13 @@ pub fn resolve_url_state(c: Option<&str>, s: Option<&str>) -> UrlState {
                     items: payload.o,
                     credits: payload.k,
                 }),
+                customs: payload.x,
             };
         }
     }
     UrlState {
         selection: c.map(parse_c_param).unwrap_or_default(),
         overrides: None,
+        customs: Vec::new(),
     }
 }

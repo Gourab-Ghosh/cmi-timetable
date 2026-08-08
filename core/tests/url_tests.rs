@@ -62,7 +62,7 @@ fn share_payload_round_trip() {
             created_at: 1_754_000_000_000.0,
         }],
     };
-    let encoded = encode_share(&selection, &overrides);
+    let encoded = encode_share(&selection, &overrides, &[]);
     // Must be URI-component-safe as produced.
     assert!(
         encoded
@@ -96,7 +96,7 @@ fn share_payload_without_credit_overrides_still_decodes() {
 
 #[test]
 fn s_beats_c() {
-    let s = encode_share(&codes(&["AML", "MAAT"]), &OverridesStore::default());
+    let s = encode_share(&codes(&["AML", "MAAT"]), &OverridesStore::default(), &[]);
     let state = resolve_url_state(Some("TOC,QCOM"), Some(&s));
     assert_eq!(state.selection, codes(&["AML", "MAAT"]));
     assert!(state.overrides.is_some());
@@ -134,7 +134,7 @@ fn removals_round_trip_and_old_payloads_still_load() {
     };
     let mut overrides = OverridesStore::default();
     overrides.add("MFD", Some(base), None, 0.0);
-    let encoded = encode_share(&["MFD".to_string()], &overrides);
+    let encoded = encode_share(&["MFD".to_string()], &overrides, &[]);
     let payload = decode_share(&encoded).expect("removal payload decodes");
     assert_eq!(payload.o.len(), 1);
     assert!(payload.o[0].is_removal());
@@ -150,4 +150,66 @@ fn removals_round_trip_and_old_payloads_still_load() {
     let o: MeetingOverride = serde_json::from_str(legacy).expect("legacy JSON loads");
     assert!(!o.is_removal());
     assert_eq!(o.to.as_ref().and_then(|m| m.hall.clone()).as_deref(), Some("Lecture Hall 803"));
+}
+
+/// The user's own courses ride the share payload and come back whole; links
+/// from before customs existed (no `x` field) still decode.
+#[test]
+fn custom_courses_ride_the_share_payload() {
+    use cmi_timetable_core::model::{Course, CustomStore, Meeting, ScheduleStatus};
+
+    let yoga = Course::custom(
+        "YOGA".to_string(),
+        "Evening yoga".to_string(),
+        vec!["S. Iyer".to_string()],
+        0,
+        vec![
+            Meeting {
+                day: Day::Sat,
+                slot: Slot::new(18 * 60, 19 * 60),
+                hall: Some("Sports annexe".to_string()),
+                temp_booking: false,
+            },
+            Meeting {
+                day: Day::Tue,
+                slot: Slot::new(550, 625),
+                hall: None,
+                temp_booking: false,
+            },
+        ],
+    );
+    // The constructor sorts meetings (day, then start) and derives status.
+    assert_eq!(yoga.meetings[0].day, Day::Tue);
+    assert_eq!(yoga.status, ScheduleStatus::Scheduled);
+    assert_eq!(yoga.credits, Some(0));
+
+    let timeless = Course::custom("RG".into(), "Reading group".into(), vec![], 2, vec![]);
+    assert_eq!(timeless.status, ScheduleStatus::UnscheduledListed);
+
+    let selection = codes(&["TOC", "YOGA"]);
+    let encoded = encode_share(&selection, &OverridesStore::default(), &[yoga.clone()]);
+    let state = resolve_url_state(None, Some(&encoded));
+    assert_eq!(state.selection, selection);
+    assert_eq!(state.customs, vec![yoga.clone()]);
+
+    // Pre-customs payloads carry no `x` field and must keep decoding.
+    let json = r#"{"v":1,"c":["TOC"],"o":[]}"#;
+    let old = decode_share(&lz_str::compress_to_encoded_uri_component(json))
+        .expect("pre-customs payload decodes");
+    assert!(old.x.is_empty());
+    // A `c=`-only URL never carries definitions.
+    assert!(resolve_url_state(Some("TOC,YOGA"), None).customs.is_empty());
+
+    // Store semantics: case-insensitive lookup, upsert replaces, remove
+    // reports whether anything went.
+    let mut store = CustomStore::default();
+    store.upsert(yoga.clone());
+    assert!(store.get("yoga").is_some());
+    let renamed = Course::custom("YOGA".into(), "Morning yoga".into(), vec![], 1, vec![]);
+    store.upsert(renamed);
+    assert_eq!(store.courses.len(), 1);
+    assert_eq!(store.get("YOGA").unwrap().name, "Morning yoga");
+    assert!(store.remove("Yoga"));
+    assert!(!store.remove("YOGA"));
+    assert!(store.is_empty());
 }

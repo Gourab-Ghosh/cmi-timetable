@@ -304,6 +304,36 @@ impl Course {
         .then(|| self.part_of_semester.as_deref())
         .flatten()
     }
+
+    /// Build a user-created course. Meetings get the same ordering parsed
+    /// courses have (day, then start time), and the schedule status derives
+    /// from whether any meeting exists — a time-less course lands in the
+    /// "No fixed slot yet" tray exactly like an unscheduled CMI offering.
+    pub fn custom(
+        code: String,
+        name: String,
+        instructors: Vec<String>,
+        credits: u8,
+        mut meetings: Vec<Meeting>,
+    ) -> Course {
+        meetings.sort_by_key(|m| (m.day.index(), m.slot.start_min, m.slot.end_min));
+        Course {
+            status: if meetings.is_empty() {
+                ScheduleStatus::UnscheduledListed
+            } else {
+                ScheduleStatus::Scheduled
+            },
+            code,
+            name,
+            instructors,
+            branches: Vec::new(),
+            credits: Some(credits),
+            starts: None,
+            part_of_semester: None,
+            optional_flag: false,
+            meetings,
+        }
+    }
 }
 
 /// Where a snapshot's data came from.
@@ -523,6 +553,53 @@ impl OverridesStore {
 
     pub fn is_empty(&self) -> bool {
         self.items.is_empty() && self.credits.is_empty()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Custom courses (user-created)
+// ---------------------------------------------------------------------------
+
+/// Courses the user created themselves — a seminar, a reading group, a
+/// class from another institute. They reuse [`Course`] wholesale so every
+/// downstream feature (clash detection, grids, credits, export, share)
+/// treats them exactly like catalog courses; only their origin differs.
+/// Lookups elsewhere resolve customs BEFORE the snapshot, so a later CMI
+/// sync introducing the same code never silently replaces the user's data.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct CustomStore {
+    pub courses: Vec<Course>,
+}
+
+impl CustomStore {
+    pub fn get(&self, code: &str) -> Option<&Course> {
+        self.courses
+            .iter()
+            .find(|c| c.code.eq_ignore_ascii_case(code))
+    }
+
+    /// Insert, or replace the course carrying the same code
+    /// (case-insensitive — codes are user-typed).
+    pub fn upsert(&mut self, course: Course) {
+        match self
+            .courses
+            .iter_mut()
+            .find(|c| c.code.eq_ignore_ascii_case(&course.code))
+        {
+            Some(existing) => *existing = course,
+            None => self.courses.push(course),
+        }
+    }
+
+    pub fn remove(&mut self, code: &str) -> bool {
+        let before = self.courses.len();
+        self.courses
+            .retain(|c| !c.code.eq_ignore_ascii_case(code));
+        self.courses.len() != before
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.courses.is_empty()
     }
 }
 

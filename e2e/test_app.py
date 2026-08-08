@@ -1369,6 +1369,198 @@ def t39_sync_pill_ticks_live(app):
     app.d.execute_script("Date.now = window.__realNow; delete window.__realNow;")
 
 
+def _js_set(app, el, value):
+    """Set an input's value the way a user would (fires the input event
+    Leptos listens on) — used for <input type=time>, whose send_keys
+    behavior is locale-dependent."""
+    app.d.execute_script(
+        "arguments[0].value = arguments[1];"
+        "arguments[0].dispatchEvent(new Event('input', {bubbles: true}));",
+        el, value,
+    )
+
+
+def t40_custom_course_create(app):
+    """'Add your own course': name-first form with an auto-suggested code,
+    segmented credits, official-slot and custom-time meetings, a live
+    clash line, grid chips (incl. a synthetic out-of-grid column), the
+    violet Custom badge, credit-summary integration and persistence."""
+    app.boot("/", selection=["TOC"])
+    app.open_tab("My courses")
+    app.wait_css(".add-own-card").click()
+    app.wait_css(".dialog .custom-form")
+
+    # Name first; the code follows until touched.
+    app.css("#cc-name").send_keys("German A1")
+    assert app.css("#cc-code").get_attribute("value") == "GERMAN"
+    app.xpath("//div[contains(@class,'seg')]/button[normalize-space()='2']").click()
+
+    # Meeting 1: Tuesday, first official slot (09:10) — clashes with TOC.
+    app.css("#cc-add-meeting").click()
+    app.css("#cc-day-0 option[value='1']").click()
+    note = app.css(".custom-form .clash-note")
+    assert "clashes with TOC" in note.text and "you can still add it" in note.text, note.text
+
+    # Meeting 2: Monday evening, custom time — 18:30 starts after CMI's
+    # last official slot (17:00–18:15) ends, so it's outside the grid.
+    app.css("#cc-add-meeting").click()
+    row2 = app.css_all(".custom-form .meeting-draft")[1]
+    row2.find_element(By.CSS_SELECTOR, "select[aria-label='Time'] option[value='custom']").click()
+    _js_set(app, row2.find_element(By.CSS_SELECTOR, "input[aria-label='Start time']"), "18:30")
+    _js_set(app, row2.find_element(By.CSS_SELECTOR, "input[aria-label='End time']"), "19:45")
+    row2.find_element(By.CSS_SELECTOR, "input[aria-label='Hall or place']").send_keys("Sports annexe")
+
+    app.xpath("//button[normalize-space()='Add to my timetable']").click()
+    app.wait_gone(".dialog")
+    app.wait_toast("Added GERMAN")
+
+    # Card: violet badge, clash flag, credit summary counts 2 credits.
+    section = app.wait_css("section[aria-label='My courses']")
+    badge = app.css("section[aria-label='My courses'] .badge.custom")
+    assert badge.text == "Custom", badge.text
+    assert "⚠ clash" in section.text, section.text
+    pills = [p.text for p in app.css_all(".credit-summary .cs-pill")]
+    assert "1 course at 2 credits" in pills, pills
+
+    # Grid: Tuesday chip in the official slot, evening chip in its own
+    # clearly-marked column.
+    app.open_tab("My timetable")
+    app.wait_css("td[data-day='1'][data-slot='550'] button.chip[aria-label^='GERMAN,']")
+    app.wait_css("th.extra")
+    app.wait_css("td[data-day='0'][data-slot='1110'] button.chip[aria-label^='GERMAN,']")
+
+    # Survives a reload.
+    app.d.refresh()
+    app.wait_css("td[data-day='0'][data-slot='1110'] button.chip[aria-label^='GERMAN,']")
+
+
+def t41_custom_course_edit_park_share_delete(app):
+    """Editing moves the definition itself (no override bookkeeping), a
+    removed custom parks under 'off the timetable' instead of dying, the
+    full share link carries the definition to a fresh browser, and delete
+    is one undoable step."""
+    app.boot("/", selection=["TOC"])
+    app.open_tab("My courses")
+    app.wait_css(".add-own-card").click()
+    app.wait_css(".dialog .custom-form")
+    app.css("#cc-name").send_keys("Gym")
+    app.xpath("//div[contains(@class,'seg')]/button[normalize-space()='0']").click()
+    app.css("#cc-add-meeting").click()
+    app.css("#cc-day-0 option[value='2']").click()  # Wednesday, first slot
+    app.xpath("//button[normalize-space()='Add to my timetable']").click()
+    app.wait_gone(".dialog")
+    pills = [p.text for p in app.css_all(".credit-summary .cs-pill")]
+    assert "1 course at 0 credits" in pills, pills
+
+    # Edit: Wednesday → Friday. The chip follows; nothing lands in the
+    # overrides list (the definition IS the schedule).
+    app.xpath("//button[normalize-space()='Edit course']").click()
+    app.wait_css(".dialog .custom-form")
+    app.css("#cc-day-0 option[value='4']").click()
+    app.xpath("//button[normalize-space()='Save changes']").click()
+    app.wait_gone(".dialog")
+    app.open_tab("My timetable")
+    app.wait_css("td[data-day='4'][data-slot='550'] button.chip[aria-label^='GYM,']")
+    assert not app.d.find_elements(
+        By.XPATH, "//button[contains(., '✎') and contains(., 'change')]"
+    ), "moving a custom course's meeting must not create an override"
+
+    # The full share link reproduces the course on a fresh browser.
+    app.xpath("//button[normalize-space()='Share']").click()
+    dialog = app.wait_css(".dialog")
+    assert "GYM" in dialog.text, dialog.text  # the travels-only-with hint
+    url = app.css(
+        "input[aria-label='Share link including custom times']"
+    ).get_attribute("value")
+    app.boot("/?" + url.split("?", 1)[1])
+    app.wait_css("td[data-day='4'][data-slot='550'] button.chip[aria-label^='GYM,']")
+    app.open_tab("My courses")
+    app.wait_css("section[aria-label='My courses'] .badge.custom")
+
+    # Park: Remove keeps the definition under "off the timetable".
+    gym_card = app.xpath(
+        "//section[@aria-label='My courses']//div[contains(@class,'card')]"
+        "[.//button[starts-with(@aria-label,'GYM,')]]"
+    )
+    gym_card.find_element(By.XPATH, ".//button[normalize-space()='Remove']").click()
+    parked = app.wait_css(".parked")
+    assert "Gym" in parked.text, parked.text
+    parked.find_element(By.XPATH, ".//button[normalize-space()='Add back']").click()
+    app.wait_css("section[aria-label='My courses'] .badge.custom")
+    app.wait_gone(".parked")
+
+    # Delete from the edit dialog — and one Undo brings it all back.
+    app.xpath("//button[normalize-space()='Edit course']").click()
+    app.wait_css(".dialog .custom-form")
+    app.xpath("//button[normalize-space()='Delete this course']").click()
+    app.wait_gone(".dialog")
+    app.wait_toast("Deleted GYM")
+    assert not app.css_all("section[aria-label='My courses'] .badge.custom")
+    app.d.execute_script("window.scrollTo(0, 0);")
+    app.xpath("//button[@aria-label='Undo']").click()
+    app.wait_css("section[aria-label='My courses'] .badge.custom")
+
+
+def t42_custom_course_shadowed_by_cmi(app):
+    """A custom course created before CMI listed that code keeps winning
+    after the sync introduces it, says so, and can be switched to CMI's
+    version in one undoable step — with the catalog chip updating live
+    (no reload) once the custom is gone."""
+    custom_toc = {"courses": [{
+        "code": "TOC", "name": "My own TOC notes", "instructors": [],
+        "branches": [], "credits": 1, "starts": None,
+        "part_of_semester": None, "optional_flag": False,
+        "status": "Scheduled",
+        "meetings": [{"day": "Fri", "slot": {"start_min": 630, "end_min": 705},
+                      "hall": None, "temp_booking": False}],
+    }]}
+    app.boot("/", selection=["TOC"])
+    app.d.execute_script(
+        "localStorage.setItem('cmitt.v1.custom', arguments[0]);", json.dumps(custom_toc)
+    )
+    app.d.refresh()
+    app.open_tab("My courses")
+    section = app.wait_css("section[aria-label='My courses']")
+    # The user's own definition wins over CMI's course of the same code.
+    assert "My own TOC notes" in section.text, section.text
+    assert "also on CMI now" in section.text, section.text
+    pills = [p.text for p in app.css_all(".credit-summary .cs-pill")]
+    assert pills == ["1 course at 1 credit"], pills
+
+    # The catalog row for the shadowed code shows the custom's name — and
+    # must update in place when the custom goes away.
+    app.open_tab("Catalog")
+    app.wait_css(".filterbar input[type='search']").send_keys("TOC")
+    chip = app.wait_css("section[aria-label='Catalog'] button.chip[aria-label^='TOC,']")
+    assert "My own TOC notes" in chip.get_attribute("aria-label"), \
+        chip.get_attribute("aria-label")
+
+    app.d.execute_script("arguments[0].scrollIntoView({block:'center'});", chip)
+    chip.click()
+    dialog = app.wait_css(".dialog")
+    assert "You're seeing your own version" in dialog.text, dialog.text[:400]
+    dialog.find_element(
+        By.XPATH, ".//button[normalize-space()=\"Use CMI's version instead\"]"
+    ).click()
+    app.wait_gone(".dialog")
+    app.wait_toast("TOC now uses CMI's version")
+
+    # Live, without a reload: the catalog chip now carries CMI's name, and
+    # the course is still selected — resolving to the official course, not
+    # a "no longer on CMI's timetable" stub.
+    WebDriverWait(app.d, 5).until(
+        lambda d: "Theory of Computation" in app.chip(
+            "TOC", "section[aria-label='Catalog']"
+        ).get_attribute("aria-label"),
+        message="the catalog chip must refresh when the custom is deleted",
+    )
+    app.open_tab("My courses")
+    section = app.wait_css("section[aria-label='My courses']")
+    assert "Theory of Computation" in section.text, section.text
+    assert "No longer on CMI's timetable" not in section.text, section.text
+    assert not app.css_all("section[aria-label='My courses'] .badge.custom")
+
+
 TESTS = [
     t01_header_sync_button_and_hidden_dev,
     t02_developer_endpoint_only,
@@ -1409,6 +1601,9 @@ TESTS = [
     t37_catalog_updates_live,
     t38_duration_based_credits,
     t39_sync_pill_ticks_live,
+    t40_custom_course_create,
+    t41_custom_course_edit_park_share_delete,
+    t42_custom_course_shadowed_by_cmi,
 ]
 
 

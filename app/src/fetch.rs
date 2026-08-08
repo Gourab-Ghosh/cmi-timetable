@@ -185,6 +185,14 @@ pub fn adopt(app: &App, new_snapshot: Snapshot, announce: bool) {
         let mut known: Vec<String> = Vec::new();
         let mut unknown: Vec<String> = Vec::new();
         for code in &selection {
+            // The user's own courses are always known — they were never
+            // waiting for a catalog to resolve against.
+            if let Some(own) = app.customs.with_untracked(|cs| cs.get(code).cloned()) {
+                if !known.contains(&own.code) {
+                    known.push(own.code.clone());
+                }
+                continue;
+            }
             match new_snapshot.course_ci(code) {
                 Some(course) => {
                     if !known.contains(&course.code) {
@@ -238,8 +246,16 @@ pub fn adopt(app: &App, new_snapshot: Snapshot, announce: bool) {
             dropped.course
         ));
     }
-    app.removed_upstream.set(merge.removed_selected.clone());
-    for code in &merge.removed_selected {
+    // The user's own courses were never upstream — the merge can't know
+    // that, so strip them before announcing removals.
+    let removed_selected: Vec<String> = merge
+        .removed_selected
+        .iter()
+        .filter(|code| app.customs.with_untracked(|cs| cs.get(code).is_none()))
+        .cloned()
+        .collect();
+    app.removed_upstream.set(removed_selected.clone());
+    for code in &removed_selected {
         app.toast(format!("{code} is no longer on CMI's timetable."));
     }
     // The very first data isn't a "change" — diffing against the empty
