@@ -1676,6 +1676,26 @@ fn details_dialog(app: App, code: String) -> impl IntoView {
                     }
                 })}
             <div class="actions">
+                // Your own course: deleting it is one click from here, not
+                // buried behind the edit form. Quiet-danger styling, and
+                // it stays undoable, so no confirmation dance.
+                {is_custom
+                    .then(|| {
+                        let del_code = code.clone();
+                        view! {
+                            <button
+                                class="btn danger"
+                                title="Delete this course and its meetings (undoable)"
+                                on:click=move |_| {
+                                    app.delete_custom_course(&del_code, false);
+                                    app.dialog.set(None);
+                                }
+                            >
+                                "Delete this course"
+                            </button>
+                            <div class="grow"></div>
+                        }
+                    })}
                 {is_custom
                     .then(|| {
                         let edit_code = code.clone();

@@ -140,9 +140,10 @@ my custom changes"). When both are present, `s` wins. The query stays
   edits change the course itself (no override bookkeeping), a violet
   **Custom** badge marks them, "Remove" parks them under "off the
   timetable" with the definition intact, and the full share link carries
-  them whole to other browsers. If a later CMI sync introduces the same
-  code, your version keeps winning and a note offers a one-click switch
-  to CMI's.
+  them whole to other browsers. Opening one gives you **Delete this
+  course** right there (still undoable); if a later CMI sync introduces
+  the same code, your version keeps winning and a note offers a one-click
+  switch to CMI's.
 
 ### Developer mode (hidden endpoint)
 

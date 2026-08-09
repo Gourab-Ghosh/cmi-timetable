@@ -1517,10 +1517,15 @@ def t41_custom_course_edit_park_share_delete(app):
     app.wait_css("section[aria-label='My courses'] .badge.custom")
     app.wait_gone(".parked")
 
-    # Delete from the edit dialog — and one Undo brings it all back.
-    app.xpath("//button[normalize-space()='Edit course']").click()
-    app.wait_css(".dialog .custom-form")
-    app.xpath("//button[normalize-space()='Delete this course']").click()
+    # Delete straight from the course's own dialog — no detour through the
+    # edit form — and one Undo brings it all back.
+    chip = app.chip("GYM", "section[aria-label='My courses']")
+    app.d.execute_script("arguments[0].scrollIntoView({block:'center'});", chip)
+    chip.click()
+    dialog = app.wait_css(".dialog")
+    dialog.find_element(
+        By.XPATH, ".//button[normalize-space()='Delete this course']"
+    ).click()
     app.wait_gone(".dialog")
     app.wait_toast("Deleted GYM")
     assert not app.css_all("section[aria-label='My courses'] .badge.custom")

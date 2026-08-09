@@ -30,6 +30,19 @@ and no committed mirror (fixtures exist only for tests/e2e seed).
 - Keep the dev server running in the background for manual testing.
 - Ultracode is ON for this session (workflows allowed for substantive work).
 - Write copy "in your own words" — plain, honest, student-facing English.
+- **RESTORE DEAD WORK (R19).** Whenever anything fails to finish — a
+  subagent/workflow agent killed by a session or rate limit, a background
+  command that died, an interrupted step — and the user then says
+  "continue" (or anything resuming the work), FIRST check for unfinished
+  work and restore it, before starting anything new. Do not assume a
+  partial result was complete. How to check workflow casualties:
+  `subagents/workflows/<run>/journal.jsonl` under the session dir records
+  one `started` and one `result` line per agent — agents with a `started`
+  and no `result` died, and their prompts survive in
+  `agent-<id>.jsonl`; recover the findings/task from there and finish
+  them by hand (or re-run). A workflow's returned value counts only the
+  agents that lived, so a "clean" report can be hiding losses. Report
+  honestly what died and what you did about it.
 
 ## 3. Layout & key files
 
@@ -574,3 +587,14 @@ regenerates the .ics golden.
   casts a soft shadow so content reads as sliding under it, and the Name
   placeholder no longer overflows on phones. 66 native + 43/43 e2e.
   Committed locally, NOT pushed.
+- **R19 (restore-dead-work rule + direct Delete):** user: "whenever you
+  cannot complete a task for any reason and I say continue, always check
+  if any task has died and restore it" (now §2, and mirrored in the
+  assistant's cross-session memory so it fires before this file is read);
+  plus "add the delete course button directly when I click on a custom
+  added course, instead of clicking edit course first". The details
+  dialog of one of your own courses now leads with a quiet-danger
+  "Delete this course" (left of the row, spacer, then the rest), so
+  deleting is one click from the course instead of a detour through the
+  edit form — which keeps its own Delete. t41 now deletes through this
+  path. 66 native + 43/43 e2e. Committed locally, NOT pushed.
