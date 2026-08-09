@@ -924,10 +924,14 @@ pub fn filter_bar(app: App, result_count: Signal<usize>) -> impl IntoView {
                 "Time slot",
                 move || app.filters().slot_starts.len(),
                 std::sync::Arc::new(move || {
-                    snapshot()
-                        .slot_grid
-                        .iter()
-                        .map(|s| (s.start_min.to_string(), s.label()))
+                    // The grid's own columns, CMI's plus the out-of-hours
+                    // ones the user has moved something to — matching runs
+                    // against EFFECTIVE meetings, so a 19:00 class would
+                    // match perfectly well if only it were offered here.
+                    // Untracked for the same reason as the Hall facet.
+                    untrack(|| app.master_slot_grid())
+                        .into_iter()
+                        .map(|(s, _)| (s.start_min.to_string(), s.label()))
                         .collect()
                 }),
                 |f, k| f.slot_starts.iter().any(|s| s.to_string() == k),
@@ -1393,9 +1397,24 @@ fn credits_editor(app: App, course: &Course) -> impl IntoView {
         official.to_string()
     };
 
-    let editing = RwSignal::new(false);
-    let input = RwSignal::new(String::new());
+    // Restored from the App-level draft, so a dialog rebuild (a sync
+    // landing, an Undo toast click) can't swallow a half-typed number.
+    let draft = app
+        .credit_edit
+        .get_untracked()
+        .filter(|(c, _)| c.eq_ignore_ascii_case(&code));
+    let editing = RwSignal::new(draft.is_some());
+    let input = RwSignal::new(draft.map(|(_, t)| t).unwrap_or_default());
     let error = RwSignal::new(false);
+    // One place that mirrors the local signals into the draft. Writing is
+    // safe; only a tracked READ would make typing rebuild the dialog.
+    let remember = {
+        let code = code.clone();
+        move |text: Option<String>| match text {
+            Some(t) => app.credit_edit.set(Some((code.clone(), t))),
+            None => app.credit_edit.set(None),
+        }
+    };
 
     view! {
         <span class="row" style="display:inline-flex;gap:0.4rem;align-items:center;flex-wrap:wrap">
@@ -1403,8 +1422,11 @@ fn credits_editor(app: App, course: &Course) -> impl IntoView {
                 let code = code.clone();
                 let official_label = official_label.clone();
                 let official_short = official_short.clone();
+                let remember = remember.clone();
                 if editing.get() {
                     let save_code = code.clone();
+                    let (remember_input, remember_save, remember_cancel) =
+                        (remember.clone(), remember.clone(), remember);
                     view! {
                         <input
                             type="number"
@@ -1413,7 +1435,11 @@ fn credits_editor(app: App, course: &Course) -> impl IntoView {
                             style="width:5rem"
                             aria-label="Credits"
                             prop:value=input.get_untracked()
-                            on:input=move |ev| input.set(event_target_value(&ev))
+                            on:input=move |ev| {
+                                let v = event_target_value(&ev);
+                                input.set(v.clone());
+                                remember_input(Some(v));
+                            }
                         />
                         <button
                             class="btn small primary"
@@ -1423,6 +1449,7 @@ fn credits_editor(app: App, course: &Course) -> impl IntoView {
                                         app.set_credit_override(&save_code, n);
                                         editing.set(false);
                                         error.set(false);
+                                        remember_save(None);
                                     }
                                     _ => error.set(true),
                                 }
@@ -1435,21 +1462,18 @@ fn credits_editor(app: App, course: &Course) -> impl IntoView {
                             on:click=move |_| {
                                 editing.set(false);
                                 error.set(false);
+                                remember_cancel(None);
                             }
                         >
                             "Cancel"
                         </button>
-                        {move || {
-                            error
-                                .get()
-                                .then(|| {
-                                    view! {
-                                        <span style="color:var(--warn)">
-                                            "Enter a whole number from 0 to 20."
-                                        </span>
-                                    }
-                                })
-                        }}
+                        <span class="form-error" aria-live="assertive">
+                            {move || {
+                                error
+                                    .get()
+                                    .then_some("Enter a whole number from 0 to 20.")
+                            }}
+                        </span>
                     }
                         .into_any()
                 } else {
@@ -1625,7 +1649,14 @@ fn details_dialog(app: App, code: String) -> impl IntoView {
                             </span>
                         }
                     })}
-                {status_badges(&course)}
+                // Status badges describe CMI's listing ("unscheduled — CMI
+                // lists it but hasn't given it a time"), which says nothing
+                // true about a course the user invented: the Custom badge
+                // above already places it, and a missing time is theirs to
+                // add whenever they like.
+                {(!is_custom).then(|| status_badges(&course))}
+                {(is_custom && course.meetings.is_empty())
+                    .then(|| view! { <span class="badge">"no time set yet"</span> })}
                 {removed
                     .then(|| view! { <span class="badge warn">"No longer on CMI's timetable"</span> })}
             </div>
@@ -1686,13 +1717,7 @@ fn details_dialog(app: App, code: String) -> impl IntoView {
                         // there was more than one.
                         <p class="row" style="margin:0.6rem 0 0">
                             <span class="badge alarm">"⚠"</span>
-                            <span>
-                                {if clashes.len() == 1 {
-                                    "Clashes with"
-                                } else {
-                                    "Clashes with these"
-                                }}
-                            </span>
+                            <span>"Clashes with"</span>
                         </p>
                         <ul class="clash-list">
                             {clashes
@@ -2501,10 +2526,16 @@ fn edit_meeting_dialog(
                     "Hall to be announced",
                 )}
             </div>
-            {move || {
-                let e = error.get();
-                (!e.is_empty()).then(|| view! { <p style="color:var(--warn)">{e}</p> })
-            }}
+            // A persistent live region: screen readers announce changes
+            // INSIDE one, not the arrival of a new node, so a validation
+            // error inserted as a fresh paragraph is silent and Save reads
+            // as a dead button.
+            <p class="form-error" aria-live="assertive">
+                {move || {
+                    let e = error.get();
+                    (!e.is_empty()).then_some(e)
+                }}
+            </p>
             <div class="actions">
                 <button class="btn" on:click=move |_| app.dialog.set(None)>
                     "Cancel"
@@ -3099,7 +3130,7 @@ fn custom_course_dialog(
                                     row.hall,
                                     format!("cc-hall-{row_key}"),
                                     "Hall or place",
-                                    "Where? (optional)",
+                                    "Hall not set yet",
                                 )}
                                 <button
                                     type="button"
@@ -3339,27 +3370,32 @@ fn export_dialog(app: App, scope: Option<String>) -> impl IntoView {
         } else {
             vec![scope_v]
         };
-        // The user's own courses export like any other (they resolve first,
-        // as everywhere).
+        // Resolved exactly as the grids resolve them: your own courses
+        // first, then CMI's, then a stub for one CMI has dropped — whose
+        // meetings live on as your overrides and belong in the calendar
+        // like any other.
         let courses: Vec<ttcore::ics::IcsCourse> = codes
             .iter()
-            .filter_map(|code| {
-                app.custom_course(code)
-                    .or_else(|| snapshot.course(code).cloned())
-            })
-            .map(|course| {
-                let meetings = crate::state::effective_meetings(&course, &overrides)
+            .map(|code| {
+                let course = app.selected_course(code);
+                let meetings: Vec<_> = crate::state::effective_meetings(&course, &overrides)
                     .into_iter()
                     .map(|e| e.meeting)
                     .collect();
                 ttcore::ics::IcsCourse::from_course(&course, meetings)
             })
             .collect();
-        if courses.is_empty() {
-            error.set("Nothing to export — add a course first.".to_string());
+        if courses.iter().all(|c| c.meetings.is_empty()) {
+            error.set(
+                "Nothing to export — none of these courses has a time yet.".to_string(),
+            );
             return;
         }
-        let c_param = ttcore::share::selection_to_c_param(&app.selection.get_untracked());
+        // Percent-encoded: a code of the user's own may contain characters
+        // a query string reads as syntax ('+', '&', '#').
+        let c_param = js_sys::encode_uri_component(
+            &ttcore::share::selection_to_c_param(&app.selection.get_untracked()),
+        );
         let opts = ttcore::ics::IcsOptions {
             range_start: start,
             range_end: end,
@@ -3433,10 +3469,16 @@ fn export_dialog(app: App, scope: Option<String>) -> impl IntoView {
                 "Courses with a “starts …” or “runs … only” note are exported with their own dates. "
                 "CMI holidays are not excluded — see the CMI semester schedule."
             </p>
-            {move || {
-                let e = error.get();
-                (!e.is_empty()).then(|| view! { <p style="color:var(--warn)">{e}</p> })
-            }}
+            // A persistent live region: screen readers announce changes
+            // INSIDE one, not the arrival of a new node, so a validation
+            // error inserted as a fresh paragraph is silent and Save reads
+            // as a dead button.
+            <p class="form-error" aria-live="assertive">
+                {move || {
+                    let e = error.get();
+                    (!e.is_empty()).then_some(e)
+                }}
+            </p>
             <div class="actions">
                 <button class="btn" on:click=move |_| app.dialog.set(None)>
                     "Cancel"
@@ -3469,7 +3511,9 @@ fn share_dialog(app: App) -> impl IntoView {
     });
     let custom_codes: Vec<String> =
         shared_customs.iter().map(|c| c.code.clone()).collect();
-    let c_param = ttcore::share::selection_to_c_param(&selection);
+    let c_param = js_sys::encode_uri_component(
+        &ttcore::share::selection_to_c_param(&selection),
+    );
     let plain = domx::share_url(&format!("?c={c_param}"));
     let with_times = domx::share_url(&format!(
         "?c={c_param}&s={}",

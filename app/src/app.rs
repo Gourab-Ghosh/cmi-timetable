@@ -66,6 +66,7 @@ fn init_app() -> (App, bool) {
         banner: RwSignal::new(None),
         conflicts: RwSignal::new(Vec::new()),
         what_changed: RwSignal::new(None),
+        credit_edit: RwSignal::new(None),
         removed_upstream: RwSignal::new(Vec::new()),
         unknown_codes: RwSignal::new(Vec::new()),
         fetch_log: RwSignal::new(Vec::new()),

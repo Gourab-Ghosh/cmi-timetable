@@ -670,6 +670,11 @@ table.tt td.drop-ok {
   box-shadow: inset 0 0 0 2px var(--accent);
 }
 table.tt td.kbd-cursor { box-shadow: inset 0 0 0 2px var(--accent); }
+/* The phone's per-day list takes drops too, so the same highlight applies. */
+.day-list .slotrow.drop-ok {
+  background: var(--accent-wash);
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
 
 .density-compact table.tt td { height: 34px; min-width: 84px; padding: 0.2rem; }
 .density-compact .chip { font-size: 0.7rem; min-height: 22px; padding: 0.08rem 0.35rem; }
@@ -1510,8 +1515,10 @@ pre.devpre {
   color: var(--alarm);
 }
 .custom-form .clash-note:empty { display: none; }
-.custom-form .form-error { color: var(--warn); margin: 0.5rem 0 0; }
-.custom-form .form-error:empty { display: none; }
+/* Validation errors live in a permanent region so screen readers announce
+   them; empty means no error, and it takes no space. */
+.form-error { color: var(--warn); margin: 0.5rem 0 0; }
+.form-error:empty { display: none; }
 .custom-form #cc-add-meeting { margin-top: 0.1rem; }
 
 /* "CMI lists this code too" — a decision point, gently boxed. */

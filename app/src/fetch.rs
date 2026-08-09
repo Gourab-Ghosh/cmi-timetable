@@ -169,10 +169,28 @@ fn record_report(app: &App, source: &str, report: ttcore::model::ParseReport) {
     });
 }
 
+/// Where an adopted snapshot came from — which decides how its differences
+/// may be described to the user.
+#[derive(Clone, Copy, PartialEq)]
+pub enum Adoption {
+    /// A real fetch: anything that changed is CMI's doing, and is announced.
+    Fetched,
+    /// The SAME cached pages, read again by a newer parser. Every difference
+    /// is the APP's doing, so none of it may be reported as CMI's edit: no
+    /// "what changed" digest, no "CMI changed times you customised" dialog
+    /// (whose default is to throw the user's override away), no "CMI now
+    /// matches your change" toast. The merge itself still runs, so override
+    /// ids stay attached to the meetings they belong to.
+    Reparsed,
+}
+
 /// Adopt a gate-passed snapshot: three-way-merge the user's overrides,
 /// queue conflicts, refresh the "What changed" digest, persist.
-pub fn adopt(app: &App, new_snapshot: Snapshot, announce: bool) {
+pub fn adopt(app: &App, new_snapshot: Snapshot, announce: bool, from: Adoption) {
     let old = app.snapshot.get_untracked();
+    // The very first data is not a "change" either — diffing against the
+    // empty placeholder would announce every course on campus as new.
+    let quiet = from == Adoption::Reparsed;
     let first_data = !old.has_data();
     let mut selection = app.selection.get_untracked();
     let overrides = app.overrides.get_untracked();
@@ -240,11 +258,13 @@ pub fn adopt(app: &App, new_snapshot: Snapshot, announce: bool) {
         s.source = new_snapshot.source.clone();
     });
 
-    for dropped in &merge.dropped_matching {
-        app.toast(format!(
-            "CMI now matches your change to {} — using the official time.",
-            dropped.course
-        ));
+    if !quiet {
+        for dropped in &merge.dropped_matching {
+            app.toast(format!(
+                "CMI now matches your change to {} — using the official time.",
+                dropped.course
+            ));
+        }
     }
     // The user's own courses were never upstream — the merge can't know
     // that, so strip them before announcing removals.
@@ -255,18 +275,21 @@ pub fn adopt(app: &App, new_snapshot: Snapshot, announce: bool) {
         .cloned()
         .collect();
     app.removed_upstream.set(removed_selected.clone());
-    for code in &removed_selected {
-        app.toast(format!("{code} is no longer on CMI's timetable."));
+    if !quiet {
+        for code in &removed_selected {
+            app.toast(format!("{code} is no longer on CMI's timetable."));
+        }
     }
-    // The very first data isn't a "change" — diffing against the empty
-    // placeholder would announce every course on campus as new.
-    if !first_data && !merge.diff.is_empty() {
+    if !first_data && !quiet && !merge.diff.is_empty() {
         app.what_changed.set(Some(merge.diff.clone()));
     }
     // Replace, never accumulate: any still-relevant conflict is re-derived
     // by every merge, and stale ones referencing resolved overrides vanish.
-    let has_conflicts = !merge.conflicts.is_empty();
-    app.conflicts.set(merge.conflicts);
+    // On a re-parse the user's value simply stays — there is no CMI edit to
+    // arbitrate, and asking them to choose would be asking about our own
+    // parser under CMI's name.
+    let has_conflicts = !merge.conflicts.is_empty() && !quiet;
+    app.conflicts.set(if quiet { Vec::new() } else { merge.conflicts });
     if has_conflicts {
         app.dialog.set(Some(crate::state::Dialog::Conflicts));
     }
@@ -432,7 +455,7 @@ pub async fn run_update(app: App, manual: bool) {
         .await
         {
             TierResult::Snapshot(snapshot) => {
-                adopt(&app, *snapshot, true);
+                adopt(&app, *snapshot, true, Adoption::Fetched);
                 adopted = true;
             }
             // Direct content is authoritative: a gate failure here means the
@@ -473,7 +496,7 @@ pub async fn run_update(app: App, manual: bool) {
             pending = rest;
             match result {
                 TierResult::Snapshot(snapshot) => {
-                    adopt(&app, *snapshot, true);
+                    adopt(&app, *snapshot, true, Adoption::Fetched);
                     adopted = true;
                 }
                 // A proxy may have mangled the content — wait for the others
@@ -491,7 +514,7 @@ pub async fn run_update(app: App, manual: bool) {
         progress(&app, "Trying the data mirror…");
         routes_tried += 1;
         if let TierResult::Snapshot(snapshot) = try_mirror(app).await {
-            adopt(&app, *snapshot, true);
+            adopt(&app, *snapshot, true, Adoption::Fetched);
             adopted = true;
         }
     }
@@ -598,7 +621,7 @@ pub fn reparse_stored(app: App, manual: bool) {
             record_report(&app, "re-parse", outcome.report.clone());
             match outcome.snapshot {
                 Some(new_snapshot) => {
-                    adopt(&app, new_snapshot, manual);
+                    adopt(&app, new_snapshot, manual, Adoption::Reparsed);
                     if manual {
                         app.toast("Re-parsed the stored pages.");
                     }

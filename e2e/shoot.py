@@ -199,8 +199,12 @@ boot("Dark", "MyCourses")
 shot("07-dark-my-courses")
 
 # Halls on Wednesday: the SVA override lands in Seminar Hall 17:00 (arrival).
-boot("Light", "Halls", prefs_extra={"halls_day": "Wed"})
+boot("Light", "Halls", prefs_extra={"halls_view": {"Day": "Wed"}})
 shot("08-light-halls-with-arrival")
+
+# Every day at once — one table per day, stacked.
+boot("Light", "Halls", prefs_extra={"halls_view": "All"})
+shot("32-light-halls-all-days")
 
 boot("Light", "MyTimetable")
 d.find_element(By.CSS_SELECTOR, "button.chip[aria-label^='TOC,']").click()
@@ -315,7 +319,7 @@ shot("23-light-tt-custom-panels")
 # ("Sports annexe", badged "yours") and a column for the evening meeting
 # sitting in it.
 boot("Light", "Halls", selection=CUSTOM_SEL, customs=CUSTOMS,
-     prefs_extra={"halls_day": "Mon"})
+     prefs_extra={"halls_view": {"Day": "Mon"}})
 # The own row sits below CMI's fifteen, so bring it into frame.
 d.execute_script(
     "document.querySelector('tr.own-hall').scrollIntoView({block:'center'});"
@@ -353,7 +357,7 @@ EVENING = {
     "credits": [],
 }
 boot("Light", "Halls", selection=CUSTOM_SEL, customs=CUSTOMS,
-     prefs_extra={"halls_day": "Tue"})
+     prefs_extra={"halls_view": {"Day": "Tue"}})
 Select(d.find_element(By.CSS_SELECTOR, "select[aria-label='Day']")).select_by_value("1")
 Select(
     d.find_element(By.CSS_SELECTOR, "select[aria-label='Time slot']")

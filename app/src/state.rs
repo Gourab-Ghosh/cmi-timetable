@@ -112,7 +112,23 @@ pub struct Prefs {
     /// ms since epoch of the last automatic update attempt (12 h throttle).
     pub last_update_attempt: f64,
     pub tab: Tab,
+    /// Legacy single-day preference. Kept so older stored prefs still load;
+    /// `halls_view` is what the app reads now.
     pub halls_day: Day,
+    /// Which day (or all of them) the Halls tab shows. `None` means the user
+    /// has never chosen: the tab then opens on today, and only a real click
+    /// writes a value here — so the choice, once made, survives every reload.
+    #[serde(default)]
+    pub halls_view: Option<HallsView>,
+}
+
+/// The Halls tab's day selection.
+#[derive(Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum HallsView {
+    /// One day at a time — the usual way to read a room timetable.
+    Day(Day),
+    /// Every day the hall data covers, one table each.
+    All,
 }
 
 impl Default for Prefs {
@@ -124,6 +140,7 @@ impl Default for Prefs {
             last_update_attempt: 0.0,
             tab: Tab::default(),
             halls_day: Day::Mon,
+            halls_view: None,
         }
     }
 }
@@ -319,6 +336,13 @@ pub struct App {
     pub banner: RwSignal<Option<Banner>>,
     pub conflicts: RwSignal<Vec<Conflict>>,
     pub what_changed: RwSignal<Option<SnapshotDiff>>,
+    /// Half-finished credits edit inside the details dialog: (course code,
+    /// what has been typed). It lives out here, not in the dialog body,
+    /// because DialogHost rebuilds that body on every tracked change — a
+    /// background sync, an Undo toast click — and a signal created in there
+    /// would take the typed value down with it. Always read UNTRACKED, or
+    /// typing would trigger the very rebuild this avoids.
+    pub credit_edit: RwSignal<Option<(String, String)>>,
     /// Selected codes that vanished upstream ("No longer on CMI's timetable").
     pub removed_upstream: RwSignal<Vec<String>>,
     /// Unknown codes from a shared URL (dismissible warning chips).
@@ -446,9 +470,15 @@ impl App {
         if selection.is_empty() {
             domx::replace_query("");
         } else {
+            // Percent-encoded: a course of the user's own can be called
+            // anything, and a code carrying '+', '&', '#' or ',' would come
+            // back from the address bar mangled or truncated on the next
+            // load, silently dropping courses from the selection.
             domx::replace_query(&format!(
                 "?c={}",
-                ttcore::share::selection_to_c_param(&selection)
+                js_sys::encode_uri_component(&ttcore::share::selection_to_c_param(
+                    &selection
+                ))
             ));
         }
     }
@@ -1071,28 +1101,28 @@ impl App {
                                 .get(code)
                                 .or_else(|| snapshot.course(code))
                                 .cloned()
-                                .unwrap_or_else(|| {
-                                    // Removed upstream but still selected:
-                                    // synthesize a stub so it stays visible
-                                    // with its badge.
-                                    Course {
-                                        code: code.clone(),
-                                        name: code.clone(),
-                                        instructors: vec![],
-                                        branches: vec![],
-                                        credits: None,
-                                        starts: None,
-                                        part_of_semester: None,
-                                        optional_flag: false,
-                                        status: ScheduleStatus::UnscheduledListed,
-                                        meetings: vec![],
-                                    }
-                                })
+                                .unwrap_or_else(|| removed_stub(code))
                         })
                         .collect()
                 })
             })
         })
+    }
+
+    /// The course behind ONE selected code, resolved the same way
+    /// `selected_courses` resolves the whole list: the user's own first, then
+    /// CMI's catalog, then a stub for a course CMI has dropped since it was
+    /// added.
+    ///
+    /// Anything acting on the selection must go through this. Exporting used
+    /// to resolve customs-then-snapshot and quietly skip whatever was left,
+    /// so a course CMI stopped listing — visible on every screen, with the
+    /// user's own meetings on it — was missing from the .ics with no word
+    /// said (R23).
+    pub fn selected_course(&self, code: &str) -> Course {
+        self.custom_course(code)
+            .or_else(|| self.snapshot.with(|s| s.course(code).cloned()))
+            .unwrap_or_else(|| removed_stub(code))
     }
 
     /// The user's own courses that are NOT currently on the timetable —
@@ -1345,6 +1375,32 @@ impl App {
         out
     }
 
+    /// What the Halls tab should show right now.
+    ///
+    /// A stored choice always wins, so the tab stays where the user left it
+    /// across reloads. With no stored choice the tab opens on TODAY, which
+    /// is what someone looking for a free room almost always wants. On a
+    /// weekend with nothing timetabled it opens on every day instead, rather
+    /// than on an empty Saturday.
+    pub fn halls_view(&self) -> HallsView {
+        if let Some(stored) = self.prefs.with(|p| p.halls_view) {
+            if let HallsView::Day(d) = stored {
+                // A stored day CMI no longer publishes would title a table
+                // the day strip has no button for.
+                if !self.hall_days().contains(&d) {
+                    return HallsView::All;
+                }
+            }
+            return stored;
+        }
+        let today = crate::domx::today_local().weekday();
+        if self.hall_days().contains(&today) {
+            HallsView::Day(today)
+        } else {
+            HallsView::All
+        }
+    }
+
     /// Days for the Halls tab and the free-hall finder: grid days UNION any
     /// day that appears only in hall bookings (e.g. a Saturday seminar) —
     /// parsed hall data must never be silently unviewable.
@@ -1404,6 +1460,24 @@ impl App {
     /// data, so an empty course list means "never synced".
     pub fn has_data(&self) -> bool {
         self.snapshot.with(|s| s.has_data())
+    }
+}
+
+/// A course that is still selected but no longer in CMI's catalog: a stub
+/// carrying just its code, so it stays visible with its "No longer on CMI's
+/// timetable" badge and keeps whatever meetings the user placed on it.
+fn removed_stub(code: &str) -> Course {
+    Course {
+        code: code.to_string(),
+        name: code.to_string(),
+        instructors: vec![],
+        branches: vec![],
+        credits: None,
+        starts: None,
+        part_of_semester: None,
+        optional_flag: false,
+        status: ScheduleStatus::UnscheduledListed,
+        meetings: vec![],
     }
 }
 
@@ -1515,10 +1589,17 @@ pub fn course_matches(app: &App, course: &Course, f: &Filters) -> bool {
     {
         return false;
     }
+    // Halls compare trimmed and case-insensitively here as everywhere else:
+    // the filter can be picked from a place the user typed themselves, and
+    // exact bytes would quietly match nothing.
     if !f.halls.is_empty()
-        && !eff
-            .iter()
-            .any(|e| e.meeting.hall.as_ref().is_some_and(|h| f.halls.contains(h)))
+        && !eff.iter().any(|e| {
+            e.meeting.hall.as_deref().is_some_and(|h| {
+                f.halls
+                    .iter()
+                    .any(|pick| pick.trim().eq_ignore_ascii_case(h.trim()))
+            })
+        })
     {
         return false;
     }

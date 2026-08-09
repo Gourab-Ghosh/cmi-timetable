@@ -307,16 +307,23 @@ pub fn enter_move_mode(app: App, spec: DragSpec, from: Option<Meeting>) {
     // an invisible move whose Enter lands somewhere the user never saw.
     if app.prefs.with_untracked(|p| p.tab) == crate::state::Tab::Halls {
         app.say(
-            "Keyboard moving works on My timetable. Here, drag with the pointer, \
-             or open the course and edit the meeting.",
+            "Keyboard moving is available on My timetable. On this page, drag a \
+             course with the pointer, or open it and edit the meeting.",
         );
         return;
     }
-    let cursor = from.map(|m| (m.day, m.slot.start_min)).unwrap_or_else(|| {
-        // Start at the grid's first day/slot — derived from the data.
-        let m = app.default_meeting();
-        (m.day, m.slot.start_min)
-    });
+    // Address the COLUMN the chip renders in, not its raw start time. A
+    // 14:10 meeting sits in the 14:00 column, and a cursor holding 850 would
+    // highlight no cell at all — then jump somewhere unrelated on the first
+    // arrow key, because it isn't in the column list either.
+    let cols = active_slot_grid(app);
+    let cursor = from
+        .and_then(|m| crate::views::column_for(&cols, &m).map(|start| (m.day, start)))
+        .unwrap_or_else(|| {
+            // Start at the grid's first day/slot — derived from the data.
+            let m = app.default_meeting();
+            (m.day, m.slot.start_min)
+        });
     app.say(format!(
         "Move mode for {}. Use arrow keys to pick a cell, Enter to drop, Escape to cancel.",
         spec.code
@@ -324,11 +331,23 @@ pub fn enter_move_mode(app: App, spec: DragSpec, from: Option<Meeting>) {
     app.move_mode.set(Some(MoveMode { spec, cursor }));
 }
 
+/// The columns of the grid the user is actually looking at. Moving by
+/// keyboard on the Master grid used to walk My timetable's columns, so the
+/// cursor could stand on a cell that grid never drew — invisible, and Enter
+/// still dropped there.
+fn active_slot_grid(app: App) -> Vec<Slot> {
+    let grid = match app.prefs.with_untracked(|p| p.tab) {
+        crate::state::Tab::MasterGrid => app.master_slot_grid(),
+        _ => app.display_slot_grid(),
+    };
+    grid.into_iter().map(|(s, _)| s).collect()
+}
+
 fn move_cursor(app: App, dx: i32, dy: i32) {
     let days = app.grid_days();
     // The display grid, so chips in synthetic (out-of-grid) columns are
     // reachable and can be moved back out again by keyboard.
-    let slots: Vec<Slot> = app.display_slot_grid().into_iter().map(|(s, _)| s).collect();
+    let slots: Vec<Slot> = active_slot_grid(app);
     if days.is_empty() || slots.is_empty() {
         return;
     }

@@ -2,7 +2,7 @@
 //! and days/halls run down the left column — never transposed.
 
 use crate::fetch;
-use crate::state::{effective_meetings, App, Density, Dialog, EffMeeting, Tab};
+use crate::state::{effective_meetings, App, Density, Dialog, EffMeeting, HallsView, Tab};
 use crate::ui::{
     branch_chip, chip, custom_changes_pill, edit_toggle, filter_bar, overrides_list, ChipClick,
     ChipProps,
@@ -140,7 +140,7 @@ fn what_changed_panel(app: App) -> impl IntoView {
 /// column containing its start (for free-form override times), else the
 /// nearest. With `display_slot_grid` the personal grid always has an exact
 /// or containing column; the nearest-fallback remains for other callers.
-fn column_for(slot_grid: &[Slot], meeting: &Meeting) -> Option<u16> {
+pub fn column_for(slot_grid: &[Slot], meeting: &Meeting) -> Option<u16> {
     let start = meeting.slot.start_min;
     if let Some(s) = slot_grid.iter().find(|s| s.start_min == start) {
         return Some(s.start_min);
@@ -435,8 +435,30 @@ fn my_timetable(app: App) -> impl IntoView {
                                             {display_slot_grid(app)
                                                 .into_iter()
                                                 .map(|(slot, extra)| {
+                                                    let start = slot.start_min;
                                                     view! {
-                                                        <div class="slotrow" class:extra=extra>
+                                                        // A real drop target, like the
+                                                        // desktop grid's cells: the chips
+                                                        // in here are draggable, and a
+                                                        // long-press that can be lifted
+                                                        // but never put down anywhere is
+                                                        // a dead gesture.
+                                                        <div
+                                                            class="slotrow"
+                                                            class:extra=extra
+                                                            data-day=day.index().to_string()
+                                                            data-slot=start.to_string()
+                                                            class:drop-ok=move || {
+                                                                app.drag
+                                                                    .with(|d| {
+                                                                        d.as_ref()
+                                                                            .is_some_and(|d| {
+                                                                                d.started
+                                                                                    && d.over == Some((day, start))
+                                                                            })
+                                                                    })
+                                                            }
+                                                        >
                                                             <span class="when">{slot.label()}</span>
                                                             <div class="sidebyside">
                                                                 {cell_chips(day, slot)}
@@ -562,7 +584,7 @@ fn my_timetable(app: App) -> impl IntoView {
                         // while one of YOUR courses is waiting for you.
                         let mine = items.iter().filter(|c| app.is_custom(&c.code)).count();
                         let note = if mine == items.len() {
-                            "your own courses — give them a time whenever you like"
+                            "your own courses, waiting for a time you set"
                         } else if mine == 0 {
                             "CMI lists these courses but hasn't put them on the timetable"
                         } else {
@@ -1385,9 +1407,9 @@ fn catalog(app: App) -> impl IntoView {
                                         view! {
                                             <p class="muted">
                                                 {format!(
-                                                    "You already have “{name}” ({code}) — \
-                                                     it's one of your own, so it lives in \
-                                                     My courses rather than CMI's catalog.",
+                                                    "“{name}” ({code}) is one of your own \
+                                                     courses, so it appears under My courses \
+                                                     rather than in CMI's catalog.",
                                                 )}
                                             </p>
                                             <button
@@ -1452,6 +1474,9 @@ fn catalog_row(app: App, course: Course) -> impl IntoView {
         })
     };
     let temp = move || eff.with(|eff| eff.iter().any(|e| e.meeting.temp_booking));
+    // The catalog prints EFFECTIVE times, so a row can be showing the user's
+    // own edit while reading like CMI's listing. Say which it is.
+    let edited = move || eff.with(|eff| eff.iter().any(|e| e.overridden));
 
     view! {
         <div class="card">
@@ -1465,6 +1490,19 @@ fn catalog_row(app: App, course: Course) -> impl IntoView {
                         {course.instructors.join(" / ")}
                         {" · "}
                         <span class="mono">{meetings_text}</span>
+                        {move || {
+                            edited()
+                                .then(|| {
+                                    view! {
+                                        <span
+                                            class="badge accent"
+                                            title="These are the times you set, not CMI's"
+                                        >
+                                            "✎ your times"
+                                        </span>
+                                    }
+                                })
+                        }}
                     </div>
                 </div>
                 {course.branches.iter().map(|b| branch_chip(app, b)).collect_view()}
@@ -1722,17 +1760,11 @@ fn halls_view(app: App) -> impl IntoView {
     let finder_day = RwSignal::new(None::<usize>); // day index
     let finder_start = RwSignal::new(None::<u16>); // slot start_min
 
-    // Clamped to the days this tab actually offers: a stored Saturday whose
-    // only class has since been removed would otherwise title a day the
-    // strip has no button for, and no arrangement of clicks could leave it.
-    let sel_day = move || {
-        let stored = app.prefs.with(|p| p.halls_day);
-        let days = app.hall_days();
-        if days.contains(&stored) {
-            stored
-        } else {
-            days.first().copied().unwrap_or(Day::Mon)
-        }
+    let view_mode = move || app.halls_view();
+    // The days on screen: one, or every day the hall data covers.
+    let shown_days = move || match view_mode() {
+        HallsView::Day(d) => vec![d],
+        HallsView::All => app.hall_days(),
     };
 
     view! {
@@ -1747,10 +1779,18 @@ fn halls_view(app: App) -> impl IntoView {
                                 view! {
                                     <button
                                         aria-pressed=move || {
-                                            if sel_day() == d { "true" } else { "false" }
+                                            if view_mode() == HallsView::Day(d) {
+                                                "true"
+                                            } else {
+                                                "false"
+                                            }
                                         }
                                         on:click=move |_| {
-                                            app.prefs.update(|p| p.halls_day = d);
+                                            app.prefs
+                                                .update(|p| {
+                                                    p.halls_day = d;
+                                                    p.halls_view = Some(HallsView::Day(d));
+                                                });
                                             app.persist_prefs();
                                         }
                                     >
@@ -1760,22 +1800,39 @@ fn halls_view(app: App) -> impl IntoView {
                             })
                             .collect_view()
                     }}
+                    <button
+                        aria-pressed=move || {
+                            if view_mode() == HallsView::All { "true" } else { "false" }
+                        }
+                        title="Every day at once"
+                        on:click=move |_| {
+                            app.prefs.update(|p| p.halls_view = Some(HallsView::All));
+                            app.persist_prefs();
+                        }
+                    >
+                        "All"
+                    </button>
                 </div>
                 <div class="grow"></div>
                 {custom_changes_pill(app)}
                 {edit_toggle(app)}
             </div>
             <p class="muted small" style="margin:0 0 0.6rem">
-                "CMI's hall allocation, with your moves shown at their new spot · \
-                 turn on ✎ Edit layout to drag a course to another hall or time · \
-                 ✓ marks your courses"
+                "Room allocation as CMI publishes it, with your own changes shown \
+                 where you moved them. Turn on ✎ Edit layout to drag a course to \
+                 another room or time; ✓ marks the courses on your timetable."
             </p>
 
+            <For
+                each=shown_days
+                key=|day| day.index()
+                children=move |day| {
+                    view! {
             <div class="grid-scroll">
                 <table class="tt">
                     <thead>
                         <tr>
-                            <th class="rowhead corner" scope="col">{move || sel_day().full()}</th>
+                            <th class="rowhead corner" scope="col">{day.full()}</th>
                             {move || {
                                 app.hall_slot_grid()
                                     .into_iter()
@@ -1793,7 +1850,6 @@ fn halls_view(app: App) -> impl IntoView {
                     <tbody>
                         {move || {
                             let snapshot = app.snapshot.get();
-                            let day = sel_day();
                             let columns = app.hall_slot_grid();
                             let cols: Vec<Slot> = columns.iter().map(|(s, _)| *s).collect();
                             // Everything the user placed on this day, drawn at
@@ -1820,9 +1876,9 @@ fn halls_view(app: App) -> impl IntoView {
                                                         view! {
                                                             <span
                                                                 class="badge custom"
-                                                                title="Your own place — CMI doesn't list this hall"
+                                                                title="A place you added — CMI's allocation does not list it"
                                                             >
-                                                                "yours"
+                                                                "your own"
                                                             </span>
                                                         }
                                                     })}
@@ -1947,6 +2003,9 @@ fn halls_view(app: App) -> impl IntoView {
                     </tbody>
                 </table>
             </div>
+                    }
+                }
+            />
 
             // Find a free hall — results appear once BOTH day and slot are
             // picked (never assume a default day).
@@ -2070,21 +2129,23 @@ fn halls_view(app: App) -> impl IntoView {
                         <div class="finder-result" aria-live="polite">
                             <p class="finder-head">
                                 <span class="finder-count" class:none=n == 0>
-                                    {if n == 0 { "none".to_string() } else { n.to_string() }}
+                                    {n.to_string()}
                                 </span>
                                 <span>
-                                    {if n == 0 {
-                                        "free — every hall CMI publishes is booked".to_string()
-                                    } else if n == 1 {
-                                        "hall free".to_string()
-                                    } else {
-                                        "halls free".to_string()
-                                    }}
+                                    {if n == 1 { "hall free" } else { "halls free" }}
                                 </span>
                                 <span class="finder-when">
                                     {format!("{} · {slot_label}", day.full())}
                                 </span>
                             </p>
+                            {(n == 0)
+                                .then(|| {
+                                    view! {
+                                        <p class="muted small finder-note">
+                                            "Every hall CMI publishes is booked at this time."
+                                        </p>
+                                    }
+                                })}
                             {(n > 0)
                                 .then(|| {
                                     view! {
@@ -2102,14 +2163,14 @@ fn halls_view(app: App) -> impl IntoView {
                                         <p class="muted small finder-note">
                                             {if own.len() == 1 {
                                                 format!(
-                                                    "“{}” is a place of your own — CMI's \
-                                                     allocation says nothing about it.",
+                                                    "“{}” is your own addition, so CMI's \
+                                                     allocation does not cover it.",
                                                     own[0],
                                                 )
                                             } else {
                                                 format!(
-                                                    "Your own places ({}) aren't in CMI's \
-                                                     allocation, so it says nothing about them.",
+                                                    "Your own additions ({}) are not part of \
+                                                     CMI's allocation, so it does not cover them.",
                                                     own.join(", "),
                                                 )
                                             }}

@@ -146,6 +146,29 @@ and no committed mirror (fixtures exist only for tests/e2e seed).
   own courses have all moved away. Keyboard move mode walks days × times, a
   shape the Halls table (rooms down the side) doesn't have, so M there says
   so instead of starting an invisible move.
+- **Only CMI's edits may be described as CMI's.** `fetch::adopt` takes an
+  `Adoption`: a `Reparsed` snapshot is the SAME cached pages read by a newer
+  parser, so every difference is the app's own doing — no "what changed"
+  digest, no "CMI changed times you customised" dialog (whose default throws
+  the user's override away), no "CMI now matches your change" toast. The
+  merge still runs so override ids stay attached (R23).
+- **Anything acting on the SELECTION resolves through
+  `App::selected_course`** — your own course, else CMI's, else a
+  `removed_stub`. A code in the selection is on the timetable, and a feature
+  that silently skips it is lying by omission: the .ics export did exactly
+  that to courses CMI had dropped, whose meetings survive as overrides and
+  render everywhere else (R23).
+- Halls day selection: `App::halls_view()` — a stored choice always wins
+  (`prefs.halls_view`, written only by a real click, so it survives
+  reloads); with none stored the tab opens on TODAY, or on every day when
+  today isn't a teaching day. `HallsView::All` renders one table per day.
+- Keyboard move mode addresses the COLUMN a chip renders in (`column_for`),
+  on the grid the user is looking at (`active_slot_grid` switches on the
+  tab) — a cursor holding a raw start time highlights no cell and jumps on
+  the first arrow key.
+- `?c=` is percent-encoded everywhere it is written (address bar, share
+  links, the .ics link): a course of the user's own can be called anything,
+  and `+`/`&`/`#`/`,` in a code would come back mangled.
 - **A list of names is not a sentence.** Anything the app answers with a SET
   renders as a list you can scan, never as `join(", ")` inside a paragraph:
   the free-hall answer leads with the count (`.finder-count`) and lays the
@@ -234,7 +257,7 @@ and no committed mirror (fixtures exist only for tests/e2e seed).
 CARGO_TARGET_DIR=~/.rust-target-e2e cargo test --workspace --features html
 # app build for e2e (never plain dist while trunk serve runs)
 cd app && CARGO_TARGET_DIR=~/.rust-target-e2e trunk build --release --dist dist-e2e
-# e2e (48 tests; self-generates seed via core example, needs cargo on PATH)
+# e2e (49 tests; self-generates seed via core example, needs cargo on PATH)
 cd e2e && DIST_DIR=../app/dist-e2e .venv/bin/python test_app.py
 # ...or just a few, by name fragment
 cd e2e && DIST_DIR=../app/dist-e2e .venv/bin/python test_app.py t44 t45
@@ -252,7 +275,7 @@ regenerates the .ics golden.
 
 ## 6. Current state
 
-- Tests: 66 native + 48/48 e2e green. Meeting removals: `MeetingOverride.to`
+- Tests: 66 native + 49/49 e2e green. Meeting removals: `MeetingOverride.to`
   is `Option<Meeting>` (None = removed; legacy JSON/share payloads still
   load — present meeting ⇒ Some). Out-of-grid times: **all three tables grow
   synthetic `.extra` columns**, each from its own source, all built by the
@@ -735,3 +758,27 @@ regenerates the .ics golden.
   collision — see the §4 rule. e2e t48 pins the master-grid column; t15/t46/t47
   now read the finder's list rather than its old sentence; shots 30 and 31.
   66 native + 48/48 e2e. Committed locally, NOT pushed.
+- **R23 (whole-app sweep + halls day picker + copy):** user asked for the
+  master-grid fix (R22) plus "search for all such bugs in the whole app",
+  then for an all-days option in Halls defaulting to today, then for a
+  professional rewrite of today's copy. The sweep ran as an ultracode
+  Workflow: 5 finder lenses (grids, ownership, round-trip, controls,
+  reactivity) → 30 findings → an adversarial refuter per finding → 18
+  survived, deduping to 11 distinct bugs, all fixed. Highest value: the
+  .ics export dropped selected courses CMI had dropped (five lenses found
+  it independently) → `App::selected_course`; a PARSER_VERSION bump
+  re-parsed the cached pages and ran them through the CMI-vs-CMI merge, so
+  the app's own parser change was announced as CMI's edit and the conflict
+  dialog offered to delete the user's overrides → `Adoption::Reparsed`.
+  Then: catalog rows printed the user's overridden times as CMI's listing
+  (now an "✎ your times" badge); the details dialog said CMI lists a course
+  the user invented; the Time-slot facet offered only CMI's slots; `?c=`
+  was written unencoded; the phone's per-day list had draggable chips and
+  no drop target; validation errors were inserted outside any live region;
+  the credits editor kept form state inside the rebuilt details dialog
+  (hoisted to `App::credit_edit`); the Hall facet compared halls exactly;
+  keyboard move addressed raw start times on the wrong grid. Halls gained
+  an "All" day button and `HallsView` (see §4). Copy: today's new strings
+  rewritten (halls lede, "your own" hall badge, finder note, unscheduled
+  tray, catalog empty state, keyboard-move message). e2e t49; shot 32.
+  66 native + 49/49 e2e. Committed locally, NOT pushed.

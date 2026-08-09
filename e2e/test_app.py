@@ -1803,7 +1803,7 @@ def t46_halls_show_your_own_places_and_times(app):
     # A row of the user's own, badged, after CMI's halls.
     own = app.wait_css("section[aria-label='Lecture halls'] tr.own-hall")
     head = own.find_element(By.CSS_SELECTOR, "th.rowhead")
-    assert "Room 1002" in head.text and "yours" in head.text, head.text
+    assert "Room 1002" in head.text and "your own" in head.text, head.text
     assert app.chips("GERMAN", "td[data-hall='Room 1002'][data-slot='550']"), \
         "the custom course must render in the place the user invented"
 
@@ -1870,6 +1870,56 @@ def t47_moved_out_of_grid_meeting_keeps_its_hall_row(app):
     free = [li.text for li in app.css_all(".hall-list li")]
     assert "Lecture Hall 803" in free, \
         f"the hall TOC moved out of is free now, and the grid already says so: {free}"
+
+
+def t49_halls_day_selection(app):
+    """The Halls tab opens on today (or on every day, when today isn't a
+    teaching day), offers an "All" view that stacks one table per day, and
+    remembers a chosen day across reloads."""
+    app.boot("/")
+    app.open_tab("Halls")
+    app.wait_css("section[aria-label='Lecture halls']")
+    tables = "section[aria-label='Lecture halls'] table.tt"
+
+    # Fixture days are Mon–Fri, so a weekend visit opens on all of them and
+    # a weekday visit opens on that day alone.
+    weekday = app.d.execute_script("return new Date().getDay();")  # 0 = Sunday
+    corners = [
+        t.find_element(By.CSS_SELECTOR, "th.corner").text
+        for t in app.css_all(tables)
+    ]
+    if weekday in (0, 6):
+        assert len(corners) == 5, corners
+    else:
+        assert len(corners) == 1, corners
+        today = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday",
+                 "Friday", "Saturday"][weekday]
+        assert corners[0] == today, corners
+
+    # "All" stacks every day, one table each, in order.
+    app.xpath(
+        "//section[@aria-label='Lecture halls']//div[@aria-label='Day']"
+        "//button[normalize-space()='All']"
+    ).click()
+    time.sleep(0.3)
+    corners = [
+        t.find_element(By.CSS_SELECTOR, "th.corner").text
+        for t in app.css_all(tables)
+    ]
+    assert corners == ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"], \
+        corners
+
+    # A chosen day survives a reload — the preference is stored, not guessed
+    # afresh from the clock.
+    _halls_day(app, "Thu")
+    assert len(app.css_all(tables)) == 1
+    app.d.refresh()
+    app.wait_css("section[aria-label='Lecture halls']")
+    corners = [
+        t.find_element(By.CSS_SELECTOR, "th.corner").text
+        for t in app.css_all(tables)
+    ]
+    assert corners == ["Thursday"], corners
 
 
 def t48_master_grid_extra_column(app):
@@ -1948,6 +1998,7 @@ TESTS = [
     t46_halls_show_your_own_places_and_times,
     t47_moved_out_of_grid_meeting_keeps_its_hall_row,
     t48_master_grid_extra_column,
+    t49_halls_day_selection,
 ]
 
 
