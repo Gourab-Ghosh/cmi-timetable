@@ -202,7 +202,7 @@ shot("07-dark-my-courses")
 boot("Light", "Halls", prefs_extra={"halls_view": {"Day": "Wed"}})
 shot("08-light-halls-with-arrival")
 
-# Every day at once — one table per day, stacked.
+# Every day at once: one table, each hall's week together.
 boot("Light", "Halls", prefs_extra={"halls_view": "All"})
 shot("32-light-halls-all-days")
 

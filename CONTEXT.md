@@ -161,7 +161,15 @@ and no committed mirror (fixtures exist only for tests/e2e seed).
 - Halls day selection: `App::halls_view()` — a stored choice always wins
   (`prefs.halls_view`, written only by a real click, so it survives
   reloads); with none stored the tab opens on TODAY, or on every day when
-  today isn't a teaching day. `HallsView::All` renders one table per day.
+  today isn't a teaching day.
+- **`HallsView::All` is ONE table, not five.** `hall_table(app, days,
+  merged)` builds both layouts and `hall_row` builds every row, so the
+  merged week and a single day cannot drift apart. Merged rows are hall ×
+  day, hall-major — a room's week reads down the page — and each row head
+  carries the day (`.day-tag`) with the repeated hall name faded
+  (`th.rowhead.cont`) and a rule at each hall's first row (`tr.group-start`).
+  Every cell still carries its own `data-day`/`data-slot`/`data-hall`, so a
+  drop into a merged row means that row's day (R24).
 - Keyboard move mode addresses the COLUMN a chip renders in (`column_for`),
   on the grid the user is looking at (`active_slot_grid` switches on the
   tab) — a cursor holding a raw start time highlights no cell and jumps on
@@ -255,9 +263,14 @@ and no committed mirror (fixtures exist only for tests/e2e seed).
 ```sh
 # native tests (66; --features html for the fixture-driven parser tests)
 CARGO_TARGET_DIR=~/.rust-target-e2e cargo test --workspace --features html
-# app build for e2e (never plain dist while trunk serve runs)
-cd app && CARGO_TARGET_DIR=~/.rust-target-e2e trunk build --release --dist dist-e2e
-# e2e (49 tests; self-generates seed via core example, needs cargo on PATH)
+# app build for e2e (never plain dist while trunk serve runs).
+# RUSTFLAGS="" on purpose: a global ~/.cargo/config.toml carrying
+# `-C target-cpu=native` reaches the wasm target too, drops its default
+# features, and wasm-bindgen then dies on a missing
+# `__wbindgen_externref_table_alloc`. Emptying it for this build restores
+# the wasm defaults without touching anything outside the repo.
+cd app && RUSTFLAGS="" CARGO_TARGET_DIR=~/.rust-target-e2e trunk build --release --dist dist-e2e
+# e2e (50 tests; self-generates seed via core example, needs cargo on PATH)
 cd e2e && DIST_DIR=../app/dist-e2e .venv/bin/python test_app.py
 # ...or just a few, by name fragment
 cd e2e && DIST_DIR=../app/dist-e2e .venv/bin/python test_app.py t44 t45
@@ -275,7 +288,7 @@ regenerates the .ics golden.
 
 ## 6. Current state
 
-- Tests: 66 native + 49/49 e2e green. Meeting removals: `MeetingOverride.to`
+- Tests: 66 native + 50/50 e2e green. Meeting removals: `MeetingOverride.to`
   is `Option<Meeting>` (None = removed; legacy JSON/share payloads still
   load — present meeting ⇒ Some). Out-of-grid times: **all three tables grow
   synthetic `.extra` columns**, each from its own source, all built by the
@@ -782,3 +795,18 @@ regenerates the .ics golden.
   rewritten (halls lede, "your own" hall badge, finder note, unscheduled
   tray, catalog empty state, keyboard-move message). e2e t49; shot 32.
   66 native + 49/49 e2e. Committed locally, NOT pushed.
+- **R24 (the all-days halls view is one table):** user asked for the halls
+  all-days view to merge into a single table behind a toggle defaulting to
+  merged — then, seeing it, dropped the toggle: All is always one table and
+  no layout control is needed. Built as `hall_table` + `hall_row` (the old
+  inline `<For>` per day became two functions both layouts share), rows
+  hall-major with a `.day-tag` per row, faded repeat hall names and a rule
+  between hall blocks — see the §4 rule. The pref added for the toggle
+  (`prefs.halls_merged`) was removed again with it, so nothing is stored.
+  e2e t50 (one table, rows are hall × day and in order, a drag into a
+  merged row lands on THAT row's day, survives a reload); t49's all-days
+  assertions rewritten. Shot 32 redone. Also found: a global
+  `~/.cargo/config.toml` `-C target-cpu=native` breaks every wasm build
+  here (wasm-bindgen: missing `__wbindgen_externref_table_alloc`) — the
+  §5 build command now passes `RUSTFLAGS=""`; the user's config was left
+  alone. 66 native + 50/50 e2e. Committed locally, NOT pushed.

@@ -1774,6 +1774,11 @@ def _halls_day(app, short):
     time.sleep(0.3)
 
 
+def _halls_all(app):
+    """Switch the Halls tab to every day at once."""
+    _halls_day(app, "All")
+
+
 # One custom course that exercises both halves of the problem: an official
 # hall at a time CMI's grid doesn't have, and a place CMI never listed.
 HALL_CUSTOM = {"courses": [{
@@ -1889,25 +1894,22 @@ def t49_halls_day_selection(app):
         for t in app.css_all(tables)
     ]
     if weekday in (0, 6):
-        assert len(corners) == 5, corners
+        # Every day at once, and the all-days view is merged by default —
+        # so that is one table, headed for a hall and a day.
+        assert corners == ["Hall · day"], corners
     else:
         assert len(corners) == 1, corners
         today = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday",
                  "Friday", "Saturday"][weekday]
         assert corners[0] == today, corners
 
-    # "All" stacks every day, one table each, in order.
-    app.xpath(
-        "//section[@aria-label='Lecture halls']//div[@aria-label='Day']"
-        "//button[normalize-space()='All']"
-    ).click()
-    time.sleep(0.3)
+    # "All" shows every day — as ONE table, headed for a hall and a day.
+    _halls_all(app)
     corners = [
         t.find_element(By.CSS_SELECTOR, "th.corner").text
         for t in app.css_all(tables)
     ]
-    assert corners == ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"], \
-        corners
+    assert corners == ["Hall · day"], corners
 
     # A chosen day survives a reload — the preference is stored, not guessed
     # afresh from the clock.
@@ -1947,6 +1949,48 @@ def t48_master_grid_extra_column(app):
         "the moved meeting belongs in its own column"
     assert not app.chips("TOC", f"{grid} td[data-day='1'][data-slot='1020']"), \
         "and must not be clamped into CMI's last slot (17:00–18:15)"
+
+
+def t50_halls_all_days_one_table(app):
+    """The all-days view is ONE table carrying every hall's week. A row still
+    stands for one hall on one day, so a drop into it means that day."""
+    app.boot("/?c=TOC")
+    app.open_tab("Halls")
+    section = app.wait_css("section[aria-label='Lecture halls']")
+    tables = "section[aria-label='Lecture halls'] table.tt"
+    _halls_all(app)
+
+    # Every day, and still a single table.
+    assert len(app.css_all(tables)) == 1, "the all-days view is one table"
+    table = app.css(tables)
+    assert table.find_element(By.CSS_SELECTOR, "th.corner").text == "Hall · day"
+
+    # Rows are hall × day, with each hall's days together and in order.
+    days = [b.text for b in section.find_elements(
+        By.XPATH, ".//div[@aria-label='Day']//button")][:-1]  # minus "All"
+    rows = table.find_elements(By.CSS_SELECTOR, "tbody tr")
+    assert len(rows) % len(days) == 0 and len(rows) >= len(days), len(rows)
+    first = rows[:len(days)]
+    assert [r.find_element(By.CSS_SELECTOR, "th .day-tag").text
+            for r in first] == days
+    assert len({r.find_element(By.CSS_SELECTOR, "th .hall-name").text
+                for r in first}) == 1, "a hall's days must sit together"
+
+    # A drop lands on the day of the ROW, not on some day the merge lost.
+    src = "td[data-day='1'][data-hall='Lecture Hall 803'][data-slot='550']"
+    dst = "td[data-day='3'][data-hall='Lecture Hall 803'][data-slot='840']"
+    app.wait_css(f"{src} button.chip[aria-label^='TOC,']")
+    section.find_element(
+        By.XPATH, ".//button[contains(.,'Edit layout')]").click()
+    app.drag(app.chip("TOC", src), app.css(dst))
+    app.wait_toast("Moved TOC to Thu 14:00–15:15 · Lecture Hall 803")
+    assert app.chips("TOC", dst) and not app.chips("TOC", src)
+
+    # …and it is still one table after a reload, with the move in it.
+    app.d.refresh()
+    app.wait_css("section[aria-label='Lecture halls']")
+    assert len(app.css_all(tables)) == 1
+    app.wait_css(f"{dst} button.chip[aria-label^='TOC,']")
 
 
 TESTS = [
@@ -1999,6 +2043,7 @@ TESTS = [
     t47_moved_out_of_grid_meeting_keeps_its_hall_row,
     t48_master_grid_extra_column,
     t49_halls_day_selection,
+    t50_halls_all_days_one_table,
 ]
 
 

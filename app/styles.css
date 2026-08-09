@@ -625,6 +625,30 @@ table.tt tr.own-hall th.rowhead {
   box-shadow: inset 2px 0 0 var(--accent2);
 }
 table.tt tr.own-hall th.rowhead .badge { margin-left: 0.4rem; }
+
+/* The merged halls table holds the whole week: one row per hall and day,
+   a hall's days kept together. The row head has to carry both, so the day
+   sits in a chip and a rule marks where each hall's block starts. */
+table.tt.halls-merged th.rowhead { min-width: 11rem; }
+table.tt th.rowhead .day-tag {
+  display: inline-block;
+  margin-left: 0.4rem;
+  padding: 0.02rem 0.3rem;
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 0.68rem;
+  font-weight: 600;
+}
+/* Repeated hall names fade after the first row of a block: the name is
+   there when you scroll into the middle of one, without five equally loud
+   copies of it competing down the column. */
+table.tt th.rowhead.cont .hall-name { opacity: 0.45; font-weight: 500; }
+table.tt tbody tr.group-start:not(:first-child) > th,
+table.tt tbody tr.group-start:not(:first-child) > td {
+  border-top: 2px solid var(--line-strong);
+}
 .day-list .slotrow.extra { border-color: var(--accent); border-style: dashed; }
 
 table.tt th.rowhead {
