@@ -24,7 +24,7 @@ from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support import expected_conditions as EC
-from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support.ui import Select, WebDriverWait
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.abspath(os.path.join(HERE, ".."))
@@ -326,6 +326,26 @@ d.find_element(By.CSS_SELECTOR, "button.chip[aria-label^='TOC,']").click()
 time.sleep(0.5)
 shot("26-light-shadow-note")
 d.find_element(By.XPATH, "//button[normalize-space()='Close']").click()
+
+# The edit-meeting dialog: day, time and the hall dropdown — and the same
+# dialog with "Other place…" chosen, which opens the free-text box.
+boot("Light", "MyTimetable", selection=["TOC"])
+d.find_element(
+    By.CSS_SELECTOR, "td[data-day='1'][data-slot='550'] button.chip"
+).click()
+time.sleep(0.4)
+next(
+    r for r in d.find_elements(By.CSS_SELECTOR, ".dialog ul.meetings li")
+    if "Tue" in r.text
+).find_element(By.XPATH, ".//button[normalize-space()='Edit']").click()
+time.sleep(0.4)
+shot("27-light-edit-meeting")
+Select(d.find_element(By.CSS_SELECTOR, "#em-hall")).select_by_visible_text(
+    "Other place…"
+)
+time.sleep(0.3)
+shot("28-light-edit-meeting-other-place")
+d.find_element(By.XPATH, "//button[normalize-space()='Cancel']").click()
 
 # Mobile width
 d.set_window_size(390, 850)

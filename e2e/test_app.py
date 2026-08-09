@@ -40,7 +40,7 @@ from selenium.webdriver.common.action_chains import ActionChains
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support import expected_conditions as EC
-from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support.ui import Select, WebDriverWait
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.abspath(os.path.join(HERE, ".."))
@@ -1408,7 +1408,12 @@ def t40_custom_course_create(app):
     row2.find_element(By.CSS_SELECTOR, "select[aria-label='Time'] option[value='custom']").click()
     _js_set(app, row2.find_element(By.CSS_SELECTOR, "input[aria-label='Start time']"), "18:30")
     _js_set(app, row2.find_element(By.CSS_SELECTOR, "input[aria-label='End time']"), "19:45")
-    row2.find_element(By.CSS_SELECTOR, "input[aria-label='Hall or place']").send_keys("Sports annexe")
+    # A place CMI never lists: the hall dropdown's "Other place…" row opens
+    # a free-text box for it.
+    Select(
+        row2.find_element(By.CSS_SELECTOR, "select[aria-label='Hall or place']")
+    ).select_by_visible_text("Other place…")
+    app.wait_css("#cc-hall-1-other").send_keys("Sports annexe")
 
     app.xpath("//button[normalize-space()='Add to my timetable']").click()
     app.wait_gone(".dialog")
@@ -1629,6 +1634,125 @@ def t43_custom_form_survives_a_sync(app):
         remove_fake_mirror()
 
 
+def _open_toc_tuesday_edit(app):
+    """Details dialog for TOC -> the Tuesday meeting's Edit button."""
+    app.chip("TOC", "td[data-day='1'][data-slot='550']").click()
+    dialog = app.wait_css(".dialog")
+    row = next(
+        r for r in dialog.find_elements(By.CSS_SELECTOR, "ul.meetings li")
+        if "Tue" in r.text
+    )
+    row.find_element(By.XPATH, ".//button[normalize-space()='Edit']").click()
+    return app.wait_css("#em-hall")
+
+
+def t44_hall_is_a_working_dropdown(app):
+    """The hall field is a real dropdown: it lists every hall CMI publishes,
+    opens already sitting on the meeting's current hall, and switches the
+    stored hall when another is picked. 'Other place…' reveals a focused
+    free-text box for rooms CMI never lists.
+
+    Regression: this was an <input list=…> + <datalist>. Browsers filter
+    datalist suggestions against the text already in the box, and the box
+    starts pre-filled with the current hall — so the list collapsed to a
+    single suggestion (the value already there) and the dropdown looked
+    dead."""
+    app.boot("/?c=TOC")
+    halls = app.d.execute_script(
+        "return JSON.parse(localStorage.getItem('cmitt.v1.snapshot')).halls;"
+    )
+    assert len(halls) >= 3, halls
+
+    sel = Select(_open_toc_tuesday_edit(app))
+    assert sel.first_selected_option.get_attribute("value") in halls, \
+        "the dropdown must open on the meeting's own hall, not on nothing"
+    current = sel.first_selected_option.get_attribute("value")
+    # Every hall, plus "Hall to be announced" and "Other place…".
+    assert len(sel.options) == len(halls) + 2, \
+        f"{len(sel.options)} options for {len(halls)} halls"
+
+    # Pick a different hall — the whole point of the control.
+    moved_to = next(h for h in halls if h != current)
+    sel.select_by_value(moved_to)
+    app.xpath("//div[@class='dialog']//button[normalize-space()='Save']").click()
+    app.wait_toast("Moved TOC")
+    stored = app.d.execute_script(
+        "return JSON.parse(localStorage.getItem('cmitt.v1.overrides'))"
+        ".items.map(o => o.to.hall);"
+    )
+    assert stored == [moved_to], stored
+
+    # Re-opening shows the new hall, and "Other place…" opens a focused box.
+    sel = Select(_open_toc_tuesday_edit(app))
+    assert sel.first_selected_option.get_attribute("value") == moved_to
+    sel.select_by_visible_text("Other place…")
+    box = app.wait_css("#em-hall-other")
+    assert app.d.switch_to.active_element == box, "the box should take focus"
+    box.clear()
+    box.send_keys("Seminar room")
+    app.xpath("//div[@class='dialog']//button[normalize-space()='Save']").click()
+    app.wait_toast("Moved TOC")
+
+    # A place CMI does not list survives, and comes back on "Other place…".
+    sel = Select(_open_toc_tuesday_edit(app))
+    assert sel.first_selected_option.text == "Other place…", \
+        sel.first_selected_option.text
+    assert app.css("#em-hall-other").get_attribute("value") == "Seminar room"
+    app.d.find_element(By.CSS_SELECTOR, "body").send_keys(Keys.ESCAPE)
+
+    # The same control, same behaviour, in the create-your-own-course form.
+    app.open_tab("My courses")
+    app.wait_css(".add-own-card").click()
+    app.wait_css(".dialog .custom-form")
+    app.css("#cc-name").send_keys("Reading group")
+    app.css("#cc-add-meeting").click()
+    row_hall = Select(app.wait_css("#cc-hall-0"))
+    assert len(row_hall.options) == len(halls) + 2
+    row_hall.select_by_value(halls[1])
+    app.xpath("//button[normalize-space()='Add to my timetable']").click()
+    app.wait_toast("Added READING")
+    saved = app.d.execute_script(
+        "return JSON.parse(localStorage.getItem('cmitt.v1.custom'))"
+        ".courses[0].meetings[0].hall;"
+    )
+    assert saved == halls[1], saved
+
+
+def t45_edit_meeting_form_survives_a_sync(app):
+    """Same rule as the create form (t43): the edit-meeting dialog is built
+    inside DialogHost's reactive closure, so its builder reads untracked. A
+    sync landing behind the modal must not rebuild the form and put the
+    meeting's original day, time and hall back."""
+    write_fake_mirror()
+    try:
+        app.boot("/?c=TOC")
+        halls = app.d.execute_script(
+            "return JSON.parse(localStorage.getItem('cmitt.v1.snapshot')).halls;"
+        )
+        sel = Select(_open_toc_tuesday_edit(app))
+        current = sel.first_selected_option.get_attribute("value")
+        moved_to = next(h for h in halls if h != current)
+        Select(app.css("#em-day")).select_by_visible_text("Friday")
+        sel.select_by_value(moved_to)
+
+        sync = app.xpath("//button[normalize-space()='Sync now']")
+        app.d.execute_script("arguments[0].click();", sync)
+        WebDriverWait(app.d, 30).until(
+            lambda d: "Synced" in app.css(".sync-pill").text,
+            message=f"sync should finish; pill: {app.css('.sync-pill').text!r}",
+        )
+
+        assert Select(app.css("#em-day")).first_selected_option.text == "Friday", \
+            "the day picked before the sync must still be picked"
+        assert Select(app.css("#em-hall")).first_selected_option.get_attribute(
+            "value"
+        ) == moved_to, "the hall picked before the sync must still be picked"
+        app.xpath("//div[@class='dialog']//button[normalize-space()='Save']").click()
+        app.wait_toast("Moved TOC to Fri")
+    finally:
+        remove_fake_mirror()
+
+
 TESTS = [
     t01_header_sync_button_and_hidden_dev,
     t02_developer_endpoint_only,
@@ -1673,6 +1797,8 @@ TESTS = [
     t41_custom_course_edit_park_share_delete,
     t42_custom_course_shadowed_by_cmi,
     t43_custom_form_survives_a_sync,
+    t44_hall_is_a_working_dropdown,
+    t45_edit_meeting_form_survives_a_sync,
 ]
 
 
@@ -1684,8 +1810,12 @@ def main():
     driver = make_driver()
     app = App(driver)
     failures = []
+    # Optional argv filter, so one failing case can be re-run on its own:
+    #     python test_app.py t44 t45
+    only = sys.argv[1:]
+    tests = [t for t in TESTS if not only or any(f in t.__name__ for f in only)]
     try:
-        for test in TESTS:
+        for test in tests:
             name = test.__name__
             try:
                 test(app)
@@ -1697,7 +1827,7 @@ def main():
     finally:
         driver.quit()
         server.shutdown()
-    print(f"\n{len(TESTS) - len(failures)}/{len(TESTS)} passed")
+    print(f"\n{len(tests) - len(failures)}/{len(tests)} passed")
     if failures:
         sys.exit(1)
 

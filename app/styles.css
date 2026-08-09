@@ -1078,7 +1078,21 @@ details.facet .menu .menu-empty { margin: 0.2rem 0 0; }
 }
 .dialog .fieldrow { display: flex; gap: 0.6rem; flex-wrap: wrap; margin: 0.5rem 0; align-items: center; }
 .dialog .fieldrow label { min-width: 6.5rem; color: var(--muted); font-size: 0.86rem; }
+/* One width for the stacked dropdowns of a form row (Day / Time / Hall),
+   so their edges line up instead of stepping in and out. */
+.dialog .fieldrow > select,
+.dialog .fieldrow .hall-pick > select { min-width: 12rem; }
 .dialog .dialog-lede { margin: -0.25rem 0 0.9rem; }
+/* Hall chooser: the dropdown, and the free-text box that "Other place…"
+   reveals beside it. Wraps rather than squeezing the two together. */
+.hall-pick {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+.hall-pick select { max-width: 15rem; }
+.hall-pick .hall-input { min-width: 9rem; flex: 1; }
 
 /* "My data" — one bordered section per stored thing, action in the header */
 .data-section {
@@ -1412,7 +1426,7 @@ pre.devpre {
   align-items: center;
   gap: 0.3rem;
 }
-.custom-form .meeting-draft .hall-input { min-width: 10rem; flex: 1; }
+.custom-form .meeting-draft .hall-pick { flex: 1; min-width: 11rem; }
 .custom-form .meeting-draft .btn.icon { margin-left: auto; }
 /* The clash line owns its own row inside the meeting box. */
 .custom-form .clash-note {

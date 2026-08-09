@@ -82,8 +82,13 @@ and no committed mirror (fixtures exist only for tests/e2e seed).
   Memo/closure (chip()'s selected/clash/aria and catalog_row's times/temp
   are), or it silently freezes until a remount (R14). Dialogs: DialogHost's
   closure tracks whatever a dialog body reads at build → stateless dialogs
-  (details, my-data, share, what-changed) rebuild live; export_dialog reads
-  UNTRACKED deliberately (local form state; its download re-reads live).
+  (details, my-data, share, what-changed) rebuild live, which is what they
+  want. **Every FORM dialog must read UNTRACKED in its builder** — custom
+  course, edit-meeting, export — or a background sync landing (or an Undo
+  toast click) rebuilds the form mid-edit and silently throws the typed
+  input away. Watch the helpers: `course_by_code`, `effective_meetings`,
+  `is_custom` all read signals tracked, so wrap them in `untrack(…)`
+  (e2e t43, t45 pin this).
 - `snapshot.with(…)`, never `snapshot.get()`, in per-chip/per-check paths:
   the Snapshot carries the gzipped raw pages, and `.get()` deep-clones it.
 - Empty snapshot (`courses.is_empty()`) ⇔ "never synced" (gate guarantees
@@ -141,6 +146,17 @@ and no committed mirror (fixtures exist only for tests/e2e seed).
   every control starts at the same left edge (mixed wrapping read as
   ragged), while controls still flow in a row so paired time inputs stay
   side by side.
+- **Never offer a choice through `<input list=…>` + `<datalist>`.** Browsers
+  filter datalist suggestions against the text already in the box, and these
+  boxes open pre-filled (a meeting's current hall) — so the list collapses to
+  one entry, itself, and the control looks dead; several mobile browsers show
+  no list at all (R20 bug report). Halls go through `hall_picker()` (ui.rs):
+  a real `<select>` of `snapshot.halls` + "Hall to be announced" (empty) +
+  "Other place…", which reveals a focused free-text box for rooms CMI never
+  lists. It matches the change event against the hall list itself, never a
+  sentinel string, so no hall name can be mistaken for the "Other" row. One
+  helper, both call sites (edit-meeting dialog, every custom-course meeting
+  row); e2e t44 pins it.
 - Toast auto-dismiss pauses while hovered/focused (`HOVERED_TOASTS`
   thread_local, deliberately NOT a signal).
 - **Custom (user-created) courses** reuse `Course` wholesale in a
@@ -179,8 +195,10 @@ and no committed mirror (fixtures exist only for tests/e2e seed).
 CARGO_TARGET_DIR=~/.rust-target-e2e cargo test --workspace --features html
 # app build for e2e (never plain dist while trunk serve runs)
 cd app && CARGO_TARGET_DIR=~/.rust-target-e2e trunk build --release --dist dist-e2e
-# e2e (43 tests; self-generates seed via core example, needs cargo on PATH)
+# e2e (45 tests; self-generates seed via core example, needs cargo on PATH)
 cd e2e && DIST_DIR=../app/dist-e2e .venv/bin/python test_app.py
+# ...or just a few, by name fragment
+cd e2e && DIST_DIR=../app/dist-e2e .venv/bin/python test_app.py t44 t45
 # screenshots + print PDFs for design review (writes e2e/shots/, gitignored)
 cd e2e && .venv/bin/python shoot.py
 # deploy the site (Docker build → force-push gh-pages; no Actions involved)
@@ -195,7 +213,7 @@ regenerates the .ics golden.
 
 ## 6. Current state
 
-- Tests: 66 native + 43/43 e2e green. Meeting removals: `MeetingOverride.to`
+- Tests: 66 native + 45/45 e2e green. Meeting removals: `MeetingOverride.to`
   is `Option<Meeting>` (None = removed; legacy JSON/share payloads still
   load — present meeting ⇒ Some). Out-of-grid times: `display_slot_grid()`
   (views.rs) = official slots + synthetic `.extra` columns; `column_for`
@@ -545,8 +563,9 @@ regenerates the .ics golden.
   power-user / consistency) reshaped it before coding: credits start at 0,
   code is derived from the name instead of demanded, Remove parks instead
   of deleting, the shadow note got an action, the hall field became a
-  datalist input (also fixed for the existing EditMeeting dialog — a
-  `<select>` silently dropped free-text halls), and the dialog got a sticky
+  datalist input (also applied to the existing EditMeeting dialog — a bare
+  `<select>` silently dropped free-text halls; **this was the wrong fix and
+  R20 undid it**, see `hall_picker`), and the dialog got a sticky
   footer + dvh sizing for phones. SPACING BUGS (the user's report, then a
   sweep): `.grid-scroll` had no bottom margin and `.panel` has no
   margin-top → every panel under a grid sat flush; and `.row` was scoped
@@ -598,3 +617,25 @@ regenerates the .ics golden.
   deleting is one click from the course instead of a detour through the
   edit form — which keeps its own Delete. t41 now deletes through this
   path. 66 native + 43/43 e2e. Committed locally, NOT pushed.
+- **R20 (the hall dropdown didn't work):** user: "the dropdown menu is not
+  working when I try to edit lecture hall through edit button in meeting
+  timings of a course", then "check for all such errors very carefully".
+  Root cause was mine from R18: the hall `<select>` had become an
+  `<input list="em-halls">` + `<datalist>`, and browsers filter datalist
+  suggestions against the text already in the box — which opens pre-filled
+  with the meeting's current hall, so the list collapsed to that one entry
+  and the control looked dead (and shows nothing at all on several mobile
+  browsers). Replaced by `hall_picker()`, one helper shared by the
+  edit-meeting dialog and every custom-course meeting row: a real dropdown
+  of CMI's halls, "Hall to be announced", and "Other place…" revealing a
+  focused free-text box for rooms CMI never lists (see §4). The sweep for
+  the same class of bug found two more: `edit_meeting_dialog` and
+  `export_dialog` still read the snapshot TRACKED inside DialogHost's
+  closure, so a sync landing mid-edit rebuilt the form and put the original
+  day/time/hall (or the default export dates) back — both untracked now,
+  `untrack(…)` around the tracked helpers in the title. e2e gained t44
+  (dropdown lists every hall, opens on the meeting's own hall, switches it,
+  "Other place…" focuses and stores a free-text place, same control in the
+  create form) and t45 (edit form survives a sync); t40 now drives the new
+  control; test_app.py takes name fragments on argv. 66 native + 45/45 e2e.
+  Committed locally, NOT pushed.

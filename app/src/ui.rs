@@ -2138,6 +2138,103 @@ fn my_data_dialog(app: App) -> impl IntoView {
 // Meeting edit dialog (precision path + accessible drag alternative)
 // ---------------------------------------------------------------------------
 
+/// Hall chooser: a real dropdown of CMI's halls, plus a free-text escape
+/// hatch for places CMI never lists ("Seminar room", "Online").
+///
+/// This used to be an `<input list=…>` backed by a `<datalist>`. Browsers
+/// filter datalist suggestions against whatever is already in the box, and
+/// the box starts pre-filled with the meeting's current hall — so the list
+/// collapsed to a single suggestion (the value already there) and clicking
+/// it appeared to do nothing. Several mobile browsers show no list at all.
+/// A `<select>` always opens, works with a keyboard and a screen reader,
+/// and matches the Day and Time fields sitting beside it.
+///
+/// `hall` stays the single source of truth; an empty string means the hall
+/// is still to be announced — `empty` names that row, since the same absence
+/// reads as a statement when editing CMI's meeting and as a prompt when
+/// writing your own.
+fn hall_picker(
+    halls: Vec<String>,
+    hall: RwSignal<String>,
+    select_id: String,
+    aria: &'static str,
+    empty: &'static str,
+) -> impl IntoView {
+    let current = hall.get_untracked();
+    // A hall CMI doesn't list — typed by hand, or dropped by a later sync —
+    // must still be editable, so such a value starts on "Other place…".
+    let is_other =
+        !current.is_empty() && !halls.iter().any(|h| h.eq_ignore_ascii_case(&current));
+    let is_other = RwSignal::new(is_other);
+    let other_id = format!("{select_id}-other");
+
+    let on_change = {
+        let halls = halls.clone();
+        let other_id = other_id.clone();
+        move |ev: web_sys::Event| {
+            let v = event_target_value(&ev);
+            // Match against the real hall list rather than a sentinel value,
+            // so no hall name can ever be mistaken for the "Other" row.
+            match halls.iter().find(|h| h.as_str() == v) {
+                Some(h) => {
+                    is_other.set(false);
+                    hall.set(h.clone());
+                }
+                None if v.is_empty() => {
+                    is_other.set(false);
+                    hall.set(String::new());
+                }
+                // "Other place…". Whatever is in the box stays as a starting
+                // point — it is usually most of the answer already.
+                None => {
+                    is_other.set(true);
+                    focus_later(other_id.clone());
+                }
+            }
+        }
+    };
+
+    view! {
+        <span class="hall-pick">
+            <select id=select_id aria-label=aria on:change=on_change>
+                <option value="" selected=current.is_empty() && !is_other.get_untracked()>
+                    {empty}
+                </option>
+                {halls
+                    .iter()
+                    .map(|h| {
+                        view! {
+                            <option value=h.clone() selected=h.eq_ignore_ascii_case(&current)>
+                                {h.clone()}
+                            </option>
+                        }
+                    })
+                    .collect_view()}
+                <option value="__other" selected=is_other.get_untracked()>
+                    "Other place…"
+                </option>
+            </select>
+            {move || {
+                is_other
+                    .get()
+                    .then(|| {
+                        view! {
+                            <input
+                                id=other_id.clone()
+                                type="text"
+                                class="hall-input"
+                                placeholder="Room, lab, online…"
+                                aria-label="Name the place"
+                                prop:value=hall.get_untracked()
+                                on:input=move |ev| hall.set(event_target_value(&ev))
+                            />
+                        }
+                    })
+            }}
+        </span>
+    }
+}
+
 fn edit_meeting_dialog(
     app: App,
     course: String,
@@ -2146,9 +2243,14 @@ fn edit_meeting_dialog(
     init: Meeting,
     create: bool,
 ) -> impl IntoView {
-    let snapshot = app.snapshot.get();
-    let slots = snapshot.slot_grid.clone();
-    let halls = snapshot.halls.clone();
+    // Every read in this builder is UNTRACKED on purpose. DialogHost builds
+    // the body inside its own reactive closure, so a tracked read here
+    // subscribes the whole dialog: a background sync landing — or an Undo
+    // toast click — would rebuild the form mid-edit and silently reset the
+    // day, time and hall to the meeting's original values.
+    let (slots, halls) = app
+        .snapshot
+        .with_untracked(|s| (s.slot_grid.clone(), s.halls.clone()));
 
     let day_idx = RwSignal::new(init.day.index());
     let is_custom = RwSignal::new(!slots.iter().any(|s| *s == init.slot));
@@ -2161,10 +2263,11 @@ fn edit_meeting_dialog(
     let slots_for_save = slots.clone();
     let course_save = course.clone();
     let title = if create {
-        let already_meets = app
-            .course_by_code(&course)
-            .map(|c| !app.effective_meetings(&c).is_empty())
-            .unwrap_or(false);
+        let already_meets = untrack(|| {
+            app.course_by_code(&course)
+                .map(|c| !app.effective_meetings(&c).is_empty())
+                .unwrap_or(false)
+        });
         if already_meets {
             format!("Add a meeting — {course}")
         } else {
@@ -2335,23 +2438,13 @@ fn edit_meeting_dialog(
             </div>
             <div class="fieldrow">
                 <label for="em-hall">"Hall"</label>
-                // Free text with the official halls one keystroke away —
-                // rooms outside CMI's list ("Seminar room", "Online") are
-                // as legitimate as LH803. Empty = hall to be announced.
-                <input
-                    id="em-hall"
-                    type="text"
-                    list="em-halls"
-                    placeholder="Hall TBA"
-                    prop:value=hall.get_untracked()
-                    on:input=move |ev| hall.set(event_target_value(&ev))
-                />
-                <datalist id="em-halls">
-                    {halls
-                        .iter()
-                        .map(|h| view! { <option value=h.clone()></option> })
-                        .collect_view()}
-                </datalist>
+                {hall_picker(
+                    halls,
+                    hall,
+                    "em-hall".to_string(),
+                    "Hall",
+                    "Hall to be announced",
+                )}
             </div>
             {move || {
                 let e = error.get();
@@ -2827,6 +2920,7 @@ fn custom_course_dialog(
                 key=|row| row.key
                 children={
                     let slots = slots.clone();
+                    let halls = halls.clone();
                     move |row| {
                         let clash = clash_text(&row);
                         let row_key = row.key;
@@ -2939,15 +3033,13 @@ fn custom_course_dialog(
                                             }
                                         })
                                 }}
-                                <input
-                                    type="text"
-                                    class="hall-input"
-                                    list="cc-halls"
-                                    placeholder="Where? (optional)"
-                                    aria-label="Hall or place"
-                                    prop:value=row.hall.get_untracked()
-                                    on:input=move |ev| row.hall.set(event_target_value(&ev))
-                                />
+                                {hall_picker(
+                                    halls.clone(),
+                                    row.hall,
+                                    format!("cc-hall-{row_key}"),
+                                    "Hall or place",
+                                    "Where? (optional)",
+                                )}
                                 <button
                                     type="button"
                                     class="btn small icon"
@@ -2987,13 +3079,6 @@ fn custom_course_dialog(
             <button id="cc-add-meeting" type="button" class="btn small" on:click=add_row>
                 "＋ Add a weekly meeting"
             </button>
-            <datalist id="cc-halls">
-                {halls
-                    .iter()
-                    .map(|h| view! { <option value=h.clone()></option> })
-                    .collect_view()}
-            </datalist>
-
             <p class="form-error" aria-live="polite">
                 {move || {
                     let e = error.get();
@@ -3154,8 +3239,10 @@ fn conflicts_dialog(app: App) -> impl IntoView {
 // ---------------------------------------------------------------------------
 
 fn export_dialog(app: App, scope: Option<String>) -> impl IntoView {
-    let snapshot = app.snapshot.get();
-    let label = snapshot.semester_label.clone();
+    // Untracked, like every form dialog: the date boxes below are the user's
+    // to fill in, and a sync landing mid-typing must not rebuild the form
+    // and put the semester defaults back.
+    let label = app.snapshot.with_untracked(|s| s.semester_label.clone());
     let (default_start, default_end) = ttcore::date::semester_range_from_label(&label)
         .unwrap_or_else(|| {
             let today = domx::today_local();
