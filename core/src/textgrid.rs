@@ -113,8 +113,28 @@ fn split_pipes(line: &str) -> Vec<&str> {
 /// bisecting a course code.
 fn slice_at(line: &str, positions: &[usize]) -> Vec<String> {
     let bytes = line.as_bytes();
+    // Where to cut, given the HEADER's separator positions and a row whose
+    // own separators have drifted.
+    //
+    // A `|` is the real separator, so look for one first and a little
+    // further afield than for a space. Cutting a space instead — which is
+    // what this did — put the cut one or two characters off the row's own
+    // pipe, which both truncated the name ("Lecture Hall 8" | "03|…") and
+    // left the pipe inside a cell, inventing rooms like "Lecture Hall 803|"
+    // that then appeared in the Halls view and the free-hall finder (§8.3).
     let nudge = |p: usize| -> usize {
-        if p >= line.len() || bytes[p] == b' ' || bytes[p] == b'|' {
+        if p >= line.len() || bytes[p] == b'|' {
+            return p;
+        }
+        for d in 1..=3usize {
+            if p >= d && bytes[p - d] == b'|' {
+                return p - d;
+            }
+            if p + d < line.len() && bytes[p + d] == b'|' {
+                return p + d;
+            }
+        }
+        if bytes[p] == b' ' {
             return p;
         }
         for d in 1..=2usize {
@@ -278,7 +298,23 @@ fn parse_grid_piped(lines: &[&str], header_idx: usize) -> Option<RawGrid> {
                 .map(|s| s.to_string())
                 .collect()
         } else {
-            slice_at(line, &pipe_positions)
+            let mut segs = slice_at(line, &pipe_positions);
+            // Belt and braces for the same failure: no hall name and no
+            // course code contains a separator, so one that survived inside
+            // a segment means the cut still missed. Blank it rather than let
+            // it become part of a name.
+            let stray = segs.iter().any(|s| s.contains('|'));
+            if stray {
+                warnings.push(format!(
+                    "grid row {:?} has a different number of '|' separators than the header; \
+                     sliced by column position and stray separators dropped",
+                    line.trim().chars().take(40).collect::<String>()
+                ));
+                for s in segs.iter_mut() {
+                    *s = s.replace('|', " ");
+                }
+            }
+            segs
         };
         let label = owned_segs
             .first()

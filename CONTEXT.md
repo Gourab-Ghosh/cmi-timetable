@@ -67,7 +67,7 @@ and no committed mirror (fixtures exist only for tests/e2e seed).
         date; feature `html` = native scraper path (tests + e2e seed).
         core/examples/snapshot_json.rs → fixtures → snapshot JSON (e2e
         seed; test tooling only, nothing ships it).
-        PARSER_VERSION=3 in core/src/model.rs. Fixtures: core/fixtures/
+        PARSER_VERSION=4 in core/src/model.rs. Fixtures: core/fixtures/
         — TEST INPUT ONLY, never served, never copied into the build.
 /app    Leptos UI. src/app.rs (boot/routing), state.rs (App handle, undo,
         filters), fetch.rs (tier chain direct→proxy, adopt/merge),
@@ -494,6 +494,22 @@ and no committed mirror (fixtures exist only for tests/e2e seed).
   bare `now_ms()` from render code, that freezes the label until an
   unrelated re-render. Header mounts once (outside the route switch), so
   the forgotten handles are page-lifetime, not leaks-per-mount.
+- **`Day::from_label` is strict on purpose and must stay strict.** It reads
+  rows that CARRY CLASSES, so "Mon-Fri" or "Mon, Wed" has to be refused
+  rather than claimed for one day. The loose reader is
+  `Day::from_section_header`, and it is ONLY for a row with no cell content
+  (the hall grid's day lines): day word first, ≤5 words, no second day
+  named. Do not "simplify" one into the other (R34, §8.1).
+- **`join_pages` keys on `fold(code)` — everything internal is
+  case-insensitive.** Builders, the hall lookup, the consumed set and the
+  gate's code stats all use the folded code; `CourseBuilder::code` carries
+  the casing shown to the student (the halls legend's, since that page is
+  the catalog). A new lookup added with the raw code re-opens R34/§8.4.
+- **A hall name never contains `|`, and a hall never has two rows in one
+  day.** Both are enforced (textgrid blanks stray separators; gate rule 9
+  "hall grid day sections" fails at ≥2 repeats). They are the fingerprints
+  of a mis-sliced row and of a merged day — failures that change no count,
+  so nothing else notices them.
 - **Vertical rhythm in the My-timetable column is carried by BOTTOM margins**
   (`.panel { margin-bottom: 0.9rem }`). Anything inserted into that column
   needs its own bottom margin or it will touch the block beneath it. This
@@ -569,7 +585,7 @@ regenerates the .ics golden.
   selected course with no time is part of the timetable, not a footnote.
 - "Your changes" groups are headed by `.cg-head` (colour rail + small caps
   + count), coloured by `OwnChange::tone()`. See §4.
-- Tests: 94 native + 61/61 e2e green. Meeting removals: `MeetingOverride.to`
+- Tests: 100 native + 61/61 e2e green. Meeting removals: `MeetingOverride.to`
   is `Option<Meeting>` (None = removed; legacy JSON/share payloads still
   load — present meeting ⇒ Some). Out-of-grid times: **all three tables grow
   synthetic `.extra` columns**, each from its own source, all built by the
@@ -1522,6 +1538,96 @@ fails. This round's bug would have been visible on it immediately.
 Verification: **94 native + 61/61 e2e**, fmt and clippy clean, design
 screenshots regenerated and read.
 
+### R34 — "fix all the bugs which were not fixed before … test as much as possible"
+
+All five open entries in §8 are fixed, each pinned by a test verified to
+fail without its fix (checked by reverting the fix and re-running: six
+reverts, six failures). §8 is now empty apart from 8.6, which is not a bug.
+`PARSER_VERSION` 3 → 4, so a cached snapshot is re-read on the next load
+rather than keeping a v3 misreading.
+
+**8.1 — a hall-grid day line that could not be read merged that day into the
+one above it.** Two halves, because the two causes are different.
+
+*Reworded but readable* ("Thursday - 6 Nov"): `Day::from_label` refuses it
+BY DESIGN, and must keep refusing it — it also reads the rows that carry
+classes, where "Mon-Fri" must never become Monday. But a hall grid's day
+lines carry no data, so that caution buys nothing there. New
+`Day::from_section_header` reads such a line: the day word must come first,
+the line must be at most five words, and no OTHER day may appear anywhere
+(so ranges and lists are still refused). Used only for a row with no cell
+content whose label is not already a known hall.
+Test: `a_day_line_with_a_date_after_it_is_still_that_day`.
+
+*Not readable at all* (a typo — "Thrusday"): there is no honest reading, so
+the page is refused instead of silently merged. The signal is structural,
+not a count: **a hall cannot have two rows in one day**, and after a merge
+every hall the two days share has exactly that. `HallsPage` now records
+`duplicate_hall_rows` and gate rule 9 ("hall grid day sections") fails at
+two or more. Two, not one: a merge duplicates a whole block of rows, while a
+single repeat could be CMI splitting one room across two lines, and blanking
+a student's timetable over one odd row is worse than the row. The real
+fixtures sit at zero.
+Test: `a_misspelled_day_line_fails_the_gate_instead_of_merging_two_days`.
+
+**8.2 — a legend was credited to the branch above the grid it belonged to.**
+`classify` returned `Other` for a grid whose rows name no day, so no section
+opened, and the legend under it went to `sections.last_mut()` — the previous
+branch, which then listed courses it does not teach. There is now a
+`PreKind::UnreadableGrid`, and a legend that follows one goes to
+`TimetablePage::orphan_legend`: the courses keep their names and get no
+branch, because "we don't know whose this is" is the true statement.
+The test deliberately mangles a SMALL branch whose courses the hall grid
+never books — lose a big grid and the cross-page rule already refuses the
+page, so the dangerous case is the small one that still passes the gate.
+Test: `a_legend_is_never_credited_to_the_branch_above_the_one_it_belongs_to`.
+
+**8.3 — a row with a stray separator lost its hall's name.** The live page
+prints the header's label cell one character narrower than the rows', so
+when a row's separator count differs and it is sliced at the header's
+positions, the cut lands on the last character of the longest hall names.
+`slice_at`'s nudge only ever hunted for a space, so it sheared the name and
+left the row's own `|` at the end of the cell — inventing rooms like
+"Lecture Hall 20" that then appeared in the Halls view and the free-hall
+finder. The nudge now looks for a `|` first (radius 3, wider than the space
+search), since that is the real separator; any separator still left inside a
+segment afterwards is blanked with a warning, because no hall name or course
+code contains one.
+Test: `a_hall_row_with_a_stray_separator_keeps_its_name`.
+
+**8.4 — the same course typed in two cases became two courses.** The pages
+are hand-edited independently, so `TOC` on one and `Toc` on the other made
+one course holding the classes with no room and one holding the room with no
+classes. `join_pages` now keys everything on `fold(code)` (ASCII uppercase)
+— builders, the hall lookup, the consumed set and the gate's code stats —
+while `CourseBuilder::code` keeps the casing shown to the student, taken
+from the halls legend when there is one, since that page is the catalog.
+Test: `a_code_cased_differently_on_the_two_pages_is_still_one_course`.
+
+**8.5 — a note on one page was lost because the other page was terser.** The
+halls legend wins the name (it is the catalog) and used to take the notes
+with it: "(starts 12 Aug)", "(Oct-Nov)" or "(2 credits)" printed only in the
+timetable legend vanished, and with them the .ics dates, the credit total
+and the "starts" hint. `extract_name_notes` now runs over BOTH names and the
+fields are unioned. The displayed name does not change; only the facts
+behind it are recovered.
+Test: `a_course_note_survives_a_terser_name_on_the_other_page`.
+
+**Testing.** 100 native (94 + 6 new) and 61/61 e2e. Each new test was run
+against a deliberately reverted fix to confirm it fails — a test that passes
+either way pins nothing. The real fixtures were re-read and compared
+field-by-field against the pre-fix parse to confirm this round changes
+nothing about how CMI's current pages are read. `cargo fmt` and `cargo
+clippy --workspace --features html --all-targets -W clippy::redundant_clone`
+clean. Visual sweep re-run (design-check link, light/dark/mobile, gap
+measurements) — no change, as expected from parser-only work.
+
+The synthetic-site harness gained `retype_timetable(from, to)` /
+`retype_halls(from, to)`: verbatim edits to the rendered page, for the
+things the builder cannot express (a day line with a date after it, a stray
+separator, a code in the wrong case). Each edit asserts it actually matched,
+so a test whose edit silently missed cannot pass for the wrong reason.
+
 ## 8. Open bugs — found, confirmed, NOT fixed (do not delete)
 
 Rules for this section: entries stay until the bug is actually fixed and a
@@ -1529,150 +1635,10 @@ test pins it. Do not delete one for being old. Do not shorten one to save
 space. When a fix lands, move the entry into that round's §7 entry and say
 which test now fails without the fix.
 
-All five below were found in R30 by the synthetic-site audit and confirmed
-by two independent skeptics each (both told to refute). None of them affects
-CMI's pages as they are published today — every one needs an upstream edit
-that has not happened. That is why they were left; it is not a reason to
-leave them forever. Severity is "medium" in the sense that the app keeps
-working and shows something plausible — which is exactly what makes them
-worth fixing, because a student cannot tell they are being lied to.
-
-### 8.1 An unreadable day header in the hall grid silently merges that day into the one before it
-
-**Where:** `core/src/parse.rs`, `parse_halls_page`, the `current_day` loop
-(≈ lines 454–500).
-
-**What happens:** the loop advances `current_day` only when
-`Day::from_label(&row.label)` returns `Some`. Any hall row that follows an
-unrecognised day header is attributed to whatever day was last recognised.
-There is no warning, because from the loop's point of view nothing unusual
-happened — it just saw another hall row.
-
-**Three real ways CMI could trigger it:** a typo ("Thrusday"); a dated
-header ("Thursday - 6 Nov"), which `Day::from_label` rejects **by design**
-so that ranges like "Mon-Fri" can't be mistaken for a single day; or a
-header typed without its trailing empty cells, which changes how the row is
-sliced.
-
-**Why the gate misses it:** every existing hall rule counts things —
-days present, halls present, share of meetings with a room. Merging a day
-into the previous one changes none of those counts. The bookings all still
-exist, they are just on the wrong day.
-
-**Suggested fix (this is the useful part):** add a gate rule on a structural
-invariant instead of a count — **a hall name must not appear twice within
-one day**. On the real fixtures that count is 0. In every broken variant the
-audit built it was 24, because the merged day contributes a second row for
-every hall. A skeptic's control deleting the header outright corrupts
-identically and is caught by the same rule, so this is not a fix aimed at
-one typo — it catches the whole family.
-
-**Confirm with:** a synthetic site (`core/tests/synthetic_site_tests.rs`)
-whose halls page has one day header misspelled; assert the gate now fails,
-and assert it still passes on the correct page.
-
-### 8.2 The same shape on the timetable page — a dropped branch grid gives its legend to the previous branch
-
-**Where:** `core/src/parse.rs`, `classify` (line 84) and the section builder
-around `page.sections.last_mut()` (line 356).
-
-**What happens:** if a branch grid's day rows aren't recognised, `classify`
-doesn't return a `RawGrid` at all, so no new section is opened. The legend
-block that follows is then attached with `page.sections.last_mut()` — i.e.
-to the **previous** branch. That branch gains courses it does not teach, and
-the dropped branch vanishes.
-
-**Why it matters more than 8.1:** branch membership drives the whole "pick
-your branch" flow, so the wrong branch shows the wrong course list.
-
-**Suggested fix:** when a legend block arrives and the immediately preceding
-`<pre>` was classified as an unreadable grid, open a section for it anyway
-(marked unresolved) rather than appending to the last good one — or at
-minimum push a warning and let a gate rule fail on "legend attached to a
-section whose grid we never read".
-
-**Confirm with:** a synthetic site with two branches where the second
-branch's day labels are mangled; assert the first branch does not absorb the
-second's legend.
-
-### 8.3 A hall row with a stray or missing `|` shears the hall's name and invents a room
-
-**Where:** `core/src/textgrid.rs`, `slice_at` (line 114), the `nudge`
-closure.
-
-**What happens:** `nudge` moves a cut up to 2 characters to find a space,
-which is what makes hand-typed rows survive small drift. When a row's pipe
-count differs from the header's, the cut lands inside the hall name and the
-nudge doesn't rescue it — the name is cut short and the leftover becomes
-part of the next cell. The audit produced a phantom room literally named
-`Lecture Hall 803|`.
-
-**Consequence:** the phantom hall joins `page.halls`, so it appears in the
-Halls view and in the free-hall finder as a room that does not exist, while
-the real room loses that booking.
-
-**Suggested fix:** validate each row's separator count against the header's
-before slicing, and when they disagree, fall back to the column-alignment
-path (`slice_at_cols`) rather than the pipe path — the pipeless reader
-already handles drifted rows correctly. A cheap gate cross-check helps too:
-a hall name containing `|` is never legitimate.
-
-**Confirm with:** a synthetic halls page where one row carries an extra `|`;
-assert the hall list is unchanged.
-
-### 8.4 `join_pages` matches course codes case-sensitively
-
-**Where:** `core/src/join.rs`, `join_pages` (line 121) — `builders` is a
-`BTreeMap<String, _>` keyed on the code exactly as printed, and
-`hall_by_key` is keyed the same way.
-
-**What happens:** if the same course is printed `TOC` in the branch grid and
-`Toc` in the hall grid, they become two different courses. The real one
-loses its room; a phantom one appears carrying only a booking.
-
-**Note:** `OverridesStore` in `core/src/model.rs` was made fully
-case-insensitive in R30 (`for_course`, `set_credits`, `remove_credits`,
-`credits_for` all use `eq_ignore_ascii_case`, pinned by
-`the_store_reads_codes_the_same_way_throughout`). **`join` was deliberately
-not changed in the same round** — it is a bigger blast radius, since the
-chosen casing then becomes the canonical code everywhere downstream
-(selection, share links, .ics UIDs). That decision is the only reason this
-is still open.
-
-**Suggested fix:** key the builders on an uppercase (or otherwise folded)
-code while keeping the first-seen casing as the display code, so the
-canonical code stays stable for existing share links. Decide explicitly
-which page wins the casing — the halls legend is the better catalog, and
-that is already how names are chosen.
-
-**Confirm with:** a synthetic site where the hall grid cases one code
-differently; assert one course with one hall, not two courses.
-
-### 8.5 Course annotations are dropped when the halls legend's name lacks them
-
-**Where:** `core/src/join.rs`, the assembly step (≈ line 210):
-`b.halls_name.clone().or_else(|| b.tt_name.clone())`.
-
-**What happens:** the halls-page legend always wins the name. If the
-timetable legend says `Topics in Combinatorics (starts 12 Aug)` and the
-halls legend says `Topics in Combinatorics`, the annotation is gone —
-and because `extract_name_notes` runs on the *chosen* name, the structured
-fields it would have produced (`starts`, `part_of_semester`, the credit
-note) are never set either. The join already knows the two disagree: it
-pushes the warning `"legends disagree on the name … (halls kept)"` and then
-throws the richer string away.
-
-**Consequence:** a course that starts mid-semester, or runs only Oct–Nov,
-looks like a normal full-semester course. `.ics` export and the
-"starts 12 Aug" hints silently lose information.
-
-**Suggested fix:** keep the halls name as the display name, but run
-`extract_name_notes` over **both** names and take the union of the notes,
-preferring whichever is non-empty. That keeps the canonical name stable and
-stops the information loss with no user-visible naming change.
-
-**Confirm with:** a synthetic site whose two legends give the same course
-different annotations; assert `starts` / `part_of_semester` survive.
+**Currently open: none.** The five entries that lived here (8.1–8.5, found
+by the R30 synthetic-site audit) were all fixed in R34; what each one was
+and how it was fixed is in R34's §7 entry, along with the test that fails
+without it. 8.6 below is not a bug and never leaves.
 
 ### 8.6 Deliberate non-bug — do not "fix" this
 

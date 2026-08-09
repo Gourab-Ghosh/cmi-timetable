@@ -88,8 +88,20 @@ pub fn split_instructors(raw: &str) -> Vec<String> {
         .collect()
 }
 
+/// The key every code is matched on. CMI's two pages are edited by hand and
+/// independently, so the same course can be printed `TOC` on one and `Toc`
+/// on the other; keying on the text as printed made those two courses, one
+/// holding the classes and the other the room (§8.4). Everything internal
+/// keys on this; `CourseBuilder::code` keeps the casing shown to the user.
+fn fold(code: &str) -> String {
+    code.to_ascii_uppercase()
+}
+
 #[derive(Default)]
 struct CourseBuilder {
+    /// The code as CMI prints it — the halls legend's casing when there is
+    /// one, since that page is the catalog, else the first seen.
+    code: String,
     tt_name: Option<String>,
     tt_instr: Option<String>,
     halls_name: Option<String>,
@@ -106,6 +118,18 @@ impl CourseBuilder {
             self.branches.push(branch.to_string());
         }
     }
+}
+
+/// The builder for a code, matched case-insensitively, created on first
+/// sight with the casing it was first seen in.
+fn builder<'a>(
+    builders: &'a mut BTreeMap<String, CourseBuilder>,
+    code: &str,
+) -> &'a mut CourseBuilder {
+    builders.entry(fold(code)).or_insert_with(|| CourseBuilder {
+        code: code.to_string(),
+        ..Default::default()
+    })
 }
 
 pub struct Joined {
@@ -125,7 +149,7 @@ pub fn join_pages(tt: &TimetablePage, hp: &HallsPage) -> Joined {
     // 1. Branch legends: membership + fallback name/instructor.
     for section in &tt.sections {
         for entry in &section.legend {
-            let b = builders.entry(entry.code.clone()).or_default();
+            let b = builder(&mut builders, &entry.code);
             b.add_branch(&section.branch.code);
             match &b.tt_name {
                 Some(existing) if *existing != entry.name => warnings.push(format!(
@@ -140,10 +164,24 @@ pub fn join_pages(tt: &TimetablePage, hp: &HallsPage) -> Joined {
         }
     }
 
+    // 1b. Courses from a legend whose branch grid could not be read (§8.2).
+    // They are real courses with real names; the one thing we do NOT know
+    // is whose branch they are, so they join with no branch rather than
+    // with the wrong one.
+    for entry in &tt.orphan_legend {
+        let b = builder(&mut builders, &entry.code);
+        if b.tt_name.is_none() {
+            b.tt_name = Some(entry.name.clone());
+        }
+        if b.tt_instr.is_none() {
+            b.tt_instr = entry.instructors_raw.clone();
+        }
+    }
+
     // 2. Grid occurrences: membership + meetings.
     for section in &tt.sections {
         for occ in &section.occurrences {
-            let b = builders.entry(occ.code.clone()).or_default();
+            let b = builder(&mut builders, &occ.code);
             b.add_branch(&section.branch.code);
             b.per_branch
                 .entry(section.branch.code.clone())
@@ -170,7 +208,7 @@ pub fn join_pages(tt: &TimetablePage, hp: &HallsPage) -> Joined {
 
     // 3. Halls legend (canonical names/instructors; also the full catalog).
     for entry in &hp.legend {
-        let b = builders.entry(entry.code.clone()).or_default();
+        let b = builder(&mut builders, &entry.code);
         if let Some(tt_name) = &b.tt_name
             && *tt_name != entry.name
         {
@@ -179,6 +217,9 @@ pub fn join_pages(tt: &TimetablePage, hp: &HallsPage) -> Joined {
                 entry.code, entry.name
             ));
         }
+        // This page is the catalog, so it also decides how the code is
+        // spelled everywhere the student sees it.
+        b.code = entry.code.clone();
         b.halls_name = Some(entry.name.clone());
         b.halls_instr = entry.instructors_raw.clone();
     }
@@ -188,7 +229,7 @@ pub fn join_pages(tt: &TimetablePage, hp: &HallsPage) -> Joined {
     for entry in &hp.entries {
         for code in &entry.codes {
             hall_by_key
-                .entry((code.clone(), entry.day, entry.slot))
+                .entry((fold(code), entry.day, entry.slot))
                 .or_default()
                 .push((entry.hall.clone(), entry.temp));
         }
@@ -202,11 +243,12 @@ pub fn join_pages(tt: &TimetablePage, hp: &HallsPage) -> Joined {
     // Make sure hall-grid-only codes (category c) get builders too.
     for entry in &hp.entries {
         for code in &entry.codes {
-            builders.entry(code.clone()).or_default();
+            builder(&mut builders, code);
         }
     }
 
-    for (code, b) in &builders {
+    for (folded, b) in &builders {
+        let code = &b.code;
         let name = b
             .halls_name
             .clone()
@@ -218,11 +260,28 @@ pub fn join_pages(tt: &TimetablePage, hp: &HallsPage) -> Joined {
                 code.clone()
             });
         let instructors_raw = b.halls_instr.clone().or_else(|| b.tt_instr.clone());
-        let notes = extract_name_notes(&name);
+        // Notes come from BOTH legends, not only the one whose name is
+        // shown. The halls legend wins the name because it is the catalog,
+        // but it is also the one more likely to be typed short — and when it
+        // was, "(starts 12 Aug)", "(Oct-Nov)" or "(2 credits)" from the
+        // timetable legend went with it, taking the .ics dates, the credit
+        // total and the "starts" hint along (§8.5). The name shown is
+        // unchanged; only the facts behind it are recovered.
+        let mut notes = extract_name_notes(&name);
+        if let Some(other) = [&b.halls_name, &b.tt_name]
+            .into_iter()
+            .flatten()
+            .find(|n| **n != name)
+        {
+            let other = extract_name_notes(other);
+            notes.starts = notes.starts.or(other.starts);
+            notes.credits = notes.credits.or(other.credits);
+            notes.part_of_semester = notes.part_of_semester.or(other.part_of_semester);
+        }
 
         let mut meetings = Vec::new();
         for (day, slot) in &b.grid_meetings {
-            let key = (code.clone(), *day, *slot);
+            let key = (folded.clone(), *day, *slot);
             let hall_matches = hall_by_key.get(&key);
             let (hall, temp) = match hall_matches {
                 Some(halls) => {
@@ -245,7 +304,7 @@ pub fn join_pages(tt: &TimetablePage, hp: &HallsPage) -> Joined {
                     // re-reported as an ignored extra).
                     let overlap = hall_by_key
                         .iter()
-                        .filter(|((c, d, s), _)| c == code && d == day && s.overlaps(slot))
+                        .filter(|((c, d, s), _)| c == folded && d == day && s.overlaps(slot))
                         .min_by_key(|((_, _, s), _)| s.start_min.abs_diff(slot.start_min))
                         .map(|(k, v)| (k.clone(), v.clone()));
                     match overlap {
@@ -282,7 +341,7 @@ pub fn join_pages(tt: &TimetablePage, hp: &HallsPage) -> Joined {
         // Hall-grid entries not matched by any branch-grid meeting.
         let extra: Vec<(Day, Slot)> = hall_by_key
             .keys()
-            .filter(|(c, d, s)| c == code && !consumed.contains(&(c.clone(), *d, *s)))
+            .filter(|(c, d, s)| c == folded && !consumed.contains(&(c.clone(), *d, *s)))
             .map(|(_, d, s)| (*d, *s))
             .collect();
 
@@ -300,7 +359,7 @@ pub fn join_pages(tt: &TimetablePage, hp: &HallsPage) -> Joined {
         } else if !extra.is_empty() {
             // Scheduled in the hall grid but in no branch grid (e.g. DSEM).
             for (d, s) in &extra {
-                let key = (code.clone(), *d, *s);
+                let key = (folded.clone(), *d, *s);
                 let halls = &hall_by_key[&key];
                 consumed.insert(key.clone());
                 meetings.push(crate::model::Meeting {
@@ -381,30 +440,36 @@ pub fn join_pages(tt: &TimetablePage, hp: &HallsPage) -> Joined {
     }
 
     // 7. Stats for the validation gate.
+    // Folded on both sides, or a code cased differently on the two pages
+    // would count as unresolved and drag the gate's legend-resolution rule
+    // down for no real reason.
     let mut grid_codes: BTreeSet<String> = BTreeSet::new();
     for section in &tt.sections {
         for occ in &section.occurrences {
-            grid_codes.insert(occ.code.clone());
+            grid_codes.insert(fold(&occ.code));
         }
     }
     for entry in &hp.entries {
         for code in &entry.codes {
-            grid_codes.insert(code.clone());
+            grid_codes.insert(fold(code));
         }
     }
-    let mut legend_codes: BTreeSet<&str> = BTreeSet::new();
+    let mut legend_codes: BTreeSet<String> = BTreeSet::new();
     for section in &tt.sections {
         for e in &section.legend {
-            legend_codes.insert(&e.code);
+            legend_codes.insert(fold(&e.code));
         }
     }
+    for e in &tt.orphan_legend {
+        legend_codes.insert(fold(&e.code));
+    }
     for e in &hp.legend {
-        legend_codes.insert(&e.code);
+        legend_codes.insert(fold(&e.code));
     }
     stats.grid_codes = grid_codes.len();
     stats.grid_codes_resolved = grid_codes
         .iter()
-        .filter(|c| legend_codes.contains(c.as_str()))
+        .filter(|c| legend_codes.contains(*c))
         .count();
     stats.branch_grids = tt.sections.len();
     stats.branch_legends = tt.sections.iter().filter(|s| !s.legend.is_empty()).count();

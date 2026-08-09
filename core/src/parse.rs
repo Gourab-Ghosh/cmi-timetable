@@ -8,6 +8,7 @@
 use crate::model::{Branch, Day, PreClassification, Slot};
 use crate::textgrid::{RawGrid, RawRow, parse_cell, parse_grid};
 use regex_lite::Regex;
+use std::collections::BTreeSet;
 use std::sync::LazyLock;
 
 /// One `<pre>` block's raw text plus the nearest preceding heading text.
@@ -31,6 +32,11 @@ pub enum PreKind {
     BranchGrid,
     HallGrid,
     Legend,
+    /// A block that IS laid out as a grid — it has a header of time ranges —
+    /// but whose row labels name no day at all. Its rows cannot be read, so
+    /// no branch comes out of it; naming that case is what stops the legend
+    /// underneath from being credited to the previous branch (§8.2).
+    UnreadableGrid,
     Other,
 }
 
@@ -40,6 +46,7 @@ impl PreKind {
             PreKind::BranchGrid => "branch grid",
             PreKind::HallGrid => "hall grid",
             PreKind::Legend => "legend",
+            PreKind::UnreadableGrid => "grid with no readable day rows",
             PreKind::Other => "other",
         }
     }
@@ -90,7 +97,7 @@ pub fn classify(text: &str) -> (PreKind, Option<RawGrid>) {
             .filter(|r| Day::from_label(&r.label).is_some())
             .count();
         if day_rows == 0 {
-            return (PreKind::Other, None);
+            return (PreKind::UnreadableGrid, None);
         }
         let day_data_rows = grid
             .rows
@@ -234,6 +241,11 @@ pub struct BranchSection {
 pub struct TimetablePage {
     pub semester_label: Option<String>,
     pub sections: Vec<BranchSection>,
+    /// Legend entries that follow a grid we could not read, so we know the
+    /// courses but NOT whose branch they belong to. They name courses and
+    /// nothing else — crediting them to the previous branch is what §8.2
+    /// was about.
+    pub orphan_legend: Vec<LegendEntry>,
     pub warnings: Vec<String>,
     pub classifications: Vec<PreClassification>,
 }
@@ -258,11 +270,17 @@ fn classification_for(page: &str, index: usize, kind: PreKind, text: &str) -> Pr
 
 pub fn parse_timetable_page(blocks: &[PreBlock]) -> TimetablePage {
     let mut page = TimetablePage::default();
+    // Did the block just before this one look like a branch grid we failed
+    // to read? If so, the legend that follows belongs to THAT branch, and
+    // must not be handed to the previous one (§8.2).
+    let mut after_unreadable_grid = false;
 
     for (i, block) in blocks.iter().enumerate() {
         let (kind, grid) = classify(&block.text);
         page.classifications
             .push(classification_for("timetable", i, kind, &block.text));
+        let follows_unreadable_grid = after_unreadable_grid;
+        after_unreadable_grid = kind == PreKind::UnreadableGrid;
 
         match kind {
             PreKind::BranchGrid => {
@@ -353,16 +371,38 @@ pub fn parse_timetable_page(blocks: &[PreBlock]) -> TimetablePage {
                     .filter(|l| !l.trim().is_empty())
                     .filter_map(parse_timetable_legend_line)
                     .collect();
-                match page.sections.last_mut() {
-                    Some(section) => section.legend.extend(entries),
-                    None => page
-                        .warnings
-                        .push(format!("legend block #{i} appears before any branch grid")),
+                // Whose legend is this? The branch grid immediately above it.
+                // When that grid could not be read, `sections.last_mut()` is
+                // the branch BEFORE it — a different branch, which would
+                // gain every course in this legend and be shown to students
+                // teaching them. Keep the names, drop the claim about who
+                // teaches them.
+                if follows_unreadable_grid {
+                    page.warnings.push(format!(
+                        "legend block #{i} follows a grid whose day rows could not be read, \
+                         so which branch these {} course(s) belong to is unknown; keeping \
+                         their names only",
+                        entries.len()
+                    ));
+                    page.orphan_legend.extend(entries);
+                } else {
+                    match page.sections.last_mut() {
+                        Some(section) => section.legend.extend(entries),
+                        None => page
+                            .warnings
+                            .push(format!("legend block #{i} appears before any branch grid")),
+                    }
                 }
             }
             PreKind::HallGrid => {
                 page.warnings.push(format!(
                     "unexpected hall-style grid (block #{i}) on the timetable page; ignored"
+                ));
+            }
+            PreKind::UnreadableGrid => {
+                page.warnings.push(format!(
+                    "block #{i} is laid out as a grid but none of its row labels name a day; \
+                     no branch could be read from it"
                 ));
             }
             PreKind::Other => {}
@@ -416,6 +456,11 @@ pub struct HallsPage {
     pub legend: Vec<LegendEntry>,
     pub days: Vec<Day>,
     pub footnotes: Vec<String>,
+    /// Halls that got a second row under one day — the fingerprint of a day
+    /// line the parser could not read, which merges that day into the one
+    /// above it while every count stays plausible. The gate judges these
+    /// (§8.1); the parser only reports them.
+    pub duplicate_hall_rows: Vec<(Day, String)>,
     pub warnings: Vec<String>,
     pub classifications: Vec<PreClassification>,
 }
@@ -452,13 +497,42 @@ pub fn parse_halls_page(blocks: &[PreBlock]) -> HallsPage {
                 }
 
                 let mut current_day: Option<Day> = None;
+                // Hall names already seen under the CURRENT day. A hall
+                // cannot have two rows in one day, so a repeat means a day
+                // line went unread and two days were merged into one — the
+                // failure this loop used to have no way of noticing, because
+                // every count it produced stayed the same (§8.1).
+                let mut seen_in_day: BTreeSet<String> = BTreeSet::new();
                 for row in &grid.rows {
-                    if let Some(day) = Day::from_label(&row.label) {
+                    let has_content = row.cells.iter().any(|c| !c.trim().is_empty());
+                    let mut day_of_row = Day::from_label(&row.label);
+                    // A day line CMI reworded — "Thursday - 6 Nov" is the
+                    // realistic one. `from_label` refuses it by design, so
+                    // that a DATA row can never be claimed for the wrong day
+                    // ("Mon-Fri" must not become Monday). A line carrying no
+                    // data is not that risk: the only question is which day
+                    // it names, and reading it keeps the rows beneath it off
+                    // the previous day.
+                    if day_of_row.is_none()
+                        && !has_content
+                        && !row.label.is_empty()
+                        && !page.halls.contains(&row.label)
+                        && let Some(day) = Day::from_section_header(&row.label)
+                    {
+                        page.warnings.push(format!(
+                            "hall grid: day line {:?} is not a plain day name; read as {}",
+                            row.label,
+                            day.full()
+                        ));
+                        day_of_row = Some(day);
+                    }
+                    if let Some(day) = day_of_row {
                         current_day = Some(day);
+                        seen_in_day.clear();
                         if !page.days.contains(&day) {
                             page.days.push(day);
                         }
-                        if row.cells.iter().any(|c| !c.trim().is_empty()) {
+                        if has_content {
                             page.warnings.push(format!(
                                 "hall grid: day row {} unexpectedly has cell content; ignored",
                                 day.full()
@@ -483,6 +557,14 @@ pub fn parse_halls_page(blocks: &[PreBlock]) -> HallsPage {
                         continue;
                     };
                     let hall = row.label.clone();
+                    if !seen_in_day.insert(hall.clone()) {
+                        page.duplicate_hall_rows.push((day, hall.clone()));
+                        page.warnings.push(format!(
+                            "hall grid: {hall} has a second row under {} — a day line was \
+                             probably not recognised, so two days have been merged",
+                            day.full()
+                        ));
+                    }
                     if !page.halls.contains(&hall) {
                         page.halls.push(hall.clone());
                     }
@@ -513,6 +595,12 @@ pub fn parse_halls_page(blocks: &[PreBlock]) -> HallsPage {
             PreKind::BranchGrid => {
                 page.warnings.push(format!(
                     "unexpected branch-style grid (block #{i}) on the halls page; ignored"
+                ));
+            }
+            PreKind::UnreadableGrid => {
+                page.warnings.push(format!(
+                    "block #{i} is laid out as a grid but none of its row labels name a day; \
+                     no hall allocation could be read from it"
                 ));
             }
             PreKind::Other => {}

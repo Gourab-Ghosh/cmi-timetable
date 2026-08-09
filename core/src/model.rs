@@ -11,7 +11,15 @@ use serde::{Deserialize, Serialize};
 /// notes in more forms (single month, full names), duration-aware assumed
 /// credits, semantic semester-label comparison, garbage-detection gate
 /// floors, hall matching by overlap.
-pub const PARSER_VERSION: u32 = 3;
+///
+/// v4: the five quiet misreadings of §8 — hall-grid day lines read even when
+/// reworded ("Thursday - 6 Nov") and refused rather than merged when they
+/// cannot be, a legend never credited to the branch above the grid it
+/// belongs to, rows sliced at their own separator so a hall keeps its name,
+/// course codes matched case-insensitively across the two pages, and course
+/// notes taken from both legends instead of only the one whose name is
+/// shown. A cached snapshot parsed by v3 is re-read on the next load.
+pub const PARSER_VERSION: u32 = 4;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum Day {
@@ -117,6 +125,39 @@ impl Day {
             )
         });
         if names_second_day {
+            return None;
+        }
+        Some(day)
+    }
+
+    /// The day named by a line that is a SECTION HEADER rather than a row of
+    /// data — specifically the hall grid's day lines, which carry no cells.
+    ///
+    /// `from_label` is deliberately strict, and must stay that way: it reads
+    /// rows that CARRY CLASSES, so "Mon-Fri" or "Mon, Wed" has to be refused
+    /// rather than claimed for one day. A line with nothing on it cannot
+    /// move anyone's class by being misread, so the only question it raises
+    /// is which single day it names — which lets this accept the wordings
+    /// `from_label` cannot, such as "Thursday - 6 Nov".
+    ///
+    /// Still refuses every range and list: the day word must come first, and
+    /// no OTHER day may be named anywhere in the line.
+    pub fn from_section_header(label: &str) -> Option<Day> {
+        let words: Vec<&str> = label
+            .split(|c: char| !c.is_ascii_alphanumeric())
+            .filter(|w| !w.is_empty())
+            .collect();
+        // A header is short. Anything long is prose, and prose that happens
+        // to open with a day name is not a header.
+        if words.is_empty() || words.len() > 5 {
+            return None;
+        }
+        let day = Day::from_label(words[0])?;
+        if words[1..]
+            .iter()
+            .filter_map(|w| Day::from_label(w))
+            .any(|d| d != day)
+        {
             return None;
         }
         Some(day)

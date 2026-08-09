@@ -59,10 +59,32 @@ mod site {
         pub ragged_hall_header: bool,
         /// Drop every `|` from the hall grid (a re-typed page).
         pub pipeless_halls: bool,
+        /// Verbatim edits applied to the finished page, for the things a
+        /// builder cannot express: a day line typed with a date after it, a
+        /// stray separator in one row, a code printed in the wrong case.
+        /// (from, to), applied in order, and each one must actually match —
+        /// a test whose edit silently missed would pass for the wrong
+        /// reason.
+        pub tt_edits: Vec<(String, String)>,
+        pub halls_edits: Vec<(String, String)>,
     }
 
     fn s(x: &str) -> String {
         x.to_string()
+    }
+
+    /// Apply verbatim edits to a rendered page, insisting each one matches.
+    /// A test whose edit quietly missed would still pass, and would be
+    /// testing nothing at all.
+    fn apply(edits: &[(String, String)], mut html: String) -> String {
+        for (from, to) in edits {
+            assert!(
+                html.contains(from.as_str()),
+                "the page has no {from:?} to retype — the test edit missed"
+            );
+            html = html.replace(from.as_str(), to.as_str());
+        }
+        html
     }
 
     impl Site {
@@ -160,6 +182,18 @@ mod site {
                     s("Various"),
                 ));
             }
+            self
+        }
+
+        /// Retype one piece of the timetable page verbatim.
+        pub fn retype_timetable(mut self, from: &str, to: &str) -> Site {
+            self.tt_edits.push((s(from), s(to)));
+            self
+        }
+
+        /// Retype one piece of the halls page verbatim.
+        pub fn retype_halls(mut self, from: &str, to: &str) -> Site {
+            self.halls_edits.push((s(from), s(to)));
             self
         }
 
@@ -363,7 +397,7 @@ mod site {
                 }
                 body.push_str("<pre>\n+ Optional course.\n</pre>\n");
             }
-            page("Timetable", &body)
+            apply(&self.tt_edits, page("Timetable", &body))
         }
 
         // -- lecturehalls.php ---------------------------------------------
@@ -474,7 +508,7 @@ mod site {
             if !legend.is_empty() {
                 body.push_str(&format!("<pre>{}\n</pre>\n", legend.join("\n")));
             }
-            page("Lecture Hall Allocation", &body)
+            apply(&self.halls_edits, page("Lecture Hall Allocation", &body))
         }
 
         /// Parse both pages exactly as the app does.
@@ -2005,4 +2039,257 @@ fn two_grids_ending_an_hour_differently_still_make_one_column() {
         "{:?}",
         lab.meetings
     );
+}
+
+// ---------------------------------------------------------------------------
+// The five ways the parser used to lie quietly (CONTEXT.md §8)
+//
+// Every one of these produced a page that LOOKED fine: the gate passed, the
+// counts were plausible, and the student had no way to tell. That is what
+// makes them worth a test each.
+// ---------------------------------------------------------------------------
+
+/// §8.1 — a day line CMI reworded is still that day.
+///
+/// The strict day reader refuses "Thursday - 6 Nov", and has to: it also
+/// reads the rows that CARRY CLASSES, where "Mon-Fri" must never become
+/// Monday. The hall grid's day lines carry nothing, so refusing them there
+/// bought nothing and cost a whole day — every hall row beneath was filed
+/// under Wednesday, silently.
+#[test]
+fn a_day_line_with_a_date_after_it_is_still_that_day() {
+    let out = january_term()
+        .retype_halls("Thursday", "Thursday - 6 Nov")
+        .read();
+    let snap = snapshot_of(&out);
+
+    // CRYP meets Thursday 11:30 in the Seminar Hall. If the day line went
+    // unread, this booking lands on Wednesday instead.
+    assert_eq!(
+        meeting_days(snap, "CRYP")
+            .into_iter()
+            .filter(|(d, _, _)| *d == Day::Thu)
+            .count(),
+        1,
+        "Thursday's bookings must stay on Thursday: {:?}",
+        meeting_days(snap, "CRYP")
+    );
+    assert!(
+        snap.hall_bookings.iter().any(|b| b.day == Day::Thu),
+        "the hall grid must still have a Thursday"
+    );
+    assert!(
+        out.report
+            .warnings
+            .iter()
+            .any(|w| w.contains("not a plain day name")),
+        "and reading it loosely is worth saying out loud: {:?}",
+        out.report.warnings
+    );
+}
+
+/// §8.1 — a day line it CANNOT read is refused, not merged.
+///
+/// A typo has no reading. The old code filed the rows beneath it under the
+/// previous day and every count it produced stayed plausible, so nothing
+/// noticed. The structural fact does: a hall cannot have two rows in one
+/// day.
+#[test]
+fn a_misspelled_day_line_fails_the_gate_instead_of_merging_two_days() {
+    let out = january_term().retype_halls("Thursday", "Thrusday").read();
+
+    assert!(
+        out.snapshot.is_none(),
+        "a merged day must not reach the student"
+    );
+    assert!(
+        failed_rules(&out)
+            .iter()
+            .any(|r| r == "hall grid day sections"),
+        "and the rule that catches it must be the one that names the problem: {:?}",
+        failed_rules(&out)
+    );
+}
+
+/// §8.2 — a legend belongs to the grid above it, or to nobody.
+///
+/// When a branch grid's day rows cannot be read, no section is opened for
+/// it — and the legend underneath used to be appended to `sections.last()`,
+/// i.e. the PREVIOUS branch, which then listed courses it does not teach.
+///
+/// The branch mangled here is deliberately a SMALL one whose courses the
+/// hall grid never books. Lose a big grid and the cross-page rule already
+/// refuses the page; lose a small one and everything still passes the gate,
+/// which is precisely when a wrong branch reaches a student.
+#[test]
+fn a_legend_is_never_credited_to_the_branch_above_the_one_it_belongs_to() {
+    let with_reading_group = |site: Site| {
+        site.course("RGA", "Reading Group A", "Various")
+            .course("RGB", "Reading Group B", "Various")
+            .branch(
+                "RG1",
+                "Reading groups",
+                &[
+                    ("MON.", &["RGA", "", "", "", ""]),
+                    ("WED.", &["", "", "RGB", "", ""]),
+                    ("FRI.", &["", "RGA", "", "", ""]),
+                ],
+            )
+    };
+    // A control first: read as printed, the reading group is its own branch
+    // and OP1 is untouched.
+    let control = snapshot_of(&with_reading_group(january_term()).read()).clone();
+    assert_eq!(
+        control.course("RGA").unwrap().branches,
+        vec!["RG1".to_string()],
+        "control: RGA belongs to RG1"
+    );
+
+    // Now RG1's day labels are unreadable. "MON." is unique to this grid —
+    // every other branch prints "Mon" or "Monday".
+    let out = with_reading_group(january_term())
+        .retype_timetable("MON.", "MOM.")
+        .retype_timetable("WED.", "WEB.")
+        .retype_timetable("FRI.", "FRO.")
+        .read();
+    let snap = snapshot_of(&out);
+
+    assert!(
+        snap.branch("RG1").is_none(),
+        "a grid with no readable day rows yields no branch"
+    );
+    for code in ["RGA", "RGB"] {
+        let course = snap.course(code).unwrap_or_else(|| panic!("{code} lost"));
+        assert!(
+            course.branches.is_empty(),
+            "{code} is RG1's, and RG1's grid was unreadable — it must not be \
+             handed to the branch printed above it: {:?}",
+            course.branches
+        );
+    }
+    // The courses themselves survive: we lost who teaches them, not them.
+    assert_eq!(snap.course("RGA").unwrap().name, "Reading Group A");
+    assert!(
+        out.report
+            .warnings
+            .iter()
+            .any(|w| w.contains("which branch these")),
+        "{:?}",
+        out.report.warnings
+    );
+}
+
+/// §8.3 — a row with one separator too many keeps its hall's name.
+///
+/// The header's label cell is a character narrower than the rows' on the
+/// live page. When a row's separator count differs, it is sliced at the
+/// header's positions instead — and the cut landed one character inside the
+/// longest hall names, shearing them and leaving the row's own separator at
+/// the end of the cell, which invented rooms like "Lecture Hall 20".
+#[test]
+fn a_hall_row_with_a_stray_separator_keeps_its_name() {
+    let base = january_term();
+    let html = base.halls_html();
+    // Monday's row for the longest-named hall, verbatim, plus one separator.
+    let row = html
+        .lines()
+        .find(|l| l.contains("Lecture Hall 205"))
+        .expect("the hall grid has a Lecture Hall 205 row")
+        .to_string();
+    let out = base.retype_halls(&row, &format!("{row}|")).read();
+    let snap = snapshot_of(&out);
+
+    assert!(
+        snap.halls.iter().any(|h| h == "Lecture Hall 205"),
+        "the hall keeps its name: {:?}",
+        snap.halls
+    );
+    assert!(
+        !snap
+            .halls
+            .iter()
+            .any(|h| h != "Lecture Hall 205" && h.starts_with("Lecture Hall 20")),
+        "and no sheared copy of it appears: {:?}",
+        snap.halls
+    );
+    assert!(
+        snap.halls.iter().all(|h| !h.contains('|')),
+        "no hall name may contain a separator: {:?}",
+        snap.halls
+    );
+    // The booking in that row is still readable.
+    assert!(
+        snap.hall_bookings
+            .iter()
+            .any(|b| b.hall == "Lecture Hall 205" && b.day == Day::Mon),
+        "Monday's booking survives the repair"
+    );
+}
+
+/// §8.4 — the same course typed in two cases is one course.
+///
+/// The pages are edited by hand and independently. Keying on the text as
+/// printed made `CAL1` and `Cal1` two courses: one holding the classes with
+/// no room, one holding the room with no classes.
+#[test]
+fn a_code_cased_differently_on_the_two_pages_is_still_one_course() {
+    let out = january_term().retype_halls("CAL1", "Cal1").read();
+    let snap = snapshot_of(&out);
+
+    let matches: Vec<&str> = snap
+        .courses
+        .iter()
+        .filter(|c| c.code.eq_ignore_ascii_case("CAL1"))
+        .map(|c| c.code.as_str())
+        .collect();
+    assert_eq!(
+        matches.len(),
+        1,
+        "one course, not one per spelling: {matches:?}"
+    );
+
+    let course = snap.course_ci("cal1").expect("found however it is cased");
+    assert_eq!(course.name, "Calculus I");
+    assert!(
+        !course.meetings.is_empty() && course.meetings.iter().all(|m| m.hall.is_some()),
+        "and it keeps the rooms the halls page gave it: {:?}",
+        course.meetings
+    );
+}
+
+/// §8.5 — a note on one page is not lost because the other page is terser.
+///
+/// The halls legend wins the NAME, because it is the catalog. It used to
+/// win the notes with it: if the timetable legend said "(starts 12 Feb)"
+/// and the halls legend did not, the course silently became a normal
+/// full-semester one — in the planner, in the credit total and in the
+/// exported calendar.
+#[test]
+fn a_course_note_survives_a_terser_name_on_the_other_page() {
+    let out = january_term()
+        .retype_timetable("Combinatorics", "Combinatorics (starts 12 Feb)")
+        .retype_timetable("Topology", "Topology (Oct-Nov)")
+        .retype_timetable("General Relativity", "General Relativity (2 credits)")
+        .read();
+    let snap = snapshot_of(&out);
+
+    let comb = snap.course("COMB").unwrap();
+    assert_eq!(comb.name, "Combinatorics", "the catalog's name is shown");
+    assert_eq!(
+        comb.starts,
+        Some((12, "Feb".to_string())),
+        "but the date it starts is not thrown away with the wording"
+    );
+
+    assert_eq!(
+        snap.course("TOPO").unwrap().part_of_semester,
+        Some("Oct-Nov".to_string())
+    );
+    assert_eq!(snap.course("GRAV").unwrap().credits, Some(2));
+
+    // And the same course read from a page that says nothing extra is
+    // unchanged — the union may only ADD what the other page knew.
+    let plain_read = january_term().read();
+    let plain_snap = snapshot_of(&plain_read);
+    assert_eq!(plain_snap.course("COMB").unwrap().starts, None);
 }

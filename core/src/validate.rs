@@ -110,6 +110,7 @@ pub fn parse_and_validate(
     run_gate(&tt.semester_label, &hp.semester_label, &joined, &mut report);
     report.gate.push(per_grid_checks(&tt));
     report.gate.push(halls_page_completeness(&tt, &hp, &joined));
+    report.gate.push(hall_days_are_separate(&hp));
 
     let snapshot = if report.gate_passed() {
         Some(Snapshot {
@@ -352,6 +353,44 @@ fn run_gate(
 /// a lost Friday is 24. Below that (a cut landing inside the last day) some
 /// classes simply read "Hall TBA", which is what the page now says, not
 /// something invented.
+/// Rule 9 — the hall grid's days really are separate days.
+///
+/// Every other hall rule COUNTS things: how many days, how many halls, what
+/// share of meetings found a room. A day line the parser cannot read changes
+/// none of those — the rows beneath it are simply filed under the day above,
+/// so the bookings all still exist and are all on the wrong day. The one
+/// thing that does change is structural: a hall cannot have two rows in one
+/// day, and after a merge every hall the two days share has exactly that.
+///
+/// Threshold. One repeat is left as a warning: it could be CMI genuinely
+/// splitting a room across two lines, and blanking a student's timetable
+/// over one odd row is worse than the row. A merge is never a single repeat
+/// — both days list the same halls, so it duplicates the whole block — so
+/// two is already the honest line, and the real pages sit at zero.
+fn hall_days_are_separate(hp: &crate::parse::HallsPage) -> GateCheck {
+    let dups = &hp.duplicate_hall_rows;
+    let named: Vec<String> = dups
+        .iter()
+        .take(3)
+        .map(|(d, hall)| format!("{hall} under {}", d.full()))
+        .collect();
+    GateCheck {
+        rule: "hall grid day sections".into(),
+        passed: dups.len() < 2,
+        detail: if dups.is_empty() {
+            "no hall appears twice under one day".to_string()
+        } else {
+            format!(
+                "{} hall row(s) repeat within a day ({}{}) — a day line was probably \
+                 not recognised, which files a whole day's bookings under the day above it",
+                dups.len(),
+                named.join(", "),
+                if dups.len() > 3 { ", …" } else { "" }
+            )
+        },
+    }
+}
+
 fn halls_page_completeness(
     tt: &crate::parse::TimetablePage,
     hp: &crate::parse::HallsPage,
