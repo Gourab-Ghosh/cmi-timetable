@@ -475,14 +475,9 @@ impl App {
         if selection.is_empty() {
             domx::replace_query("");
         } else {
-            // Percent-encoded: a course of the user's own can be called
-            // anything, and a code carrying '+', '&', '#' or ',' would come
-            // back from the address bar mangled or truncated on the next
-            // load, silently dropping courses from the selection.
-            domx::replace_query(&format!(
-                "?c={}",
-                js_sys::encode_uri_component(&ttcore::share::selection_to_c_param(&selection))
-            ));
+            // Plain commas between codes, each code percent-encoded — see
+            // `domx::c_param`.
+            domx::replace_query(&format!("?c={}", domx::c_param(&selection)));
         }
     }
 

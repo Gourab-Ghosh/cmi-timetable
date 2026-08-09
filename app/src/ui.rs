@@ -3590,11 +3590,7 @@ fn export_dialog(app: App, scope: Option<String>) -> impl IntoView {
             error.set("Nothing to export — none of these courses has a time yet.".to_string());
             return;
         }
-        // Percent-encoded: a code of the user's own may contain characters
-        // a query string reads as syntax ('+', '&', '#').
-        let c_param = js_sys::encode_uri_component(&ttcore::share::selection_to_c_param(
-            &app.selection.get_untracked(),
-        ));
+        let c_param = domx::c_param(&app.selection.get_untracked());
         let opts = ttcore::ics::IcsOptions {
             range_start: start,
             range_end: end,
@@ -3706,7 +3702,7 @@ fn share_dialog(app: App) -> impl IntoView {
             .collect()
     });
     let custom_codes: Vec<String> = shared_customs.iter().map(|c| c.code.clone()).collect();
-    let c_param = js_sys::encode_uri_component(&ttcore::share::selection_to_c_param(&selection));
+    let c_param = domx::c_param(&selection);
     let plain = domx::share_url(&format!("?c={c_param}"));
     let with_times = domx::share_url(&format!(
         "?c={c_param}&s={}",

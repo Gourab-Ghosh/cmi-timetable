@@ -192,9 +192,16 @@ and no committed mirror (fixtures exist only for tests/e2e seed).
   on the grid the user is looking at (`active_slot_grid` switches on the
   tab) — a cursor holding a raw start time highlights no cell and jumps on
   the first arrow key.
-- `?c=` is percent-encoded everywhere it is written (address bar, share
-  links, the .ics link): a course of the user's own can be called anything,
-  and `+`/`&`/`#`/`,` in a code would come back mangled.
+- **`?c=`: strict on the way out, generous on the way in.** Written by
+  `domx::c_param` — each CODE percent-encoded, joined by PLAIN COMMAS —
+  everywhere it appears (address bar, share links, the .ics link). Encoding
+  the joined string instead (an R23 mistake, fixed in R27) turns every
+  separator into `%2C` and leaves an address bar nobody can read; the comma
+  is legal in a query value, and it is the codes that can carry `+`, `&` or
+  `#`. Read by `share::parse_c_param`, which accepts percent-encoding
+  ANYWHERE: `%2C` between codes still separates (a doubly-encoded link), and
+  each code is percent-decoded byte-wise then read as UTF-8, so a stray `%`
+  is text and a multi-byte character survives.
 - **A list of names is not a sentence.** Anything the app answers with a SET
   renders as a list you can scan, never as `join(", ")` inside a paragraph:
   the free-hall answer leads with the count (`.finder-count`) and lays the
@@ -309,7 +316,7 @@ CARGO_TARGET_DIR=~/.rust-target-e2e cargo test --workspace --features html
 # `__wbindgen_externref_table_alloc`. Emptying it for this build restores
 # the wasm defaults without touching anything outside the repo.
 cd app && RUSTFLAGS="" CARGO_TARGET_DIR=~/.rust-target-e2e trunk build --release --dist dist-e2e
-# e2e (51 tests; self-generates seed via core example, needs cargo on PATH)
+# e2e (52 tests; self-generates seed via core example, needs cargo on PATH)
 cd e2e && DIST_DIR=../app/dist-e2e .venv/bin/python test_app.py
 # ...or just a few, by name fragment
 cd e2e && DIST_DIR=../app/dist-e2e .venv/bin/python test_app.py t44 t45
@@ -327,7 +334,7 @@ regenerates the .ics golden.
 
 ## 6. Current state
 
-- Tests: 66 native + 51/51 e2e green. Meeting removals: `MeetingOverride.to`
+- Tests: 66 native + 52/52 e2e green. Meeting removals: `MeetingOverride.to`
   is `Option<Meeting>` (None = removed; legacy JSON/share payloads still
   load — present meeting ⇒ Some). Out-of-grid times: **all three tables grow
   synthetic `.extra` columns**, each from its own source, all built by the
@@ -890,3 +897,15 @@ regenerates the .ics golden.
   rustfmt-clean; edition 2024 also reorders imports) and clippy again —
   both clean, 66 native + 51/51 e2e still green. Pushed and deployed on the
   user's explicit instruction.
+- **R27 (`?c=` keeps its commas):** user noticed the address bar now read
+  `%2C` between every code. R23 had percent-encoded the JOINED string; it
+  now encodes each CODE and joins with plain commas (`domx::c_param`, used
+  by the address bar, both share links and the .ics link). Reading was
+  generalized on the user's instruction rather than special-cased:
+  `parse_c_param` normalizes an encoded separator (`%2C`/`%2c`, i.e. a
+  doubly-encoded link) and percent-decodes each code byte-wise before
+  reading it as UTF-8 — so `+`, `&`, `#`, spaces and multi-byte characters
+  all come back, a stray `%` is text, and encoded values dedupe against
+  their plain twins. e2e t52 (plain commas in the bar; a `%2C` link opens
+  and is rewritten to the readable form); url_tests cover the decoder.
+  66 native + 52/52 e2e. Pushed and deployed on the user's instruction.

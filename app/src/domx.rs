@@ -112,6 +112,22 @@ pub fn copy_to_clipboard(text: String, done: impl Fn(bool) + 'static) {
     });
 }
 
+/// The `?c=` value for a selection: each CODE percent-encoded, joined by
+/// plain commas.
+///
+/// Encoding the joined string instead turns every separator into `%2C` and
+/// leaves an address bar nobody can read. The comma is legal in a query
+/// value and is ours to use as a separator; it is the codes themselves that
+/// can carry `+`, `&` or `#` — a course of the user's own can be called
+/// anything — and those would come back mangled or truncated.
+pub fn c_param(selection: &[String]) -> String {
+    selection
+        .iter()
+        .map(|code| String::from(js_sys::encode_uri_component(code)))
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
 /// (c, s) query parameters, parsed independently of any router.
 pub fn query_params() -> (Option<String>, Option<String>) {
     let search = window().location().search().unwrap_or_default();

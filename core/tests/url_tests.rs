@@ -32,6 +32,28 @@ fn c_param_is_forgiving() {
     );
     assert!(parse_c_param("").is_empty());
     assert!(parse_c_param(",,,").is_empty());
+    // Percent-encoding is accepted wherever it turns up — links get
+    // rewritten by all sorts of software between one person and the next.
+    // Separators, in either case:
+    assert_eq!(parse_c_param("TOC%2CQCOM"), codes(&["TOC", "QCOM"]));
+    assert_eq!(
+        parse_c_param("TOC%2cQCOM,MFD"),
+        codes(&["TOC", "QCOM", "MFD"])
+    );
+    // …and codes, including the characters a query string reads as syntax:
+    assert_eq!(
+        parse_c_param("A%2BB,C%26D,E%23F"),
+        codes(&["A+B", "C&D", "E#F"])
+    );
+    assert_eq!(parse_c_param("MY%20COURSE"), codes(&["MY COURSE"]));
+    // Multi-byte characters survive as characters, not as broken bytes.
+    assert_eq!(
+        parse_c_param("%E0%AE%A4%E0%AE%AE%E0%AE%BF"),
+        codes(&["தமி"])
+    );
+    // A stray '%' is text, not an error, and encoded values still dedupe
+    // against their plain twins.
+    assert_eq!(parse_c_param("100%,TOC,%2CTOC"), codes(&["100%", "TOC"]));
 }
 
 #[test]

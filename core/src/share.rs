@@ -14,14 +14,62 @@ pub fn selection_to_c_param(selection: &[String]) -> String {
 /// pages and their casing is whatever CMI uses; the app canonicalizes
 /// against the live catalog case-insensitively at lookup time.
 pub fn parse_c_param(raw: &str) -> Vec<String> {
+    // Percent-encoding is accepted anywhere, not just in the shapes this app
+    // writes: links are retyped, quoted, wrapped and re-encoded by mail
+    // clients and chat apps on the way from one person to the next, and the
+    // only thing that matters is that the codes come back.
+    //
+    // Separators first (a `%2C` that survived the browser's own decoding —
+    // i.e. arrived double-encoded — still separates), then each code, so a
+    // code carrying '+', '&' or '#' is restored as it was written.
     let mut out: Vec<String> = Vec::new();
-    for token in raw.split(',') {
-        let code = token.trim().to_string();
-        if !code.is_empty() && !out.iter().any(|c| c.eq_ignore_ascii_case(&code)) {
-            out.push(code);
+    for token in normalize_separators(raw).split(',') {
+        let code = percent_decode(token.trim());
+        let code = code.trim();
+        if !code.is_empty() && !out.iter().any(|c| c.eq_ignore_ascii_case(code)) {
+            out.push(code.to_string());
         }
     }
     out
+}
+
+/// Turn any still-encoded comma into a real one, so it separates.
+fn normalize_separators(raw: &str) -> String {
+    raw.replace("%2C", ",").replace("%2c", ",")
+}
+
+/// Decode `%XX` escapes. Bytes first, then UTF-8, so a multi-byte character
+/// split across escapes ("%E2%82%B9") comes back whole. Anything that isn't
+/// a valid escape is left exactly as it was — a stray '%' is not an error.
+fn percent_decode(s: &str) -> String {
+    if !s.contains('%') {
+        return s.to_string();
+    }
+    let bytes = s.as_bytes();
+    let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%'
+            && i + 2 < bytes.len()
+            && let (Some(hi), Some(lo)) = (hex_val(bytes[i + 1]), hex_val(bytes[i + 2]))
+        {
+            out.push(hi * 16 + lo);
+            i += 3;
+            continue;
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+fn hex_val(b: u8) -> Option<u8> {
+    match b {
+        b'0'..=b'9' => Some(b - b'0'),
+        b'a'..=b'f' => Some(b - b'a' + 10),
+        b'A'..=b'F' => Some(b - b'A' + 10),
+        _ => None,
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

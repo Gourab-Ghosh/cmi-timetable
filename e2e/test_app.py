@@ -2065,6 +2065,25 @@ def t51_changes_are_grouped_by_what_they_did(app):
     assert groups[0].find_element(By.CSS_SELECTOR, "li .btn").text == "Remove"
 
 
+def t52_c_param_keeps_plain_commas(app):
+    """The address bar separates codes with plain commas — %2C between every
+    pair made it unreadable — while each CODE is still encoded. A link whose
+    separators arrived percent-encoded opens exactly the same."""
+    app.boot("/?c=TOC,ISS")
+    app.wait_css("button.chip")
+    assert "?c=TOC,ISS" in app.d.current_url, app.d.current_url
+
+    # The same link with encoded separators: same selection, and the app
+    # rewrites the address bar to the readable form.
+    app.boot("/?c=TOC%2CISS")
+    app.wait_css("button.chip")
+    WebDriverWait(app.d, 5).until(
+        lambda d: "?c=TOC,ISS" in d.current_url,
+        message=f"expected plain commas, got {app.d.current_url}",
+    )
+    assert app.chips("TOC") and app.chips("ISS")
+
+
 TESTS = [
     t01_header_sync_button_and_hidden_dev,
     t02_developer_endpoint_only,
@@ -2117,6 +2136,7 @@ TESTS = [
     t49_halls_day_selection,
     t50_halls_all_days_one_table,
     t51_changes_are_grouped_by_what_they_did,
+    t52_c_param_keeps_plain_commas,
 ]
 
 
