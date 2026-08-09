@@ -1681,10 +1681,25 @@ fn details_dialog(app: App, code: String) -> impl IntoView {
             {(!clashes.is_empty())
                 .then(|| {
                     view! {
-                        <p>
+                        // Each clash on its own line: "TOC × QCOM" run
+                        // together with semicolons was unreadable the moment
+                        // there was more than one.
+                        <p class="row" style="margin:0.6rem 0 0">
                             <span class="badge alarm">"⚠"</span>
-                            {format!(" Clashes with {}", clashes.join("; "))}
+                            <span>
+                                {if clashes.len() == 1 {
+                                    "Clashes with"
+                                } else {
+                                    "Clashes with these"
+                                }}
+                            </span>
                         </p>
+                        <ul class="clash-list">
+                            {clashes
+                                .iter()
+                                .map(|c| view! { <li>{c.clone()}</li> })
+                                .collect_view()}
+                        </ul>
                     }
                 })}
             <div class="actions">

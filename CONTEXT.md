@@ -146,6 +146,12 @@ and no committed mirror (fixtures exist only for tests/e2e seed).
   own courses have all moved away. Keyboard move mode walks days × times, a
   shape the Halls table (rooms down the side) doesn't have, so M there says
   so instead of starting an invisible move.
+- **A list of names is not a sentence.** Anything the app answers with a SET
+  renders as a list you can scan, never as `join(", ")` inside a paragraph:
+  the free-hall answer leads with the count (`.finder-count`) and lays the
+  rooms out as `.hall-list` pills; clashes are one row per collision
+  (`.clash-list`, code × code · when) on both My timetable and the details
+  dialog. Prose is for explanation, not for data (R22).
 - **Hall text is user input, so it is canonicalised on the way in and
   compared loosely on the way out.** `App::canonical_hall` (trim, and adopt
   CMI's spelling when it matches case-insensitively) runs on every save;
@@ -228,7 +234,7 @@ and no committed mirror (fixtures exist only for tests/e2e seed).
 CARGO_TARGET_DIR=~/.rust-target-e2e cargo test --workspace --features html
 # app build for e2e (never plain dist while trunk serve runs)
 cd app && CARGO_TARGET_DIR=~/.rust-target-e2e trunk build --release --dist dist-e2e
-# e2e (47 tests; self-generates seed via core example, needs cargo on PATH)
+# e2e (48 tests; self-generates seed via core example, needs cargo on PATH)
 cd e2e && DIST_DIR=../app/dist-e2e .venv/bin/python test_app.py
 # ...or just a few, by name fragment
 cd e2e && DIST_DIR=../app/dist-e2e .venv/bin/python test_app.py t44 t45
@@ -246,11 +252,15 @@ regenerates the .ics golden.
 
 ## 6. Current state
 
-- Tests: 66 native + 47/47 e2e green. Meeting removals: `MeetingOverride.to`
+- Tests: 66 native + 48/48 e2e green. Meeting removals: `MeetingOverride.to`
   is `Option<Meeting>` (None = removed; legacy JSON/share payloads still
-  load — present meeting ⇒ Some). Out-of-grid times: `display_slot_grid()`
-  (views.rs) = official slots + synthetic `.extra` columns; `column_for`
-  prefers the tightest containing slot; master grid always extra=false.
+  load — present meeting ⇒ Some). Out-of-grid times: **all three tables grow
+  synthetic `.extra` columns**, each from its own source, all built by the
+  shared `push_extra_column`/`columns` pair in state.rs —
+  `display_slot_grid()` (the selection), `master_slot_grid()` (every override
+  destination, R22), `hall_slot_grid()` (hall bookings + placements with a
+  hall). `column_for` prefers the tightest containing slot and still
+  sublabels when the meeting's own time differs from its column.
   Removed meetings produce NO EffMeeting — halls view checks removals
   explicitly (hall_booking_chip) or the official chip would reappear. Print sheet (`@media print` block in
   styles.css + `.print-masthead`/`.print-legend` DOM in views.rs
@@ -709,3 +719,19 @@ regenerates the .ics golden.
   own column + finder agreement) and t47 (the user's exact report);
   `boot()` takes `customs=`; shot 29. 66 native + 47/47 e2e. Committed
   locally, NOT pushed.
+- **R22 (master grid columns + readable output):** user: "the out-of-timetable
+  problem still stays in the master grid — it sets the course to the last
+  column available. Apply the fixes already done in My timetable", then "make
+  the free-hall finder output extremely beautiful and readable, search for all
+  such unreadability". The master grid's clamp was a deliberate R13 choice
+  (keep CMI's columns, sublabel the real time); the user overruled it, so it
+  now grows synthetic `.extra` columns from `master_slot_grid()` (extras come
+  from every override destination, since this grid draws CMI's whole catalog,
+  not the selection). The three grid builders now share `push_extra_column` +
+  `columns` in state.rs, and `perform_drop` resolves against all three.
+  Readability: the free-hall answer became a count + `.hall-list` pills +
+  a right-aligned when-line instead of one comma-separated sentence, and both
+  clash lists (My timetable panel, details dialog) became one row per
+  collision — see the §4 rule. e2e t48 pins the master-grid column; t15/t46/t47
+  now read the finder's list rather than its old sentence; shots 30 and 31.
+  66 native + 48/48 e2e. Committed locally, NOT pushed.

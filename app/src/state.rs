@@ -1185,25 +1185,32 @@ impl App {
         let mut extra: Vec<Slot> = Vec::new();
         for course in self.selected_courses() {
             for e in self.effective_meetings(&course) {
-                let start = e.meeting.slot.start_min;
-                let covered = official
-                    .iter()
-                    .any(|s| s.start_min == start || (start >= s.start_min && start < s.end_min));
-                if covered {
-                    continue;
-                }
-                match extra.iter_mut().find(|s| s.start_min == start) {
-                    // Same start, different lengths: one column, widest
-                    // range; chips whose times differ sublabel themselves.
-                    Some(s) => s.end_min = s.end_min.max(e.meeting.slot.end_min),
-                    None => extra.push(e.meeting.slot),
-                }
+                push_extra_column(&official, &mut extra, e.meeting.slot);
             }
         }
-        let mut all: Vec<(Slot, bool)> = official.into_iter().map(|s| (s, false)).collect();
-        all.extend(extra.into_iter().map(|s| (s, true)));
-        all.sort_by_key(|(s, _)| s.start_min);
-        all
+        columns(official, extra)
+    }
+
+    /// Columns for the Master grid. CMI's slots, plus a synthetic column for
+    /// every out-of-grid time the user has moved something to.
+    ///
+    /// This grid draws CMI's whole catalog, so its extras come from the
+    /// override store rather than the selection: any course on the page can
+    /// carry one, selected or not. It used to keep CMI's columns alone and
+    /// clamp a 19:00 meeting into the 17:00 one with a sublabel — the column
+    /// header then said something that wasn't true, which is the same lie
+    /// `display_slot_grid` was built to stop telling (R22).
+    pub fn master_slot_grid(&self) -> Vec<(Slot, bool)> {
+        let official = self.snapshot.with(|s| s.slot_grid.clone());
+        let mut extra: Vec<Slot> = Vec::new();
+        self.overrides.with(|ovs| {
+            for o in &ovs.items {
+                if let Some(m) = o.to.as_ref() {
+                    push_extra_column(&official, &mut extra, m.slot);
+                }
+            }
+        });
+        columns(official, extra)
     }
 
     /// The day rows shown in grids: Mon–Fri always, Sat/Sun only when data
@@ -1249,19 +1256,7 @@ impl App {
         let official = self.snapshot.with(|s| s.slot_grid.clone());
         let mut extra: Vec<Slot> = Vec::new();
         {
-            let mut add = |slot: Slot| {
-                let start = slot.start_min;
-                if official
-                    .iter()
-                    .any(|s| s.start_min == start || (start >= s.start_min && start < s.end_min))
-                {
-                    return;
-                }
-                match extra.iter_mut().find(|s| s.start_min == start) {
-                    Some(s) => s.end_min = s.end_min.max(slot.end_min),
-                    None => extra.push(slot),
-                }
-            };
+            let mut add = |slot: Slot| push_extra_column(&official, &mut extra, slot);
             self.snapshot
                 .with(|s| s.hall_bookings.iter().for_each(|b| add(b.slot)));
             // Only placements WITH a hall can land in this table.
@@ -1281,10 +1276,7 @@ impl App {
                 }
             }
         }
-        let mut all: Vec<(Slot, bool)> = official.into_iter().map(|s| (s, false)).collect();
-        all.extend(extra.into_iter().map(|s| (s, true)));
-        all.sort_by_key(|(s, _)| s.start_min);
-        all
+        columns(official, extra)
     }
 
     /// The hall as it should be STORED: trimmed, and spelled the way CMI (or
@@ -1413,6 +1405,34 @@ impl App {
     pub fn has_data(&self) -> bool {
         self.snapshot.with(|s| s.has_data())
     }
+}
+
+/// Note a time that CMI's slot grid has no room for, so the table can grow a
+/// column of its own for it. Times already covered — exactly, or by falling
+/// inside an official slot — are left alone.
+fn push_extra_column(official: &[Slot], extra: &mut Vec<Slot>, slot: Slot) {
+    let start = slot.start_min;
+    if official
+        .iter()
+        .any(|s| s.start_min == start || (start >= s.start_min && start < s.end_min))
+    {
+        return;
+    }
+    match extra.iter_mut().find(|s| s.start_min == start) {
+        // Same start, different lengths: one column spanning the widest
+        // range; chips whose own times differ sublabel themselves.
+        Some(s) => s.end_min = s.end_min.max(slot.end_min),
+        None => extra.push(slot),
+    }
+}
+
+/// CMI's columns first, then the synthetic ones, in time order. The flag is
+/// "this column is not part of CMI's grid" — every table tints those.
+fn columns(official: Vec<Slot>, extra: Vec<Slot>) -> Vec<(Slot, bool)> {
+    let mut all: Vec<(Slot, bool)> = official.into_iter().map(|s| (s, false)).collect();
+    all.extend(extra.into_iter().map(|s| (s, true)));
+    all.sort_by_key(|(s, _)| s.start_min);
+    all
 }
 
 /// Overrides layered onto official meetings (usable outside a reactive

@@ -1091,6 +1091,72 @@ details.facet .menu .menu-empty { margin: 0.2rem 0 0; }
 .dialog .fieldrow > select,
 .dialog .fieldrow .hall-pick > select { min-width: 12rem; }
 .dialog .dialog-lede { margin: -0.25rem 0 0.9rem; }
+/* Free-hall answer: the count leads, then the rooms as a scannable list.
+   A sentence of fifteen comma-separated room names is not readable. */
+.finder-result { margin-top: 0.85rem; }
+.finder-head {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  margin: 0;
+  font-size: 0.98rem;
+}
+.finder-count {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  font-size: 1.15rem;
+  color: var(--ok);
+  background: var(--ok-wash);
+  border-radius: var(--r-sm);
+  padding: 0.05rem 0.45rem;
+}
+.finder-count.none { color: var(--muted); background: var(--surface-2); }
+.finder-when {
+  margin-left: auto;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 0.82rem;
+  white-space: nowrap;
+}
+.hall-list {
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  padding: 0;
+  margin: 0.6rem 0 0;
+}
+.hall-list li {
+  border: 1px solid color-mix(in srgb, var(--ok) 30%, var(--line));
+  background: var(--ok-wash);
+  color: var(--ok);
+  border-radius: 999px;
+  padding: 0.18rem 0.65rem;
+  font-size: 0.84rem;
+  font-weight: 600;
+}
+.finder-note { margin: 0.55rem 0 0; }
+
+/* Clash lists: one line per collision, not a run-on sentence. */
+.clash-list { list-style: none; padding: 0; margin: 0.4rem 0 0; }
+.clash-list li {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  padding: 0.3rem 0;
+  border-top: 1px solid var(--line);
+}
+.clash-list li:first-child { border-top: 0; }
+.clash-list .when {
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+}
+.clash-list .x { color: var(--alarm); font-weight: 700; }
+
 /* Hall chooser: the dropdown, and the free-text box that "Other place…"
    reveals beside it. Wraps rather than squeezing the two together. */
 .hall-pick {

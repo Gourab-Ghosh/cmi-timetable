@@ -494,21 +494,32 @@ fn my_timetable(app: App) -> impl IntoView {
                                     <span class="badge alarm">"⚠"</span>
                                     " Clashes"
                                 </h3>
-                                <ul>
+                                // One row per collision: the two codes, then
+                                // when. Reads as a table you scan, not a
+                                // paragraph you parse.
+                                <ul class="clash-list">
                                     {clashes
                                         .into_iter()
                                         .map(|c| {
+                                            let times = if c.a_slot == c.b_slot {
+                                                c.a_slot.label()
+                                            } else {
+                                                format!(
+                                                    "{} / {}",
+                                                    c.a_slot.label(),
+                                                    c.b_slot.label(),
+                                                )
+                                            };
                                             view! {
                                                 <li>
                                                     <span class="mono">{c.a.clone()}</span>
-                                                    " and "
+                                                    <span class="x" aria-label="clashes with">
+                                                        "×"
+                                                    </span>
                                                     <span class="mono">{c.b.clone()}</span>
-                                                    {format!(
-                                                        " overlap on {} ({} / {})",
-                                                        c.day.full(),
-                                                        c.a_slot.label(),
-                                                        c.b_slot.label(),
-                                                    )}
+                                                    <span class="when">
+                                                        {format!("{} · {times}", c.day.full())}
+                                                    </span>
                                                 </li>
                                             }
                                         })
@@ -1144,7 +1155,11 @@ fn master_grid(app: App) -> impl IntoView {
     let count = Signal::derive(move || filtered.get().len());
 
     let cell_chips = move |day: Day, slot: Slot| -> Vec<AnyView> {
-        let slot_grid = app.snapshot.with(|s| s.slot_grid.clone());
+        // The display columns, not CMI's raw grid: a meeting moved to 19:00
+        // gets a column of its own here exactly as it does on My timetable,
+        // instead of being clamped into the 17:00 one.
+        let slot_grid: Vec<Slot> =
+            app.master_slot_grid().into_iter().map(|(s, _)| s).collect();
         filtered
             .get()
             .into_iter()
@@ -1162,9 +1177,10 @@ fn master_grid(app: App) -> impl IntoView {
                     })
                     .map(|e| {
                         let info_code = course.code.clone();
-                        // The master grid keeps CMI's official columns, so a
-                        // custom time lands in the nearest one — say the real
-                        // time on the chip rather than let the column lie.
+                        // Out-of-grid times get their own column, but a
+                        // meeting can still borrow a column it merely falls
+                        // inside (09:30 in the 09:10 slot) — say the real
+                        // time rather than let the header speak for it.
                         let sublabel =
                             (e.meeting.slot != slot).then(|| e.meeting.slot.label());
                         view! {
@@ -1242,10 +1258,15 @@ fn master_grid(app: App) -> impl IntoView {
                         <tr>
                             <th class="rowhead corner" scope="col"></th>
                             {move || {
-                                app.snapshot
-                                    .with(|s| s.slot_grid.clone())
+                                app.master_slot_grid()
                                     .into_iter()
-                                    .map(|s| view! { <th scope="col">{s.label()}</th> })
+                                    .map(|(s, extra)| {
+                                        view! {
+                                            <th scope="col" class:extra=extra>
+                                                {s.label()}
+                                            </th>
+                                        }
+                                    })
                                     .collect_view()
                             }}
                         </tr>
@@ -1258,19 +1279,14 @@ fn master_grid(app: App) -> impl IntoView {
                                     view! {
                                         <tr>
                                             <th class="rowhead" scope="row">{day.short()}</th>
-                                            {app.snapshot
-                                                .with(|s| s.slot_grid.clone())
+                                            {app.master_slot_grid()
                                                 .into_iter()
-                                                .map(|slot| {
+                                                .map(|(slot, extra)| {
                                                     grid_cell(
                                                             app,
                                                             day,
                                                             slot,
-                                                            // The master grid keeps CMI's
-                                                            // official columns; custom times
-                                                            // clamp to the nearest column and
-                                                            // sublabel their real time.
-                                                            false,
+                                                            extra,
                                                             view! { {move || cell_chips(day, slot)} },
                                                         )
                                                         .into_any()
@@ -2045,33 +2061,62 @@ fn halls_view(app: App) -> impl IntoView {
                     // they are never offered here — say so rather than let
                     // the list look incomplete.
                     let own = app.user_halls();
+                    let n = free.len();
                     Some(view! {
-                        <p style="margin-top:0.6rem">
-                            {if free.is_empty() {
-                                format!("No free halls on {} {slot_label}.", day.full())
-                            } else {
-                                format!(
-                                    "Free on {} {slot_label}: {}",
-                                    day.full(),
-                                    free.join(", "),
-                                )
-                            }}
-                        </p>
-                        {(!own.is_empty())
-                            .then(|| {
-                                view! {
-                                    <p class="muted small" style="margin:0.3rem 0 0">
-                                        {format!(
-                                            "Your own place{} ({}) {} not part of CMI's \
-                                             allocation, so this can't say whether {} free.",
-                                            if own.len() == 1 { "" } else { "s" },
-                                            own.join(", "),
-                                            if own.len() == 1 { "is" } else { "are" },
-                                            if own.len() == 1 { "it is" } else { "they are" },
-                                        )}
-                                    </p>
-                                }
-                            })}
+                        // The answer first, as a number and a heading, then
+                        // the halls themselves as things you can scan down —
+                        // a comma-separated sentence of fifteen room names is
+                        // not something anyone reads.
+                        <div class="finder-result" aria-live="polite">
+                            <p class="finder-head">
+                                <span class="finder-count" class:none=n == 0>
+                                    {if n == 0 { "none".to_string() } else { n.to_string() }}
+                                </span>
+                                <span>
+                                    {if n == 0 {
+                                        "free — every hall CMI publishes is booked".to_string()
+                                    } else if n == 1 {
+                                        "hall free".to_string()
+                                    } else {
+                                        "halls free".to_string()
+                                    }}
+                                </span>
+                                <span class="finder-when">
+                                    {format!("{} · {slot_label}", day.full())}
+                                </span>
+                            </p>
+                            {(n > 0)
+                                .then(|| {
+                                    view! {
+                                        <ul class="hall-list">
+                                            {free
+                                                .iter()
+                                                .map(|h| view! { <li>{h.clone()}</li> })
+                                                .collect_view()}
+                                        </ul>
+                                    }
+                                })}
+                            {(!own.is_empty())
+                                .then(|| {
+                                    view! {
+                                        <p class="muted small finder-note">
+                                            {if own.len() == 1 {
+                                                format!(
+                                                    "“{}” is a place of your own — CMI's \
+                                                     allocation says nothing about it.",
+                                                    own[0],
+                                                )
+                                            } else {
+                                                format!(
+                                                    "Your own places ({}) aren't in CMI's \
+                                                     allocation, so it says nothing about them.",
+                                                    own.join(", "),
+                                                )
+                                            }}
+                                        </p>
+                                    }
+                                })}
+                        </div>
                     })
                 }}
             </div>

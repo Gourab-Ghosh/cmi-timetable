@@ -157,6 +157,7 @@ pub fn perform_drop(
     let Some(slot) = app
         .display_slot_grid()
         .into_iter()
+        .chain(app.master_slot_grid())
         .chain(app.hall_slot_grid())
         .map(|(s, _)| s)
         .find(|s| s.start_min == slot_start)

@@ -339,6 +339,40 @@ time.sleep(0.5)
 shot("26-light-shadow-note")
 d.find_element(By.XPATH, "//button[normalize-space()='Close']").click()
 
+# The free-hall answer, and the master grid with an evening column of its
+# own (a course moved to 18:30 must not clamp into CMI's last slot).
+EVENING = {
+    "next_id": 1,
+    "items": [{
+        "id": 0, "course": "TOC",
+        "base": {"day": "Tue", "slot": {"start_min": 550, "end_min": 625},
+                 "hall": "Lecture Hall 803", "temp_booking": False},
+        "to": {"day": "Tue", "slot": {"start_min": 1110, "end_min": 1185},
+               "hall": "Lecture Hall 803", "temp_booking": False},
+        "created_at": 1754000000000.0}],
+    "credits": [],
+}
+boot("Light", "Halls", selection=CUSTOM_SEL, customs=CUSTOMS,
+     prefs_extra={"halls_day": "Tue"})
+Select(d.find_element(By.CSS_SELECTOR, "select[aria-label='Day']")).select_by_value("1")
+Select(
+    d.find_element(By.CSS_SELECTOR, "select[aria-label='Time slot']")
+).select_by_value("840")
+time.sleep(0.4)
+d.execute_script(
+    "document.querySelector('.finder-result').scrollIntoView({block:'center'});"
+)
+time.sleep(0.3)
+shot("30-light-free-hall-answer")
+
+boot("Light", "MasterGrid", selection=["TOC"])
+d.execute_script(
+    "localStorage.setItem('cmitt.v1.overrides', arguments[0]);", json.dumps(EVENING)
+)
+d.refresh()
+time.sleep(1.2)
+shot("31-light-master-grid-extra-column")
+
 # The edit-meeting dialog: day, time and the hall dropdown — and the same
 # dialog with "Other place…" chosen, which opens the free-text box.
 boot("Light", "MyTimetable", selection=["TOC"])

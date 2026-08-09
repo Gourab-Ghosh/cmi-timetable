@@ -479,17 +479,18 @@ def t15_halls_free_finder(app):
     section = app.wait_css("section[aria-label='Lecture halls']")
     day_sel = section.find_element(By.CSS_SELECTOR, "select[aria-label='Day']")
     slot_sel = section.find_element(By.CSS_SELECTOR, "select[aria-label='Time slot']")
-    # Slot picked but no day: no result line yet.
+    # Slot picked but no day: no answer yet.
     slot_sel.find_element(By.CSS_SELECTOR, "option[value='840']").click()
-    assert "Free on" not in section.text
+    assert not app.css_all(".finder-result")
     day_sel.find_element(By.CSS_SELECTOR, "option[value='1']").click()  # Tuesday
-    WebDriverWait(app.d, 10).until(lambda d: "Free on Tuesday" in app.css(
-        "section[aria-label='Lecture halls']").text)
-    text = app.css("section[aria-label='Lecture halls']").text
-    # Tue 14:00: Seminar Hall is free, Lecture Hall 6 is not (LIEA).
-    line = next(l for l in text.splitlines() if l.startswith("Free on Tuesday"))
-    assert "Seminar Hall" in line, line
-    assert "Lecture Hall 6" not in line, line
+    app.wait_css(".finder-result")
+    # Tue 14:00: Seminar Hall is free, Lecture Hall 6 is not (LIEA). The
+    # answer is a list of rooms, one chip each, led by the count.
+    free = [li.text for li in app.css_all(".hall-list li")]
+    assert "Seminar Hall" in free, free
+    assert "Lecture Hall 6" not in free, free
+    assert app.css(".finder-count").text == str(len(free)), free
+    assert "Tuesday" in app.css(".finder-when").text
 
 
 def t16_facet_menus_close_each_other(app):
@@ -1823,14 +1824,11 @@ def t46_halls_show_your_own_places_and_times(app):
     section.find_element(
         By.CSS_SELECTOR, "select[aria-label='Day'] option[value='0']"
     ).click()  # Monday
-    WebDriverWait(app.d, 10).until(
-        lambda d: "Free on Monday" in app.css(
-            "section[aria-label='Lecture halls']").text
-    )
-    text = app.css("section[aria-label='Lecture halls']").text
-    assert "Room 1002" in text.split("Free on Monday")[1].split("\n")[1], text
-    assert "Room 1002" not in text.split("Free on Monday")[1].split("\n")[0], \
+    app.wait_css(".finder-result")
+    assert "Room 1002" not in [li.text for li in app.css_all(".hall-list li")], \
         "a place CMI doesn't allocate must not be offered as a free hall"
+    assert "Room 1002" in app.css(".finder-note").text, \
+        "…but the page must say why it isn't there"
 
 
 def t47_moved_out_of_grid_meeting_keeps_its_hall_row(app):
@@ -1868,16 +1866,37 @@ def t47_moved_out_of_grid_meeting_keeps_its_hall_row(app):
     section.find_element(
         By.CSS_SELECTOR, "select[aria-label='Day'] option[value='1']"
     ).click()  # Tuesday
-    WebDriverWait(app.d, 10).until(
-        lambda d: "Free on Tuesday" in app.css(
-            "section[aria-label='Lecture halls']").text
-    )
-    line = next(
-        l for l in app.css("section[aria-label='Lecture halls']").text.splitlines()
-        if l.startswith("Free on Tuesday")
-    )
-    assert "Lecture Hall 803" in line, \
-        f"the hall TOC moved out of is free now, and the grid already says so: {line}"
+    app.wait_css(".finder-result")
+    free = [li.text for li in app.css_all(".hall-list li")]
+    assert "Lecture Hall 803" in free, \
+        f"the hall TOC moved out of is free now, and the grid already says so: {free}"
+
+
+def t48_master_grid_extra_column(app):
+    """The master grid grows its own column for a time outside CMI's hours,
+    like My timetable and the Halls tab. It used to clamp such a meeting into
+    CMI's nearest slot, so the column header said something untrue."""
+    evening = {
+        "next_id": 1,
+        "items": [{
+            "id": 0, "course": "TOC",
+            "base": {"day": "Tue", "slot": {"start_min": 550, "end_min": 625},
+                     "hall": "Lecture Hall 803", "temp_booking": False},
+            "to": {"day": "Tue", "slot": {"start_min": 1110, "end_min": 1185},
+                   "hall": "Lecture Hall 803", "temp_booking": False},
+            "created_at": 1754000000000.0}],
+        "credits": [],
+    }
+    app.boot("/", selection=["TOC"], overrides=evening)
+    app.open_tab("Master grid")
+    grid = "section[aria-label='Master grid']"
+    app.wait_css(grid)
+    extra = app.css(f"{grid} thead th.extra")
+    assert "18:30" in extra.text, extra.text
+    assert app.chips("TOC", f"{grid} td[data-day='1'][data-slot='1110']"), \
+        "the moved meeting belongs in its own column"
+    assert not app.chips("TOC", f"{grid} td[data-day='1'][data-slot='1020']"), \
+        "and must not be clamped into CMI's last slot (17:00–18:15)"
 
 
 TESTS = [
@@ -1928,6 +1947,7 @@ TESTS = [
     t45_edit_meeting_form_survives_a_sync,
     t46_halls_show_your_own_places_and_times,
     t47_moved_out_of_grid_meeting_keeps_its_hall_row,
+    t48_master_grid_extra_column,
 ]
 
 
