@@ -1292,3 +1292,37 @@ Verification: **94 native + 61/61 e2e**, `cargo fmt --all` and
 `cargo clippy --workspace --features html --all-targets -W
 clippy::redundant_clone` clean. NOT pushed and NOT deployed — the standing
 rule holds until the user says otherwise.
+
+### R31 — "push and deploy now"
+
+The standing "don't push or deploy until I say" rule was lifted, so the
+three waiting commits (`3673c36`, `9d54824`, `a0e2f29`) went out with
+`./deploy.sh --push`. No code changed this round.
+
+What the release actually did, in order: pushed `main` to origin; built
+inside a throwaway `rust:1` container; ran `cargo test --workspace`, which
+came back **94 passed / 0 failed** — the same count as the host, so the
+suite does not depend on anything local to this machine; built the release
+bundle with Trunk in 33s at public URL `/cmi-timetable/`; wrote the dist as
+a single orphan commit on `gh-pages` (`33910e0`); then polled the live URL
+until it served this build's wasm fingerprint.
+
+The publish line read `published a0e2f29` with no `+dirty` suffix, which is
+the check worth keeping: it means the deployed tree is exactly the committed
+one, not a working copy with stray edits baked in.
+
+Verified live afterwards, independently of the script: `origin/main ==
+HEAD` (0 ahead), and every asset 200s at
+<https://gourab-ghosh.github.io/cmi-timetable/> — index, 404, css, js, the
+1.46 MB wasm, and all three mirror files (`data/latest.json`,
+`data/timetable.php.html`, `data/lecturehalls.php.html`) at byte sizes
+matching the repo. The deployed `index.html` references its assets as
+`/cmi-timetable/…`, so the Pages sub-path is baked in correctly.
+
+One thing left alone deliberately: `--sync` was NOT passed, so the mirror
+still carries the snapshot generated 2026-08-06 (`August--November 2026`).
+That is the last-resort tier only — the app tries CMI directly, then the
+proxy, before it ever reads the mirror — so a slightly old mirror costs
+nothing while CMI is reachable. Refreshing it is `./deploy.sh --sync`,
+which re-fetches both pages, re-runs the gate, and commits the mirror as
+data before building.
