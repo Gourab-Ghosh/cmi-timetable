@@ -34,7 +34,7 @@
   --accent2: #8a46c8;
   --accent2-wash: #f3ebfb;
   --grad: linear-gradient(120deg, var(--accent), var(--accent2));
-  --alarm: #c22f41; /* reserved EXCLUSIVELY for clashes */
+  --alarm: #c22f41; /* clashes, and anything that deletes */
   --warn: #93700a;
 
   --chip-sat: 55%;
@@ -75,7 +75,7 @@
   --accent2: #c39df2;
   --accent2-wash: #2c2440;
   --grad: linear-gradient(120deg, var(--accent), var(--accent2));
-  --alarm: #ff6b7a; /* reserved EXCLUSIVELY for clashes */
+  --alarm: #ff6b7a; /* clashes, and anything that deletes */
   --warn: #e0bc5f;
 
   --chip-sat: 40%;
@@ -272,17 +272,20 @@ button {
   border-color: var(--accent-strong);
   box-shadow: var(--shadow-md);
 }
-/* Destructive row actions are QUIET at rest — alarm red belongs to
-   clashes, and six red buttons per screen drowned that signal. The red
-   shows on hover/focus (intent), and stands only in the danger zone. */
-.btn.danger { color: var(--muted); }
+/* Anything that deletes or removes wears red, everywhere and at rest — the
+   same red as "Delete all app data", so a destructive button is recognised
+   before it is read. Red text and a tinted border while it sits there; the
+   wash arrives on hover, when you are about to press it. It can't be
+   confused with a clash: those are filled badges, never buttons. */
+.btn.danger {
+  color: var(--alarm);
+  border-color: color-mix(in srgb, var(--alarm) 32%, var(--line));
+}
 .btn.danger:hover:not(:disabled),
 .btn.danger:focus-visible {
-  color: var(--alarm);
   border-color: var(--alarm);
   background: var(--alarm-wash);
 }
-.danger-zone .btn.danger { color: var(--alarm); }
 .btn.small { padding: 0.22rem 0.55rem; min-height: 28px; font-size: 0.8rem; }
 /* Quiet accent: for repeated constructive actions (catalog Add) so the one
    filled accent stays rare. */
@@ -804,20 +807,6 @@ table.tt td.kbd-cursor { box-shadow: inset 0 0 0 2px var(--accent); }
   padding-top: 0.55rem;
   border-top: 1px solid var(--line);
 }
-.btn.quiet-danger { color: var(--alarm); border-color: var(--line); }
-.btn.quiet-danger:hover {
-  border-color: color-mix(in srgb, var(--alarm) 45%, var(--line));
-  background: color-mix(in srgb, var(--alarm) 8%, var(--surface));
-}
-/* Row actions are always available but never the loudest thing in a list:
-   they come up to full strength on hover or keyboard focus, and stay full
-   on touch, where there is no hover to reveal them. */
-ul.meetings .acts { opacity: 0.62; transition: opacity 120ms var(--ease); }
-ul.meetings li:hover .acts,
-ul.meetings li:focus-within .acts { opacity: 1; }
-@media (pointer: coarse) {
-  ul.meetings .acts { opacity: 1; }
-}
 
 .card:hover {
   border-color: var(--line-strong);
@@ -834,9 +823,11 @@ ul.meetings li:focus-within .acts { opacity: 1; }
    five sentences of differing length; anything extra to say about a row
    drops onto a full-width line underneath it. */
 ul.meetings { margin: 0.45rem 0 0; padding: 0; list-style: none; }
+/* WHEN and WHERE, and nothing else: a meeting line is something you read.
+   Changing one is the course editor's job. */
 ul.meetings li {
   display: grid;
-  grid-template-columns: max-content minmax(0, 1fr) max-content;
+  grid-template-columns: max-content minmax(0, 1fr);
   align-items: center;
   gap: 0.3rem 0.8rem;
   padding: 0.36rem 0;
@@ -863,19 +854,10 @@ ul.meetings .where {
 ul.meetings .where .hall { overflow-wrap: anywhere; }
 /* No room yet is a fact about the room, so it reads as one — not as a name. */
 ul.meetings .where .hall.tba { color: var(--muted); font-style: italic; }
-ul.meetings .acts {
-  grid-column: 3;
-  justify-self: end;
-  display: flex;
-  gap: 0.35rem;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-}
 ul.meetings .replaces { grid-column: 1 / -1; }
 @media (max-width: 640px) {
   ul.meetings li { grid-template-columns: minmax(0, 1fr); }
-  ul.meetings .when, ul.meetings .where, ul.meetings .acts { grid-column: 1; }
-  ul.meetings .acts { justify-self: start; justify-content: flex-start; }
+  ul.meetings .when, ul.meetings .where { grid-column: 1; }
 }
 
 /* ==========================================================================
@@ -914,13 +896,16 @@ ul.meetings .replaces { grid-column: 1 / -1; }
    text so "Tue 09:10 → Wed 17:00" copies, and reads to a screen reader, as
    one line rather than three. Spacing comes from the arrow's margins. */
 .delta { min-width: 0; }
-.delta .was, .replaces .was {
+/* One grammar for a change means one rule for it: a value being replaced
+   reads the same in the changes list, on a meeting line, in the editor's
+   "CMI: …" note and in its list of meetings you struck out. */
+.was {
   color: var(--muted);
   font-size: 0.82rem;
 }
 /* Nothing replaces it — it is simply gone, and a line through says that
    faster than any wording. */
-.delta .was.gone, .replaces .was.gone { text-decoration: line-through; }
+.was.gone { text-decoration: line-through; }
 .delta .arrow { color: var(--muted); font-size: 0.8rem; }
 .delta .now {
   color: var(--text);
@@ -941,6 +926,27 @@ ul.meetings .replaces { grid-column: 1 / -1; }
   min-width: 0;
 }
 .replaces { color: var(--muted); }
+
+/* Credits, in the details dialog: the number is the answer, everything
+   beside it is provenance. Deliberately NOT a flex row — the parts are
+   separated by real spaces so the line copies as one sentence. */
+.cr-line .cr-value { font-weight: 650; font-variant-numeric: tabular-nums; }
+
+/* Courses missing from the catalog because you deleted them. A shorter
+   catalog than CMI's has to explain itself where the absence is felt. */
+.deleted-note {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+  margin: 0 0 0.6rem;
+  padding: 0.4rem 0.65rem;
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--r-sm);
+  background: var(--surface-2);
+  font-size: 0.84rem;
+  color: var(--muted);
+}
 
 /* One group per kind of change, headed by the kind and how many there are:
    twenty changes become four short lists you can pick from. */
@@ -1325,7 +1331,11 @@ details.facet .menu .menu-empty { margin: 0.2rem 0 0; }
   flex-wrap: wrap;
 }
 .dialog .fieldrow { display: flex; gap: 0.6rem; flex-wrap: wrap; margin: 0.5rem 0; align-items: center; }
-.dialog .fieldrow label { min-width: 6.5rem; color: var(--muted); font-size: 0.86rem; }
+/* `.fieldlabel` is the same thing as a `label` for a row whose control
+   isn't one element (the segmented credits) or isn't a control at all
+   (CMI's own name and code) — so it has to look the same. */
+.dialog .fieldrow label,
+.dialog .fieldrow .fieldlabel { min-width: 6.5rem; color: var(--muted); font-size: 0.86rem; }
 /* One width for the stacked dropdowns of a form row (Day / Time / Hall),
    so their edges line up instead of stepping in and out. */
 .dialog .fieldrow > select,
@@ -1729,8 +1739,8 @@ pre.devpre {
 }
 
 /* The create/edit form. */
-.custom-form .form-lede { margin: -0.4rem 0 0.8rem; }
-.custom-form .fieldrow { flex-wrap: wrap; }
+.course-form .form-lede { margin: -0.4rem 0 0.8rem; }
+.course-form .fieldrow { flex-wrap: wrap; }
 /* Phones: labels take their own line so every control starts at the same
    left edge. Without this, rows whose input happens to fit stay inline
    while wider ones wrap, and the form reads as ragged. Controls keep
@@ -1742,13 +1752,13 @@ pre.devpre {
     min-width: 0;
   }
 }
-.custom-form .code-input {
+.course-form .code-input {
   font-family: var(--font-mono);
   text-transform: uppercase;
   width: 9rem;
 }
-.custom-form .meetings-title { margin: 0.9rem 0 0.45rem; font-size: 0.95rem; }
-.custom-form .meeting-draft {
+.course-form .meetings-title { margin: 0.9rem 0 0.45rem; font-size: 0.95rem; }
+.course-form .meeting-draft {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -1759,26 +1769,56 @@ pre.devpre {
   padding: 0.5rem 0.6rem;
   margin-bottom: 0.5rem;
 }
-.custom-form .meeting-draft .timepair {
+.course-form .meeting-draft .timepair {
   display: inline-flex;
   align-items: center;
   gap: 0.3rem;
 }
-.custom-form .meeting-draft .hall-pick { flex: 1; min-width: 11rem; }
-.custom-form .meeting-draft .btn.icon { margin-left: auto; }
+.course-form .meeting-draft .hall-pick { flex: 1; min-width: 11rem; }
+.course-form .meeting-draft .btn.icon { margin-left: auto; }
+/* What this row replaces, and one click back to it. Its own line inside the
+   meeting box, and only there while the row actually differs — an untouched
+   row has nothing to say. */
+.course-form .row-origin {
+  flex-basis: 100%;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+  margin: 0;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+/* CMI's own fields: shown so the form is about a course you recognise, and
+   plainly not a control. */
+.course-form .fieldrow.ro { gap: 0.5rem; align-items: baseline; }
+.course-form .ro-value { font-weight: 550; }
+.course-form .ro-value.mono { font-family: var(--font-mono); }
+/* Meetings you struck out — nothing on the timetable stands for them, so the
+   editor is the only place they can come back from. */
+.course-form ul.removed-list { margin: 0; padding: 0; list-style: none; }
+.course-form ul.removed-list li {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  padding: 0.32rem 0;
+  font-size: 0.86rem;
+}
+.course-form ul.removed-list li + li { border-top: 1px dashed var(--line); }
 /* The clash line owns its own row inside the meeting box. */
-.custom-form .clash-note {
+.course-form .clash-note {
   flex-basis: 100%;
   margin: 0;
   font-size: 0.82rem;
   color: var(--alarm);
 }
-.custom-form .clash-note:empty { display: none; }
+.course-form .clash-note:empty { display: none; }
 /* Validation errors live in a permanent region so screen readers announce
    them; empty means no error, and it takes no space. */
 .form-error { color: var(--warn); margin: 0.5rem 0 0; }
 .form-error:empty { display: none; }
-.custom-form #cc-add-meeting { margin-top: 0.1rem; }
+.course-form #ce-add-meeting { margin-top: 0.1rem; }
 
 /* "CMI lists this code too" — a decision point, gently boxed. */
 .shadow-note {

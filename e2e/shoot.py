@@ -327,8 +327,8 @@ shot("19-dark-my-courses-custom")
 boot("Light", "MyCourses", selection=CUSTOM_SEL, customs=CUSTOMS)
 d.find_element(By.CSS_SELECTOR, ".add-own-card").click()
 time.sleep(0.4)
-d.find_element(By.CSS_SELECTOR, "#cc-name").send_keys("Music lesson")
-d.find_element(By.CSS_SELECTOR, "#cc-add-meeting").click()
+d.find_element(By.CSS_SELECTOR, "#ce-name").send_keys("Music lesson")
+d.find_element(By.CSS_SELECTOR, "#ce-add-meeting").click()
 time.sleep(0.3)
 d.find_element(
     By.CSS_SELECTOR, ".meeting-draft select[aria-label='Time'] option[value='custom']"
@@ -340,14 +340,16 @@ d.find_element(By.XPATH, "//button[normalize-space()='Cancel']").click()
 boot("Dark", "MyCourses", selection=CUSTOM_SEL, customs=CUSTOMS)
 d.find_element(By.CSS_SELECTOR, ".add-own-card").click()
 time.sleep(0.4)
-d.find_element(By.CSS_SELECTOR, "#cc-add-meeting").click()
+d.find_element(By.CSS_SELECTOR, "#ce-add-meeting").click()
 time.sleep(0.4)
 shot("21-dark-custom-form")
 d.find_element(By.XPATH, "//button[normalize-space()='Cancel']").click()
 
 # Edit mode: prefilled rows + the quiet-danger delete in the footer.
 boot("Light", "MyCourses", selection=CUSTOM_SEL, customs=CUSTOMS)
-d.find_element(By.XPATH, "//button[normalize-space()='Edit course']").click()
+d.find_element(By.XPATH,
+    "//div[contains(@class,'card')][.//span[normalize-space()='Custom']]"
+    "//button[normalize-space()='Edit course']").click()
 time.sleep(0.4)
 shot("22-light-custom-form-edit")
 d.find_element(By.XPATH, "//button[normalize-space()='Cancel']").click()
@@ -422,23 +424,56 @@ shot("31-light-master-grid-extra-column")
 
 # The edit-meeting dialog: day, time and the hall dropdown — and the same
 # dialog with "Other place…" chosen, which opens the free-text box.
+# The one editor, on one of CMI's courses: their name and code stated, their
+# times and credits editable, and a row that says what it replaced.
 boot("Light", "MyTimetable", selection=["TOC"])
 d.find_element(
     By.CSS_SELECTOR, "td[data-day='1'][data-slot='550'] button.chip"
 ).click()
 time.sleep(0.4)
-next(
-    r for r in d.find_elements(By.CSS_SELECTOR, ".dialog ul.meetings li")
-    if "Tue" in r.text
-).find_element(By.XPATH, ".//button[normalize-space()='Edit']").click()
+d.find_element(
+    By.XPATH, "//div[@class='dialog']//button[normalize-space()='Edit this course']"
+).click()
 time.sleep(0.4)
-shot("27-light-edit-meeting")
-Select(d.find_element(By.CSS_SELECTOR, "#em-hall")).select_by_visible_text(
+Select(d.find_element(By.CSS_SELECTOR, "#ce-day-0")).select_by_visible_text(
+    "Wednesday"
+)
+time.sleep(0.4)
+shot("27-light-course-editor")
+Select(d.find_element(By.CSS_SELECTOR, "#ce-hall-0")).select_by_visible_text(
     "Other place…"
 )
 time.sleep(0.3)
-shot("28-light-edit-meeting-other-place")
+shot("28-light-course-editor-other-place")
 d.find_element(By.XPATH, "//button[normalize-space()='Cancel']").click()
+
+# The details dialog of one of CMI's courses: read-only meetings, one Edit,
+# and Delete in red.
+boot("Light", "MyTimetable", selection=["TOC"])
+d.find_element(
+    By.CSS_SELECTOR, "td[data-day='1'][data-slot='550'] button.chip"
+).click()
+time.sleep(0.5)
+shot("36-light-details-one-edit-one-delete")
+
+# Your changes with whole courses in it: one of CMI's deleted, one of your
+# own added, alongside the meeting-level changes.
+boot("Light", "MyTimetable", selection=["TOC", "ISS"], customs=CUSTOMS,
+     overrides=dict(MANY_CHANGES,
+                    hidden=[{"course": "QCOM", "created_at": 1754000005000.0}]))
+d.execute_script(
+    "document.querySelector(\"[data-testid='your-changes']\")"
+    ".scrollIntoView({block: 'center'});"
+)
+time.sleep(0.4)
+shot("37-light-changes-with-courses")
+
+# The catalog owning up to what you took out of it.
+boot("Light", "Catalog", selection=["TOC"],
+     overrides={"next_id": 0, "items": [], "credits": [],
+                "hidden": [{"course": "QCOM", "created_at": 1754000005000.0}]})
+time.sleep(0.4)
+shot("38-light-catalog-deleted-note")
 
 # Mobile width
 d.set_window_size(390, 850)
@@ -453,7 +488,7 @@ d.execute_script("arguments[0].scrollIntoView({block:'center'});", tile)
 time.sleep(0.2)
 tile.click()
 time.sleep(0.4)
-add = d.find_element(By.CSS_SELECTOR, "#cc-add-meeting")
+add = d.find_element(By.CSS_SELECTOR, "#ce-add-meeting")
 d.execute_script("arguments[0].scrollIntoView({block:'center'});", add)
 time.sleep(0.2)
 add.click()

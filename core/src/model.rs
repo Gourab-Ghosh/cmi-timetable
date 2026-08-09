@@ -507,6 +507,17 @@ pub struct CreditOverride {
     pub created_at: f64,
 }
 
+/// A course of CMI's that the user deleted from their planner. CMI's data is
+/// never edited, so a deletion is stored the same way every other change is:
+/// as a thing of theirs the user has overwritten — here, overwritten with
+/// nothing. It hides the course everywhere the app *lists* courses, and is
+/// undone by restoring it from "Your changes".
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct HiddenCourse {
+    pub course: String,
+    pub created_at: f64,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct OverridesStore {
     pub next_id: u64,
@@ -514,6 +525,10 @@ pub struct OverridesStore {
     /// At most one per course.
     #[serde(default)]
     pub credits: Vec<CreditOverride>,
+    /// Courses the user deleted. Absent in data written before deleting a
+    /// CMI course was possible, and left out of what we write when empty.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hidden: Vec<HiddenCourse>,
 }
 
 impl OverridesStore {
@@ -566,8 +581,34 @@ impl OverridesStore {
             .map(|c| c.credits)
     }
 
+    /// Codes are compared case-insensitively throughout: a deletion can be
+    /// made from a URL the user typed by hand, and CMI's own casing is not
+    /// something anyone should have to reproduce.
+    pub fn is_hidden(&self, course: &str) -> bool {
+        self.hidden
+            .iter()
+            .any(|h| h.course.eq_ignore_ascii_case(course))
+    }
+
+    pub fn hide(&mut self, course: &str, now: f64) {
+        if !self.is_hidden(course) {
+            self.hidden.push(HiddenCourse {
+                course: course.to_string(),
+                created_at: now,
+            });
+        }
+    }
+
+    /// `true` if the course was hidden and is now back.
+    pub fn unhide(&mut self, course: &str) -> bool {
+        let before = self.hidden.len();
+        self.hidden
+            .retain(|h| !h.course.eq_ignore_ascii_case(course));
+        self.hidden.len() != before
+    }
+
     pub fn is_empty(&self) -> bool {
-        self.items.is_empty() && self.credits.is_empty()
+        self.items.is_empty() && self.credits.is_empty() && self.hidden.is_empty()
     }
 }
 

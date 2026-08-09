@@ -1,7 +1,9 @@
 //! Shared UI: chips, header, tabs, toasts, banner, filter bar, and every
-//! dialog (course details, meeting edit, conflicts, export, share).
+//! dialog (course details, the course editor, conflicts, export, share).
 
-use crate::state::{App, BannerKind, Dialog, DragSpec, EffMeeting, Filters, Route, Tab, ThemePref};
+use crate::state::{
+    App, BannerKind, Dialog, DragSpec, EditedMeeting, EffMeeting, Filters, Route, Tab, ThemePref,
+};
 use crate::{dnd, domx, fetch, hues, storage};
 use leptos::prelude::*;
 use ttcore::model::{Course, Day, Meeting, ScheduleStatus, Slot, Snapshot, SourceTier};
@@ -1176,13 +1178,21 @@ pub fn DialogHost() -> impl IntoView {
                 });
             }
             gloo_timers::callback::Timeout::new(0, || {
-                if let Some(el) = domx::document()
-                    .query_selector(
-                        ".dialog button, .dialog [href], .dialog input, .dialog select, \
-                         .dialog textarea",
-                    )
+                // A FIELD first, and only then a button. Space is how people
+                // scroll a tall dialog, and the course editor's first button
+                // is a credits toggle — landing there turned a scroll into
+                // "this course is worth 0 credits". A form's first field is
+                // also simply where you want to start.
+                let doc = domx::document();
+                if let Some(el) = doc
+                    .query_selector(".dialog input, .dialog select, .dialog textarea")
                     .ok()
                     .flatten()
+                    .or_else(|| {
+                        doc.query_selector(".dialog button, .dialog [href]")
+                            .ok()
+                            .flatten()
+                    })
                     .and_then(|el| el.dyn_into::<web_sys::HtmlElement>().ok())
                 {
                     let _ = el.focus();
@@ -1207,15 +1217,12 @@ pub fn DialogHost() -> impl IntoView {
                     let body = match dialog {
                         Dialog::Details(code) => details_dialog(app, code).into_any(),
                         Dialog::MyData => my_data_dialog(app).into_any(),
-                        Dialog::EditMeeting { course, ov_id, base, init, create } => {
-                            edit_meeting_dialog(app, course, ov_id, base, init, create).into_any()
-                        }
                         Dialog::Conflicts => conflicts_dialog(app).into_any(),
                         Dialog::Export { scope } => export_dialog(app, scope).into_any(),
                         Dialog::Share => share_dialog(app).into_any(),
                         Dialog::WhatChanged => what_changed_dialog(app).into_any(),
-                        Dialog::CustomCourse { edit, prefill } => {
-                            custom_course_dialog(app, edit, prefill).into_any()
+                        Dialog::EditCourse { code, prefill, add_meeting } => {
+                            course_editor_dialog(app, code, prefill, add_meeting).into_any()
                         }
                     };
                     view! {
@@ -1349,13 +1356,13 @@ fn status_badges(course: &Course) -> impl IntoView + use<> {
         .collect_view()
 }
 
+/// One meeting, as a line you read. Nothing here is a control: a course is
+/// changed in one place — its editor — and a list of times that also has to
+/// be a control panel is neither. See `course_editor_dialog`.
 pub fn meeting_row(app: App, course: &Course, eff: EffMeeting) -> impl IntoView + use<> {
     let code = course.code.clone();
     let m = eff.meeting.clone();
     let clash = app.is_selected(&code) && app.meeting_has_clash(&code, &m);
-    let edit_code = code.clone();
-    let edit_eff = eff.clone();
-    let reset_code = code.clone();
     // Say inline exactly which CMI data this custom meeting overwrites —
     // the value struck through, as everywhere else a change is shown.
     let replaces = eff
@@ -1367,10 +1374,10 @@ pub fn meeting_row(app: App, course: &Course, eff: EffMeeting) -> impl IntoView 
         .flatten();
     let invented = eff.overridden && replaces.is_none();
 
-    // Three aligned columns — WHEN, WHERE, and what you can do about it —
-    // so a course with five meetings reads as a small table rather than
-    // five sentences of differing length. Anything extra to say about the
-    // row (what CMI had here) goes on a line of its own underneath.
+    // Two aligned columns — WHEN and WHERE — so a course with five meetings
+    // reads as a small table rather than five sentences of differing length.
+    // Anything extra to say about the row (what CMI had here) goes on a line
+    // of its own underneath.
     let hall = m.hall.clone();
     view! {
         <li>
@@ -1411,209 +1418,66 @@ pub fn meeting_row(app: App, course: &Course, eff: EffMeeting) -> impl IntoView 
                         <span class="replaces small">"not on CMI's timetable — created by you"</span>
                     }
                 })}
-            <span class="acts">
-            <button
-                class="btn small"
-                on:click=move |_| {
-                    app.dialog
-                        .set(
-                            Some(Dialog::EditMeeting {
-                                course: edit_code.clone(),
-                                ov_id: edit_eff.ov_id,
-                                base: edit_eff.base.clone(),
-                                init: edit_eff.meeting.clone(),
-                                create: false,
-                            }),
-                        );
-                }
-            >
-                "Edit"
-            </button>
-            {eff.ov_id
-                .map(|id| {
-                    let reset_code = reset_code.clone();
-                    view! {
-                        <button
-                            class="btn small"
-                            on:click=move |_| {
-                                app.reset_override(
-                                    id,
-                                    Some(format!("{reset_code} back on CMI's time")),
-                                );
-                            }
-                        >
-                            "Reset to CMI's time"
-                        </button>
-                    }
-                })}
-            // The counterpart to "Add a meeting": strike this one from the
-            // timetable. Restorable from Your changes / My data, undoable.
-            {
-                let remove_code = code;
-                let remove_eff = eff.clone();
-                view! {
-                    <button
-                        class="btn small danger"
-                        title="Take this meeting off your timetable — restorable \
-                               from Your changes at any time"
-                        on:click=move |_| {
-                            app.remove_meeting(
-                                &remove_code,
-                                remove_eff.ov_id,
-                                remove_eff.base.clone(),
-                            );
-                        }
-                    >
-                        "Remove this meeting"
-                    </button>
-                }
-            }
-            </span>
         </li>
     }
 }
 
-/// Inline credits display + editor (details dialog). Shows the official
-/// value, lets the user overwrite it, and offers a one-click reset back to
-/// it. For the user's own courses there is no official value: editing
-/// writes the definition, so no comparison and no reset are shown.
-fn credits_editor(app: App, course: &Course) -> impl IntoView + use<> {
+/// What this course counts for, and where that number came from: CMI's own
+/// figure, an assumption the app had to make, or the value the user set —
+/// which always says what it replaced. Changing it is the editor's job.
+fn credits_display(app: App, course: &Course) -> impl IntoView + use<> {
     let code = course.code.clone();
     let official = course.effective_credits();
     let official_assumed = course.credits_assumed();
     let official_label = if let Some(span) = course.duration_note() {
-        format!("{official} (assumed from its {span} duration — CMI doesn't state it)")
+        format!("(assumed from its {span} duration — CMI doesn't state it)")
     } else if official_assumed {
-        format!("{official} (assumed — CMI doesn't state it)")
+        "(assumed — CMI doesn't state it)".to_string()
     } else {
-        official.to_string()
+        String::new()
     };
     let official_short = if official_assumed {
         format!("{official} assumed")
     } else {
         official.to_string()
     };
-
-    // Restored from the App-level draft, so a dialog rebuild (a sync
-    // landing, an Undo toast click) can't swallow a half-typed number.
-    let draft = app
-        .credit_edit
-        .get_untracked()
-        .filter(|(c, _)| c.eq_ignore_ascii_case(&code));
-    let editing = RwSignal::new(draft.is_some());
-    let input = RwSignal::new(draft.map(|(_, t)| t).unwrap_or_default());
-    let error = RwSignal::new(false);
-    // One place that mirrors the local signals into the draft. Writing is
-    // safe; only a tracked READ would make typing rebuild the dialog.
-    let remember = {
-        let code = code.clone();
-        move |text: Option<String>| match text {
-            Some(t) => app.credit_edit.set(Some((code.clone(), t))),
-            None => app.credit_edit.set(None),
-        }
-    };
-
     view! {
-        <span class="row" style="display:inline-flex;gap:0.4rem;align-items:center;flex-wrap:wrap">
-            {move || {
-                let code = code.clone();
-                let official_label = official_label.clone();
-                let official_short = official_short.clone();
-                let remember = remember.clone();
-                if editing.get() {
-                    let save_code = code;
-                    let (remember_input, remember_save, remember_cancel) =
-                        (remember.clone(), remember.clone(), remember);
+        {move || {
+            // The user's own course has no "official" value behind it: the
+            // definition IS the number, so there is nothing to compare to.
+            let own = app.is_custom(&code);
+            let custom = (!own).then(|| app.credits_custom(&code)).flatten();
+            let official_label = official_label.clone();
+            let official_short = official_short.clone();
+            // Real spaces between the parts, and nothing laid out as a flex
+            // row: this line has to copy, and be read aloud, as one sentence
+            // ("4 (assumed — CMI doesn't state it)").
+            match custom {
+                Some(n) => {
                     view! {
-                        <input
-                            type="number"
-                            min="0"
-                            max="20"
-                            style="width:5rem"
-                            aria-label="Credits"
-                            prop:value=input.get_untracked()
-                            on:input=move |ev| {
-                                let v = event_target_value(&ev);
-                                input.set(v.clone());
-                                remember_input(Some(v));
-                            }
-                        />
-                        <button
-                            class="btn small primary"
-                            on:click=move |_| {
-                                match input.get_untracked().trim().parse::<u8>() {
-                                    Ok(n) if n <= 20 => {
-                                        app.set_credit_override(&save_code, n);
-                                        editing.set(false);
-                                        error.set(false);
-                                        remember_save(None);
-                                    }
-                                    _ => error.set(true),
-                                }
-                            }
-                        >
-                            "Save"
-                        </button>
-                        <button
-                            class="btn small"
-                            on:click=move |_| {
-                                editing.set(false);
-                                error.set(false);
-                                remember_cancel(None);
-                            }
-                        >
-                            "Cancel"
-                        </button>
-                        <span class="form-error" aria-live="assertive">
-                            {move || {
-                                error
-                                    .get()
-                                    .then_some("Enter a whole number from 0 to 20.")
-                            }}
-                        </span>
+                        <span class="cr-value">{n.to_string()}</span>
+                        " "
+                        {change_tag("set by you", true)}
+                        " "
+                        <span class="muted small">{format!("CMI: {official_short}")}</span>
                     }
                         .into_any()
-                } else {
-                    // The user's own course has no "official" value behind
-                    // it: editing changes the definition, so there is
-                    // nothing to compare against or reset to.
-                    let own = app.is_custom(&code);
-                    let custom = (!own).then(|| app.credits_custom(&code)).flatten();
-                    let shown = match custom {
-                        Some(n) => format!("{n} (set by you — CMI: {official_short})"),
-                        None => official_label,
-                    };
-                    let edit_start = custom.unwrap_or(official);
-                    let reset_code = code;
+                }
+                None => {
                     view! {
-                        <span>{shown}</span>
-                        <button
-                            class="btn small"
-                            on:click=move |_| {
-                                input.set(edit_start.to_string());
-                                editing.set(true);
-                            }
-                        >
-                            "Edit"
-                        </button>
-                        {custom
-                            .map(|_| {
+                        <span class="cr-value">{official.to_string()}</span>
+                        {(!own && !official_label.is_empty())
+                            .then(|| {
                                 view! {
-                                    <button
-                                        class="btn small"
-                                        on:click=move |_| {
-                                            app.remove_credit_override(&reset_code);
-                                        }
-                                    >
-                                        "Reset to CMI's value"
-                                    </button>
+                                    " "
+                                    <span class="muted small">{official_label}</span>
                                 }
                             })}
                     }
                         .into_any()
                 }
-            }}
-        </span>
+            }
+        }}
     }
 }
 
@@ -1692,9 +1556,9 @@ fn details_dialog(app: App, code: String) -> impl IntoView {
         }
     }
     let removed = app.is_removed_upstream(&code);
+    let deleted = app.is_hidden(&code);
 
     let toggle_code = course.code.clone();
-    let give_code = course.code.clone();
     let export_code = course.code.clone();
     let course_notes = {
         let mut notes: Vec<String> = Vec::new();
@@ -1743,7 +1607,7 @@ fn details_dialog(app: App, code: String) -> impl IntoView {
                     }}
                 </dd>
                 <dt>"Credits"</dt>
-                <dd>{credits_editor(app, &course)}</dd>
+                <dd class="cr-line">{credits_display(app, &course)}</dd>
                 {(!course_notes.is_empty())
                     .then(|| {
                         view! {
@@ -1771,6 +1635,18 @@ fn details_dialog(app: App, code: String) -> impl IntoView {
                     .then(|| view! { <span class="badge">"no time set yet"</span> })}
                 {removed
                     .then(|| view! { <span class="badge warn">"No longer on CMI's timetable"</span> })}
+                {deleted
+                    .then(|| {
+                        view! {
+                            <span
+                                class="badge alarm"
+                                title="You deleted this course — it is hidden from the catalog \
+                                       and the master grid until you restore it"
+                            >
+                                "Deleted by you"
+                            </span>
+                        }
+                    })}
             </div>
             {(is_custom && app.custom_shadows_official(&code))
                 .then(|| {
@@ -1858,67 +1734,74 @@ fn details_dialog(app: App, code: String) -> impl IntoView {
                     }
                 })}
             <div class="actions">
-                // Your own course: deleting it is one click from here, not
-                // buried behind the edit form. Quiet-danger styling, and
-                // it stays undoable, so no confirmation dance.
-                {is_custom
+                // Deleting is one click from here and nowhere else — never
+                // inside the edit form, where it could be hit half-way
+                // through a change. It is red, as everything that destroys
+                // something is, and it stays undoable, so no confirmation
+                // dance. CMI's course is deleted from YOUR planner and can
+                // be restored from Your changes; your own course is gone
+                // (Undo brings it back).
+                {(!deleted)
                     .then(|| {
                         let del_code = code.clone();
+                        let title = if is_custom {
+                            "Delete this course and its meetings (undoable)"
+                        } else {
+                            "Take this course out of your planner entirely — off your \
+                             timetable, out of the catalog and the master grid. \
+                             Restorable from Your changes."
+                        };
                         view! {
                             <button
                                 class="btn danger"
-                                title="Delete this course and its meetings (undoable)"
+                                title=title
                                 on:click=move |_| {
-                                    app.delete_custom_course(&del_code, false);
+                                    app.delete_course(&del_code);
                                     app.dialog.set(None);
                                 }
                             >
                                 "Delete this course"
                             </button>
-                            <div class="grow"></div>
                         }
                     })}
-                {is_custom
+                {deleted
                     .then(|| {
-                        let edit_code = code.clone();
+                        let restore_code = code.clone();
                         view! {
                             <button
                                 class="btn"
                                 on:click=move |_| {
-                                    app.dialog
-                                        .set(
-                                            Some(Dialog::CustomCourse {
-                                                edit: Some(edit_code.clone()),
-                                                prefill: None,
-                                            }),
-                                        );
+                                    app.restore_course(&restore_code);
+                                    app.dialog.set(None);
                                 }
                             >
-                                "Edit this course"
+                                "Restore this course"
                             </button>
                         }
                     })}
-                // Any course can gain extra time slots — the button is only
-                // labeled differently when CMI gave it none to begin with.
+                <div class="grow"></div>
+                // ONE way in to changing anything: times, hall, credits and
+                // (for your own courses) the name and code, in one form.
                 {
+                    let edit_code = code.clone();
                     let no_meetings = eff.is_empty();
                     view! {
                         <button
                             class="btn"
+                            title="Change this course's times, hall and credits — all in \
+                                   one place"
                             on:click=move |_| {
                                 app.dialog
                                     .set(
-                                        Some(Dialog::EditMeeting {
-                                            course: give_code.clone(),
-                                            ov_id: None,
-                                            base: None,
-                                            init: app.default_meeting(),
-                                            create: true,
+                                        Some(Dialog::EditCourse {
+                                            code: Some(edit_code.clone()),
+                                            prefill: None,
+                                            add_meeting: no_meetings,
                                         }),
                                     );
                             }
                         >
-                            {if no_meetings { "Give it a time" } else { "Add a meeting" }}
+                            {if no_meetings { "Give it a time" } else { "Edit this course" }}
                         </button>
                     }
                 }
@@ -1942,6 +1825,7 @@ fn details_dialog(app: App, code: String) -> impl IntoView {
                 <button
                     class="btn"
                     class:primary=!selected
+                    class:danger=selected
                     on:click=move |_| {
                         app.toggle_select(&toggle_code);
                     }
@@ -1970,7 +1854,8 @@ pub fn custom_changes_pill(app: App) -> impl IntoView {
                     view! {
                         <button
                             class="btn small"
-                            title="Everything of CMI's you've changed — with one-click removal"
+                            title="Everything you've added, deleted or changed — with \
+                                   one-click removal"
                             on:click=move |_| app.dialog.set(Some(Dialog::MyData))
                         >
                             {format!("✎ {n} change{}", if n == 1 { "" } else { "s" })}
@@ -1985,6 +1870,11 @@ pub fn custom_changes_pill(app: App) -> impl IntoView {
 /// "which of my changes moved a room?" is one glance, not twenty reads.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum OwnChange {
+    // Whole courses first: adding or deleting one outranks anything done
+    // inside it, and both are what someone scanning this list is most
+    // likely to be looking for.
+    CourseAdded,
+    CourseDeleted,
     Time,
     Room,
     TimeAndRoom,
@@ -1999,6 +1889,8 @@ impl OwnChange {
     fn label(&self, n: usize) -> String {
         let plural = |one: &str, many: &str| if n == 1 { one.into() } else { many.into() };
         match self {
+            OwnChange::CourseAdded => plural("Course you added", "Courses you added"),
+            OwnChange::CourseDeleted => plural("Course you deleted", "Courses you deleted"),
             OwnChange::Time => plural("Moved to another time", "Moved to other times"),
             OwnChange::Room => plural("Moved to another room", "Moved to other rooms"),
             OwnChange::TimeAndRoom => "Moved to another time and room".to_string(),
@@ -2009,27 +1901,134 @@ impl OwnChange {
     }
 }
 
-/// Every overwrite together — moved/created meetings and changed credits —
-/// grouped by what kind of change it is, each row showing exactly which CMI
-/// value it replaces, with one-click removal. Shared by the "Your changes"
-/// panel and the My data dialog.
+/// Everything of the user's together — courses they added or deleted,
+/// meetings they moved, created or struck out, credits they set — grouped by
+/// what kind of change it is, each row showing exactly which CMI value it
+/// replaces, with one-click removal. Shared by the "Your changes" panel and
+/// the My data dialog.
 pub fn overrides_list(app: App) -> impl IntoView {
     view! {
         {move || {
             let overrides = app.overrides.get();
-            if overrides.is_empty() {
+            let customs = app.customs.with(|cs| cs.courses.clone());
+            if overrides.is_empty() && customs.is_empty() {
                 return view! {
                     <p class="muted small">
-                        "None. Meetings you move or create and credits you change \
-                         appear here, each showing which CMI data it overwrites."
+                        "None. Courses you add or delete, meetings you move or create \
+                         and credits you change appear here, each showing which CMI \
+                         data it overwrites."
                     </p>
                 }
                     .into_any();
             }
-            let snapshot = app.snapshot.get();
+            // Only the facts these rows need come out of the snapshot:
+            // `.get()` would deep-clone it — gzipped raw pages included — on
+            // every re-render of this list (R26).
+            let deleted_names: Vec<Option<String>> = app.snapshot.with(|s| {
+                overrides
+                    .hidden
+                    .iter()
+                    .map(|h| s.course_ci(&h.course).map(|c| c.name.clone()))
+                    .collect()
+            });
+            let credit_official: Vec<String> = app.snapshot.with(|s| {
+                overrides
+                    .credits
+                    .iter()
+                    .map(|c| match s.course(&c.course) {
+                        Some(cr) if cr.credits_assumed() => {
+                            format!("{} (assumed)", cr.effective_credits())
+                        }
+                        Some(cr) => cr.effective_credits().to_string(),
+                        None => "?".to_string(),
+                    })
+                    .collect()
+            });
             // (kind, row) for everything, then one section per kind.
             let mut rows: Vec<(OwnChange, AnyView)> = Vec::new();
+            // A course of your own is an addition to CMI's data — the
+            // largest change there is — so it belongs in this list beside
+            // the small ones, not in a section of its own somewhere else.
+            for c in &customs {
+                let code = c.code.clone();
+                let del_code = c.code.clone();
+                let n = c.meetings.len();
+                let what = if n == 0 {
+                    "your own course, no time set yet".to_string()
+                } else {
+                    format!(
+                        "your own course, {n} weekly meeting{}",
+                        if n == 1 { "" } else { "s" },
+                    )
+                };
+                rows.push((
+                    OwnChange::CourseAdded,
+                    view! {
+                        <li>
+                            {chip(app, ChipProps::list(&code))}
+                            <span class="change-what">
+                                {change_delta(None, Some(what))}
+                                {(!app.is_selected(&code))
+                                    .then(|| {
+                                        view! {
+                                            <span class="badge">"not currently selected"</span>
+                                        }
+                                    })}
+                            </span>
+                            <button
+                                class="btn small danger"
+                                title="Delete this course of yours (undoable)"
+                                on:click=move |_| app.delete_custom_course(&del_code, false)
+                            >
+                                "Delete"
+                            </button>
+                        </li>
+                    }
+                        .into_any(),
+                ));
+            }
+            // …and a course of CMI's you deleted is the same statement in
+            // reverse: their data, struck through, one click from coming back.
+            for (i, h) in overrides.hidden.iter().enumerate() {
+                let code = h.course.clone();
+                let restore_code = h.course.clone();
+                let what = deleted_names
+                    .get(i)
+                    .cloned()
+                    .flatten()
+                    .unwrap_or_else(|| "on CMI's timetable".to_string());
+                rows.push((
+                    OwnChange::CourseDeleted,
+                    view! {
+                        <li>
+                            {chip(app, ChipProps::list(&code))}
+                            <span class="change-what">
+                                {change_delta(Some(what), None)}
+                                // Not a `.ctx` value — `.ctx` is monospace,
+                                // for the times and halls a row carries. This
+                                // is a sentence.
+                                <span class="muted small">
+                                    "hidden from the catalog and grids"
+                                </span>
+                            </span>
+                            <button
+                                class="btn small"
+                                on:click=move |_| app.restore_course(&restore_code)
+                            >
+                                "Restore"
+                            </button>
+                        </li>
+                    }
+                        .into_any(),
+                ));
+            }
             for o in &overrides.items {
+                // A deleted course's own changes go with it: they describe
+                // something nothing on screen shows, and they come back
+                // whole when the course does.
+                if overrides.is_hidden(&o.course) {
+                    continue;
+                }
                 let id = o.id;
                 let course = o.course.clone();
                 // What actually changed decides the group AND what the row
@@ -2072,8 +2071,10 @@ pub fn overrides_list(app: App) -> impl IntoView {
                 let selected = app.is_selected(&course);
                 // Undoing a removal RESTORES a meeting; undoing a move or an
                 // added meeting removes the change. Same action, but the
-                // button must say what will happen.
-                let action_label = if o.is_removal() { "Restore" } else { "Remove" };
+                // button must say what will happen — and wear the colour of
+                // it: red takes something away, plain gives it back.
+                let removal = o.is_removal();
+                let action_label = if removal { "Restore" } else { "Remove" };
                 rows.push((
                     kind,
                     view! {
@@ -2092,6 +2093,7 @@ pub fn overrides_list(app: App) -> impl IntoView {
                             </span>
                             <button
                                 class="btn small"
+                                class:danger=!removal
                                 on:click=move |_| {
                                     app.reset_override(
                                         id,
@@ -2106,16 +2108,16 @@ pub fn overrides_list(app: App) -> impl IntoView {
                         .into_any(),
                 ));
             }
-            for c in &overrides.credits {
+            for (i, c) in overrides.credits.iter().enumerate() {
+                if overrides.is_hidden(&c.course) {
+                    continue;
+                }
                 let course = c.course.clone();
                 let remove_course = c.course.clone();
-                let official = match snapshot.course(&c.course) {
-                    Some(cr) if cr.credits_assumed() => {
-                        format!("{} (assumed)", cr.effective_credits())
-                    }
-                    Some(cr) => cr.effective_credits().to_string(),
-                    None => "?".to_string(),
-                };
+                let official = credit_official
+                    .get(i)
+                    .cloned()
+                    .unwrap_or_else(|| "?".to_string());
                 let selected = app.is_selected(&course);
                 rows.push((
                     OwnChange::Credits,
@@ -2132,7 +2134,7 @@ pub fn overrides_list(app: App) -> impl IntoView {
                                     })}
                             </span>
                             <button
-                                class="btn small"
+                                class="btn small danger"
                                 on:click=move |_| app.remove_credit_override(&remove_course)
                             >
                                 "Remove"
@@ -2168,20 +2170,31 @@ pub fn overrides_list(app: App) -> impl IntoView {
                     }
                 })
                 .collect_view();
+            let any_overrides = !overrides.is_empty();
             view! {
                 {groups}
-                <button
-                    class="btn small"
-                    on:click=move |_| {
-                        app.act("remove all custom changes", |_, ovs| {
-                            ovs.items.clear();
-                            ovs.credits.clear();
-                        });
-                        app.toast_undo("All custom changes removed — back on CMI's data");
-                    }
-                >
-                    "Remove all changes"
-                </button>
+                {any_overrides
+                    .then(|| {
+                        view! {
+                            <button
+                                class="btn small danger"
+                                title="Put every one of CMI's courses back the way they \
+                                       publish it. Your own courses are kept."
+                                on:click=move |_| {
+                                    app.act("remove all custom changes", |_, ovs| {
+                                        ovs.items.clear();
+                                        ovs.credits.clear();
+                                        ovs.hidden.clear();
+                                    });
+                                    app.toast_undo(
+                                        "All custom changes removed — back on CMI's data",
+                                    );
+                                }
+                            >
+                                "Remove all changes"
+                            </button>
+                        }
+                    })}
             }
                 .into_any()
         }}
@@ -2229,8 +2242,9 @@ fn my_data_dialog(app: App) -> impl IntoView {
                  item can be removed right here."
             </p>
 
-            // Every custom change together: exactly which CMI data it
-            // replaces — moved/created meetings and changed credits.
+            // Every custom change together, and exactly which CMI data each
+            // one replaces: courses added and deleted, meetings moved,
+            // created and struck out, credits changed.
             <section class="data-section">
                 <header>
                     <h3>"Your changes"</h3>
@@ -2246,7 +2260,7 @@ fn my_data_dialog(app: App) -> impl IntoView {
                             .then(|| {
                                 view! {
                                     <button
-                                        class="btn small"
+                                        class="btn small danger"
                                         on:click=move |_| {
                                             app.act("clear selection", |sel, _| sel.clear());
                                             app.toast_undo("Selection cleared");
@@ -2283,53 +2297,9 @@ fn my_data_dialog(app: App) -> impl IntoView {
                 }}
             </section>
 
-            <section class="data-section">
-                <header>
-                    <h3>"Your own courses"</h3>
-                </header>
-                {move || {
-                    let customs = app.customs.with(|cs| cs.courses.clone());
-                    if customs.is_empty() {
-                        view! {
-                            <p class="small muted">
-                                "None yet — create one from My courses or the catalog."
-                            </p>
-                        }
-                            .into_any()
-                    } else {
-                        customs
-                            .into_iter()
-                            .map(|c| {
-                                let del_code = c.code.clone();
-                                let on_grid = app.is_selected(&c.code);
-                                view! {
-                                    <div class="row data-row">
-                                        <span class="mono">{c.code.clone()}</span>
-                                        <span>{c.name}</span>
-                                        <span class="muted small">
-                                            {if on_grid {
-                                                "on your timetable"
-                                            } else {
-                                                "off the timetable, kept"
-                                            }}
-                                        </span>
-                                        <div class="grow"></div>
-                                        <button
-                                            class="btn small danger"
-                                            on:click=move |_| {
-                                                app.delete_custom_course(&del_code, false);
-                                            }
-                                        >
-                                            "Delete"
-                                        </button>
-                                    </div>
-                                }
-                            })
-                            .collect_view()
-                            .into_any()
-                    }
-                }}
-            </section>
+            // Your own courses are NOT a section of their own: they are the
+            // "Courses you added" group in Your changes above, where every
+            // other thing you changed already lives. One list, one place.
 
             <section class="data-section">
                 <header>
@@ -2338,7 +2308,7 @@ fn my_data_dialog(app: App) -> impl IntoView {
                         app.has_data()
                             .then(|| {
                                 view! {
-                                    <button class="btn small" on:click=clear_snapshot>
+                                    <button class="btn small danger" on:click=clear_snapshot>
                                         "Clear"
                                     </button>
                                 }
@@ -2375,7 +2345,7 @@ fn my_data_dialog(app: App) -> impl IntoView {
                 <header>
                     <h3>"Preferences"</h3>
                     <button
-                        class="btn small"
+                        class="btn small danger"
                         on:click=move |_| {
                             app.prefs.set(Default::default());
                             app.persist_prefs();
@@ -2408,7 +2378,8 @@ fn my_data_dialog(app: App) -> impl IntoView {
 }
 
 // ---------------------------------------------------------------------------
-// Meeting edit dialog (precision path + accessible drag alternative)
+// The course editor (the precision path, and the accessible alternative to
+// dragging) — see `course_editor_dialog` below
 // ---------------------------------------------------------------------------
 
 /// Hall chooser: a real dropdown of CMI's halls, plus a free-text escape
@@ -2469,7 +2440,16 @@ fn hall_picker(
 
     view! {
         <span class="hall-pick">
-            <select id=select_id aria-label=aria on:change=on_change>
+            <select
+                id=select_id
+                aria-label=aria
+                // Same reason as the Day and Time controls: the option list
+                // is built once, so what is SHOWN must follow `hall`.
+                prop:value=move || {
+                    if is_other.get() { "__other".to_string() } else { hall.get() }
+                }
+                on:change=on_change
+            >
                 <option value="" selected=current.is_empty() && !is_other.get_untracked()>
                     {empty}
                 </option>
@@ -2530,246 +2510,13 @@ fn hall_picker(
     }
 }
 
-fn edit_meeting_dialog(
-    app: App,
-    course: String,
-    ov_id: Option<u64>,
-    base: Option<Meeting>,
-    init: Meeting,
-    create: bool,
-) -> impl IntoView {
-    // Every read in this builder is UNTRACKED on purpose. DialogHost builds
-    // the body inside its own reactive closure, so a tracked read here
-    // subscribes the whole dialog: a background sync landing — or an Undo
-    // toast click — would rebuild the form mid-edit and silently reset the
-    // day, time and hall to the meeting's original values.
-    let (slots, halls) = app
-        .snapshot
-        .with_untracked(|s| (s.slot_grid.clone(), s.halls.clone()));
-    let own_halls = untrack(|| app.user_halls());
-
-    let day_idx = RwSignal::new(init.day.index());
-    let is_custom = RwSignal::new(!slots.contains(&init.slot));
-    let slot_start = RwSignal::new(init.slot.start_min);
-    let custom_start = RwSignal::new(init.slot.start_label());
-    let custom_end = RwSignal::new(init.slot.end_label());
-    let hall = RwSignal::new(init.hall.unwrap_or_default());
-    let error = RwSignal::new(String::new());
-
-    let slots_for_save = slots.clone();
-    let course_save = course.clone();
-    let title = if create {
-        let already_meets = untrack(|| {
-            app.course_by_code(&course)
-                .map(|c| !app.effective_meetings(&c).is_empty())
-                .unwrap_or(false)
-        });
-        if already_meets {
-            format!("Add a meeting — {course}")
-        } else {
-            format!("Give {course} a time")
-        }
-    } else {
-        format!("Edit meeting — {course}")
-    };
-
-    let save = move |_| {
-        let day = Day::ALL[day_idx.get_untracked()];
-        let slot = if is_custom.get_untracked() {
-            let (Some(start), Some(end)) = (
-                parse_hhmm(&custom_start.get_untracked()),
-                parse_hhmm(&custom_end.get_untracked()),
-            ) else {
-                error.set("Enter times as HH:MM, e.g. 14:00.".to_string());
-                return;
-            };
-            if start >= end {
-                error.set("The start time must be before the end time.".to_string());
-                return;
-            }
-            Slot::new(start, end)
-        } else {
-            let start = slot_start.get_untracked();
-            match slots_for_save.iter().find(|s| s.start_min == start) {
-                Some(s) => *s,
-                None => {
-                    error.set("Pick a time slot.".to_string());
-                    return;
-                }
-            }
-        };
-        let to = Meeting {
-            day,
-            slot,
-            // Trimmed, and spelled CMI's way when it is one of theirs —
-            // otherwise the Halls tab grows a second, empty row for what is
-            // really the same room.
-            hall: app.canonical_hall(&hall.get_untracked()),
-            temp_booking: false,
-        };
-        if create {
-            // Creating always ADDS a meeting (a course can have any number
-            // of extra slots). On a not-yet-selected course it selects it
-            // too, as one undo step — a placed meeting must never be
-            // invisible.
-            if app.is_selected(&course_save) {
-                app.add_meeting(
-                    &course_save,
-                    to.clone(),
-                    format!(
-                        "Added a {} {} meeting to {course_save}",
-                        day.short(),
-                        to.slot.label(),
-                    ),
-                );
-            } else {
-                app.select_and_override(
-                    &course_save,
-                    None,
-                    to.clone(),
-                    format!(
-                        "Added {course_save} and placed it on {} {}",
-                        day.short(),
-                        to.slot.label(),
-                    ),
-                );
-            }
-        } else {
-            let toast = format!("Moved {course_save} to {} {}", day.short(), to.slot.label(),);
-            app.apply_override(
-                &course_save,
-                ov_id,
-                base.clone(),
-                to,
-                &format!("edit {course_save} meeting"),
-                Some(toast),
-            );
-        }
-        app.dialog.set(None);
-    };
-
-    view! {
-        <div>
-            <h2>{title}</h2>
-            <div class="fieldrow">
-                <label for="em-day">"Day"</label>
-                <select
-                    id="em-day"
-                    on:change=move |ev| {
-                        if let Ok(i) = event_target_value(&ev).parse::<usize>() {
-                            day_idx.set(i);
-                        }
-                    }
-                >
-                    {Day::ALL
-                        .iter()
-                        .map(|d| {
-                            view! {
-                                <option
-                                    value=d.index().to_string()
-                                    selected=d.index() == day_idx.get_untracked()
-                                >
-                                    {d.full()}
-                                </option>
-                            }
-                        })
-                        .collect_view()}
-                </select>
-            </div>
-            <div class="fieldrow">
-                <label for="em-slot">"Time"</label>
-                <select
-                    id="em-slot"
-                    on:change=move |ev| {
-                        let v = event_target_value(&ev);
-                        if v == "custom" {
-                            is_custom.set(true);
-                        } else if let Ok(start) = v.parse::<u16>() {
-                            is_custom.set(false);
-                            slot_start.set(start);
-                        }
-                    }
-                >
-                    {slots
-                        .iter()
-                        .map(|s| {
-                            view! {
-                                <option
-                                    value=s.start_min.to_string()
-                                    selected=!is_custom.get_untracked()
-                                        && s.start_min == slot_start.get_untracked()
-                                >
-                                    {s.label()}
-                                </option>
-                            }
-                        })
-                        .collect_view()}
-                    <option value="custom" selected=is_custom.get_untracked()>
-                        "Custom time…"
-                    </option>
-                </select>
-                {move || {
-                    is_custom
-                        .get()
-                        .then(|| {
-                            view! {
-                                <input
-                                    type="time"
-                                    aria-label="Start time"
-                                    prop:value=custom_start.get_untracked()
-                                    on:input=move |ev| custom_start.set(event_target_value(&ev))
-                                />
-                                <span>"–"</span>
-                                <input
-                                    type="time"
-                                    aria-label="End time"
-                                    prop:value=custom_end.get_untracked()
-                                    on:input=move |ev| custom_end.set(event_target_value(&ev))
-                                />
-                            }
-                        })
-                }}
-            </div>
-            <div class="fieldrow">
-                <label for="em-hall">"Hall"</label>
-                {hall_picker(
-                    halls,
-                    own_halls,
-                    hall,
-                    "em-hall".to_string(),
-                    "Hall",
-                    "Hall to be announced",
-                )}
-            </div>
-            // A persistent live region: screen readers announce changes
-            // INSIDE one, not the arrival of a new node, so a validation
-            // error inserted as a fresh paragraph is silent and Save reads
-            // as a dead button.
-            <p class="form-error" aria-live="assertive">
-                {move || {
-                    let e = error.get();
-                    (!e.is_empty()).then_some(e)
-                }}
-            </p>
-            <div class="actions">
-                <button class="btn" on:click=move |_| app.dialog.set(None)>
-                    "Cancel"
-                </button>
-                <button class="btn primary" on:click=save>
-                    "Save"
-                </button>
-            </div>
-        </div>
-    }
-}
-
 // ---------------------------------------------------------------------------
-// Your own course — create & edit
+// The course editor — one form for every course, CMI's and your own
 // ---------------------------------------------------------------------------
 
-/// One editable meeting row in the custom-course form. The row list only
-/// changes on add/remove; each field is its own signal, so typing in one
-/// input never rebuilds the others.
+/// One editable meeting row in the editor. The row list only changes on
+/// add/remove; each field is its own signal, so typing in one input never
+/// rebuilds the others.
 #[derive(Clone, Copy)]
 struct MeetRowDraft {
     key: u64,
@@ -2849,51 +2596,122 @@ fn suggest_code(name: &str) -> String {
         .collect()
 }
 
-fn custom_course_dialog(app: App, edit: Option<String>, prefill: Option<String>) -> impl IntoView {
-    let editing = edit.clone();
+/// The one course editor: create a course of your own, edit one of your own,
+/// or edit one of CMI's — the same form, because it is the same job.
+///
+/// Everything a course HAS is here at once: its times, its hall, its credits,
+/// and (for your own) its name and code. Editing used to be scattered over a
+/// button per field — one on the credits, three on every meeting row — which
+/// made a course look like a control panel and a small change take five
+/// clicks in four places. One form, one Save, one step in the undo history.
+///
+/// What CMI owns is shown but not editable: a course of theirs under another
+/// name is a course of your own. Their times, hall and credits are all
+/// overwritable, and each row says exactly what it replaces.
+fn course_editor_dialog(
+    app: App,
+    code: Option<String>,
+    prefill: Option<String>,
+    add_meeting: bool,
+) -> impl IntoView {
     // Every read in this builder is UNTRACKED on purpose. DialogHost builds
     // the body inside its own reactive closure, so a tracked read here
     // subscribes the whole dialog: a background sync landing (or an Undo
-    // toast click) would rebuild the form and silently throw away
-    // everything typed so far. Live bits — the shadow note below — are
-    // rendered through their own closures instead.
-    let existing = edit
+    // toast click) would rebuild the form and silently throw away everything
+    // typed so far. Live bits — the shadow note, the removed-meetings list —
+    // are rendered through their own closures instead.
+    let own_course = code
         .as_deref()
         .and_then(|c| app.customs.with_untracked(|cs| cs.get(c).cloned()));
+    let cmi_course = match (&code, &own_course) {
+        (Some(c), None) => app.snapshot.with_untracked(|s| s.course_ci(c).cloned()),
+        _ => None,
+    };
+    let creating = code.is_none();
+    // A course CMI has since dropped is still on the user's timetable, with
+    // times of their own — `selected_course` hands back the stub the rest of
+    // the app renders for it. It has no definition to edit, but its meetings
+    // are as editable as any other's.
+    let orphan = match &code {
+        Some(c) if own_course.is_none() && cmi_course.is_none() && app.is_selected(c) => {
+            Some(untrack(|| app.selected_course(c)))
+        }
+        _ => None,
+    };
+    let subject = own_course
+        .clone()
+        .or_else(|| cmi_course.clone())
+        .or_else(|| orphan.clone());
+    // Editing something that is no longer there (a sync dropped it while the
+    // dialog was opening, or another tab deleted it): say so, rather than
+    // offer an empty form that would create something on save.
+    let Some(subject) = subject.or_else(|| {
+        creating.then(|| Course::custom(String::new(), String::new(), Vec::new(), 4, Vec::new()))
+    }) else {
+        return view! {
+            <div>
+                <h2>"That course isn't here any more"</h2>
+                <p class="muted">
+                    "It went while you were opening it — CMI's timetable changed, or it \
+                     was deleted in another tab."
+                </p>
+                <div class="actions">{close_button(app)}</div>
+            </div>
+        }
+        .into_any();
+    };
+
+    // Anything that isn't the user's own course is written as overrides on
+    // top of CMI's data, and shows their name and code rather than fields.
+    let is_cmi = cmi_course.is_some() || orphan.is_some();
+    // What CMI had when this form opened. Removals are judged against THIS,
+    // not against whatever a sync lands mid-edit: the form can only speak
+    // about the meetings it showed.
+    let official_at_open: Vec<Meeting> = cmi_course
+        .as_ref()
+        .map(|c| c.meetings.clone())
+        .unwrap_or_default();
+    // The code being edited, whoever owns it…
+    let editing_code = (!creating).then(|| subject.code.clone());
+    // …and the one the SAVE path needs: `save_custom_course` takes the code
+    // a course of the user's own had before the edit, so it can follow a
+    // rename through the selection. CMI's courses never go down that path.
+    let own_editing = own_course.as_ref().map(|c| c.code.clone());
+    let subject_code = subject.code.clone();
+
     let slots = app.snapshot.with_untracked(|s| s.slot_grid.clone());
     let halls = app.snapshot.with_untracked(|s| s.halls.clone());
     let own_halls = untrack(|| app.user_halls());
     let first_slot = slots.first().copied();
 
-    let name = RwSignal::new(
-        existing
-            .as_ref()
-            .map(|c| c.name.clone())
-            .or(prefill)
-            .unwrap_or_default(),
-    );
-    let code = RwSignal::new(
-        existing
-            .as_ref()
-            .map(|c| c.code.clone())
-            .unwrap_or_else(|| suggest_code(&name.get_untracked())),
-    );
+    let name = RwSignal::new(if creating {
+        prefill.unwrap_or_default()
+    } else {
+        subject.name.clone()
+    });
+    let code_sig = RwSignal::new(if creating {
+        suggest_code(&name.get_untracked())
+    } else {
+        subject.code.clone()
+    });
     // The code follows the name until the user takes it over.
-    let code_touched = RwSignal::new(existing.is_some());
-    let instructor = RwSignal::new(
-        existing
-            .as_ref()
-            .map(|c| c.instructors.join(" / "))
-            .unwrap_or_default(),
-    );
-    let credits = RwSignal::new(
-        existing
-            .as_ref()
-            .map(|c| c.effective_credits())
-            .unwrap_or(4),
-    );
-    let credits_other = RwSignal::new(existing.as_ref().is_some_and(|c| c.effective_credits() > 4));
-    let credits_text = RwSignal::new(credits.get_untracked().to_string());
+    let code_touched = RwSignal::new(!creating);
+    let instructor = RwSignal::new(subject.instructors.join(" / "));
+
+    // What the course counts for now — CMI's figure, or the one the user
+    // already set over it.
+    let start_credits = untrack(|| app.course_credits(&subject));
+    let credits = RwSignal::new(start_credits);
+    let credits_other = RwSignal::new(start_credits > 4);
+    let credits_text = RwSignal::new(start_credits.to_string());
+    let official_credits = cmi_course.as_ref().map(|c| c.effective_credits());
+    let official_credits_note = cmi_course.as_ref().map(|c| {
+        if c.credits_assumed() {
+            format!("CMI: {} (assumed)", c.effective_credits())
+        } else {
+            format!("CMI: {}", c.effective_credits())
+        }
+    });
 
     let row_seq = RwSignal::new(0u64);
     let next_key = move || {
@@ -2901,23 +2719,55 @@ fn custom_course_dialog(app: App, edit: Option<String>, prefill: Option<String>)
         row_seq.set(k + 1);
         k
     };
-    let initial_rows: Vec<MeetRowDraft> = existing
-        .as_ref()
-        .map(|c| {
-            c.meetings
-                .iter()
-                .enumerate()
-                .map(|(i, m)| MeetRowDraft::from_meeting(i as u64, m, &slots))
-                .collect()
-        })
-        .unwrap_or_default();
+    // The rows start from the EFFECTIVE meetings — what the user sees on
+    // their timetable — so the form opens on their own timetable, not on
+    // CMI's copy of it. Each row remembers where it came from: that is what
+    // tells "moved this meeting" from "invented one" when it is saved.
+    let eff: Vec<EffMeeting> = untrack(|| app.effective_meetings(&subject));
+    let origins: RwSignal<Vec<(u64, EffMeeting)>> = RwSignal::new(
+        eff.iter()
+            .enumerate()
+            .map(|(i, e)| (i as u64, e.clone()))
+            .collect(),
+    );
+    let initial_rows: Vec<MeetRowDraft> = eff
+        .iter()
+        .enumerate()
+        .map(|(i, e)| MeetRowDraft::from_meeting(i as u64, &e.meeting, &slots))
+        .collect();
     row_seq.set(initial_rows.len() as u64);
     let rows = RwSignal::new(initial_rows);
     let error = RwSignal::new(String::new());
+    let origin_of = move |key: u64| {
+        origins.with_untracked(|v| v.iter().find(|(k, _)| *k == key).map(|(_, e)| e.clone()))
+    };
+
+    // Meetings of CMI's that the user struck out. They are not rows — they
+    // are not on the timetable — but the editor is where you put one back,
+    // because "everything about this course" has to include the parts of it
+    // you took away.
+    let removed_meetings: Vec<(u64, Meeting)> = match &editing_code {
+        Some(c) if is_cmi => app.overrides.with_untracked(|o| {
+            o.items
+                .iter()
+                .filter(|x| x.course.eq_ignore_ascii_case(c) && x.to.is_none())
+                .filter_map(|x| x.base.clone().map(|b| (x.id, b)))
+                .collect()
+        }),
+        _ => Vec::new(),
+    };
+    let restored: RwSignal<Vec<u64>> = RwSignal::new(Vec::new());
+
+    // "Give it a time": open with a row already waiting, so the first thing
+    // on screen is the thing to fill in.
+    if add_meeting && removed_meetings.is_empty() {
+        let key = next_key();
+        rows.update(|r| r.push(MeetRowDraft::blank(key, first_slot)));
+    }
 
     // Live, per-row clash preview against everything else on the timetable.
     // Non-blocking, like every clash in this app.
-    let own_code = edit.unwrap_or_default();
+    let own_code = editing_code.clone().unwrap_or_default();
     let clash_text = {
         let slots = slots.clone();
         move |row: &MeetRowDraft| {
@@ -2964,15 +2814,24 @@ fn custom_course_dialog(app: App, edit: Option<String>, prefill: Option<String>)
         }
     };
 
-    let title = if let Some(c) = &editing {
-        format!("Edit {c}")
+    let title = match &editing_code {
+        Some(c) => format!("Edit {c}"),
+        None => "Add your own course".to_string(),
+    };
+    let lede = if is_cmi {
+        "One of CMI's courses. What you change here is yours — their data stays \
+         underneath it, every change is listed under Your changes, and any of it \
+         can be put back."
+    } else if creating {
+        "Seminars, reading groups, a class from another institute — anything CMI's \
+         pages don't list."
     } else {
-        "Add your own course".to_string()
+        "This is your own course — everything here is yours to change."
     };
     // Its own closure, so the note can appear the moment a sync introduces
     // the code — without rebuilding the form around it.
     let shadows = {
-        let code = editing.clone();
+        let code = own_editing.clone();
         move || {
             code.as_deref()
                 .is_some_and(|c| app.custom_shadows_official(c))
@@ -2982,19 +2841,58 @@ fn custom_course_dialog(app: App, edit: Option<String>, prefill: Option<String>)
     let add_row = move |_| {
         let key = next_key();
         rows.update(|r| r.push(MeetRowDraft::blank(key, first_slot)));
-        focus_later(format!("cc-day-{key}"));
+        focus_later(format!("ce-day-{key}"));
     };
 
     let save = {
         let slots = slots.clone();
-        let editing = editing.clone();
+        let own_editing = own_editing.clone();
+        let cmi_code = (is_cmi && !creating).then(|| subject_code.clone());
         move |_| {
+            let credits_v = if credits_other.get_untracked() {
+                match credits_text.get_untracked().trim().parse::<u8>() {
+                    Ok(v) if v <= 20 => v,
+                    _ => {
+                        error.set("Enter a whole number from 0 to 20.".to_string());
+                        return;
+                    }
+                }
+            } else {
+                credits.get_untracked()
+            };
+            let mut meetings: Vec<(Option<EffMeeting>, Meeting)> = Vec::new();
+            for (i, row) in rows.get_untracked().iter().enumerate() {
+                match row.to_meeting(&slots) {
+                    Ok(mut m) => {
+                        // Store the hall the way everything else spells it.
+                        m.hall = m.hall.as_deref().and_then(|h| app.canonical_hall(h));
+                        meetings.push((origin_of(row.key), m));
+                    }
+                    Err(e) => {
+                        error.set(format!("Meeting {}: {e}.", i + 1));
+                        return;
+                    }
+                }
+            }
+
+            // CMI's course: the form's rows become this course's overrides,
+            // whole — nothing else about it is ours to write.
+            if let Some(code) = &cmi_code {
+                let edited = meetings
+                    .into_iter()
+                    .map(|(from, to)| EditedMeeting { from, to })
+                    .collect();
+                app.save_course_edit(code, official_at_open.clone(), edited, Some(credits_v));
+                app.dialog.set(None);
+                return;
+            }
+
             let name_v = name.get_untracked().trim().to_string();
             if name_v.is_empty() {
                 error.set("Give the course a name.".to_string());
                 return;
             }
-            let code_v: String = code
+            let code_v: String = code_sig
                 .get_untracked()
                 .trim()
                 .chars()
@@ -3011,7 +2909,7 @@ fn custom_course_dialog(app: App, edit: Option<String>, prefill: Option<String>)
                 error.set("Keep the code to 12 characters or fewer.".to_string());
                 return;
             }
-            let renaming_from = editing.as_deref();
+            let renaming_from = own_editing.as_deref();
             let taken_official = renaming_from
                 .map(|orig| !orig.eq_ignore_ascii_case(&code_v))
                 .unwrap_or(true)
@@ -3035,41 +2933,17 @@ fn custom_course_dialog(app: App, edit: Option<String>, prefill: Option<String>)
                 error.set(format!("You already have a course called {code_v}."));
                 return;
             }
-            let credits_v = if credits_other.get_untracked() {
-                match credits_text.get_untracked().trim().parse::<u8>() {
-                    Ok(v) if v <= 20 => v,
-                    _ => {
-                        error.set("Enter a whole number from 0 to 20.".to_string());
-                        return;
-                    }
-                }
-            } else {
-                credits.get_untracked()
-            };
-            let mut meetings: Vec<Meeting> = Vec::new();
-            for (i, row) in rows.get_untracked().iter().enumerate() {
-                match row.to_meeting(&slots) {
-                    Ok(mut m) => {
-                        // Store the hall the way everything else spells it.
-                        m.hall = m.hall.as_deref().and_then(|h| app.canonical_hall(h));
-                        meetings.push(m);
-                    }
-                    Err(e) => {
-                        error.set(format!("Meeting {}: {e}.", i + 1));
-                        return;
-                    }
-                }
-            }
             let instructors: Vec<String> = instructor
                 .get_untracked()
                 .split('/')
                 .map(|s| s.trim().to_string())
                 .filter(|s| !s.is_empty())
                 .collect();
+            let meetings: Vec<Meeting> = meetings.into_iter().map(|(_, m)| m).collect();
             let no_meetings = meetings.is_empty();
             let course = Course::custom(code_v.clone(), name_v, instructors, credits_v, meetings);
-            let creating = editing.is_none();
-            app.save_custom_course(editing.as_deref(), course);
+            let creating = renaming_from.is_none();
+            app.save_custom_course(renaming_from, course);
             if creating {
                 if no_meetings {
                     app.toast_undo(format!(
@@ -3085,19 +2959,16 @@ fn custom_course_dialog(app: App, edit: Option<String>, prefill: Option<String>)
         }
     };
 
+    let cmi_name = subject.name.clone();
+    let cmi_code_text = subject.code.clone();
+    let cmi_teachers = subject.instructors.join(" / ");
+
     view! {
-        <div class="custom-form">
+        <div class="course-form">
             <h2>{title}</h2>
-            <p class="muted small form-lede">
-                {if editing.is_some() {
-                    "This is your own course — everything here is yours to change."
-                } else {
-                    "Seminars, reading groups, a class from another institute — \
-                     anything CMI's pages don't list."
-                }}
-            </p>
+            <p class="muted small form-lede">{lede}</p>
             {
-                let switch_code = editing.clone().unwrap_or_default();
+                let switch_code = own_editing.unwrap_or_default();
                 move || {
                     let switch_code = switch_code.clone();
                     shadows()
@@ -3122,51 +2993,81 @@ fn custom_course_dialog(app: App, edit: Option<String>, prefill: Option<String>)
                         })
                 }
             }
-            <div class="fieldrow">
-                <label for="cc-name">"Name"</label>
-                <input
-                    id="cc-name"
-                    type="text"
-                    placeholder="e.g. German A1"
-                    prop:value=name.get_untracked()
-                    on:input=move |ev| {
-                        name.set(event_target_value(&ev));
-                        if !code_touched.get_untracked() {
-                            code.set(suggest_code(&name.get_untracked()));
-                        }
+            // CMI's own fields: shown, so the form is about a course you can
+            // recognise, and not editable, because the planner never edits
+            // their pages. Renaming one is what "your own course" is for.
+            {is_cmi
+                .then(|| {
+                    view! {
+                        <div class="fieldrow ro">
+                            <span class="fieldlabel">"Name"</span>
+                            <span class="ro-value">{cmi_name}</span>
+                        </div>
+                        <div class="fieldrow ro">
+                            <span class="fieldlabel">"Code"</span>
+                            <span class="ro-value mono">{cmi_code_text}</span>
+                        </div>
+                        {(!cmi_teachers.is_empty())
+                            .then(|| {
+                                view! {
+                                    <div class="fieldrow ro">
+                                        <span class="fieldlabel">"Taught by"</span>
+                                        <span class="ro-value">{cmi_teachers}</span>
+                                    </div>
+                                }
+                            })}
                     }
-                />
-            </div>
-            <div class="fieldrow">
-                <label for="cc-code">"Code"</label>
-                <input
-                    id="cc-code"
-                    type="text"
-                    class="code-input"
-                    aria-describedby="cc-code-help"
-                    prop:value=move || code.get()
-                    on:input=move |ev| {
-                        code_touched.set(true);
-                        code.set(event_target_value(&ev).to_ascii_uppercase());
+                })}
+            {(!is_cmi)
+                .then(|| {
+                    view! {
+                        <div class="fieldrow">
+                            <label for="ce-name">"Name"</label>
+                            <input
+                                id="ce-name"
+                                type="text"
+                                placeholder="e.g. German A1"
+                                prop:value=name.get_untracked()
+                                on:input=move |ev| {
+                                    name.set(event_target_value(&ev));
+                                    if !code_touched.get_untracked() {
+                                        code_sig.set(suggest_code(&name.get_untracked()));
+                                    }
+                                }
+                            />
+                        </div>
+                        <div class="fieldrow">
+                            <label for="ce-code">"Code"</label>
+                            <input
+                                id="ce-code"
+                                type="text"
+                                class="code-input"
+                                aria-describedby="ce-code-help"
+                                prop:value=move || code_sig.get()
+                                on:input=move |ev| {
+                                    code_touched.set(true);
+                                    code_sig.set(event_target_value(&ev).to_ascii_uppercase());
+                                }
+                            />
+                            <span id="ce-code-help" class="muted small">
+                                "The short label shown on your timetable."
+                            </span>
+                        </div>
+                        <div class="fieldrow">
+                            <label for="ce-instructor">"Taught by"</label>
+                            <input
+                                id="ce-instructor"
+                                type="text"
+                                placeholder="optional"
+                                prop:value=instructor.get_untracked()
+                                on:input=move |ev| instructor.set(event_target_value(&ev))
+                            />
+                        </div>
                     }
-                />
-                <span id="cc-code-help" class="muted small">
-                    "The short label shown on your timetable."
-                </span>
-            </div>
+                })}
             <div class="fieldrow">
-                <label for="cc-instructor">"Taught by"</label>
-                <input
-                    id="cc-instructor"
-                    type="text"
-                    placeholder="optional"
-                    prop:value=instructor.get_untracked()
-                    on:input=move |ev| instructor.set(event_target_value(&ev))
-                />
-            </div>
-            <div class="fieldrow">
-                <span class="fieldlabel" id="cc-credits-label">"Credits"</span>
-                <div class="seg" role="group" aria-labelledby="cc-credits-label">
+                <span class="fieldlabel" id="ce-credits-label">"Credits"</span>
+                <div class="seg" role="group" aria-labelledby="ce-credits-label">
                     {[0u8, 1, 2, 3, 4]
                         .into_iter()
                         .map(|v| {
@@ -3209,12 +3110,46 @@ fn custom_course_dialog(app: App, edit: Option<String>, prefill: Option<String>)
                                     max="20"
                                     aria-label="Credits"
                                     style="width:5rem"
-                                    prop:value=credits_text.get_untracked()
+                                    // Reactive, so "Use CMI's value" is seen
+                                    // as well as saved.
+                                    prop:value=move || credits_text.get()
                                     on:input=move |ev| credits_text.set(event_target_value(&ev))
                                 />
                             }
                         })
                 }}
+                // What CMI counts it for, and one click back to it — the same
+                // "here is what you overwrote" every change in this app shows.
+                {official_credits
+                    .map(|official| {
+                        let note = official_credits_note.clone().unwrap_or_default();
+                        view! {
+                            <span class="muted small">{note}</span>
+                            {move || {
+                                let now = if credits_other.get() {
+                                    credits_text.get().trim().parse::<u8>().ok()
+                                } else {
+                                    Some(credits.get())
+                                };
+                                (now != Some(official))
+                                    .then(|| {
+                                        view! {
+                                            <button
+                                                type="button"
+                                                class="btn small"
+                                                on:click=move |_| {
+                                                    credits_other.set(official > 4);
+                                                    credits.set(official);
+                                                    credits_text.set(official.to_string());
+                                                }
+                                            >
+                                                "Use CMI's value"
+                                            </button>
+                                        }
+                                    })
+                            }}
+                        }
+                    })}
             </div>
 
             <h3 class="meetings-title">"Weekly meetings"</h3>
@@ -3222,19 +3157,82 @@ fn custom_course_dialog(app: App, edit: Option<String>, prefill: Option<String>)
                 each=move || rows.get()
                 key=|row| row.key
                 children={
+                    let slots = slots.clone();
                     move |row| {
                         let clash = clash_text(&row);
                         let row_key = row.key;
                         let remove = move |_| {
                             rows.update(|r| r.retain(|x| x.key != row_key));
-                            focus_later("cc-add-meeting".to_string());
+                            focus_later("ce-add-meeting".to_string());
                         };
-                        let day_id = format!("cc-day-{row_key}");
+                        let day_id = format!("ce-day-{row_key}");
                         let row_n = move || {
                             rows.with(|r| {
                                 r.iter().position(|x| x.key == row_key).map(|i| i + 1)
                             })
                             .unwrap_or(0)
+                        };
+                        // What this row replaces, shown only once it differs
+                        // from it: an untouched row has nothing to say, and a
+                        // changed one says exactly what it took the place of.
+                        let origin = origin_of(row_key);
+                        let base = if is_cmi {
+                            origin.as_ref().and_then(|e| e.base.clone())
+                        } else {
+                            None
+                        };
+                        let invented =
+                            is_cmi && origin.as_ref().is_none_or(|e| e.base.is_none());
+                        let origin_note = {
+                            let slots = slots.clone();
+                            base.map(|b| {
+                                let reset = b.clone();
+                                let text = b.describe();
+                                let differs = Memo::new(move |_| {
+                                    let _ = (
+                                        row.day.get(),
+                                        row.preset.get(),
+                                        row.start.get(),
+                                        row.end.get(),
+                                        row.hall.get(),
+                                    );
+                                    row.to_meeting(&slots)
+                                        .map(|m| !m.same_place_time(&b))
+                                        .unwrap_or(true)
+                                });
+                                view! {
+                                    {move || {
+                                        let text = text.clone();
+                                        let reset = reset.clone();
+                                        differs
+                                            .get()
+                                            .then(|| {
+                                                view! {
+                                                    <p class="row-origin">
+                                                        "CMI: "
+                                                        <span class="was gone">{text}</span>
+                                                        <button
+                                                            type="button"
+                                                            class="btn small"
+                                                            on:click=move |_| {
+                                                                row.day.set(reset.day.index());
+                                                                row.preset.set(Some(reset.slot.start_min));
+                                                                row.start.set(reset.slot.start_label());
+                                                                row.end.set(reset.slot.end_label());
+                                                                row.hall
+                                                                    .set(
+                                                                        reset.hall.clone().unwrap_or_default(),
+                                                                    );
+                                                            }
+                                                        >
+                                                            "Put it back"
+                                                        </button>
+                                                    </p>
+                                                }
+                                            })
+                                    }}
+                                }
+                            })
                         };
                         view! {
                             <div
@@ -3245,6 +3243,10 @@ fn custom_course_dialog(app: App, edit: Option<String>, prefill: Option<String>)
                                 <select
                                     id=day_id
                                     aria-label="Day"
+                                    // The options are built once, so the
+                                    // rendered choice has to follow the
+                                    // signal — "Put it back" writes it.
+                                    prop:value=move || row.day.get().to_string()
                                     on:change=move |ev| {
                                         if let Ok(i) = event_target_value(&ev).parse::<usize>() {
                                             row.day.set(i);
@@ -3267,6 +3269,12 @@ fn custom_course_dialog(app: App, edit: Option<String>, prefill: Option<String>)
                                 </select>
                                 <select
                                     aria-label="Time"
+                                    prop:value=move || {
+                                        row.preset
+                                            .get()
+                                            .map(|s| s.to_string())
+                                            .unwrap_or_else(|| "custom".to_string())
+                                    }
                                     on:change={
                                         let slots = slots.clone();
                                         move |ev| {
@@ -3338,19 +3346,28 @@ fn custom_course_dialog(app: App, edit: Option<String>, prefill: Option<String>)
                                     halls.clone(),
                                     own_halls.clone(),
                                     row.hall,
-                                    format!("cc-hall-{row_key}"),
+                                    format!("ce-hall-{row_key}"),
                                     "Hall or place",
                                     "Hall not set yet",
                                 )}
                                 <button
                                     type="button"
-                                    class="btn small icon"
+                                    class="btn small icon danger"
                                     aria-label=move || format!("Remove meeting {}", row_n())
                                     title="Remove this meeting"
                                     on:click=remove
                                 >
                                     "✕"
                                 </button>
+                                {invented
+                                    .then(|| {
+                                        view! {
+                                            <p class="row-origin">
+                                                "not on CMI's timetable — added by you"
+                                            </p>
+                                        }
+                                    })}
+                                {origin_note}
                                 // The live region itself must persist — a
                                 // screen reader announces changes INSIDE
                                 // one, not the arrival of a new node — so
@@ -3378,9 +3395,77 @@ fn custom_course_dialog(app: App, edit: Option<String>, prefill: Option<String>)
                         }
                     })
             }}
-            <button id="cc-add-meeting" type="button" class="btn small" on:click=add_row>
+            <button id="ce-add-meeting" type="button" class="btn small" on:click=add_row>
                 "＋ Add a weekly meeting"
             </button>
+            // Meetings of CMI's you struck out. They are not rows — they are
+            // not on your timetable — but this is where you put one back,
+            // because "everything about this course" has to include the parts
+            // of it you took away.
+            {
+                move || {
+                    let gone = restored.get();
+                    let items: Vec<(u64, Meeting)> = removed_meetings
+                        .iter()
+                        .filter(|(id, _)| !gone.contains(id))
+                        .cloned()
+                        .collect();
+                    let slots = slots.clone();
+                    (!items.is_empty())
+                        .then(move || {
+                            view! {
+                                <h3 class="meetings-title">"Meetings you removed"</h3>
+                                <ul class="removed-list">
+                                    {items
+                                        .into_iter()
+                                        .map(|(id, m)| {
+                                            let slots = slots.clone();
+                                            let restore = m.clone();
+                                            view! {
+                                                <li>
+                                                    <span class="was gone">{m.describe()}</span>
+                                                    <button
+                                                        type="button"
+                                                        class="btn small"
+                                                        on:click=move |_| {
+                                                            let key = next_key();
+                                                            origins
+                                                                .update(|v| {
+                                                                    v.push((
+                                                                        key,
+                                                                        EffMeeting {
+                                                                            meeting: restore.clone(),
+                                                                            overridden: false,
+                                                                            ov_id: Some(id),
+                                                                            base: Some(restore.clone()),
+                                                                            user_created: false,
+                                                                        },
+                                                                    ))
+                                                                });
+                                                            rows.update(|r| {
+                                                                r.push(
+                                                                    MeetRowDraft::from_meeting(
+                                                                        key,
+                                                                        &restore,
+                                                                        &slots,
+                                                                    ),
+                                                                )
+                                                            });
+                                                            restored.update(|r| r.push(id));
+                                                            focus_later(format!("ce-day-{key}"));
+                                                        }
+                                                    >
+                                                        "Put it back"
+                                                    </button>
+                                                </li>
+                                            }
+                                        })
+                                        .collect_view()}
+                                </ul>
+                            }
+                        })
+                }
+            }
             <p class="form-error" aria-live="polite">
                 {move || {
                     let e = error.get();
@@ -3395,11 +3480,12 @@ fn custom_course_dialog(app: App, edit: Option<String>, prefill: Option<String>)
                     "Cancel"
                 </button>
                 <button class="btn primary" on:click=save>
-                    {if editing.is_some() { "Save changes" } else { "Add to my timetable" }}
+                    {if creating { "Add to my timetable" } else { "Save changes" }}
                 </button>
             </div>
         </div>
     }
+    .into_any()
 }
 
 /// Whether the clash-note verb should read "save" (editing) or "add".

@@ -68,7 +68,6 @@ fn init_app() -> (App, bool) {
         banner: RwSignal::new(None),
         conflicts: RwSignal::new(Vec::new()),
         what_changed: RwSignal::new(None),
-        credit_edit: RwSignal::new(None),
         removed_upstream: RwSignal::new(Vec::new()),
         unknown_codes: RwSignal::new(Vec::new()),
         fetch_log: RwSignal::new(Vec::new()),
@@ -169,6 +168,7 @@ fn apply_url_state(app: App) {
                     *ovs = store;
                     purge_custom_overrides(customs, ovs);
                 }
+                unhide_selected(sel, ovs);
             });
         }
         return;
@@ -215,11 +215,21 @@ fn apply_url_state(app: App) {
                 *ovs = store;
                 purge_custom_overrides(customs, ovs);
             }
+            unhide_selected(sel, ovs);
         });
     } else {
         app.sync_url();
     }
     app.unknown_codes.set(unknown);
+}
+
+/// A course cannot be on the timetable AND deleted. A link that names one —
+/// an old bookmark opened after the course was deleted, or a share link from
+/// someone who never deleted it — is the user asking for it back.
+fn unhide_selected(selection: &[String], overrides: &mut ttcore::model::OverridesStore) {
+    for code in selection {
+        overrides.unhide(code);
+    }
 }
 
 pub fn apply_theme(app: App) {

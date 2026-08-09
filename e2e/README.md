@@ -23,7 +23,7 @@ Environment knobs: `CHROME_BIN` (default `/usr/bin/chromium`), `DIST_DIR`,
 `PORT`, `CARGO_TARGET_DIR` (for the seed generator; defaults to
 `~/.rust-target-e2e`).
 
-Covered flows (43 tests): Sync-now header + hidden developer mode (URL
+Covered flows (57 tests): Sync-now header + hidden developer mode (URL
 endpoint only), `?c=` selection + clash badges/panel (any casing), unknown-
 code warning, credits defaulting to 4 and per-course credit overwrites,
 master-grid ⚠ would-clash markers and clash toast on add, the ⓘ details
@@ -64,7 +64,15 @@ override bookkeeping, parking off the timetable instead of deleting,
 share links carrying full definitions to a fresh browser, delete as one
 undoable step, a course whose code a later CMI sync also introduces (your
 version keeps winning, the catalog chip refreshes live when you switch to
-CMI's), and the create form surviving a sync that lands mid-typing.
+CMI's), and the create form surviving a sync that lands mid-typing — plus the
+one course editor: every course, CMI's and your own, is changed in a single
+form (times, hall, credits, and for your own its name and code), saved as
+ONE undoable step, with each changed row saying which of CMI's meetings it
+replaces and a list of the ones you struck out so they can be put back;
+deleting one of CMI's courses (it leaves the timetable, the catalog and the
+master grid, is listed under Your changes with a Restore, and a link naming
+it lifts the deletion); courses you added and deleted appearing in that same
+list; and every button that takes something away wearing the same red.
 
 The app ships no timetable data, so the suite derives a snapshot from
 `core/fixtures/` at startup (via core's `snapshot_json` example — cargo must

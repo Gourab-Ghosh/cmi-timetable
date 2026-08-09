@@ -1,7 +1,7 @@
 //! URL state: the `?c=` course-code list and the `&s=` compressed share
 //! payload (selection + overrides). When both are present, `s` wins.
 
-use crate::model::{Course, CreditOverride, MeetingOverride, OverridesStore};
+use crate::model::{Course, CreditOverride, HiddenCourse, MeetingOverride, OverridesStore};
 use serde::{Deserialize, Serialize};
 
 /// Canonical `?c=` value: uppercase codes, comma-separated, order preserved.
@@ -86,6 +86,11 @@ pub struct SharePayload {
     /// made before customs existed.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub x: Vec<Course>,
+    /// Courses the sender deleted. A share link carries the sender's whole
+    /// planner, and a course they struck out is as much a part of it as a
+    /// meeting they moved — the recipient can restore any of it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub d: Vec<HiddenCourse>,
 }
 
 /// Compress selection + overrides + the selection's custom courses into a
@@ -101,6 +106,7 @@ pub fn encode_share(
         o: overrides.items.clone(),
         k: overrides.credits.clone(),
         x: customs.to_vec(),
+        d: overrides.hidden.clone(),
     };
     let json = serde_json::to_string(&payload).expect("share payload serializes");
     lz_str::compress_to_encoded_uri_component(json.as_str())
@@ -145,6 +151,7 @@ pub fn resolve_url_state(c: Option<&str>, s: Option<&str>) -> UrlState {
                 next_id,
                 items: payload.o,
                 credits: payload.k,
+                hidden: payload.d,
             }),
             customs: payload.x,
         };

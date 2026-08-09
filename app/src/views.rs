@@ -573,8 +573,9 @@ fn my_timetable(app: App) -> impl IntoView {
                     })
             }}
 
-            // Your changes — every overwrite of CMI data in one place, each
-            // showing the official value it replaces, with one-click removal.
+            // Your changes — everything you added, deleted or overwrote, in
+            // one place, each showing what of CMI's it stands in for, with
+            // one-click removal.
             {move || {
                 (app.custom_change_count() > 0)
                     .then(|| {
@@ -585,9 +586,9 @@ fn my_timetable(app: App) -> impl IntoView {
                                     " Your changes"
                                 </h3>
                                 <p class="muted small">
-                                    "These overwrite CMI's data in your timetable. Remove \
-                                     one to go back to the official value — every change \
-                                     is also undoable (Ctrl+Z)."
+                                    "Everything you've added, deleted or overwritten in \
+                                     your timetable. Remove one to go back to CMI's \
+                                     version — every change is also undoable (Ctrl+Z)."
                                 </p>
                                 {overrides_list(app)}
                             </div>
@@ -645,12 +646,10 @@ fn my_timetable(app: App) -> impl IntoView {
                                                         on:click=move |_| {
                                                             app.dialog
                                                                 .set(
-                                                                    Some(Dialog::EditMeeting {
-                                                                        course: give_code.clone(),
-                                                                        ov_id: None,
-                                                                        base: None,
-                                                                        init: app.default_meeting(),
-                                                                        create: true,
+                                                                    Some(Dialog::EditCourse {
+                                                                        code: Some(give_code.clone()),
+                                                                        prefill: None,
+                                                                        add_meeting: true,
                                                                     }),
                                                                 );
                                                         }
@@ -899,9 +898,10 @@ fn my_courses(app: App) -> impl IntoView {
                                     on:click=move |_| {
                                         app.dialog
                                             .set(
-                                                Some(Dialog::CustomCourse {
-                                                    edit: None,
+                                                Some(Dialog::EditCourse {
+                                                    code: None,
                                                     prefill: None,
+                                                    add_meeting: false,
                                                 }),
                                             );
                                     }
@@ -931,9 +931,10 @@ fn my_courses(app: App) -> impl IntoView {
                                 on:click=move |_| {
                                     app.dialog
                                         .set(
-                                            Some(Dialog::CustomCourse {
-                                                edit: None,
+                                            Some(Dialog::EditCourse {
+                                                code: None,
                                                 prefill: None,
+                                                add_meeting: false,
                                             }),
                                         );
                                 }
@@ -994,9 +995,10 @@ fn my_courses(app: App) -> impl IntoView {
                                                     on:click=move |_| {
                                                         app.dialog
                                                             .set(
-                                                                Some(Dialog::CustomCourse {
-                                                                    edit: Some(edit_code.clone()),
+                                                                Some(Dialog::EditCourse {
+                                                                    code: Some(edit_code.clone()),
                                                                     prefill: None,
+                                                                    add_meeting: false,
                                                                 }),
                                                             );
                                                     }
@@ -1020,12 +1022,10 @@ fn course_card(app: App, course: Course) -> impl IntoView {
     let is_custom = app.is_custom(&code);
     let shadows = is_custom && app.custom_shadows_official(&code);
     let eff = app.effective_meetings(&course);
-    let has_overrides = eff.iter().any(|e| e.overridden);
     let has_meetings = !eff.is_empty();
     let clash = app.course_has_clash(&code);
     let removed = app.is_removed_upstream(&code);
     let remove_code = code.clone();
-    let reset_code = code.clone();
     let cr_course = course.clone();
     let cr_code = code.clone();
     let cr_code_title = code.clone();
@@ -1123,64 +1123,37 @@ fn course_card(app: App, course: Course) -> impl IntoView {
                     })}
             </div>
             {has_meetings.then(|| view! { <ul class="meetings">{meeting_rows}</ul> })}
+            // One way in to changing anything about a course, and one way to
+            // take it off the timetable. The row used to carry four buttons
+            // (edit, add a meeting, reset the times, remove) on top of three
+            // more on every meeting line.
             <div class="row card-actions">
-                {is_custom
-                    .then(|| {
-                        let edit_code = code.clone();
-                        view! {
-                            <button
-                                class="btn small"
-                                title="Change this course's name, code, credits or times"
-                                on:click=move |_| {
-                                    app.dialog
-                                        .set(
-                                            Some(Dialog::CustomCourse {
-                                                edit: Some(edit_code.clone()),
-                                                prefill: None,
-                                            }),
-                                        );
-                                }
-                            >
-                                "Edit course"
-                            </button>
-                        }
-                    })}
-                <button
-                    class="btn small"
-                    title="Give this course an extra weekly time slot"
-                    on:click={
-                        let add_code = code.clone();
-                        move |_| {
-                            app.dialog
-                                .set(
-                                    Some(Dialog::EditMeeting {
-                                        course: add_code.clone(),
-                                        ov_id: None,
-                                        base: None,
-                                        init: app.default_meeting(),
-                                        create: true,
-                                    }),
-                                );
-                        }
+                {
+                    let edit_code = code;
+                    let no_meetings = !has_meetings;
+                    view! {
+                        <button
+                            class="btn small"
+                            title="Change this course's times, hall and credits — all in one \
+                                   place"
+                            on:click=move |_| {
+                                app.dialog
+                                    .set(
+                                        Some(Dialog::EditCourse {
+                                            code: Some(edit_code.clone()),
+                                            prefill: None,
+                                            add_meeting: no_meetings,
+                                        }),
+                                    );
+                            }
+                        >
+                            {if no_meetings { "Give it a time" } else { "Edit course" }}
+                        </button>
                     }
-                >
-                    "Add a meeting"
-                </button>
-                {has_overrides
-                    .then(|| {
-                        let reset_code = reset_code.clone();
-                        view! {
-                            <button
-                                class="btn small"
-                                on:click=move |_| app.reset_course_overrides(&reset_code)
-                            >
-                                "Reset to CMI's times"
-                            </button>
-                        }
-                    })}
+                }
                 <div class="grow"></div>
                 <button
-                    class="btn small quiet-danger"
+                    class="btn small danger"
                     title="Take this course off your timetable — its times stay if you add it back"
                     on:click=move |_| app.remove_course(&remove_code)
                 >
@@ -1304,6 +1277,7 @@ fn master_grid(app: App) -> impl IntoView {
                  · ⚠ clashes with your timetable · rearrange with ✎ Edit layout"
             </p>
             {filter_bar(app, count)}
+            {deleted_note(app)}
             <div
                 class="grid-scroll"
                 class:density-compact=move || app.prefs.with(|p| p.density) == Density::Compact
@@ -1363,6 +1337,35 @@ fn master_grid(app: App) -> impl IntoView {
 // 4. Catalog
 // ---------------------------------------------------------------------------
 
+/// Courses missing from a list because YOU took them out say so, where the
+/// absence is felt. A list quietly shorter than CMI's is one nobody can
+/// trust — and the way back has to be one click from the gap.
+fn deleted_note(app: App) -> impl IntoView {
+    view! {
+        {move || {
+            let gone = app.hidden_courses();
+            (!gone.is_empty())
+                .then(|| {
+                    let n = gone.len();
+                    view! {
+                        <p class="deleted-note" role="note">
+                            <span>
+                                {format!(
+                                    "{n} course{} you deleted {} hidden here.",
+                                    if n == 1 { "" } else { "s" },
+                                    if n == 1 { "is" } else { "are" },
+                                )}
+                            </span>
+                            <button class="btn small" on:click=move |_| app.restore_all_courses()>
+                                {if n == 1 { "Restore it" } else { "Restore them" }}
+                            </button>
+                        </p>
+                    }
+                })
+        }}
+    }
+}
+
 fn catalog(app: App) -> impl IntoView {
     let filtered = Memo::new(move |_| {
         // This re-runs on every keystroke in the search box, and `.get`
@@ -1395,13 +1398,20 @@ fn catalog(app: App) -> impl IntoView {
                     title="Add a course CMI's pages don't list"
                     on:click=move |_| {
                         app.dialog
-                            .set(Some(Dialog::CustomCourse { edit: None, prefill: None }));
+                            .set(
+                                Some(Dialog::EditCourse {
+                                    code: None,
+                                    prefill: None,
+                                    add_meeting: false,
+                                }),
+                            );
                     }
                 >
                     "＋ Add your own course"
                 </button>
             </div>
             {filter_bar(app, count)}
+            {deleted_note(app)}
             // Keyed list: rows persist across filter changes, so the page
             // keeps its scroll position and focus while filtering. The key
             // fingerprints the content so a sync remounts changed rows.
@@ -1430,10 +1440,43 @@ fn catalog(app: App) -> impl IntoView {
                                     })
                             })
                             .flatten();
+                        let deleted = (!needle.is_empty())
+                            .then(|| {
+                                let gone = app.hidden_courses();
+                                app.snapshot
+                                    .with(|s| {
+                                        gone.iter()
+                                            .find_map(|code| {
+                                                let c = s.course_ci(code)?;
+                                                let hit = c.code.to_lowercase().contains(&needle)
+                                                    || c.name.to_lowercase().contains(&needle);
+                                                hit.then(|| (c.code.clone(), c.name.clone()))
+                                            })
+                                    })
+                            })
+                            .flatten();
                         view! {
                             <div class="empty panel">
                                 <p class="big">"No courses match."</p>
                                 <p>"Loosen a filter or clear the search to see more."</p>
+                                // It IS one of CMI's — you deleted it. Say so
+                                // and offer the way back, instead of offering
+                                // to create it and then refusing the code.
+                                {deleted
+                                    .map(|(code, name)| {
+                                        let restore = code.clone();
+                                        view! {
+                                            <p class="muted">
+                                                {format!("You deleted “{name}” ({code}).")}
+                                            </p>
+                                            <button
+                                                class="btn"
+                                                on:click=move |_| app.restore_course(&restore)
+                                            >
+                                                "Restore it"
+                                            </button>
+                                        }
+                                    })}
                                 // Your own courses aren't in CMI's catalog,
                                 // so searching for one lands here. Say where
                                 // it actually is instead of offering to
@@ -1466,9 +1509,10 @@ fn catalog(app: App) -> impl IntoView {
                                                 on:click=move |_| {
                                                     app.dialog
                                                         .set(
-                                                            Some(Dialog::CustomCourse {
-                                                                edit: None,
+                                                            Some(Dialog::EditCourse {
+                                                                code: None,
                                                                 prefill: Some(prefill.clone()),
+                                                                add_meeting: false,
                                                             }),
                                                         );
                                                 }
@@ -1488,6 +1532,7 @@ fn catalog(app: App) -> impl IntoView {
 fn catalog_row(app: App, course: Course) -> impl IntoView {
     let code = course.code.clone();
     let toggle_code = code.clone();
+    let danger_code = code.clone();
     let click_code = code.clone();
     // See course_card: built out here so the markup borrows nothing.
     let branch_chips: Vec<_> = course
@@ -1556,9 +1601,12 @@ fn catalog_row(app: App, course: Course) -> impl IntoView {
                 {move || {
                     temp().then(|| view! { <span class="badge warn">"temporary booking"</span> })
                 }}
+                // One button, two jobs, and it wears the colour of whichever
+                // it is about to do: quiet accent to add, red to take away.
                 <button
                     class="btn small"
                     class:ghost-accent=move || !app.is_selected(&toggle_code)
+                    class:danger=move || app.is_selected(&danger_code)
                     on:click=move |_| app.toggle_select(&click_code)
                 >
                     // `code` itself: the view macro builds children before

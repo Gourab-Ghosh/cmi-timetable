@@ -2,7 +2,7 @@
 //! that a valid `&s=` payload beats `c=`.
 
 use cmi_timetable_core::model::{
-    CreditOverride, Day, Meeting, MeetingOverride, OverridesStore, Slot,
+    CreditOverride, Day, HiddenCourse, Meeting, MeetingOverride, OverridesStore, Slot,
 };
 use cmi_timetable_core::share::{
     decode_share, encode_share, parse_c_param, resolve_url_state, selection_to_c_param,
@@ -83,6 +83,10 @@ fn share_payload_round_trip() {
             credits: 2,
             created_at: 1_754_000_000_000.0,
         }],
+        hidden: vec![HiddenCourse {
+            course: "QCOM".to_string(),
+            created_at: 1_754_000_000_000.0,
+        }],
     };
     let encoded = encode_share(&selection, &overrides, &[]);
     // Must be URI-component-safe as produced.
@@ -96,14 +100,34 @@ fn share_payload_round_trip() {
     assert_eq!(payload.c, selection);
     assert_eq!(payload.o, overrides.items);
     assert_eq!(payload.k, overrides.credits);
+    assert_eq!(payload.d, overrides.hidden);
 
     // The resolved state rebuilds a usable store: next_id past every item,
-    // credit overrides carried along.
+    // credit overrides and deleted courses carried along.
     let state = resolve_url_state(None, Some(&encoded));
     let store = state.overrides.expect("s payload present");
     assert_eq!(store.next_id, 4);
     assert_eq!(store.items, overrides.items);
     assert_eq!(store.credits_for("SVA"), Some(2));
+    assert!(
+        store.is_hidden("qcom"),
+        "a deleted course travels, any casing"
+    );
+}
+
+#[test]
+fn share_payload_without_deletions_still_decodes() {
+    // Payloads from before deleting a CMI course existed have no `d` field,
+    // and a store with nothing hidden must not grow one on the way out.
+    let json = r#"{"v":1,"c":["TOC"],"o":[],"k":[]}"#;
+    let encoded = lz_str::compress_to_encoded_uri_component(json);
+    let payload = decode_share(&encoded).expect("old payload decodes");
+    assert!(payload.d.is_empty());
+    let store = resolve_url_state(None, Some(&encoded))
+        .overrides
+        .expect("s payload present");
+    assert!(store.hidden.is_empty());
+    assert!(store.is_empty(), "no items, no credits, nothing hidden");
 }
 
 #[test]

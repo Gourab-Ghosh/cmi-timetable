@@ -103,18 +103,34 @@ my custom changes"). When both are present, `s` wins. The query stays
   own search field plus **All** / **None** shortcuts that act on whatever
   the search currently shows. A **Course** dropdown filters to hand-picked
   courses.
+- **One editor per course.** Clicking any course and pressing **Edit this
+  course** opens the whole of it in one form — every weekly meeting (day,
+  time, hall), its credits, and for a course of your own its name and code —
+  saved in a single step you can undo in one go. Each row you change says
+  which of CMI's meetings it replaces, with **Put it back**; meetings you
+  struck out are listed underneath so you can put those back too.
 - Deselecting a course **keeps** its custom times, so re-adding it (or
   spotting it in the master grid) doesn't silently revert a move. Remove
-  custom times explicitly per meeting, per course, or in **My data**.
+  custom times in the editor, or in **My data**.
+- **Deleting** a course takes it out of your planner entirely: off the
+  timetable, out of the catalog and the master grid. CMI's pages are never
+  edited, so this is your copy of them — the deletion is listed under "Your
+  changes" with a one-click **Restore** that brings the course back along
+  with everything you had done to it, the catalog says how many are hidden,
+  and a link naming a deleted course lifts the deletion. Anything that takes
+  something away — delete, remove, clear, reset — is **red**.
 - **Every custom change is visible in one place**: the "Your changes" panel
-  on My timetable (and the same list inside **My data**) shows each custom
-  meeting and credit change as *official → yours*, each with a one-click
-  Remove, plus "Remove all changes". A "✎ N changes" pill sits in the grid
-  toolbars whenever custom data is in play, and overridden meeting rows say
-  inline exactly which CMI time they overwrite.
-- **Any course can gain extra time slots**: "Add a meeting" (course card or
-  details dialog) appends another weekly meeting; unscheduled courses get
-  the same flow as "Give it a time".
+  on My timetable (and the same list inside **My data**) shows each one as
+  *official → yours*, grouped by what kind of change it is — courses you
+  added, courses you deleted, meetings moved, added or removed, credits you
+  set — each with a one-click Remove or Restore, plus "Remove all changes"
+  (which keeps your own courses). A "✎ N changes" pill sits in the grid
+  toolbars whenever custom data is in play, counting exactly the rows in
+  that list, and overridden meeting rows say inline which CMI time they
+  overwrite.
+- **Any course can gain extra time slots**: "＋ Add a weekly meeting" in the
+  editor appends another one; a course CMI hasn't scheduled opens the same
+  form through "Give it a time".
 - In the master grid your selected courses are unmistakable — a **✓ mark
   plus an accent ring** (never color alone); an **ⓘ** button opens full
   course details, and unselected courses that would clash with your current
@@ -126,9 +142,9 @@ my custom changes"). When both are present, `s` wins. The query stays
   shorter month span, in which case the assumption is **one credit per
   month** ("(Oct-Nov)" ⇒ 2 credits, "(Sep)" ⇒ 1; the tooltip explains).
   Stated credits are never second-guessed. My courses shows the total plus
-  a per-value breakdown ("1 × 4 cr · 2 × 2 cr"). The details dialog lets
-  you **overwrite credits** per course (totals, filters and the catalog
-  follow suit), with a one-click reset to CMI's value.
+  a per-value breakdown ("1 × 4 cr · 2 × 2 cr"). The editor lets you
+  **overwrite credits** per course (totals, filters and the catalog follow
+  suit), with a one-click "Use CMI's value".
 - **Your own courses**: "Add your own course" (My courses, or the catalog —
   including straight from a failed search) creates anything CMI's pages
   don't list: seminars, reading groups, classes from other institutes.
@@ -138,10 +154,11 @@ my custom changes"). When both are present, `s` wins. The query stays
   They behave like real courses everywhere — clash detection, drag & drop,
   credit totals, .ics export — but their definition is yours: drags and
   edits change the course itself (no override bookkeeping), a violet
-  **Custom** badge marks them, "Remove" parks them under "off the
-  timetable" with the definition intact, and the full share link carries
-  them whole to other browsers. Opening one gives you **Delete this
-  course** right there (still undoable); if a later CMI sync introduces
+  **Custom** badge marks them, they are listed as "Courses you added" among
+  your changes, "Remove" parks them under "off the timetable" with the
+  definition intact, and the full share link carries them whole to other
+  browsers. Opening one gives you **Delete this course** right there (still
+  undoable); if a later CMI sync introduces
   the same code, your version keeps winning and a note offers a one-click
   switch to CMI's.
 

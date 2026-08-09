@@ -289,10 +289,10 @@ and no committed mirror (fixtures exist only for tests/e2e seed).
   chip, details, export) — a later CMI sync that introduces the same code
   never replaces user data, it just lights up `custom_shadows_official`
   plus a one-click "Use CMI's version instead"; (2) a custom course NEVER
-  carries overrides — its definition IS its schedule, so apply_override /
-  select_and_override / add_meeting / remove_meeting / set_credit_override
-  all branch to `edit_custom_meetings` (which re-sorts + re-derives
-  status), and every writer purges overrides under a custom code
+  carries overrides — its definition IS its schedule, so `apply_override` /
+  `select_and_override` branch to `edit_custom_meetings` (which re-sorts +
+  re-derives status), the course editor writes the definition through
+  `save_custom_course`, and every writer purges overrides under a custom code
   (save/delete in state.rs, `purge_custom_overrides` on share import —
   a shared store is written wholesale and can aim at a code the recipient
   owns). Customs are undoable like everything else: `UndoEntry.customs` +
@@ -300,6 +300,79 @@ and no committed mirror (fixtures exist only for tests/e2e seed).
   "Remove" parks them (`parked_customs`, still in the store, off the
   selection); only Delete destroys. Renames rewrite the selection entry
   and then dedupe it (a code CMI dropped can still hold a slot).
+- **ONE editor per course, and it is the only thing that writes one.**
+  `Dialog::EditCourse { code, prefill, add_meeting }` →
+  `ui::course_editor_dialog` serves all three cases (create your own / edit
+  your own / edit one of CMI's). CMI's name, code and instructors are shown
+  read-only — a course of theirs under another name is a course of your own —
+  and their times, hall and credits are all overwritable. A course CMI has
+  since DROPPED still opens the editor (on `selected_course`'s stub, with an
+  empty official list), or its card's one button would be a dead end. Everything else is
+  READ-ONLY: `meeting_row` is a line you read, `credits_display` states a
+  number and where it came from. There is no per-meeting dialog and no
+  per-field Edit; `Dialog::EditMeeting`, `edit_meeting_dialog`, `add_meeting`,
+  `remove_meeting`, `set_credit_override` and `reset_course_overrides` were
+  deleted with it (R29). Drag & drop and keyboard move mode still write
+  through `apply_override`/`select_and_override` — those are gestures, not
+  forms.
+- **A `<select>`'s options are built once, so what it SHOWS must come from a
+  reactive `prop:value`** — `selected=…get_untracked()` alone is a one-time
+  attribute. The editor's "Put it back" and "Use CMI's value" write the row's
+  signals; without the prop the control kept showing the old value and the
+  form saved something it had never displayed. Applies to the Day and Time
+  selects, `hall_picker`'s select and the credits number box.
+- **`App::save_course_edit` REBUILDS a course's overrides from the editor's
+  rows** rather than patching them, in ONE `act`. An override exists exactly
+  when a row differs from CMI's meeting (compared with `same_place_time`, so
+  their TMP* decoration isn't the user's to reproduce), and a CMI meeting no
+  row claims is a removal. That is what makes "put it back where CMI has it"
+  cost nothing and lets the form restore a meeting struck out earlier. Two
+  claim passes preserve identity — exact (base,to) first, then same-base — so
+  an unchanged override keeps its id and `created_at` (the sync merge compares
+  that against CMI's edits) and an edited one keeps them too. A row the user
+  invented on a course that isn't selected selects it (and lifts a deletion),
+  as one step. THREE rules the review caught, each of which lost data before
+  it existed: (a) `official` is what CMI had when the form OPENED (the editor
+  passes it in), not at save time — a sync landing behind the modal would
+  otherwise turn every one of CMI's new meetings into a removal the user
+  never made; (b) "the row equals its base ⇒ store nothing" holds only when
+  that base is still one of CMI's meetings — a STALE base (an unresolved
+  conflict, or a share link imported against fresher data) stands for
+  nothing, so dropping the row would delete a meeting the form was showing
+  (e2e t57 pins this); (c) a row the user wrote that says exactly what CMI
+  says CLAIMS that meeting instead of becoming an override, or striking one
+  out and adding it back would read as two changes for nothing.
+- **Deleting one of CMI's courses = hiding it** (`OverridesStore.hidden`,
+  share field `d`): off the timetable, out of the catalog and the master grid
+  (one early return in `course_matches`), and listed in Your changes as
+  "Course you deleted" with a Restore. Its own meeting/credit changes are
+  KEPT in the store but filtered out of the changes list and its count, so
+  Restore gives back the course AND everything you had done to it. Selecting a
+  course unhides it (`add_course`, and `app::unhide_selected` on the URL /
+  share path, so an old bookmark naming a deleted course lifts the deletion
+  instead of contradicting it) — nothing can be on your timetable and deleted
+  at once. **The Halls tab deliberately ignores deletions:** it
+  answers "is this room free?", and a booking of CMI's stays true whether or
+  not you want the course. The catalog says how many are hidden
+  (`.deleted-note`) — a catalog quietly shorter than CMI's is a catalog
+  nobody can trust.
+- **Your changes lists WHOLE COURSES too** (`OwnChange::CourseAdded` from
+  `CustomStore`, `CourseDeleted` from `hidden`), ordered before the
+  meeting-level kinds, and `custom_change_count` counts them — the number on
+  the ✎ pill must equal the rows in the list it opens. "Remove all changes"
+  clears items + credits + hidden and KEEPS the user's own courses.
+- **A dialog focuses its first FIELD, and only then its first button**
+  (`DialogHost`). Space is how people scroll a tall dialog, and the course
+  editor's first button is a credits toggle — landing there turned a scroll
+  into "this course is worth 0 credits".
+- **Red = it takes something away.** `.btn.danger` is red at rest (text +
+  32%-tinted border, wash on hover), not only on hover and not only in the
+  danger zone — R29 replaced that rule at the user's request. It is on every
+  delete/remove/clear/reset: course, meeting row ✕, card Remove, the
+  Add/Remove toggle when it would remove, each row's Remove in Your changes
+  (but NOT Restore), Remove all changes, Clear selection, Clear cache, Reset
+  preferences, Delete all app data. Clash red never looks like it: clashes
+  are filled `.badge.alarm`, never buttons.
 - The header's "Synced … ago" pill and its 48 h stale tint tick on their
   own: Header owns a `now: RwSignal<f64>` bumped by a 30 s
   `gloo_timers::callback::Interval` plus a `visibilitychange` listener
@@ -314,7 +387,7 @@ and no committed mirror (fixtures exist only for tests/e2e seed).
 ## 5. Build & test commands (exact)
 
 ```sh
-# native tests (66; --features html for the fixture-driven parser tests)
+# native tests (67; --features html for the fixture-driven parser tests)
 CARGO_TARGET_DIR=~/.rust-target-e2e cargo test --workspace --features html
 # app build for e2e (never plain dist while trunk serve runs).
 # RUSTFLAGS="" on purpose: a global ~/.cargo/config.toml carrying
@@ -323,7 +396,7 @@ CARGO_TARGET_DIR=~/.rust-target-e2e cargo test --workspace --features html
 # `__wbindgen_externref_table_alloc`. Emptying it for this build restores
 # the wasm defaults without touching anything outside the repo.
 cd app && RUSTFLAGS="" CARGO_TARGET_DIR=~/.rust-target-e2e trunk build --release --dist dist-e2e
-# e2e (52 tests; self-generates seed via core example, needs cargo on PATH)
+# e2e (57 tests; self-generates seed via core example, needs cargo on PATH)
 cd e2e && DIST_DIR=../app/dist-e2e .venv/bin/python test_app.py
 # ...or just a few, by name fragment
 cd e2e && DIST_DIR=../app/dist-e2e .venv/bin/python test_app.py t44 t45
@@ -341,7 +414,7 @@ regenerates the .ics golden.
 
 ## 6. Current state
 
-- Tests: 66 native + 52/52 e2e green. Meeting removals: `MeetingOverride.to`
+- Tests: 67 native + 57/57 e2e green. Meeting removals: `MeetingOverride.to`
   is `Option<Meeting>` (None = removed; legacy JSON/share payloads still
   load — present meeting ⇒ Some). Out-of-grid times: **all three tables grow
   synthetic `.extra` columns**, each from its own source, all built by the
@@ -931,3 +1004,56 @@ regenerates the .ics golden.
   hover/focus (full always on touch). t49/t50 updated for the new gutters;
   shots 32 and 35 (dark). 66 native + 52/52 e2e. Committed locally, NOT
   pushed — the user asked to hold pushes again.
+- **R29 (one editor per course; delete CMI courses; red means delete):**
+  user: "Instead of having edit for all fields when I click on a cmi course,
+  add a single edit button from where I can edit everything at once, similar
+  for custom courses. Add a delete option for cmi courses as well. And any
+  addition and deletion of course should also be mentioned in the overwrite
+  section… The delete the course and any other thing like that should be in
+  red color by default (similar to delete all app data under my data)."
+  Three changes, one round.
+  (1) **One editor.** `custom_course_dialog` became `course_editor_dialog`
+  and now serves CMI's courses too: their name/code/teacher read-only, their
+  times, hall and credits editable, each changed row saying what it replaced
+  with a "Put it back", and a "Meetings you removed" list so a struck-out
+  meeting can be restored from the same form. Saving is ONE undoable step
+  (`App::save_course_edit`, which rebuilds the course's overrides from the
+  rows — see §4). Everything else went read-only: `meeting_row` lost its
+  Edit / Reset / Remove, `credits_editor` became `credits_display`, the card
+  dropped "Add a meeting" and "Reset to CMI's times", and the whole
+  per-meeting dialog (`Dialog::EditMeeting`, 233 lines) plus four now-dead
+  App methods were deleted.
+  (2) **Delete for CMI's courses.** Deleting cannot touch CMI's pages, so it
+  hides the course in the user's planner — `OverridesStore.hidden`, dropped
+  overrides, out of catalog and master grid, restorable from Your changes,
+  carried by share links (`d`), with the catalog owning up to the gap. The
+  Halls tab keeps every booking (§4).
+  (3) **Additions and deletions in Your changes.** Two new groups, "Courses
+  you added" (the user's own courses, action: Delete) and "Courses you
+  deleted" (action: Restore), ahead of the meeting-level kinds; the ✎ pill
+  now counts them so the number matches the list.
+  (4) **Red by default.** `.btn.danger` had been quiet at rest and red only
+  on hover, which is exactly what the user hit — "Delete all app data" was
+  red only because `.danger-zone` overrode it. Now red always, and applied
+  to every take-away action in the app (§4); `.btn.quiet-danger` deleted.
+  Verification: 67 native + 57/57 e2e (t14/t17/t18/t19/t35/t37/t41/t44/t45
+  moved onto the editor; new t53 delete-a-CMI-course, t54 four changes in
+  one save + one Undo, t55 destructive buttons share the wipe button's
+  colour, t56 a link naming a deleted course lifts the deletion, t57 a row
+  whose CMI original moved survives being put back), fmt + clippy (incl.
+  `-W clippy::redundant_clone`) clean, shots 27/28 rebuilt on the new editor
+  and 36/37/38 added.
+  Then a review fan-out at the user's request — 8 lenses × adversarial
+  refutation, 41 agents, 32 findings of which 11 survived. Every one is
+  fixed: the stale-base row that saved to nothing (t57, verified failing
+  without the fix), `official` captured at open instead of at save, four
+  paths that could leave a course selected AND deleted, the dead-end editor
+  for a course CMI has dropped, `<select>`s that ignored "Put it back"
+  because their options were built once, the credits box that ignored "Use
+  CMI's value" for the same reason, a dialog focusing a credits toggle that
+  Space would then press, `.was.gone` never reaching the new markup,
+  `.fieldlabel` with no styling, the catalog's Remove not being red, the
+  master grid saying nothing about hidden courses, and searching the catalog
+  for a course you deleted offering to recreate it and then refusing. Also
+  from the round: deleting a course now KEEPS its own changes (Restore is a
+  true inverse), and the changes list stopped deep-cloning the snapshot.

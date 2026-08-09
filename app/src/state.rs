@@ -7,8 +7,8 @@ use serde::{Deserialize, Serialize};
 use ttcore::diff::SnapshotDiff;
 use ttcore::merge::Conflict;
 use ttcore::model::{
-    Course, CustomStore, Day, Meeting, OverridesStore, ParseReport, ScheduleStatus, Slot, Snapshot,
-    SourceTier,
+    Course, CustomStore, Day, Meeting, MeetingOverride, OverridesStore, ParseReport,
+    ScheduleStatus, Slot, Snapshot, SourceTier,
 };
 
 pub const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -200,25 +200,21 @@ pub enum Dialog {
     Details(String),
     /// "My data": everything saved in the browser, with removal options.
     MyData,
-    /// Create/edit a meeting override. `create` = "Give it a time".
-    EditMeeting {
-        course: String,
-        ov_id: Option<u64>,
-        base: Option<Meeting>,
-        init: Meeting,
-        create: bool,
-    },
     Conflicts,
     Export {
         scope: Option<String>,
     },
     Share,
     WhatChanged,
-    /// Create (`edit: None`) or edit one of the user's own courses.
-    /// `prefill` seeds the name field from a failed catalog search.
-    CustomCourse {
-        edit: Option<String>,
+    /// The one editor. `code: None` creates a course of the user's own;
+    /// `Some(code)` edits that course, whether it is CMI's or theirs — every
+    /// field of it, in one form, saved in one step. `prefill` seeds the name
+    /// from a failed catalog search; `add_meeting` opens with a fresh
+    /// meeting row waiting (the "Give it a time" path).
+    EditCourse {
+        code: Option<String>,
         prefill: Option<String>,
+        add_meeting: bool,
     },
 }
 
@@ -310,6 +306,17 @@ pub struct EffMeeting {
     pub user_created: bool,
 }
 
+/// One row of the course editor as it was saved: where it came from, and
+/// what it says now. `from` is what makes the difference between moving a
+/// meeting and inventing one — the same row of controls does both.
+#[derive(Clone)]
+pub struct EditedMeeting {
+    /// The effective meeting this row started as — `None` for a row the user
+    /// added in the form.
+    pub from: Option<EffMeeting>,
+    pub to: Meeting,
+}
+
 #[derive(Clone, PartialEq)]
 pub struct ClashPair {
     pub a: String,
@@ -338,13 +345,6 @@ pub struct App {
     pub banner: RwSignal<Option<Banner>>,
     pub conflicts: RwSignal<Vec<Conflict>>,
     pub what_changed: RwSignal<Option<SnapshotDiff>>,
-    /// Half-finished credits edit inside the details dialog: (course code,
-    /// what has been typed). It lives out here, not in the dialog body,
-    /// because DialogHost rebuilds that body on every tracked change — a
-    /// background sync, an Undo toast click — and a signal created in there
-    /// would take the typed value down with it. Always read UNTRACKED, or
-    /// typing would trigger the very rebuild this avoids.
-    pub credit_edit: RwSignal<Option<(String, String)>>,
     /// Selected codes that vanished upstream ("No longer on CMI's timetable").
     pub removed_upstream: RwSignal<Vec<String>>,
     /// Unknown codes from a shared URL (dismissible warning chips).
@@ -594,10 +594,13 @@ impl App {
             return;
         }
         let code = code.to_string();
-        self.act(&format!("add {code}"), |sel, _| {
+        self.act(&format!("add {code}"), |sel, ovs| {
             if !sel.contains(&code) {
                 sel.push(code.clone());
             }
+            // A course cannot be on your timetable AND deleted: putting it
+            // back is the same decision as restoring it.
+            ovs.unhide(&code);
         });
         // Warn immediately (never block) when the new course clashes.
         let clashing = self.clashing_partners(&code);
@@ -651,6 +654,74 @@ impl App {
         } else {
             self.add_course(code);
         }
+    }
+
+    // -- deleting a course ------------------------------------------------------
+
+    /// Courses the user deleted, in the order they went.
+    pub fn hidden_courses(&self) -> Vec<String> {
+        self.overrides
+            .with(|o| o.hidden.iter().map(|h| h.course.clone()).collect())
+    }
+
+    pub fn is_hidden(&self, code: &str) -> bool {
+        self.overrides.with(|o| o.is_hidden(code))
+    }
+
+    /// Delete a course outright. CMI's pages are never edited, so deleting
+    /// one of theirs means striking it from YOUR planner: off the timetable,
+    /// out of the catalog and the master grid, and recorded in "Your
+    /// changes" as a thing of theirs you overwrote — with nothing.
+    ///
+    /// Anything else you'd customised about it goes WITH it rather than
+    /// under it: the overrides stay in the store but drop out of the changes
+    /// list and its count (a moved meeting on a course you deleted is a
+    /// change to nothing anyone can see), so Restore gives back the course
+    /// AND everything you had done to it. One undoable step throughout.
+    ///
+    /// Your own course has no CMI version underneath: deleting it deletes
+    /// the definition, which is what `delete_custom_course` already does.
+    ///
+    /// The Halls tab is deliberately untouched by this — see `hall_row`.
+    pub fn delete_course(&self, code: &str) {
+        if self.is_custom(code) {
+            self.delete_custom_course(code, false);
+            return;
+        }
+        if self.is_hidden(code) {
+            return;
+        }
+        let code = code.to_string();
+        let now = domx::now_ms();
+        self.act(&format!("delete {code}"), |sel, ovs| {
+            sel.retain(|c| !c.eq_ignore_ascii_case(&code));
+            ovs.hide(&code, now);
+        });
+        self.removed_upstream.update(|r| r.retain(|c| c != &code));
+        self.toast_undo(format!("Deleted {code} — restore it from Your changes"));
+    }
+
+    /// Put a deleted course back, with every change you had made to it. It
+    /// does not rejoin the timetable: what was deleted was the course, not
+    /// your selection.
+    pub fn restore_course(&self, code: &str) {
+        let code = code.to_string();
+        self.act(&format!("restore {code}"), |_, ovs| {
+            ovs.unhide(&code);
+        });
+        self.toast_undo(format!("{code} is back"));
+    }
+
+    pub fn restore_all_courses(&self) {
+        let n = self.overrides.with_untracked(|o| o.hidden.len());
+        if n == 0 {
+            return;
+        }
+        self.act("restore deleted courses", |_, ovs| ovs.hidden.clear());
+        self.toast_undo(format!(
+            "{n} deleted course{} back",
+            if n == 1 { "" } else { "s" },
+        ));
     }
 
     // -- custom courses --------------------------------------------------------
@@ -886,80 +957,155 @@ impl App {
         self.act(&format!("add & move {course}"), |sel, ovs| {
             if !sel.iter().any(|c| c == &course) {
                 sel.push(course.clone());
+                ovs.unhide(&course);
             }
             ovs.add(&course, base.clone(), Some(to.clone()), now);
         });
         self.toast_undo(toast);
     }
 
-    /// Add an extra weekly meeting to a course (base = None ⇒ user-created).
-    /// Unlike `apply_override`, this ALWAYS creates a new entry, so a course
-    /// can gain any number of additional time slots.
-    pub fn add_meeting(&self, course: &str, to: Meeting, toast: String) {
-        if self.is_custom(course) {
-            self.edit_custom_meetings(course, &format!("add a meeting to {course}"), |meetings| {
-                meetings.push(to.clone())
-            });
-            self.toast_undo(toast);
-            return;
-        }
-        let course = course.to_string();
-        let now = domx::now_ms();
-        self.act(&format!("add a meeting to {course}"), |_, ovs| {
-            ovs.add(&course, None, Some(to.clone()), now);
-        });
-        self.toast_undo(toast);
-    }
-
-    /// Remove one meeting from the user's timetable. Removing a meeting the
-    /// user created (or already moved) folds into its existing override;
-    /// removing an official meeting records a removal override, restorable
-    /// from Your changes / My data like any other change.
-    pub fn remove_meeting(&self, course: &str, ov_id: Option<u64>, base: Option<Meeting>) {
-        let when = base
-            .as_ref()
-            .map(|b| format!(" ({})", b.describe()))
-            .unwrap_or_default();
-        // A custom course's meeting is deleted from the definition itself —
-        // there is no official version underneath to hide.
-        if self.is_custom(course) {
-            let course_name = course.to_string();
-            self.edit_custom_meetings(
-                course,
-                &format!("remove a meeting from {course_name}"),
-                |meetings| {
-                    if let Some(b) = &base
-                        && let Some(i) = meetings.iter().position(|m| m == b)
+    /// Save a whole course edit at once: every meeting row as it now stands,
+    /// plus the credits. This is the ONE path that writes a CMI course's
+    /// changes, so the entire edit — three moves, a new meeting, a removal
+    /// and a credit change — is a single undo step.
+    ///
+    /// The overrides for the course are rebuilt from the rows rather than
+    /// patched: an override exists exactly when a row differs from CMI's
+    /// meeting, and a CMI meeting no row claims is a removal. That is what
+    /// makes "put it back where CMI has it" fall out for free — the row
+    /// matches its base again, so nothing is stored — and what lets the form
+    /// restore a meeting the user had struck out earlier.
+    ///
+    /// Identity is preserved where it exists: an override that comes back
+    /// unchanged keeps its id and the day it was made (the sync merge
+    /// compares that against CMI's edits), and one that only changed target
+    /// keeps them too — it is the same decision, revised.
+    pub fn save_course_edit(
+        &self,
+        code: &str,
+        official: Vec<Meeting>,
+        rows: Vec<EditedMeeting>,
+        credits: Option<u8>,
+    ) {
+        // (base, to) for every override the saved form implies.
+        let mut desired: Vec<(Option<Meeting>, Option<Meeting>)> = Vec::new();
+        let mut claimed: Vec<usize> = Vec::new();
+        let mut invented = false;
+        for row in &rows {
+            let base = row.from.as_ref().and_then(|f| f.base.clone());
+            invented |= row.from.is_none();
+            match &base {
+                // A row that came from one of CMI's meetings speaks for it.
+                Some(base) => {
+                    let stands_for = official
+                        .iter()
+                        .enumerate()
+                        .find(|(i, m)| m.same_place_time(base) && !claimed.contains(i))
+                        .map(|(i, _)| i);
+                    if let Some(i) = stands_for {
+                        claimed.push(i);
+                    }
+                    // Back on CMI's own meeting: no override at all. Day,
+                    // time and hall are what the form can set, so they are
+                    // what "the same" means — CMI's TMP* decoration isn't
+                    // the user's to reproduce.
+                    //
+                    // Only when the row really stands for a meeting CMI has
+                    // NOW, though. A base CMI has since moved (an unresolved
+                    // conflict, or a share link imported against fresher
+                    // data) stands for nothing: storing nothing for it would
+                    // delete a meeting that is on the user's timetable and
+                    // on this form — the one case where saving could lose
+                    // what it was showing.
+                    if stands_for.is_some() && base.same_place_time(&row.to) {
+                        continue;
+                    }
+                    desired.push((Some(base.clone()), Some(row.to.clone())));
+                }
+                // A row the user wrote that says exactly what CMI says IS
+                // CMI's meeting, however it got there — so it speaks for it
+                // too, and nothing is stored. Without this, striking a
+                // meeting out and adding the same one back leaves a removal
+                // and an addition that cancel on screen and read as two
+                // changes in the list.
+                None => {
+                    match official
+                        .iter()
+                        .enumerate()
+                        .find(|(i, m)| m.same_place_time(&row.to) && !claimed.contains(i))
                     {
-                        meetings.remove(i);
+                        Some((i, _)) => claimed.push(i),
+                        None => desired.push((None, Some(row.to.clone()))),
                     }
-                },
-            );
-            self.toast_undo(format!("Removed a {course_name} meeting{when}"));
-            return;
+                }
+            }
         }
-        let course = course.to_string();
+        // Whatever CMI has that no row stands for, the user struck out.
+        for (i, m) in official.iter().enumerate() {
+            if !claimed.contains(&i) {
+                desired.push((Some(m.clone()), None));
+            }
+        }
+
+        let credits_now = credits.filter(|n| {
+            self.snapshot
+                .with_untracked(|s| s.course_ci(code).map(|c| c.effective_credits()))
+                != Some(*n)
+        });
+        let was_selected = self.is_selected(code);
+        // A meeting you place must never be invisible: giving a time to a
+        // course that isn't on your timetable puts it there, in the same step.
+        let select_now = !was_selected && invented;
+        let code = code.to_string();
         let now = domx::now_ms();
-        self.act(&format!("remove a meeting from {course}"), |_, ovs| {
-            match (ov_id, &base) {
-                // A meeting the user created out of thin air: removing it
-                // just deletes the override — nothing of CMI's is hidden.
-                (Some(id), None) => ovs.remove(id),
-                // A meeting the user had already moved: the same override
-                // now records the removal (base identity preserved).
-                (Some(id), Some(_)) => {
-                    if let Some(o) = ovs.items.iter_mut().find(|o| o.id == id) {
-                        o.to = None;
+        self.act(&format!("edit {code}"), |sel, ovs| {
+            let mut pool: Vec<MeetingOverride> = Vec::new();
+            ovs.items.retain(|o| {
+                let mine = o.course.eq_ignore_ascii_case(&code);
+                if mine {
+                    pool.push(o.clone());
+                }
+                !mine
+            });
+            let mut kept: Vec<Option<MeetingOverride>> = vec![None; desired.len()];
+            // Unchanged overrides claim their old selves first, so an edited
+            // one can't walk off with an identical override's id.
+            for (i, (base, to)) in desired.iter().enumerate() {
+                if let Some(p) = pool.iter().position(|o| &o.base == base && &o.to == to) {
+                    kept[i] = Some(pool.remove(p));
+                }
+            }
+            for (i, (base, to)) in desired.iter().enumerate() {
+                if kept[i].is_none()
+                    && let Some(p) = pool.iter().position(|o| &o.base == base)
+                {
+                    let mut o = pool.remove(p);
+                    o.to = to.clone();
+                    kept[i] = Some(o);
+                }
+            }
+            for (slot, (base, to)) in kept.into_iter().zip(desired.iter()) {
+                match slot {
+                    Some(o) => ovs.items.push(o),
+                    None => {
+                        ovs.add(&code, base.clone(), to.clone(), now);
                     }
                 }
-                // An untouched official meeting.
-                (None, Some(_)) => {
-                    ovs.add(&course, base.clone(), None, now);
-                }
-                (None, None) => {}
+            }
+            match credits_now {
+                Some(n) => ovs.set_credits(&code, n, now),
+                None => ovs.remove_credits(&code),
+            }
+            if select_now && !sel.iter().any(|c| c.eq_ignore_ascii_case(&code)) {
+                sel.push(code.clone());
+                ovs.unhide(&code);
             }
         });
-        self.toast_undo(format!("Removed a {course} meeting{when}"));
+        if select_now {
+            self.toast_undo(format!("Added {code} to your timetable"));
+        } else {
+            self.toast_undo(format!("Saved your changes to {code}"));
+        }
     }
 
     /// Starting point for newly created meetings: the grid's first day and
@@ -987,14 +1133,6 @@ impl App {
         }
     }
 
-    pub fn reset_course_overrides(&self, code: &str) {
-        let code = code.to_string();
-        self.act(&format!("reset {code} to CMI's times"), |_, ovs| {
-            ovs.items.retain(|o| o.course != code);
-        });
-        self.toast_undo(format!("{code} back on CMI's times"));
-    }
-
     // -- credits -------------------------------------------------------------
 
     /// Credits used everywhere: your override, else CMI's stated value,
@@ -1011,40 +1149,6 @@ impl App {
         self.overrides.with(|o| o.credits_for(code))
     }
 
-    pub fn set_credit_override(&self, code: &str, credits: u8) {
-        // For the user's own course there is no "official" value to keep
-        // around: the definition itself is edited.
-        if self.is_custom(code) {
-            let code_own = code.to_string();
-            self.act_customs(
-                &format!("set {code_own} to {credits} credits"),
-                |customs, _, _| {
-                    if let Some(c) = customs
-                        .courses
-                        .iter_mut()
-                        .find(|c| c.code.eq_ignore_ascii_case(&code_own))
-                    {
-                        c.credits = Some(credits);
-                    }
-                },
-            );
-            self.toast_undo(format!(
-                "{code_own} now counts as {credits} credit{}",
-                if credits == 1 { "" } else { "s" },
-            ));
-            return;
-        }
-        let code = code.to_string();
-        let now = domx::now_ms();
-        self.act(&format!("set {code} to {credits} credits"), |_, ovs| {
-            ovs.set_credits(&code, credits, now);
-        });
-        self.toast_undo(format!(
-            "{code} now counts as {credits} credit{}",
-            if credits == 1 { "" } else { "s" },
-        ));
-    }
-
     pub fn remove_credit_override(&self, code: &str) {
         let code = code.to_string();
         self.act(&format!("reset {code} credits"), |_, ovs| {
@@ -1053,9 +1157,16 @@ impl App {
         self.toast_undo(format!("{code} back on official credits"));
     }
 
-    /// Total number of custom changes (meeting moves + credit overrides).
+    /// Everything the user's own data adds up to: meetings moved, added or
+    /// struck out, credits set, courses deleted, courses of their own. It is
+    /// the count of the rows in "Your changes", because a number that
+    /// doesn't match the list it opens is worse than no number at all.
     pub fn custom_change_count(&self) -> usize {
-        self.overrides.with(|o| o.items.len() + o.credits.len())
+        self.overrides.with(|o| {
+            o.items.iter().filter(|i| !o.is_hidden(&i.course)).count()
+                + o.credits.iter().filter(|c| !o.is_hidden(&c.course)).count()
+                + o.hidden.len()
+        }) + self.customs.with(|c| c.courses.len())
     }
 
     /// Resolve all queued conflicts in one undoable step.
@@ -1624,6 +1735,12 @@ pub fn effective_meetings(course: &Course, overrides: &OverridesStore) -> Vec<Ef
 
 /// Facet matching: OR within a facet, AND across facets.
 pub fn course_matches(app: &App, course: &Course, f: &Filters) -> bool {
+    // A course the user deleted is out of the catalog and the master grid
+    // entirely. It comes first because no filter should be able to bring
+    // one back — restoring it is a decision, made in "Your changes".
+    if app.is_hidden(&course.code) {
+        return false;
+    }
     if !f.branches.is_empty() && !course.branches.iter().any(|b| f.branches.contains(b)) {
         return false;
     }
