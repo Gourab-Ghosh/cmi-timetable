@@ -37,7 +37,7 @@ view (including the chip relocating in the halls grid itself, surviving
 reload, and drag-back-to-reset), filter menus keeping focus/scroll while
 ticking boxes, the ✓ selected-course marker in the master grid, toasts
 pausing while hovered, the first-run welcome prompt (failed sync → honest
-banner; reachable mirror → auto-populates), filters in the undo history
+banner; reachable CMI → auto-populates), filters in the undo history
 (with search-typing coalesced into one step), the per-dropdown
 search + All/None shortcuts incl. the Course facet, share links carrying
 custom changes onto a fresh browser, the full three-way-merge conflict
@@ -87,7 +87,18 @@ one used to vanish on save).
 
 The app ships no timetable data, so the suite derives a snapshot from
 `core/fixtures/` at startup (via core's `snapshot_json` example — cargo must
-be on PATH) and seeds it into localStorage before each test. The browser
-runs with all non-localhost DNS blackholed: the direct/proxy tiers fail
-instantly, the first-run tests serve the same seed as a fake same-origin
-mirror, and nothing ever touches the real network.
+be on PATH) and seeds it into localStorage before each test.
+
+The browser runs with every non-localhost hostname blackholed, so a sync
+fails instantly and nothing touches the real network. The tests that need a
+sync to *succeed* call `serve_cmi()`, which stands a TLS server up on
+localhost holding the fixture pages while Chromium resolves www.cmi.ac.in to
+it (`--ignore-certificate-errors`, since the cert is self-signed). Those
+tests therefore run the app's real DIRECT tier rather than a test-only path.
+It answers 503 until a test asks for it, and the runner switches it back off
+after every test, so "CMI is unreachable" stays the default.
+
+Because the fake CMI serves the fixtures, a test that needs CMI to *differ*
+from the cache arranges it from the other side: `cache_from_before_cmi_moved_toc()`
+seeds a cache in which TOC's first class sits on Friday, so syncing against
+the real fixtures looks exactly like CMI moving it back to Tuesday.

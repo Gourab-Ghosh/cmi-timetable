@@ -1,4 +1,4 @@
-//! Native `<pre>` extraction with scraper — used by /sync, /app's build
+//! Native `<pre>` extraction with scraper — used by /app's build
 //! script and this crate's tests. The wasm app extracts with the browser's
 //! DOMParser instead (smaller binary, maximally tolerant of CMI's HTML) and
 //! feeds the same `PreBlock` list to the same parsing functions.

@@ -1,8 +1,10 @@
-//! The tiered source chain (§2.3): direct → CORS proxies → same-origin
-//! mirror. The app ships no timetable data — before the first successful
-//! sync it shows a "sync to start" prompt instead. A fetched snapshot
-//! replaces the cache only after the validation gate passes; any failure
-//! leaves the cache untouched and is explained in plain language.
+//! The tiered source chain (§2.3): direct → CORS proxies. Every route ends
+//! at cmi.ac.in itself — this app keeps no copy of CMI's pages and serves
+//! none, so what a student sees is always what CMI is publishing right now.
+//! The app ships no timetable data either: before the first successful sync
+//! it shows a "sync to start" prompt instead. A fetched snapshot replaces
+//! the cache only after the validation gate passes; any failure leaves the
+//! cache untouched and is explained in plain language.
 
 use crate::state::{App, BannerKind, FetchLogEntry, StoredReport};
 use crate::{domx, storage};
@@ -16,7 +18,6 @@ pub const CMI_HALLS_URL: &str = "https://www.cmi.ac.in/practical/lecturehalls.ph
 
 const DIRECT_TIMEOUT_MS: u32 = 4_000;
 const PROXY_TIMEOUT_MS: u32 = 12_000;
-const MIRROR_TIMEOUT_MS: u32 = 8_000;
 const AUTO_UPDATE_INTERVAL_MS: f64 = 12.0 * 3600.0 * 1000.0;
 
 /// Public CORS relays, tried in order. To add a self-hosted relay (the most
@@ -149,7 +150,7 @@ fn log(app: &App, tier: &str, url: &str, result: &Result<FetchOk, String>) {
 /// substitute their own error pages on rate limits/failures. This check is
 /// used ONLY to pick honest error copy AFTER the parser rejected content —
 /// never to reject content the parser would accept, and never for the
-/// direct or mirror tiers (their URLs already prove the origin). It is
+/// direct tier (its URL already proves the origin). It is
 /// deliberately loose (case-insensitive, several markers) so a CMI redesign
 /// doesn't get misreported as "unreachable".
 fn looks_like_cmi(html: &str) -> bool {
@@ -350,16 +351,6 @@ fn progress(app: &App, text: &str) {
     app.sync.update(|s| s.progress = text);
 }
 
-#[derive(serde::Deserialize)]
-struct MirrorFile {
-    generated_at: f64,
-    #[allow(dead_code)]
-    parser_version: u32,
-    #[allow(dead_code)]
-    semester_label: String,
-    snapshot: Snapshot,
-}
-
 enum TierResult {
     /// A gate-passing snapshot ready to adopt.
     Snapshot(Box<Snapshot>),
@@ -420,53 +411,6 @@ async fn fetch_pages_tier(
     }
 }
 
-async fn try_mirror(app: App) -> TierResult {
-    // All three same-origin fetches in parallel.
-    let (latest, tt, halls) = futures::join!(
-        fetch_text("data/latest.json", MIRROR_TIMEOUT_MS),
-        fetch_text("data/timetable.php.html", MIRROR_TIMEOUT_MS),
-        fetch_text("data/lecturehalls.php.html", MIRROR_TIMEOUT_MS)
-    );
-    log(&app, "mirror", "data/latest.json", &latest);
-    log(&app, "mirror", "data/timetable.php.html", &tt);
-    log(&app, "mirror", "data/lecturehalls.php.html", &halls);
-    let meta: Option<MirrorFile> = latest
-        .ok()
-        .and_then(|ok| serde_json::from_str(&ok.text).ok());
-
-    // Same-origin copies: the URL proves the origin, so the parser + gate
-    // are the only judges of content (no marker/shape pre-check).
-    if let (Ok(tt), Ok(halls)) = (&tt, &halls) {
-        let fetched_at = meta
-            .as_ref()
-            .map(|m| m.generated_at)
-            .unwrap_or_else(domx::now_ms);
-        if let Ok(outcome) = parse_pair(&tt.text, &halls.text, fetched_at, SourceTier::Mirror) {
-            record_report(&app, "mirror", outcome.report.clone());
-            if let Some(snapshot) = outcome.snapshot {
-                return TierResult::Snapshot(Box::new(snapshot));
-            }
-            // Client parser rejected the mirror HTML — fall back to the
-            // CI-validated snapshot inside latest.json if present.
-        }
-    }
-    if let Some(meta) = meta {
-        let mut snapshot = meta.snapshot;
-        // This is the one snapshot in the app that never meets the
-        // validation gate — it is same-origin and CI-validated, so the gate
-        // has already run on the way in. "Someone else validated it" is not
-        // a reason to let a truncated or half-written file empty a student's
-        // catalog, though, so it still has to contain a timetable.
-        if !snapshot.has_data() {
-            return TierResult::GateFailed;
-        }
-        snapshot.source = SourceTier::Mirror;
-        snapshot.fetched_at = meta.generated_at;
-        return TierResult::Snapshot(Box::new(snapshot));
-    }
-    TierResult::Unreachable
-}
-
 /// The "Sync now" flow (also used for throttled background syncs).
 pub async fn run_update(app: App, manual: bool) {
     if app.sync.with_untracked(|s| s.updating) {
@@ -484,10 +428,10 @@ pub async fn run_update(app: App, manual: bool) {
 
     let force = app.force_tier.get_untracked();
     let mut routes_tried = 0usize;
-    // Gate failure on DIRECT content is terminal (no proxy or mirror will
-    // see anything different from CMI itself); gate failure on a PROXY
-    // response only means that relay may have mangled the page — the chain
-    // continues to the next proxy and to the mirror.
+    // Gate failure on DIRECT content is terminal (no proxy will see anything
+    // different from CMI itself); gate failure on a PROXY response only means
+    // that relay may have mangled the page — the chain continues to the next
+    // proxy.
     let mut gate_failed_direct = false;
     let mut gate_failed_any = false;
     let mut adopted = false;
@@ -549,23 +493,10 @@ pub async fn run_update(app: App, manual: bool) {
                     adopt(&app, *snapshot, true, Adoption::Fetched);
                     adopted = true;
                 }
-                // A proxy may have mangled the content — wait for the others
-                // (and the mirror after that).
+                // A proxy may have mangled the content — wait for the others.
                 TierResult::GateFailed => gate_failed_any = true,
                 TierResult::Unreachable => {}
             }
-        }
-    }
-
-    // Tier 3 — same-origin mirror published by the GitHub Actions cron.
-    // Runs even after a proxy gate failure: the mirror is the most reliable
-    // tier and its content is independent of whatever a proxy mangled.
-    if !adopted && !gate_failed_direct && (force.is_none() || force.as_deref() == Some("mirror")) {
-        progress(&app, "Trying the data mirror…");
-        routes_tried += 1;
-        if let TierResult::Snapshot(snapshot) = try_mirror(app).await {
-            adopt(&app, *snapshot, true, Adoption::Fetched);
-            adopted = true;
         }
     }
 

@@ -4,7 +4,6 @@
 # branch is still GitHub's own step — see verify_published below.)
 #
 #   ./deploy.sh                  # test + build + publish + verify
-#   ./deploy.sh --sync           # refresh the CMI data mirror first
 #   ./deploy.sh --push           # also push main first (ship code + site)
 #   ./deploy.sh --skip-tests     # publish without running the test suite
 #   ./deploy.sh --allow-stale    # publish even if origin/main is ahead
@@ -14,9 +13,10 @@
 #
 # Nothing about the release runs on GitHub's infrastructure: there are no
 # workflows in this repo, so no CI job can fail, stall or send failure mail.
-# `--sync` does locally what the old cron did — fetch both CMI pages, run
-# them through the same parser and validation gate, and update the mirror
-# under app/public/data (committed as data, never as build output).
+#
+# The published site is the app and nothing else. It hosts no copy of CMI's
+# pages: every student's browser fetches cmi.ac.in itself, so nobody is ever
+# shown a stale snapshot that this repo happened to be carrying.
 #
 # How it works:
 #   1. Builds the app with Trunk inside a temporary Docker container
@@ -55,7 +55,6 @@ ALLOW_STALE=0
 PUSH_MAIN=0
 VERIFY=1
 REPUBLISH=0
-SYNC_DATA=0
 BUILD_ONLY=0
 for arg in "$@"; do
     case "$arg" in
@@ -64,7 +63,6 @@ for arg in "$@"; do
         --push)        PUSH_MAIN=1 ;;
         --no-verify)   VERIFY=0 ;;
         --republish)   REPUBLISH=1 ;;
-        --sync)        SYNC_DATA=1 ;;
         --build-only)  BUILD_ONLY=1 ;;
         # Print the whole header comment, however long it grows.
         -h|--help) awk 'NR>1 { if (!/^#/) exit; print }' "$0"; exit 0 ;;
@@ -187,7 +185,7 @@ if [ "$REPUBLISH" = 1 ]; then
 fi
 
 # The site is force-replaced wholesale, so deploying a stale checkout would
-# roll back whatever else lives on main — most importantly the data mirror.
+# roll back whatever else has landed on main.
 if git fetch -q origin main 2>/dev/null; then
     if ! git merge-base --is-ancestor origin/main HEAD; then
         behind=$(git rev-list --count HEAD..origin/main)
@@ -195,33 +193,14 @@ if git fetch -q origin main 2>/dev/null; then
             echo "!! deploying a stale checkout ($behind commit(s) behind origin/main)"
         else
             echo "refusing to deploy: origin/main is $behind commit(s) ahead of HEAD." >&2
-            echo "The site is replaced wholesale, so this would roll back those" >&2
-            echo "commits (e.g. the CMI data mirror). Run 'git pull' first, or" >&2
-            echo "pass --allow-stale if that is what you want." >&2
+            echo "The site is replaced wholesale, so this would roll those" >&2
+            echo "commits back off it. Run 'git pull' first, or pass" >&2
+            echo "--allow-stale if that is what you want." >&2
             exit 1
         fi
     fi
 else
     echo "!! could not reach origin — deploying from the local checkout as-is"
-fi
-
-# --sync: refresh the data mirror before building (what the cron used to do).
-# The gate lives in the sync binary: a failure leaves the last good mirror in
-# place, and we stop rather than ship a build around bad data.
-if [ "$SYNC_DATA" = 1 ]; then
-    echo "==> refreshing the CMI data mirror"
-    command -v cargo >/dev/null || { echo "--sync needs cargo on PATH" >&2; exit 1; }
-    CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$CACHE/target}" \
-        cargo run --release -q -p cmi-timetable-sync -- app/public/data
-    if [ -n "$(git status --porcelain -- app/public/data)" ]; then
-        git add app/public/data
-        git commit -q -m "data: refresh CMI mirror" -- app/public/data
-        SHA=$(git rev-parse --short HEAD)
-        [ -z "$(git status --porcelain)" ] && DIRTY=""
-        echo "    mirror updated and committed ($SHA)"
-    else
-        echo "    mirror already current"
-    fi
 fi
 
 # Build steps, identical in both environments. Paths are resolved at RUN

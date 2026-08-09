@@ -8,9 +8,9 @@ name = "cmi_timetable_core"
 
 [features]
 default = []
-# Native HTML extraction (scraper). Enabled by /sync, by /app's build script and
-# by this crate's own tests — never by the wasm app, which extracts <pre> blocks
-# with the browser's DOMParser instead.
+# Native HTML extraction (scraper). Enabled by /app's build script and by this
+# crate's own tests — never by the wasm app, which extracts <pre> blocks with
+# the browser's DOMParser instead.
 html = ["dep:scraper"]
 
 # Used by the e2e harness to derive its seed data from the fixtures — the

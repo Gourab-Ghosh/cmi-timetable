@@ -5,6 +5,12 @@
 > state* (rewrite in place; no history), and APPEND one compact entry to
 > section 7 (newest last). Optimize for a fresh LLM re-acquiring the project
 > in one read: dense facts, exact paths, exact commands, no prose padding.
+>
+> **§8 is the open-bug list and it is NOT history.** Never delete, trim or
+> summarise an entry there because it is old or because the round that found
+> it is over. An entry leaves §8 exactly once: when the bug is fixed and a
+> test pins the fix — then move it to the round's §7 entry as fixed. If you
+> touch code an entry names, re-read that entry first.
 
 ## 1. What this project is
 
@@ -27,6 +33,16 @@ and no committed mirror (fixtures exist only for tests/e2e seed).
   repo and must never be committed).
 - Package installs: pacman first, `cargo install` only on failure.
 - Nothing about the CMI website may be hard-coded; process dynamically.
+- **NO COPY OF THE CMI WEBSITE MAY BE SERVED OR SHIPPED (R32).** Everything
+  the user sees is loaded from the internet at runtime. The repo must not
+  carry a snapshot the app can fall back to, and the deployed site must not
+  host CMI's pages. The one exception the user granted explicitly is
+  `core/fixtures/*.html` — **test input only**, never served, never bundled,
+  never reachable from the app. If you add a new "handy local copy" of
+  anything from cmi.ac.in outside `core/fixtures/`, you have broken this
+  rule.
+- **§8 (open bugs) is append-and-fix-only** — never delete an entry to tidy
+  the file; it leaves only when the bug is fixed and pinned by a test.
 - Keep the dev server running in the background for manual testing.
 - Ultracode is ON for this session (workflows allowed for substantive work).
 - Write copy "in your own words" — plain, honest, student-facing English.
@@ -48,16 +64,17 @@ and no committed mirror (fixtures exist only for tests/e2e seed).
 
 ```text
 /core   parsers, model, validate (gate), merge (3-way), diff, ics, share,
-        date; feature `html` = native scraper path (sync/tests/e2e seed).
-        core/examples/snapshot_json.rs → fixtures → latest.json (e2e seed).
-        PARSER_VERSION=3 in core/src/model.rs. Fixtures: core/fixtures/.
+        date; feature `html` = native scraper path (tests + e2e seed).
+        core/examples/snapshot_json.rs → fixtures → snapshot JSON (e2e
+        seed; test tooling only, nothing ships it).
+        PARSER_VERSION=3 in core/src/model.rs. Fixtures: core/fixtures/
+        — TEST INPUT ONLY, never served, never copied into the build.
 /app    Leptos UI. src/app.rs (boot/routing), state.rs (App handle, undo,
-        filters), fetch.rs (tier chain direct→proxy→mirror, adopt/merge),
+        filters), fetch.rs (tier chain direct→proxy, adopt/merge),
         ui.rs (header/tabs/facets/dialogs/chips), views.rs (5 tabs +
         welcome()), dnd.rs (pointer+keyboard drag), storage.rs, dev.rs,
         domx.rs; styles.css = whole design system (tokens, light+dark).
-/sync   native mirror publisher (CI cron writes app/public/data/).
-/e2e    test_app.py — 43 Selenium tests, self-seeding (see §5); shoot.py —
+/e2e    test_app.py — 61 Selenium tests, self-seeding (see §5); shoot.py —
         design-review screenshots + print PDFs.
 /githooks  pre-push — builds+publishes via deploy.sh when main is pushed
         (activate per clone: `git config core.hooksPath githooks`; skip
@@ -415,10 +432,15 @@ and no committed mirror (fixtures exist only for tests/e2e seed).
   the `assert!` that followed — which, under `panic = "abort"`, took the
   whole app down. There is no assert there now; if the mangled page ever
   passes, it says so (R30, e2e t58, core t11d).
-- The mirror's `latest.json` snapshot is the ONLY snapshot adopted without
-  the validation gate (it is same-origin and gated in CI on the way in). It
-  still has to contain a timetable — `has_data()` — or a truncated file
-  would empty a student's catalog.
+- **Every snapshot the app adopts has passed the validation gate**, with no
+  exceptions any more. The one that used to skip it (the mirror's
+  CI-validated `latest.json`) went away with the mirror in R32, so there is
+  no longer a path where "someone else validated it" stands in for the gate.
+  Do not reintroduce one.
+- **The app has exactly two sources, both cmi.ac.in** (direct, then proxy).
+  If a change would add a third that serves CMI's content from anywhere
+  else — this site, a cache, a CDN, a bundled file — it breaks a standing
+  user rule (§2), not just a design preference.
 - `fetch_text` times out the BODY as well as the headers: `send()` resolves
   at the headers, so a relay that answers and then stalls would otherwise
   hang `run_update` forever with `sync.updating` still true, and every
@@ -472,14 +494,26 @@ and no committed mirror (fixtures exist only for tests/e2e seed).
   bare `now_ms()` from render code, that freezes the label until an
   unrelated re-render. Header mounts once (outside the route switch), so
   the forgotten handles are page-lifetime, not leaks-per-mount.
-- e2e Chrome flags: `--force-prefers-reduced-motion` (dialog animations) and
-  `--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE 127.0.0.1` (no network).
+- e2e Chrome flags: `--force-prefers-reduced-motion` (dialog animations),
+  `--host-resolver-rules=MAP www.cmi.ac.in 127.0.0.1:$CMI_PORT, MAP *
+  ~NOTFOUND, EXCLUDE 127.0.0.1` and `--ignore-certificate-errors`. Nothing
+  reaches the real network: cmi.ac.in resolves to the suite's own TLS
+  stand-in, which answers 503 until a test calls `serve_cmi()` and is
+  switched back off after EVERY test (in the runner's `finally`), so
+  "unreachable" stays the default. Tests needing a successful sync run the
+  app's real DIRECT tier — there is no test-only tier any more.
+- e2e can no longer hand the app a *different* CMI (the stand-in serves the
+  fixtures), so a test that needs upstream to differ from the cache seeds
+  the disagreement into the CACHE instead:
+  `cache_from_before_cmi_moved_toc()` puts TOC's first class on Friday, so
+  syncing against the real fixtures reads as CMI moving it back to Tuesday.
+  Same merge path, opposite direction.
 
 ## 5. Build & test commands (exact)
 
 ```sh
-# native tests (94; --features html for the fixture-driven parser tests)
-CARGO_TARGET_DIR=~/.rust-target-e2e cargo test --workspace --features html
+# native tests (94; the html feature comes from core's self dev-dependency)
+CARGO_TARGET_DIR=~/.rust-target-e2e RUSTFLAGS="" cargo test --workspace
 # app build for e2e (never plain dist while trunk serve runs).
 # RUSTFLAGS="" on purpose: a global ~/.cargo/config.toml carrying
 # `-C target-cpu=native` reaches the wasm target too, drops its default
@@ -526,8 +560,13 @@ regenerates the .ics golden.
   credits unstated→4; RDBM 2 credits; SVA unscheduled; MFD Wed/Fri 840 LH6;
   RFLR Mon/Wed 630 LH5; QCOM Tue/Thu 930 LH803; slots
   550/630/710/840/930/1020; 75 courses, 18 branches.
-- `app/public/data/` mirror files are written ONLY by the sync binary
-  (`./deploy.sh --sync`), never by hand.
+- **No copy of CMI's site exists in the repo or on the deployed site.**
+  `app/public/data/` (the mirror), the `/sync` crate that wrote it, the
+  mirror tier in `fetch.rs` and `deploy.sh --sync` were all removed in R32
+  at the user's instruction. The only saved pages left are
+  `core/fixtures/*.html`, which are test input: no build copies them and no
+  code path in the app can reach them. `SourceTier::Mirror` survives as a
+  deserialize-only legacy variant so an older cache still loads.
 - Published: `https://github.com/Gourab-Ghosh/cmi-timetable` (origin, ssh),
   live at `https://gourab-ghosh.github.io/cmi-timetable/`. Deploys are
   LOCAL-FIRST: `./deploy.sh` builds in a temporary Docker container (rust:1;
@@ -537,10 +576,8 @@ regenerates the .ics golden.
   (`build_type=legacy`). Caches in `.build-cache/` (gitignored).
   **There are NO GitHub Actions workflows in this repo** (all four deleted at
   the user's request: nothing on GitHub may build/schedule/fail/mail). The
-  data-mirror cron became `./deploy.sh --sync` (same binary, same gate, run
-  locally; commits `app/public/data` as data, not build output). The ONLY
-  GitHub-side step left is their managed `pages-build-deployment`, which
-  copies the branch's static files — unavoidable for Pages.
+  The ONLY GitHub-side step left is their managed `pages-build-deployment`,
+  which copies the branch's static files — unavoidable for Pages.
 
 ## 7. Prompt log (append one entry per user round; newest last)
 
@@ -1326,3 +1363,234 @@ proxy, before it ever reads the mirror — so a slightly old mirror costs
 nothing while CMI is reachable. Refreshing it is `./deploy.sh --sync`,
 which re-fetches both pages, re-runs the gate, and commits the mirror as
 data before building.
+
+*(Superseded by R32: the mirror, the sync binary and `--sync` no longer
+exist. Left here as the record of what this round did.)*
+
+### R32 — "no copy of the CMI website anywhere; remove the code that served it" plus "keep the open bugs documented"
+
+Two asks. Both done; nothing was deferred.
+
+**1. The open-bug list is now §8** and the file header says it may not be
+deleted or trimmed. The five confirmed-but-unfixed findings from R30 used to
+live inside R30's prompt-log entry, where they would have been read as
+history and eventually lost. Each is now written up properly: exact function
+and line, what actually goes wrong, how CMI could trigger it, why the gate
+misses it, a concrete suggested fix, and the synthetic-site test that would
+confirm the fix. §8.6 records the one thing that must NOT be "fixed" (direct
+gate failure stopping the chain), because it has been raised repeatedly and
+keeps looking like a bug.
+
+**2. Every copy of CMI's site is gone, along with the code that needed one.**
+The user's instruction: everything loads from the internet, no local copy.
+They confirmed test fixtures may stay, and that git history is to be left
+alone.
+
+Removed: `app/public/data/` (the mirror — `latest.json` plus verbatim copies
+of both pages); the whole `/sync` crate that produced it; the mirror tier in
+`app/src/fetch.rs` (`try_mirror`, `MirrorFile`, `MIRROR_TIMEOUT_MS`, tier-3
+block); `deploy.sh --sync` and its commit-the-mirror step; the
+`copy-dir public/data` line in `app/index.html` (without which the build
+fails outright — a useful tripwire); the "mirror only" dev-mode tier option;
+and every doc paragraph describing the mirror as a data source.
+
+Kept deliberately: `SourceTier::Mirror` as a **deserialize-only legacy
+variant**, like `Bundled`. Deleting it would make an existing user's cached
+snapshot fail to parse, and unlike `Bundled` that cache holds real CMI data
+that went through the same parser and gate — so it is kept and simply
+re-synced, not discarded. Its labels now say "from this site's old copy".
+
+The app is now direct → proxy, both ending at cmi.ac.in.
+
+**The e2e suite needed real work, not a search-and-replace.** Five tests
+depended on the mirror to make a sync SUCCEED, because every external host
+is blackholed and the mirror was the only reachable route. Rather than
+weaken them, the harness now *is* CMI: `serve_cmi()` stands up a TLS server
+on localhost holding the fixture pages, and Chromium resolves www.cmi.ac.in
+to it (`--ignore-certificate-errors`; the cert is generated per run with
+openssl). Those tests now exercise the app's real DIRECT tier — the path a
+student's browser tries first — instead of a tier that only existed for
+them. It answers 503 until a test asks for it and is switched off in the
+runner's `finally`, so "CMI unreachable" is still the default and t25 still
+proves the honest failure banner.
+
+Two tests (t30, t60) needed CMI to *differ* from the cache, which the old
+harness did by mutating the mirror's JSON. The stand-in serves the fixtures,
+so that direction is no longer available — the disagreement is now seeded
+into the CACHE instead (`cache_from_before_cmi_moved_toc()`: TOC's first
+class remembered on Friday, so syncing against the real fixtures reads as
+CMI moving it back to Tuesday). Same merge code path, opposite direction;
+the conflict assertion changed from "Fri 14:00" to "Tue 09:10". The
+removed-upstream half is seeded the same way, by renaming one course in the
+cache so it looks dropped.
+
+Verification: **94 native + 61/61 e2e green** (t26 is the proof the stand-in
+works — it only passes if a real direct-tier fetch succeeded and the pill
+says "direct"), `cargo fmt --all` and `cargo clippy --workspace --features
+html --all-targets -W clippy::redundant_clone` clean, and the release build
+produces a `dist` with no `data/` directory at all.
+
+Not done, on the user's explicit instruction: git history still contains the
+files in older commits. The live site still serves them until the next
+deploy, since `gh-pages` is only replaced when `deploy.sh` runs.
+
+## 8. Open bugs — found, confirmed, NOT fixed (do not delete)
+
+Rules for this section: entries stay until the bug is actually fixed and a
+test pins it. Do not delete one for being old. Do not shorten one to save
+space. When a fix lands, move the entry into that round's §7 entry and say
+which test now fails without the fix.
+
+All five below were found in R30 by the synthetic-site audit and confirmed
+by two independent skeptics each (both told to refute). None of them affects
+CMI's pages as they are published today — every one needs an upstream edit
+that has not happened. That is why they were left; it is not a reason to
+leave them forever. Severity is "medium" in the sense that the app keeps
+working and shows something plausible — which is exactly what makes them
+worth fixing, because a student cannot tell they are being lied to.
+
+### 8.1 An unreadable day header in the hall grid silently merges that day into the one before it
+
+**Where:** `core/src/parse.rs`, `parse_halls_page`, the `current_day` loop
+(≈ lines 454–500).
+
+**What happens:** the loop advances `current_day` only when
+`Day::from_label(&row.label)` returns `Some`. Any hall row that follows an
+unrecognised day header is attributed to whatever day was last recognised.
+There is no warning, because from the loop's point of view nothing unusual
+happened — it just saw another hall row.
+
+**Three real ways CMI could trigger it:** a typo ("Thrusday"); a dated
+header ("Thursday - 6 Nov"), which `Day::from_label` rejects **by design**
+so that ranges like "Mon-Fri" can't be mistaken for a single day; or a
+header typed without its trailing empty cells, which changes how the row is
+sliced.
+
+**Why the gate misses it:** every existing hall rule counts things —
+days present, halls present, share of meetings with a room. Merging a day
+into the previous one changes none of those counts. The bookings all still
+exist, they are just on the wrong day.
+
+**Suggested fix (this is the useful part):** add a gate rule on a structural
+invariant instead of a count — **a hall name must not appear twice within
+one day**. On the real fixtures that count is 0. In every broken variant the
+audit built it was 24, because the merged day contributes a second row for
+every hall. A skeptic's control deleting the header outright corrupts
+identically and is caught by the same rule, so this is not a fix aimed at
+one typo — it catches the whole family.
+
+**Confirm with:** a synthetic site (`core/tests/synthetic_site_tests.rs`)
+whose halls page has one day header misspelled; assert the gate now fails,
+and assert it still passes on the correct page.
+
+### 8.2 The same shape on the timetable page — a dropped branch grid gives its legend to the previous branch
+
+**Where:** `core/src/parse.rs`, `classify` (line 84) and the section builder
+around `page.sections.last_mut()` (line 356).
+
+**What happens:** if a branch grid's day rows aren't recognised, `classify`
+doesn't return a `RawGrid` at all, so no new section is opened. The legend
+block that follows is then attached with `page.sections.last_mut()` — i.e.
+to the **previous** branch. That branch gains courses it does not teach, and
+the dropped branch vanishes.
+
+**Why it matters more than 8.1:** branch membership drives the whole "pick
+your branch" flow, so the wrong branch shows the wrong course list.
+
+**Suggested fix:** when a legend block arrives and the immediately preceding
+`<pre>` was classified as an unreadable grid, open a section for it anyway
+(marked unresolved) rather than appending to the last good one — or at
+minimum push a warning and let a gate rule fail on "legend attached to a
+section whose grid we never read".
+
+**Confirm with:** a synthetic site with two branches where the second
+branch's day labels are mangled; assert the first branch does not absorb the
+second's legend.
+
+### 8.3 A hall row with a stray or missing `|` shears the hall's name and invents a room
+
+**Where:** `core/src/textgrid.rs`, `slice_at` (line 114), the `nudge`
+closure.
+
+**What happens:** `nudge` moves a cut up to 2 characters to find a space,
+which is what makes hand-typed rows survive small drift. When a row's pipe
+count differs from the header's, the cut lands inside the hall name and the
+nudge doesn't rescue it — the name is cut short and the leftover becomes
+part of the next cell. The audit produced a phantom room literally named
+`Lecture Hall 803|`.
+
+**Consequence:** the phantom hall joins `page.halls`, so it appears in the
+Halls view and in the free-hall finder as a room that does not exist, while
+the real room loses that booking.
+
+**Suggested fix:** validate each row's separator count against the header's
+before slicing, and when they disagree, fall back to the column-alignment
+path (`slice_at_cols`) rather than the pipe path — the pipeless reader
+already handles drifted rows correctly. A cheap gate cross-check helps too:
+a hall name containing `|` is never legitimate.
+
+**Confirm with:** a synthetic halls page where one row carries an extra `|`;
+assert the hall list is unchanged.
+
+### 8.4 `join_pages` matches course codes case-sensitively
+
+**Where:** `core/src/join.rs`, `join_pages` (line 121) — `builders` is a
+`BTreeMap<String, _>` keyed on the code exactly as printed, and
+`hall_by_key` is keyed the same way.
+
+**What happens:** if the same course is printed `TOC` in the branch grid and
+`Toc` in the hall grid, they become two different courses. The real one
+loses its room; a phantom one appears carrying only a booking.
+
+**Note:** `OverridesStore` in `core/src/model.rs` was made fully
+case-insensitive in R30 (`for_course`, `set_credits`, `remove_credits`,
+`credits_for` all use `eq_ignore_ascii_case`, pinned by
+`the_store_reads_codes_the_same_way_throughout`). **`join` was deliberately
+not changed in the same round** — it is a bigger blast radius, since the
+chosen casing then becomes the canonical code everywhere downstream
+(selection, share links, .ics UIDs). That decision is the only reason this
+is still open.
+
+**Suggested fix:** key the builders on an uppercase (or otherwise folded)
+code while keeping the first-seen casing as the display code, so the
+canonical code stays stable for existing share links. Decide explicitly
+which page wins the casing — the halls legend is the better catalog, and
+that is already how names are chosen.
+
+**Confirm with:** a synthetic site where the hall grid cases one code
+differently; assert one course with one hall, not two courses.
+
+### 8.5 Course annotations are dropped when the halls legend's name lacks them
+
+**Where:** `core/src/join.rs`, the assembly step (≈ line 210):
+`b.halls_name.clone().or_else(|| b.tt_name.clone())`.
+
+**What happens:** the halls-page legend always wins the name. If the
+timetable legend says `Topics in Combinatorics (starts 12 Aug)` and the
+halls legend says `Topics in Combinatorics`, the annotation is gone —
+and because `extract_name_notes` runs on the *chosen* name, the structured
+fields it would have produced (`starts`, `part_of_semester`, the credit
+note) are never set either. The join already knows the two disagree: it
+pushes the warning `"legends disagree on the name … (halls kept)"` and then
+throws the richer string away.
+
+**Consequence:** a course that starts mid-semester, or runs only Oct–Nov,
+looks like a normal full-semester course. `.ics` export and the
+"starts 12 Aug" hints silently lose information.
+
+**Suggested fix:** keep the halls name as the display name, but run
+`extract_name_notes` over **both** names and take the union of the notes,
+preferring whichever is non-empty. That keeps the canonical name stable and
+stops the information loss with no user-visible naming change.
+
+**Confirm with:** a synthetic site whose two legends give the same course
+different annotations; assert `starts` / `part_of_semester` survive.
+
+### 8.6 Deliberate non-bug — do not "fix" this
+
+A gate failure on the DIRECT tier stops the chain instead of trying the
+other routes. This reads like over-reach and has been raised more than once.
+It is intentional: direct content is CMI's own bytes, so if the gate rejects
+them, no other route will see anything different, and the honest message is
+"this app needs an update". Making the chain continue would replace that
+message with a stale-but-plausible timetable. Leave it.

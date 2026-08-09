@@ -3,7 +3,7 @@
 //!
 //! The input is a list of pre-extracted `<pre>` texts (plus the nearest
 //! preceding heading text) so the same logic runs under wasm (DOMParser
-//! extraction in /app) and natively (scraper extraction in /sync and tests).
+//! extraction in /app) and natively (scraper extraction in the tests).
 
 use crate::model::{Branch, Day, PreClassification, Slot};
 use crate::textgrid::{RawGrid, RawRow, parse_cell, parse_grid};

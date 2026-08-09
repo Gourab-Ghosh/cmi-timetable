@@ -12,10 +12,13 @@ rather than being squeezed into the nearest official slot. The header's **My dat
 dialog shows exactly what is stored (including which CMI times your custom
 times overwrite) with one-click removal for each piece.
 
-The app **ships no timetable data at all** — no bundled snapshot, no
-checked-in mirror. On first load it shows a welcome screen asking for one
-sync; after that the fetched timetable lives in the browser and everything
-works offline. Nothing about CMI's current pages is hard-coded anywhere.
+The app **ships no timetable data at all**, and neither does the site it is
+served from: there is no bundled snapshot and no hosted copy of CMI's pages.
+Every timetable you see was fetched from cmi.ac.in by your own browser, so
+it is CMI's current page and not somebody's saved version of it. On first
+load the app shows a welcome screen asking for one sync; after that the
+fetched timetable lives in your browser and everything works offline.
+Nothing about CMI's current pages is hard-coded anywhere.
 
 Data sources (the only two):
 
@@ -30,15 +33,13 @@ Built with **Rust → WebAssembly** ([Leptos](https://leptos.dev) CSR +
 ```text
 /core   Data model, parsers for both CMI pages, validation gate, snapshot
         diff, three-way merge, .ics generation, URL-state codecs.
-        No wasm-only deps; unit-tested against committed HTML fixtures
-        (core/fixtures/, fetched 5 Aug 2026).
+        No wasm-only deps; unit-tested against two saved pages in
+        core/fixtures/ (test input only — never served, never bundled)
+        and against synthetic pages the tests generate themselves.
 /app    Leptos CSR UI (Trunk). Extracts <pre> blocks with the browser's
         DOMParser and feeds them to the same core parsing functions.
         Ships empty: the first load asks for a sync (build.rs only stamps
         build metadata — no data is baked in).
-/sync   Small native binary (reqwest + core). `./deploy.sh --sync` runs it
-        to publish a validated data mirror under app/public/data/.
-        One parser everywhere: one source of truth.
 ```
 
 ### How "Sync now" gets data (the CORS reality)
@@ -52,8 +53,11 @@ valid response wins:
 
 1. **direct** — a cheap 4 s attempt at the CMI URLs (in case CORS ever opens up)
 2. **proxy** — public CORS relays raced in parallel (see `app/src/fetch.rs`)
-3. **mirror** — same-origin `data/latest.json` + raw HTML copies produced by
-   `./deploy.sh --sync` (never hand-written: the gate is the only judge)
+
+Both routes end at cmi.ac.in. There is deliberately no third tier serving a
+copy of the pages from this site: a fallback like that works by showing you
+something CMI published a while ago, without you knowing how long ago, and a
+timetable you can't date is worse than an honest "couldn't reach CMI".
 
 Until the first sync succeeds the app stays on its welcome screen; a failed
 first sync explains itself in a banner and every later page load retries
@@ -181,9 +185,11 @@ uses a minimal hand-rolled hash router instead (two routes: `#/` and
 bounces unknown paths back to `index.html` preserving the query string.
 
 A second deliberate deviation: the build spec's bundled snapshot ("first
-load works offline") was **removed by explicit request** — nothing about
-CMI's pages may ship inside the app. First load now asks for a sync; the
-fixtures remain in the repo only for parser tests and the e2e seed.
+load works offline") was **removed by explicit request**, and so, later, was
+the same-origin data mirror that replaced it. Nothing about CMI's pages may
+ship inside the app or be hosted alongside it. First load asks for a sync;
+the two pages in `core/fixtures/` are test input and nothing else — they are
+not copied into the build and no code path in the app can reach them.
 
 Two more reality-driven deviations, both verified against the live pages on
 5 Aug 2026 and documented in the code:
@@ -205,8 +211,8 @@ cargo install trunk --locked               # or download a release binary
 # dev loop (http://127.0.0.1:8080)
 cd app && trunk serve
 
-# tests — parser tests 1–11 against the fixtures, merge decision table,
-# .ics golden files, URL codecs
+# tests — parser tests 1–11 against the fixtures, the synthetic-site suite,
+# merge decision table, .ics golden files, URL codecs
 cargo test --workspace
 
 # regenerate the .ics golden after an intentional format change
@@ -214,9 +220,6 @@ UPDATE_GOLDEN=1 cargo test -p cmi-timetable-core --test ics_tests
 
 # end-to-end browser tests (Selenium + headless Chromium) — see e2e/README.md
 python e2e/test_app.py
-
-# run the mirror publisher locally (writes app/public/data/)
-cargo run -p cmi-timetable-sync
 ```
 
 ## Deploying
@@ -237,7 +240,6 @@ Push without deploying once: `CMITT_SKIP_DEPLOY=1 git push`.
 
 ```sh
 ./deploy.sh               # test + build + publish + verify it went live
-./deploy.sh --sync        # refresh the CMI data mirror first
 ./deploy.sh --push        # push your commits too (ship code + site)
 ./deploy.sh --skip-tests  # skip the test suite
 ./deploy.sh --republish   # re-trigger serving of what is already published
@@ -258,11 +260,6 @@ build_type=legacy -f "source[branch]=gh-pages"`). For a
 **user/organization page** (`<user>.github.io` repo) run with
 `PUBLIC_URL=/`, and adjust the `base` computation in
 `app/public/404.html` (comment inside).
-
-`--sync` does locally what a cron used to do on GitHub: fetch both CMI
-pages, run them through the same parser and validation gate, and update
-`app/public/data/` (committed as *data*, never as build output). A failed
-gate leaves the last good mirror in place and stops the deploy.
 
 The one step still on GitHub's side is serving the branch — their managed
 `pages-build-deployment`, which only copies static files. If they are

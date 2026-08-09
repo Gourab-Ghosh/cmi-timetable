@@ -15,18 +15,24 @@ Environment:
                       `trunk serve` can never race it)
 
 The app ships no timetable data, so the suite derives a snapshot from the
-committed fixtures at startup (core's `snapshot_json` example) and seeds it
-into localStorage before each test — every test still runs offline and
-deterministically. The browser is started with all non-localhost DNS
-blackholed, so the direct/proxy sync tiers fail instantly and nothing ever
-touches the real network; the first-run tests serve that same seed as a fake
-same-origin mirror instead.
+committed test fixtures at startup (core's `snapshot_json` example) and seeds
+it into localStorage before each test — every test still runs offline and
+deterministically.
+
+Nothing here ever touches the real network. The browser is started with every
+non-localhost hostname blackholed, so a sync fails instantly by default,
+which is what most tests want. The few tests that need a sync to SUCCEED turn
+on a stand-in for cmi.ac.in: `serve_cmi()` starts a TLS server on localhost
+holding the fixture pages, and Chromium is told to resolve www.cmi.ac.in to
+it. That means those tests exercise the app's DIRECT tier — the same code
+path a real student's browser takes first — rather than a special one that
+only exists under test.
 """
 
 import http.server
 import json
 import os
-import shutil
+import ssl
 import subprocess
 import sys
 import tempfile
@@ -46,6 +52,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.abspath(os.path.join(HERE, ".."))
 DIST = os.environ.get("DIST_DIR", os.path.join(HERE, "..", "app", "dist"))
 PORT = int(os.environ.get("PORT", "8977"))
+# Where the stand-in for www.cmi.ac.in listens (see serve_cmi below).
+CMI_PORT = int(os.environ.get("CMI_PORT", "8978"))
 BASE = f"http://127.0.0.1:{PORT}"
 CHROME_BIN = os.environ.get("CHROME_BIN", "/usr/bin/chromium")
 FIXTURES = os.path.join(REPO, "core", "fixtures")
@@ -65,16 +73,16 @@ TOC_OVR = {
     "credits": [{"course": "TOC", "credits": 3, "created_at": 1754000000000.0}],
 }
 
-# Filled by build_seed() at startup: the parsed mirror-format dict and the
-# ready-to-store snapshot JSON string.
-SEED_LATEST = None
+# Filled by build_seed() at startup: the snapshot as the app's own parser
+# produces it from the fixtures, ready to drop into localStorage.
+SEED_SNAPSHOT = None
 SEED_SNAPSHOT_JSON = None
 
 
 def build_seed():
     """Derive the seed snapshot from the committed fixtures with the exact
     same parser the app uses (core's `snapshot_json` example)."""
-    global SEED_LATEST, SEED_SNAPSHOT_JSON
+    global SEED_SNAPSHOT, SEED_SNAPSHOT_JSON
     env = dict(os.environ)
     env.setdefault(
         "CARGO_TARGET_DIR", os.path.expanduser("~/.rust-target-e2e")
@@ -90,39 +98,154 @@ def build_seed():
     )
     if result.returncode != 0:
         sys.exit(f"seed generation failed:\n{result.stderr}")
-    SEED_LATEST = json.loads(result.stdout)
-    snapshot = SEED_LATEST["snapshot"]
-    snapshot["fetched_at"] = time.time() * 1000.0
-    snapshot["source"] = "Mirror"
-    SEED_SNAPSHOT_JSON = json.dumps(snapshot)
+    SEED_SNAPSHOT = json.loads(result.stdout)
+    SEED_SNAPSHOT["fetched_at"] = time.time() * 1000.0
+    SEED_SNAPSHOT["source"] = "Direct"
+    SEED_SNAPSHOT_JSON = json.dumps(SEED_SNAPSHOT)
 
 
-def write_fake_mirror(mutate=None):
-    """Publish the seed as a same-origin mirror (DIST/data/) so a real sync
-    can succeed through the mirror tier — external hosts are blackholed.
-    With `mutate`, the snapshot inside latest.json is edited (simulating an
-    upstream CMI change) and the raw HTML copies are omitted so the client
-    adopts the CI-validated snapshot instead of re-parsing raw pages."""
-    data_dir = os.path.join(DIST, "data")
-    os.makedirs(data_dir, exist_ok=True)
-    latest = dict(SEED_LATEST)
-    latest["generated_at"] = time.time() * 1000.0
-    if mutate is not None:
-        snap = json.loads(json.dumps(SEED_LATEST["snapshot"]))
-        mutate(snap)
-        latest = dict(latest, snapshot=snap)
-    with open(os.path.join(data_dir, "latest.json"), "w") as f:
-        json.dump(latest, f)
-    for name in ("timetable.php.html", "lecturehalls.php.html"):
-        target = os.path.join(data_dir, name)
-        if mutate is None:
-            shutil.copy(os.path.join(FIXTURES, name), target)
-        elif os.path.exists(target):
-            os.remove(target)
+def cache_from_before_cmi_moved_toc(gone_code="QCOM"):
+    """A cached snapshot that disagrees with CMI's live pages, plus the
+    override anchored to it.
+
+    The app has no way to be handed a *different* CMI — the fixtures are what
+    the fake CMI serves. So a test that needs "CMI moved a class you had
+    customised" arranges it from the other side: the cache remembers TOC's
+    first class on Friday 14:00, the student moved that class to Wednesday
+    17:00, and the live pages put it back on Tuesday 09:10. From the merge's
+    point of view that is exactly an upstream move of a meeting the student
+    had customised, which is the situation under test.
+
+    `gone_code` is renamed in the cache only, so that course looks removed
+    upstream on the next sync. Returns (snapshot_json, overrides, gone_code).
+    """
+    snap = json.loads(SEED_SNAPSHOT_JSON)
+    moved_from = None
+    for course in snap["courses"]:
+        if course["code"] != "TOC":
+            continue
+        for m in course["meetings"]:
+            if m["day"] == "Tue" and m["slot"]["start_min"] == 550:
+                m["day"] = "Fri"
+                m["slot"] = {"start_min": 840, "end_min": 915}
+                moved_from = json.loads(json.dumps(m))
+    assert moved_from is not None, "the fixture must still have TOC on Tue 09:10"
+
+    renamed = f"{gone_code}X"
+    assert not any(c["code"] == renamed for c in snap["courses"]), \
+        f"{renamed} must not already exist upstream, or nothing looks removed"
+    for course in snap["courses"]:
+        if course["code"] == gone_code:
+            course["code"] = renamed
+
+    overrides = {
+        "next_id": 1,
+        "items": [{
+            "id": 0, "course": "TOC",
+            "base": {"day": "Fri",
+                     "slot": {"start_min": 840, "end_min": 915},
+                     "hall": moved_from.get("hall"), "temp_booking": False},
+            "to": {"day": "Wed", "slot": {"start_min": 1020, "end_min": 1095},
+                   "hall": moved_from.get("hall"), "temp_booking": False},
+            "created_at": 1754000000000.0}],
+        "credits": [],
+    }
+    return json.dumps(snap), overrides, renamed
 
 
-def remove_fake_mirror():
-    shutil.rmtree(os.path.join(DIST, "data"), ignore_errors=True)
+# ---------------------------------------------------------------------------
+# A stand-in for www.cmi.ac.in
+#
+# The app has exactly one source of data: CMI's own two pages, fetched over
+# https. So to test a sync that actually succeeds, we have to be CMI. This
+# serves the fixture pages over TLS on localhost, and Chromium is started
+# with www.cmi.ac.in resolving here and certificate errors ignored. The app
+# is unmodified and unaware — it runs its normal DIRECT tier, the same code
+# path a real student's browser takes first.
+#
+# Off by default: most tests want an unreachable CMI, which is what the
+# blackholed resolver gives them, and leaving it off keeps those honest.
+# ---------------------------------------------------------------------------
+
+CMI_PAGES = {
+    "/practical/timetable.php": "timetable.php.html",
+    "/practical/lecturehalls.php": "lecturehalls.php.html",
+}
+
+_cmi = {"up": False, "bodies": {}}
+
+
+def _make_cert(directory):
+    """Self-signed cert for www.cmi.ac.in. Chromium is told to ignore
+    certificate errors, so this only has to exist, not be trusted."""
+    key = os.path.join(directory, "cmi-key.pem")
+    crt = os.path.join(directory, "cmi-cert.pem")
+    subprocess.run(
+        ["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes",
+         "-keyout", key, "-out", crt, "-days", "1",
+         "-subj", "/CN=www.cmi.ac.in",
+         "-addext", "subjectAltName=DNS:www.cmi.ac.in"],
+        check=True, capture_output=True,
+    )
+    return key, crt
+
+
+class _CmiHandler(http.server.BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+
+    def do_GET(self):
+        path = self.path.split("?", 1)[0]
+        if not _cmi["up"] or path not in _cmi["bodies"]:
+            self.send_response(503)
+            self.send_header("Content-Length", "0")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            return
+        body = _cmi["bodies"][path].encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        # The real CMI sends no CORS header — that is the whole reason the
+        # proxy tier exists. This one does, because a test that had to go
+        # through a public relay to reach localhost would be testing the
+        # relay, not the app.
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, *args, **kwargs):
+        pass
+
+
+def serve_cmi(timetable=None, lecturehalls=None):
+    """Make CMI reachable for this test. Serves the fixture pages verbatim
+    unless given something else."""
+    given = {"timetable.php.html": timetable,
+             "lecturehalls.php.html": lecturehalls}
+    for path, name in CMI_PAGES.items():
+        body = given[name]
+        if body is None:
+            with open(os.path.join(FIXTURES, name), encoding="utf-8") as f:
+                body = f.read()
+        _cmi["bodies"][path] = body
+    _cmi["up"] = True
+
+
+def stop_serving_cmi():
+    """Back to an unreachable CMI — the state every test starts from."""
+    _cmi["up"] = False
+    _cmi["bodies"] = {}
+
+
+def serve_fake_cmi():
+    tmp = tempfile.mkdtemp(prefix="cmitt-e2e-cmi-")
+    key, crt = _make_cert(tmp)
+    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    ctx.load_cert_chain(crt, key)
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", CMI_PORT), _CmiHandler)
+    server.socket = ctx.wrap_socket(server.socket, server_side=True)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return server
 
 
 def serve_dist():
@@ -148,11 +271,18 @@ def make_driver():
     # The stylesheet honors prefers-reduced-motion; forcing it here disables
     # entry animations so dialogs are fully visible the moment they mount.
     opts.add_argument("--force-prefers-reduced-motion")
-    # Blackhole every non-localhost hostname: sync's direct/proxy tiers fail
-    # instantly and deterministically, and no test ever touches the network.
+    # Blackhole every non-localhost hostname: no test can touch the real
+    # network, so a sync fails instantly and deterministically. The one
+    # exception is CMI itself, pointed at our own TLS stand-in — which
+    # answers 503 unless a test called serve_cmi(), so the default is still
+    # "CMI is unreachable".
     opts.add_argument(
-        "--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE 127.0.0.1"
+        f"--host-resolver-rules=MAP www.cmi.ac.in 127.0.0.1:{CMI_PORT}, "
+        "MAP * ~NOTFOUND, EXCLUDE 127.0.0.1"
     )
+    # The stand-in's certificate is self-signed; it is only there because
+    # the app fetches over https.
+    opts.add_argument("--ignore-certificate-errors")
     opts.add_experimental_option("prefs", {
         "download.default_directory": DOWNLOADS,
         "download.prompt_for_download": False,
@@ -789,8 +919,8 @@ def t24_toast_pauses_while_hovered(app):
 
 def t25_first_run_prompt_when_empty(app):
     """A first-time visitor sees the welcome prompt, no tabs, and an honest
-    failure banner when the sync can't get through (all hosts blackholed)."""
-    remove_fake_mirror()  # ensure the mirror tier 404s
+    failure banner when the sync can't get through (nothing reachable)."""
+    stop_serving_cmi()  # make sure the previous test left CMI unreachable
     app.boot("/", seed=False)
     welcome = app.wait_css(".welcome-card")
     assert "Plan your semester" in welcome.text, welcome.text
@@ -805,21 +935,21 @@ def t25_first_run_prompt_when_empty(app):
     app.xpath("//button[contains(.,'Fetch the timetable')]")
 
 
-def t26_first_sync_populates_from_mirror(app):
-    """With a reachable (same-origin) mirror, the automatic first sync fills
-    the app: welcome disappears, tabs appear, data renders."""
-    write_fake_mirror()
+def t26_first_sync_populates_from_cmi(app):
+    """With CMI reachable, the automatic first sync fills the app straight
+    from its pages: welcome disappears, tabs appear, data renders, and the
+    pill says the data came directly from CMI."""
+    serve_cmi()
     try:
         app.boot("/", seed=False)
-        # The auto-sync walks direct (dead) → proxies (dead) → mirror (live).
         app.wait_css(".tabs .tab", timeout=30)
         app.wait_gone(".welcome-card")
-        assert "mirror" in app.css(".sync-pill").text, app.css(".sync-pill").text
+        assert "direct" in app.css(".sync-pill").text, app.css(".sync-pill").text
         app.open_tab("Master grid")
         app.wait_css("section[aria-label='Master grid'] table.tt")
         app.chip("TOC")
     finally:
-        remove_fake_mirror()
+        stop_serving_cmi()
 
 
 def t27_filters_undo_redo(app):
@@ -919,20 +1049,14 @@ def t30_sync_merge_conflict_flow(app):
     """Upstream moves a customised meeting → conflict dialog; keep-mine
     rebases (no re-conflict on the next sync); a removed course gets its
     badge; the What-changed digest is structured."""
-    def mutate(snap):
-        for c in snap["courses"]:
-            if c["code"] == "TOC":
-                for m in c["meetings"]:
-                    if m["day"] == "Tue":
-                        m["day"] = "Fri"
-                        m["slot"] = {"start_min": 840, "end_min": 915}
-        snap["courses"] = [c for c in snap["courses"] if c["code"] != "QCOM"]
-    write_fake_mirror(mutate)
+    cached, overrides, gone = cache_from_before_cmi_moved_toc()
+    serve_cmi()
     try:
-        app.boot("/", selection=["TOC", "QCOM"], overrides=TOC_OVR)
+        app.boot("/", selection=["TOC", gone], overrides=overrides,
+                 raw_snapshot=cached)
         app.xpath("//button[normalize-space()='Sync now']").click()
         dialog = app.wait_css(".dialog", timeout=30)
-        assert "your time" in dialog.text and "Fri 14:00" in dialog.text, dialog.text
+        assert "your time" in dialog.text and "Tue 09:10" in dialog.text, dialog.text
         # Default is "Use CMI's" — actively keep the user's time instead.
         dialog.find_element(
             By.XPATH, ".//button[normalize-space()='Keep mine for all']"
@@ -940,13 +1064,13 @@ def t30_sync_merge_conflict_flow(app):
         dialog.find_element(By.XPATH, ".//button[normalize-space()='Apply']").click()
         app.wait_toast("Conflicts resolved")
         app.wait_css("td[data-day='2'][data-slot='1020'] button.chip[aria-label^='TOC,']")
-        app.wait_toast("QCOM is no longer on CMI's timetable")
+        app.wait_toast(f"{gone} is no longer on CMI's timetable")
         banner = app.xpath("//div[contains(@class,'banner')][contains(.,'CMI updated')]")
         banner.find_element(
             By.XPATH, ".//button[normalize-space()='See what changed']"
         ).click()
         dlg = app.wait_css(".dialog")
-        assert "No longer listed" in dlg.text and "QCOM" in dlg.text, dlg.text
+        assert "No longer listed" in dlg.text and gone in dlg.text, dlg.text
         app.d.find_element(By.TAG_NAME, "body").send_keys(Keys.ESCAPE)
         app.open_tab("My courses")
         section = app.wait_css("section[aria-label='My courses']")
@@ -958,7 +1082,7 @@ def t30_sync_merge_conflict_flow(app):
         assert not app.css_all(".dialog"), \
             "keep-mine must rebase the override — no repeat conflict"
     finally:
-        remove_fake_mirror()
+        stop_serving_cmi()
 
 
 def t31_keyboard_move_mode(app):
@@ -1641,7 +1765,7 @@ def t43_custom_form_survives_a_sync(app):
     it: the dialog is constructed inside DialogHost's reactive closure, so
     every read in its builder is untracked and typed-but-unsaved input
     stays put. The live shadow note is the one exception (own closure)."""
-    write_fake_mirror()
+    serve_cmi()
     try:
         app.boot("/", selection=["TOC"])
         app.open_tab("My courses")
@@ -1668,7 +1792,7 @@ def t43_custom_form_survives_a_sync(app):
         assert len(app.css_all(".course-form .meeting-draft")) == 1, \
             "the meeting row the user added must survive the sync"
     finally:
-        remove_fake_mirror()
+        stop_serving_cmi()
 
 
 def _open_toc_editor(app):
@@ -1777,7 +1901,7 @@ def t45_editor_survives_a_sync(app):
     DialogHost's reactive closure, so its builder reads untracked. A sync
     landing behind the modal must not rebuild the form and put the meeting's
     original day, time and hall back."""
-    write_fake_mirror()
+    serve_cmi()
     try:
         app.boot("/?c=TOC")
         halls = app.d.execute_script(
@@ -1804,7 +1928,7 @@ def t45_editor_survives_a_sync(app):
         app.xpath("//div[@class='dialog']//button[normalize-space()='Save changes']").click()
         app.wait_toast("Saved your changes to TOC")
     finally:
-        remove_fake_mirror()
+        stop_serving_cmi()
 
 
 def _halls_day(app, short):
@@ -2433,23 +2557,16 @@ def t60_a_conflicting_sync_does_not_steal_the_open_editor(app):
     the slot throws away the name they were typing, the rows they added,
     all of it. The conflicts banner is already on screen with Review, so
     the question can wait until they are finished."""
-    def mutate(snap):
-        for c in snap["courses"]:
-            if c["code"] != "TOC":
-                continue
-            for m in c["meetings"]:
-                if m["day"] == "Tue" and m["slot"]["start_min"] == 550:
-                    m["day"] = "Fri"
-                    m["slot"] = {"start_min": 840, "end_min": 915}
-
-    write_fake_mirror(mutate)
+    cached, overrides, _gone = cache_from_before_cmi_moved_toc()
+    serve_cmi()
     try:
-        app.boot("/", selection=["TOC"], overrides=TOC_OVR)
+        app.boot("/", selection=["TOC"], overrides=overrides,
+                 raw_snapshot=cached)
         app.open_tab("My courses")
         app.wait_css("section[aria-label='My courses']")
         app.xpath("//button[normalize-space()='Edit course']").click()
         app.wait_css(".dialog .course-form")
-        Select(app.css("#ce-day-0")).select_by_visible_text("Friday")
+        Select(app.css("#ce-day-0")).select_by_visible_text("Monday")
 
         sync = app.xpath("//button[normalize-space()='Sync now']")
         app.d.execute_script("arguments[0].click();", sync)
@@ -2460,7 +2577,7 @@ def t60_a_conflicting_sync_does_not_steal_the_open_editor(app):
 
         # The editor is still there, still holding what they chose.
         assert app.css_all(".course-form"), "the sync must not close the editor"
-        assert Select(app.css("#ce-day-0")).first_selected_option.text == "Friday", \
+        assert Select(app.css("#ce-day-0")).first_selected_option.text == "Monday", \
             "and must not reset what they had picked"
 
         # The conflict is not lost — it is waiting in the banner.
@@ -2480,7 +2597,7 @@ def t60_a_conflicting_sync_does_not_steal_the_open_editor(app):
         dialog = app.wait_css(".dialog")
         assert "TOC" in dialog.text, dialog.text
     finally:
-        remove_fake_mirror()
+        stop_serving_cmi()
 
 
 def t61_adding_a_meeting_where_a_moved_one_used_to_be(app):
@@ -2552,7 +2669,7 @@ TESTS = [
     t23_master_grid_marks_selected,
     t24_toast_pauses_while_hovered,
     t25_first_run_prompt_when_empty,
-    t26_first_sync_populates_from_mirror,
+    t26_first_sync_populates_from_cmi,
     t27_filters_undo_redo,
     t28_facet_menu_search_and_select_all,
     t29_share_link_carries_custom_changes,
@@ -2596,6 +2713,8 @@ def main():
         sys.exit(f"dist directory not found: {DIST} — run `trunk build --release` first")
     build_seed()
     server = serve_dist()
+    # Always listening, but answering 503 until a test calls serve_cmi().
+    cmi = serve_fake_cmi()
     driver = make_driver()
     app = App(driver)
     failures = []
@@ -2613,9 +2732,14 @@ def main():
                 failures.append(name)
                 print(f"FAIL  {name}")
                 traceback.print_exc()
+            finally:
+                # A test that failed before its own cleanup must not leave
+                # CMI reachable for the next one.
+                stop_serving_cmi()
     finally:
         driver.quit()
         server.shutdown()
+        cmi.shutdown()
     print(f"\n{len(tests) - len(failures)}/{len(tests)} passed")
     if failures:
         sys.exit(1)

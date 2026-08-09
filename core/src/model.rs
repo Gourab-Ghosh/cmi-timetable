@@ -350,6 +350,12 @@ impl Course {
 pub enum SourceTier {
     Direct,
     Proxy(String),
+    /// Legacy: the site used to host a copy of CMI's pages and serve it as a
+    /// third tier. It doesn't any more — everything is fetched from cmi.ac.in
+    /// itself. Kept ONLY so a cache written by an older build still
+    /// deserializes; nothing produces it. The data in such a cache is real
+    /// CMI data (it went through the same parser and gate), so unlike
+    /// `Bundled` it is kept and simply re-synced on the next update.
     Mirror,
     /// Legacy: snapshots baked into pre-1.x app builds. Kept only so those
     /// caches still deserialize; the app discards them at load time.
@@ -363,7 +369,7 @@ impl SourceTier {
         match self {
             SourceTier::Direct => "directly from cmi.ac.in".to_string(),
             SourceTier::Proxy(name) => format!("via proxy ({name})"),
-            SourceTier::Mirror => "via mirror".to_string(),
+            SourceTier::Mirror => "from this site's old copy".to_string(),
             SourceTier::Bundled => "bundled with the app".to_string(),
             SourceTier::None => "nothing synced yet".to_string(),
         }
@@ -373,7 +379,7 @@ impl SourceTier {
         match self {
             SourceTier::Direct => "direct".to_string(),
             SourceTier::Proxy(_) => "proxy".to_string(),
-            SourceTier::Mirror => "mirror".to_string(),
+            SourceTier::Mirror => "old copy".to_string(),
             SourceTier::Bundled => "built-in copy".to_string(),
             SourceTier::None => "not synced".to_string(),
         }

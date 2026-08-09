@@ -78,7 +78,6 @@ fn simulators(app: App) -> impl IntoView {
                     <option value="">"(all tiers, normal order)"</option>
                     <option value="direct">"direct only"</option>
                     <option value="proxy">"proxy only"</option>
-                    <option value="mirror">"mirror only"</option>
                 </select>
                 <button class="btn small" on:click=move |_| {
                     leptos::task::spawn_local(async move {

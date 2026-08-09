@@ -1,7 +1,8 @@
-//! Parse two saved CMI pages and print a mirror-format `latest.json` to
-//! stdout. The e2e browser tests use this to seed localStorage / a fake
-//! mirror from the committed fixtures — the app itself ships no timetable
-//! data at all.
+//! Parse two saved CMI pages and print the snapshot as JSON on stdout. The
+//! e2e browser tests use this to derive their seed from the committed test
+//! fixtures with the exact parser the app runs. Test tooling only: neither
+//! the app nor the deployed site ever reads a file like this — the app has
+//! no source of timetable data except cmi.ac.in itself.
 //!
 //! ```sh
 //! cargo run -p cmi-timetable-core --example snapshot_json --features html -- \
@@ -41,7 +42,7 @@ fn main() -> ExitCode {
         &tt,
         &halls,
         now_ms,
-        cmi_timetable_core::model::SourceTier::Mirror,
+        cmi_timetable_core::model::SourceTier::Direct,
         true,
     );
     let Some(snapshot) = out.snapshot else {
@@ -52,12 +53,6 @@ fn main() -> ExitCode {
         return ExitCode::FAILURE;
     };
 
-    let latest = serde_json::json!({
-        "generated_at": now_ms,
-        "parser_version": cmi_timetable_core::PARSER_VERSION,
-        "semester_label": snapshot.semester_label,
-        "snapshot": snapshot,
-    });
-    println!("{}", serde_json::to_string(&latest).unwrap());
+    println!("{}", serde_json::to_string(&snapshot).unwrap());
     ExitCode::SUCCESS
 }
