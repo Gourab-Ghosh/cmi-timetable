@@ -37,6 +37,13 @@ pub struct MergeResult {
     /// Overrides dropped because CMI now matches the user's change —
     /// announce with a toast.
     pub dropped_matching: Vec<MeetingOverride>,
+    /// Changes whose meeting is in NEITHER snapshot: CMI has not run that
+    /// class for at least a term, so there is nothing left for the change to
+    /// attach to. A move keeps its destination (it becomes a time of the
+    /// user's own); a removal has nothing left to suppress and goes. Both
+    /// are ANNOUNCED — the one thing that must not happen is a silent
+    /// reinterpretation of what the student asked for.
+    pub lapsed: Vec<MeetingOverride>,
     /// Conflicts to put in front of the user — never auto-resolved.
     pub conflicts: Vec<Conflict>,
     /// Courses in the current selection that no longer exist upstream.
@@ -106,6 +113,8 @@ pub fn merge_overrides(
         .collect();
 
     let mut drop_ids: Vec<u64> = Vec::new();
+    // Overrides that keep their destination but lose their anchor.
+    let mut unanchor_ids: Vec<u64> = Vec::new();
 
     for ov in &overrides.items {
         let old_meetings = old.course(&ov.course).map(|c| c.meetings.as_slice());
@@ -155,28 +164,28 @@ pub fn merge_overrides(
                         }
                     }
                     Err(()) => {
+                        // The base is in neither snapshot — CMI has not run
+                        // this class for at least a term. (It cannot be in
+                        // the new one: `counterpart` returns `Ok` for that.)
+                        //
+                        // Asking about it was tried and is not safe: the
+                        // question's only candidates are the classes the
+                        // course runs NOW, none of which the student edited,
+                        // and `resolve_conflict` would re-point the override
+                        // at one of them — "keep it removed" striking out a
+                        // lecture they never touched, "keep mine" hiding one.
+                        // Dropping it silently is not acceptable either: that
+                        // is how a struck-out class comes back with no word.
+                        // So the change LAPSES, and is announced.
+                        result.lapsed.push(ov.clone());
                         if ov.is_removal() {
-                            // Base missing from the OLD snapshot. If it still
-                            // matches a CURRENT official meeting (overrides
-                            // imported via a share link against fresher
-                            // data), the removal is meaningful — keep it. If
-                            // not, it is inert: it suppresses nothing, there
-                            // is nothing to "keep", and rebasing onto an
-                            // arbitrary candidate could strike a meeting the
-                            // user never touched. Drop it silently; the
-                            // visible timetable is unchanged either way.
-                            if !new_m.iter().any(|m| m.same_place_time(base)) {
-                                drop_ids.push(ov.id);
-                            }
+                            // Nothing left to suppress.
+                            drop_ids.push(ov.id);
                         } else {
-                            // Stale base (not in the old snapshot). Offer the
-                            // new official meetings as candidates.
-                            result.conflicts.push(Conflict {
-                                override_id: ov.id,
-                                course: ov.course.clone(),
-                                mine: ov.to.clone(),
-                                theirs: new_m.to_vec(),
-                            });
+                            // Their placement is real and stays put — as a
+                            // time of their own, with nothing claimed about
+                            // what it replaces.
+                            unanchor_ids.push(ov.id);
                         }
                     }
                 }
@@ -209,6 +218,11 @@ pub fn merge_overrides(
 
     for id in drop_ids {
         result.overrides.remove(id);
+    }
+    for id in unanchor_ids {
+        if let Some(o) = result.overrides.items.iter_mut().find(|o| o.id == id) {
+            o.base = None;
+        }
     }
 
     result

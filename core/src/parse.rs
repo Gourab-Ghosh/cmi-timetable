@@ -47,8 +47,17 @@ impl PreKind {
 
 // Deliberately loose: case-insensitive, "Time Table"/"Timetable", the
 // "for"/"of" connective optional — CMI can reword the heading any semester.
-static SEMESTER_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(?i)time\s*-?\s*table\s+(?:(?:for|of)\s+)?(.+?\d{4})").unwrap());
+//
+// The label ends at the first year, EXCEPT when a second month and year
+// follow a dash: a term that crosses New Year is written with both years
+// ("December 2026--March 2027"), and stopping at the first would keep only
+// half of it — a truncated label the halls page would then contradict.
+static SEMESTER_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r"(?i)time\s*-?\s*table\s+(?:(?:for|of)\s+)?(.+?\d{4}(?:\s*(?:--|[-\u{2013}\u{2014}])\s*[A-Za-z.]+\s+\d{4})?)",
+    )
+    .unwrap()
+});
 
 // Fallback signal when the phrasing changes entirely: a short line carrying
 // a plausible calendar year.

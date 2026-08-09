@@ -451,20 +451,45 @@ impl App {
 
     // -- persistence + URL -------------------------------------------------
 
+    /// Saving the user's OWN data — the one thing in this app that cannot be
+    /// fetched again. A failure here used to be discarded (`let _ =`) while
+    /// the sync flow went on saying "Your courses and changes are safe", so
+    /// a full localStorage lost the lot at the next reload without a word.
+    /// It stays on screen (sticky) because it is about data the user can
+    /// still rescue — the session in front of them is still correct.
+    fn persisted(&self, what: &str, result: Result<(), String>) {
+        if result.is_err() {
+            self.set_banner_sticky(
+                BannerKind::Warn,
+                format!(
+                    "Your browser wouldn't let the app save your {what}. Everything is \
+                     still here for now, but it may not come back next time you open \
+                     the app. Freeing some space — or clearing the cached timetable \
+                     under My data — should fix it.",
+                ),
+            );
+        }
+    }
+
     pub fn persist_selection(&self) {
-        let _ = storage::save(storage::KEY_SELECTION, &self.selection.get_untracked());
+        let r = storage::save(storage::KEY_SELECTION, &self.selection.get_untracked());
+        self.persisted("courses", r);
         self.sync_url();
     }
 
     pub fn persist_overrides(&self) {
-        let _ = storage::save(storage::KEY_OVERRIDES, &self.overrides.get_untracked());
+        let r = storage::save(storage::KEY_OVERRIDES, &self.overrides.get_untracked());
+        self.persisted("changes", r);
     }
 
     pub fn persist_customs(&self) {
-        let _ = storage::save(storage::KEY_CUSTOM, &self.customs.get_untracked());
+        let r = storage::save(storage::KEY_CUSTOM, &self.customs.get_untracked());
+        self.persisted("own courses", r);
     }
 
     pub fn persist_prefs(&self) {
+        // Preferences are re-derivable and re-chosen in a second; a failure
+        // here is not worth a banner that would then hide a real one.
         let _ = storage::save(storage::KEY_PREFS, &self.prefs.get_untracked());
     }
 
@@ -955,11 +980,25 @@ impl App {
         let course = course.to_string();
         let now = domx::now_ms();
         self.act(&format!("add & move {course}"), |sel, ovs| {
-            if !sel.iter().any(|c| c == &course) {
+            if !sel.iter().any(|c| c.eq_ignore_ascii_case(&course)) {
                 sel.push(course.clone());
                 ovs.unhide(&course);
             }
-            ovs.add(&course, base.clone(), Some(to.clone()), now);
+            // Update in place when this CMI meeting already carries a change,
+            // exactly as `apply_override` does. A course can be dragged in the
+            // master grid while unselected AFTER it was already customised —
+            // adding a second override for the same base makes the one meeting
+            // render twice, on the timetable and in Your changes.
+            match ovs
+                .items
+                .iter_mut()
+                .find(|o| o.course.eq_ignore_ascii_case(&course) && o.base == base)
+            {
+                Some(o) => o.to = Some(to.clone()),
+                None => {
+                    ovs.add(&course, base.clone(), Some(to.clone()), now);
+                }
+            }
         });
         self.toast_undo(toast);
     }
@@ -988,56 +1027,65 @@ impl App {
         credits: Option<u8>,
     ) {
         // (base, to) for every override the saved form implies.
+        //
+        // Two passes, and the order matters. A row that CAME from one of
+        // CMI's meetings names it explicitly, so it has the first claim on
+        // it; only afterwards may a row the user wrote themselves claim a
+        // leftover meeting it happens to coincide with. The other way round
+        // loses data: a meeting the user added at exactly the time of a CMI
+        // meeting they had MOVED away would claim that meeting and store
+        // nothing, while the move — finding its base already spoken for —
+        // stored itself as a stale-base override. The added meeting then
+        // existed nowhere, and a save that changed nothing made it vanish.
         let mut desired: Vec<(Option<Meeting>, Option<Meeting>)> = Vec::new();
         let mut claimed: Vec<usize> = Vec::new();
         let mut invented = false;
         for row in &rows {
-            let base = row.from.as_ref().and_then(|f| f.base.clone());
             invented |= row.from.is_none();
-            match &base {
-                // A row that came from one of CMI's meetings speaks for it.
-                Some(base) => {
-                    let stands_for = official
-                        .iter()
-                        .enumerate()
-                        .find(|(i, m)| m.same_place_time(base) && !claimed.contains(i))
-                        .map(|(i, _)| i);
-                    if let Some(i) = stands_for {
-                        claimed.push(i);
-                    }
-                    // Back on CMI's own meeting: no override at all. Day,
-                    // time and hall are what the form can set, so they are
-                    // what "the same" means — CMI's TMP* decoration isn't
-                    // the user's to reproduce.
-                    //
-                    // Only when the row really stands for a meeting CMI has
-                    // NOW, though. A base CMI has since moved (an unresolved
-                    // conflict, or a share link imported against fresher
-                    // data) stands for nothing: storing nothing for it would
-                    // delete a meeting that is on the user's timetable and
-                    // on this form — the one case where saving could lose
-                    // what it was showing.
-                    if stands_for.is_some() && base.same_place_time(&row.to) {
-                        continue;
-                    }
-                    desired.push((Some(base.clone()), Some(row.to.clone())));
-                }
-                // A row the user wrote that says exactly what CMI says IS
-                // CMI's meeting, however it got there — so it speaks for it
-                // too, and nothing is stored. Without this, striking a
-                // meeting out and adding the same one back leaves a removal
-                // and an addition that cancel on screen and read as two
-                // changes in the list.
-                None => {
-                    match official
-                        .iter()
-                        .enumerate()
-                        .find(|(i, m)| m.same_place_time(&row.to) && !claimed.contains(i))
-                    {
-                        Some((i, _)) => claimed.push(i),
-                        None => desired.push((None, Some(row.to.clone()))),
-                    }
-                }
+        }
+        for row in &rows {
+            let Some(base) = row.from.as_ref().and_then(|f| f.base.clone()) else {
+                continue;
+            };
+            let stands_for = official
+                .iter()
+                .enumerate()
+                .find(|(i, m)| m.same_place_time(&base) && !claimed.contains(i))
+                .map(|(i, _)| i);
+            if let Some(i) = stands_for {
+                claimed.push(i);
+            }
+            // Back on CMI's own meeting: no override at all. Day, time and
+            // hall are what the form can set, so they are what "the same"
+            // means — CMI's TMP* decoration isn't the user's to reproduce.
+            //
+            // Only when the row really stands for a meeting CMI has NOW,
+            // though. A base CMI has since moved (an unresolved conflict, or
+            // a share link imported against fresher data) stands for
+            // nothing: storing nothing for it would delete a meeting that is
+            // on the user's timetable and on this form — the one case where
+            // saving could lose what it was showing.
+            if stands_for.is_some() && base.same_place_time(&row.to) {
+                continue;
+            }
+            desired.push((Some(base.clone()), Some(row.to.clone())));
+        }
+        // A row the user wrote that says exactly what CMI says IS CMI's
+        // meeting, however it got there — so it speaks for it too, and
+        // nothing is stored. Without this, striking a meeting out and adding
+        // the same one back leaves a removal and an addition that cancel on
+        // screen and read as two changes in the list.
+        for row in &rows {
+            if row.from.as_ref().and_then(|f| f.base.as_ref()).is_some() {
+                continue;
+            }
+            match official
+                .iter()
+                .enumerate()
+                .find(|(i, m)| m.same_place_time(&row.to) && !claimed.contains(i))
+            {
+                Some((i, _)) => claimed.push(i),
+                None => desired.push((None, Some(row.to.clone()))),
             }
         }
         // Whatever CMI has that no row stands for, the user struck out.

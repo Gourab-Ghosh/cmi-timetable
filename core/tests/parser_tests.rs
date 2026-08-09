@@ -573,6 +573,104 @@ fn t11b_pipeless_pages_recover() {
     assert_eq!(toc.meetings, SNAPSHOT.course("TOC").unwrap().meetings);
 }
 
+/// Test 11d — what /app's "simulate a parse failure" button relies on.
+///
+/// Every grid is located by the time ranges in its header, so a page whose
+/// times are unreadable has no grid and no legend: the gate refuses it and
+/// the cached timetable stands. This is the counterpart of t11b — since
+/// parser version 3, deleting the vertical rules is recoverable drift, so
+/// the simulator mangles the times instead. If this ever starts passing,
+/// the simulator is demonstrating nothing and must be changed with it.
+#[test]
+fn t11d_a_page_with_unreadable_times_fails_closed() {
+    let out = parse_html_pages(&TT.replace(':', ";"), HALLS, 0.0, SourceTier::Direct, false);
+    assert!(!out.report.gate_passed(), "{:#?}", out.report.gate);
+    assert!(
+        out.snapshot.is_none(),
+        "fail closed: nothing to replace with"
+    );
+}
+
+/// Test 11e — a lecture-halls page cut short in transfer.
+///
+/// It still parses: the day sections simply stop, so every class after the
+/// cut keeps its time and loses its room. The count floors stay satisfied
+/// the whole way down (a half page still has three days and three halls),
+/// so before rule 8 a 50–60% cut replaced a perfectly good cached snapshot
+/// with one where every Thursday and Friday class read "Hall TBA".
+#[test]
+fn t11e_a_truncated_halls_page_fails_closed() {
+    for percent in [40, 45, 50, 55] {
+        let cut = HALLS.len() * percent / 100;
+        let cut = HALLS
+            .char_indices()
+            .map(|(i, _)| i)
+            .take_while(|i| *i <= cut)
+            .last()
+            .unwrap_or(0);
+        let out = parse_html_pages(TT, &HALLS[..cut], 0.0, SourceTier::Direct, false);
+        assert!(
+            !out.report.gate_passed(),
+            "{percent}% of the halls page must not replace a whole one \
+             ({}/{} classes left with no room): {:#?}",
+            out.report.stats.meetings_without_hall,
+            out.report.stats.meetings_total,
+            out.report.gate
+        );
+        assert!(out.snapshot.is_none(), "{percent}%");
+    }
+    // The whole page, of course, is fine.
+    assert!(SNAPSHOT.courses.len() >= 70);
+    // Past that the cut lands INSIDE the last day, so a handful of classes
+    // read "Hall TBA" — which is what the page now says, not something
+    // invented, and every one of them is warned about.
+    let cut = HALLS.len() * 60 / 100;
+    let out = parse_html_pages(TT, &HALLS[..cut], 0.0, SourceTier::Direct, false);
+    assert!(out.report.gate_passed());
+    assert!(out.report.stats.meetings_without_hall > 0);
+    assert!(
+        out.report.warnings.iter().any(|w| w.contains("hall")),
+        "and it is not silent about them"
+    );
+}
+
+/// Rooms going missing is only half the signal: a page that simply has not
+/// allocated many rooms yet, but covers every day, is a real page.
+#[test]
+fn t11f_missing_rooms_alone_do_not_fail_the_gate() {
+    // Strip every course code out of the hall grid's cells, leaving the day
+    // sections and hall rows intact: no bookings at all, so every class is
+    // roomless, but the page is whole.
+    let stripped: String = HALLS
+        .lines()
+        .map(|line| {
+            if line.contains('|') && line.contains("Hall") {
+                let (head, rest) = line.split_at(line.find('|').unwrap());
+                let blanked: String = rest
+                    .chars()
+                    .map(|c| if c == '|' { '|' } else { ' ' })
+                    .collect();
+                format!("{head}{blanked}")
+            } else {
+                line.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let out = parse_html_pages(TT, &stripped, 0.0, SourceTier::Direct, false);
+    let completeness = out
+        .report
+        .gate
+        .iter()
+        .find(|g| g.rule == "halls page completeness")
+        .expect("rule 8 runs");
+    assert!(
+        completeness.passed,
+        "a whole page with few rooms allocated is not a truncated one: {}",
+        completeness.detail
+    );
+}
+
 /// The stored raw HTML round-trips, enabling the re-parse path.
 #[test]
 fn raw_html_reparse_path() {

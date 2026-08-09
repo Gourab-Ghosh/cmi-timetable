@@ -84,7 +84,29 @@ async fn fetch_text(url: &str, timeout_ms: u32) -> Result<FetchOk, String> {
     if !(200..300).contains(&status) {
         return Err(format!("HTTP {status}"));
     }
-    let text = response.text().await.map_err(|e| e.to_string())?;
+    // The body needs the clock too. `send()` resolves once the headers are
+    // in, so a relay that answers and then stalls mid-body would hang here
+    // forever — and because `run_update` clears its `updating` flag only on
+    // the way out, Sync would stay dead for the rest of the session.
+    // Whatever is left of this tier's budget (never less than half a second,
+    // so a slow-but-alive body isn't cut off at the finish line).
+    let left = (f64::from(timeout_ms) - (domx::now_ms() - started)).max(500.0);
+    let body = select(
+        Box::pin(response.text()),
+        Box::pin(gloo_timers::future::TimeoutFuture::new(left as u32)),
+    );
+    let text = match body.await {
+        Either::Left((result, _)) => result.map_err(|e| e.to_string())?,
+        Either::Right(_) => {
+            if let Some(c) = &controller {
+                c.abort();
+            }
+            return Err(format!(
+                "timed out after {} s reading the page",
+                timeout_ms / 1000
+            ));
+        }
+    };
     Ok(FetchOk {
         bytes: text.len(),
         status,
@@ -265,6 +287,25 @@ pub fn adopt(app: &App, new_snapshot: Snapshot, announce: bool, from: Adoption) 
                 dropped.course
             ));
         }
+        // A change whose class CMI hasn't run for a term. It can't be kept
+        // pointing at nothing and it can't be re-aimed at a class the user
+        // never touched, so it lapses — and they hear about it, because the
+        // alternative is their week quietly changing under them.
+        for lapsed in &merge.lapsed {
+            app.toast(if lapsed.is_removal() {
+                format!(
+                    "CMI no longer lists the {} class you had removed, so that change \
+                     has lapsed.",
+                    lapsed.course
+                )
+            } else {
+                format!(
+                    "CMI no longer lists the {} class you had moved — the time you \
+                     gave it is now one of your own.",
+                    lapsed.course
+                )
+            });
+        }
     }
     // The user's own courses were never upstream — the merge can't know
     // that, so strip them before announcing removals.
@@ -291,7 +332,12 @@ pub fn adopt(app: &App, new_snapshot: Snapshot, announce: bool, from: Adoption) 
     let has_conflicts = !merge.conflicts.is_empty() && !quiet;
     app.conflicts
         .set(if quiet { Vec::new() } else { merge.conflicts });
-    if has_conflicts {
+    // Only when nothing else is open. A sync can land while the user is
+    // halfway through the course editor, and there is ONE dialog slot — so
+    // taking it would throw away the name they were typing, the meeting rows
+    // they added, everything. The conflicts banner is already on screen with
+    // a Review button (ui.rs), so waiting for them to finish costs nothing.
+    if has_conflicts && app.dialog.with_untracked(|d| d.is_none()) {
         app.dialog.set(Some(crate::state::Dialog::Conflicts));
     }
     if announce {
@@ -406,6 +452,14 @@ async fn try_mirror(app: App) -> TierResult {
     }
     if let Some(meta) = meta {
         let mut snapshot = meta.snapshot;
+        // This is the one snapshot in the app that never meets the
+        // validation gate — it is same-origin and CI-validated, so the gate
+        // has already run on the way in. "Someone else validated it" is not
+        // a reason to let a truncated or half-written file empty a student's
+        // catalog, though, so it still has to contain a timetable.
+        if !snapshot.has_data() {
+            return TierResult::GateFailed;
+        }
         snapshot.source = SourceTier::Mirror;
         snapshot.fetched_at = meta.generated_at;
         return TierResult::Snapshot(Box::new(snapshot));
@@ -650,15 +704,26 @@ pub fn simulate_parse_failure(app: App) {
         ),
         None => (String::new(), String::new()),
     };
-    let mangled = tt.replace('|', " ");
+    // Take the colons out: every grid is found by the time ranges in its
+    // header, so a page without them has no grid to read and no legend
+    // either. Deleting the `|` rules is NOT enough any more — since parser
+    // version 3 a page that lost its vertical rules still parses by column
+    // alignment, which is exactly the drift tolerance this button existed to
+    // disprove.
+    let mangled = tt.replace(':', ";");
     match parse_pair(&mangled, &halls, domx::now_ms(), SourceTier::Direct) {
         Ok(outcome) => {
             record_report(&app, "simulated-failure", outcome.report.clone());
             let saved_date = domx::fmt_local_date(snapshot.fetched_at);
-            assert!(
-                outcome.snapshot.is_none(),
-                "mangled pages must fail the gate"
-            );
+            if outcome.snapshot.is_some() {
+                // A demonstration of fail-closed behaviour is the last thing
+                // that may lie — and it may not take the app down either.
+                app.toast(
+                    "Could not simulate a parse failure: the mangled page still passed \
+                     the gate. Nothing was changed.",
+                );
+                return;
+            }
             app.set_banner(
                 BannerKind::Warn,
                 format!(

@@ -243,11 +243,11 @@ and no committed mirror (fixtures exist only for tests/e2e seed).
   Without both, " lecture hall 803 " sat in CMI's row for one comparison and
   spawned a separate, permanently empty "yours" row for another, and the chip
   disappeared entirely between them.
-- `--alarm` color is reserved EXCLUSIVELY for clashes — and that includes
-  VOLUME: `.btn.danger` is quiet (muted) at rest and turns alarm only on
-  hover/focus; standing red exists solely in the My-data danger zone. One
-  documented exception: `.diff-del` keeps red (universal diff convention,
-  glyph-scale). Second accent `--accent2` (violet) + `--grad` carry the
+- `--alarm` is for clashes AND for anything that takes something away — see
+  "Red = it takes something away" below, which replaced this bullet's
+  earlier rule (quiet at rest, red only on hover) at the user's request in
+  R29. One documented exception: `.diff-del` keeps red (universal diff
+  convention, glyph-scale). Second accent `--accent2` (violet) + `--grad` carry the
   brand: header hairline, active nav, h2 kickers, primary buttons, toast
   edge, welcome hero, credit-summary total. Ambience lives on a fixed
   `body::before` (iOS ignores background-attachment). `.main` has
@@ -373,6 +373,97 @@ and no committed mirror (fixtures exist only for tests/e2e seed).
   (but NOT Restore), Remove all changes, Clear selection, Clear cache, Reset
   preferences, Delete all app data. Clash red never looks like it: clashes
   are filled `.badge.alarm`, never buttons.
+- **A column is its START MINUTE.** Everything places a class by
+  `slot.start_min`: `column_for`, `hall_col_for_slot`, the `data-slot`
+  attribute, drag targets. So the canonical `slot_grid` may never hold two
+  columns starting at the same minute — `join_pages` keeps the first grid's
+  reading and warns when a later branch ends that hour differently (R30).
+  Two columns sharing a start drew every class in that hour twice.
+  The other half of the same rule: a booking whose start falls INSIDE a
+  column gets no column of its own (`push_extra_column` returns early), so
+  whatever looks it up must use the containing-column rule, not equality.
+  `hall_col_for_slot` is that rule; the halls table AND `hall_cell_busy`
+  both go through it, or a 12:00 booking against an 11:50 column vanishes
+  and the free-hall finder calls the room empty (R30, e2e t59).
+- `hall_booking_state`/`hall_booking_chip` take BOTH the booking's own slot
+  (identifies the official meeting behind it) and the column it is drawn in
+  (decides `lands_here` and the chip's sublabel). They are not the same
+  value; conflating them was the bug above.
+- **`OverridesStore` matches course codes case-insensitively throughout** —
+  items, credits and hidden alike. Half of it used to be exact-match, so a
+  code CMI re-typed in another case kept the student's deletion while
+  silently dropping their credit correction and their moved classes (R30).
+- **A change whose meeting is in NEITHER snapshot LAPSES — announced, never
+  silently reinterpreted, and never re-aimed.** Conflicts are not persisted
+  and `adopt` stores the new snapshot regardless, so an unanswered question
+  comes back next sync with its base stale. Three designs were tried in R30
+  and only the third is safe: dropping it silently put a struck-out class
+  back with no word; raising it as a conflict was WORSE, because the only
+  candidates a stale-base conflict can offer are the classes the course runs
+  NOW — none of which the student touched — and `resolve_conflict` would
+  re-point the override at one, so "keep it removed" struck out a lecture
+  they never removed and "keep mine" hid one. So `merge_overrides` now
+  reports them in `MergeResult::lapsed`: a removal goes (nothing left to
+  suppress), a move keeps its destination with `base = None` (a time of
+  their own), and /app toasts both. Nothing the student did not edit may
+  move. `resolve_conflict`'s rebase is therefore only ever reached from the
+  `Ok(Some(cmi_new))` path, where `theirs[0]` really is the counterpart the
+  merge computed.
+- Developer mode's "Simulate parse failure" mangles the TIMES (`:` → `;`),
+  not the `|` rules: since parser v3 a pipe-less page still parses by
+  column alignment (t11b), so the old mangling passed the gate and tripped
+  the `assert!` that followed — which, under `panic = "abort"`, took the
+  whole app down. There is no assert there now; if the mangled page ever
+  passes, it says so (R30, e2e t58, core t11d).
+- The mirror's `latest.json` snapshot is the ONLY snapshot adopted without
+  the validation gate (it is same-origin and gated in CI on the way in). It
+  still has to contain a timetable — `has_data()` — or a truncated file
+  would empty a student's catalog.
+- `fetch_text` times out the BODY as well as the headers: `send()` resolves
+  at the headers, so a relay that answers and then stalls would otherwise
+  hang `run_update` forever with `sync.updating` still true, and every
+  later Sync returns at the door for the rest of the session.
+- **Saving the user's own data is never `let _ =`.** `persist_selection`,
+  `persist_overrides` and `persist_customs` go through `App::persisted`,
+  which raises a sticky banner when the browser refuses: their courses and
+  changes are the one thing here that cannot be fetched again, and the sync
+  flow's "Your courses and changes are safe" has to be true when it is
+  said. `persist_prefs` stays silent — re-derivable, and a banner for it
+  would hide a real one.
+- **Gate rule 8 — the halls page arrived whole.** Rule 7 catches a truncated
+  timetable page; a truncated HALLS page fails quietly instead (the day
+  sections just stop, every class after the cut keeps its time and loses its
+  room) while the ≥3-days/≥3-halls floors stay satisfied. Measured on the
+  live page, a 50 % cut left 60 of 146 classes reading "Hall TBA" and the
+  gate was happy. Rule 8 fails when a DAY the timetable schedules is absent
+  from the halls page and the classes stranded on it are ≥10 % of the week —
+  two signals, because a lone Saturday make-up class with no room listed
+  trips the first but never the second. A cut landing inside the last day
+  still passes: those classes read "Hall TBA", which is what the page now
+  says (parser_tests t11e/t11f).
+- **There is ONE dialog slot.** `adopt` opens the conflicts dialog only when
+  `app.dialog` is empty — a sync can land while the course editor is open,
+  and taking the slot would throw away everything typed into it. The
+  conflicts banner (ui.rs) is always on screen with Review, so the question
+  is never lost (e2e t60).
+- **`save_course_edit` claims CMI's meetings in two passes**: rows that CAME
+  from one of CMI's meetings first (they name it explicitly), then rows the
+  user wrote themselves against what is left. One pass in form order let a
+  user-added meeting sitting exactly where a MOVED CMI meeting used to be
+  claim it, store nothing, and vanish on a save that changed nothing, while
+  the move stored itself against a base already spoken for (e2e t61).
+- `core/tests/synthetic_site_tests.rs` publishes a whole fake CMI site from
+  a compact description (`Site::new(...).slots(...).branch(...).course(...)
+  .halls(...).book(...)`), reproducing the real HTML down to its quirks:
+  `<b>`-wrapped grid rows, `<div>`/`<a>` day sections, and the hall header's
+  label cell one character narrower than the rows below it. Use it for
+  anything that asks "what if CMI's page were different" — a January term,
+  other slot times, halls added and removed, a term crossing New Year,
+  branches with their own columns (`own_columns`), or a page that is simply
+  broken. `the_term_after()` shows the next-semester shape: `relabel`,
+  `drop_branch`, `drop_course`, `move_class`, `move_booking`.
+- The Halls day picker reads **All, Mon, Tue, …** — the widest view first,
+  narrowing to a day being the step you take from it (R30, user request).
 - The header's "Synced … ago" pill and its 48 h stale tint tick on their
   own: Header owns a `now: RwSignal<f64>` bumped by a 30 s
   `gloo_timers::callback::Interval` plus a `visibilitychange` listener
@@ -387,7 +478,7 @@ and no committed mirror (fixtures exist only for tests/e2e seed).
 ## 5. Build & test commands (exact)
 
 ```sh
-# native tests (67; --features html for the fixture-driven parser tests)
+# native tests (94; --features html for the fixture-driven parser tests)
 CARGO_TARGET_DIR=~/.rust-target-e2e cargo test --workspace --features html
 # app build for e2e (never plain dist while trunk serve runs).
 # RUSTFLAGS="" on purpose: a global ~/.cargo/config.toml carrying
@@ -396,7 +487,7 @@ CARGO_TARGET_DIR=~/.rust-target-e2e cargo test --workspace --features html
 # `__wbindgen_externref_table_alloc`. Emptying it for this build restores
 # the wasm defaults without touching anything outside the repo.
 cd app && RUSTFLAGS="" CARGO_TARGET_DIR=~/.rust-target-e2e trunk build --release --dist dist-e2e
-# e2e (57 tests; self-generates seed via core example, needs cargo on PATH)
+# e2e (61 tests; self-generates seed via core example, needs cargo on PATH)
 cd e2e && DIST_DIR=../app/dist-e2e .venv/bin/python test_app.py
 # ...or just a few, by name fragment
 cd e2e && DIST_DIR=../app/dist-e2e .venv/bin/python test_app.py t44 t45
@@ -414,7 +505,7 @@ regenerates the .ics golden.
 
 ## 6. Current state
 
-- Tests: 67 native + 57/57 e2e green. Meeting removals: `MeetingOverride.to`
+- Tests: 94 native + 61/61 e2e green. Meeting removals: `MeetingOverride.to`
   is `Option<Meeting>` (None = removed; legacy JSON/share payloads still
   load — present meeting ⇒ Some). Out-of-grid times: **all three tables grow
   synthetic `.extra` columns**, each from its own source, all built by the
@@ -1057,3 +1148,147 @@ regenerates the .ics golden.
   for a course you deleted offering to recreate it and then refusing. Also
   from the round: deleting a course now KEEPS its own changes (Restore is a
   true inverse), and the changes list stopped deep-cloning the snapshot.
+
+### R30 — "test the whole app again with as many agents as possible … be creative … this will be the final test before deployment", plus "keep All first in the Halls section"
+
+The round's centrepiece is **`core/tests/synthetic_site_tests.rs` (22 tests)**:
+a builder that publishes a whole CMI site that has never existed, so the
+parser can be held to its promises against pages it has never seen. It
+renders both pages faithfully — `<b>`-wrapped grid rows, `<div>`/`<a>` day
+sections, the hall header's label cell one character narrower than the rows
+under it — from a compact description. What it proves: a January--April term
+with other slot times, other halls and full day names reads exactly as
+August does; halls appear, disappear and get renamed and every booking
+follows; a three-branch minisemester is a semester, not garbage; the clock
+is read from the page (dot minutes, "to", am/pm, a range crossing noon, an
+evening class); codes are taken as written (lowercase, dotted, hyphenated,
+one character, twelve); a name may contain colons and non-ASCII; a term
+crossing New Year survives whole; and ten kinds of broken page — 404, PHP
+error, login interstitial, truncation, the two pages swapped, a page with no
+`<pre>` at all — every one fails closed with a reason. Then the downstream
+half: a student's full planner (a moved class, a struck-out one, a credit
+correction, a deleted course, two courses of their own) meeting next
+semester's site, plus the calendar and the share link for that term.
+
+Bugs it and the audit found, all fixed, each with a test verified to fail
+without its fix:
+
+1. **The parse-failure simulator crashed the app.** It mangled the page by
+   deleting `|`, but parser v3 reads a pipe-less grid by column alignment
+   (t11b already said so), so the mangled page passed, tripped the `assert!`
+   after it, and under `panic = "abort"` took the whole app down. Now it
+   mangles the times, and there is no assert. e2e t58, core t11d.
+2. **A struck-out class silently came back.** An unresolved removal conflict
+   is not persisted while `adopt` stores the snapshot anyway, so the next
+   sync found a base in neither snapshot and DROPPED the removal — no toast,
+   no undo. Moves already re-raised there; removals now do too.
+3. **Two columns starting at the same minute drew everything twice.**
+   `join_pages` took the union of branch grids, so a lab ending an hour
+   fifteen minutes later added a second 14:30 column, and every class and
+   booking in that hour rendered once per column.
+4. **A booking at 12:00 vanished against an 11:50 column** — and the
+   free-hall finder called the room free. The halls table matched bookings
+   by exact start while the user's own placements used the containing-column
+   rule right beside it. e2e t59.
+5. **A parked custom course erased CMI's booking** for the same code: the
+   suppression fired for any custom, but its meetings are only drawn while
+   it is on the timetable.
+6. **A term crossing New Year lost its end month** — `SEMESTER_RE` stopped
+   at the first year, so "December 2026--March 2027" became "December 2026",
+   which a halls page spelling it out would then contradict into a gate
+   failure. `semester_range_from_label` also learned both-years and
+   single-month terms (without which a one-month term exports a calendar
+   months too long).
+7. **`OverridesStore` was half case-insensitive**: deletions matched any
+   casing, credits and meeting overrides did not.
+8. The mirror's `latest.json` — the one snapshot that skips the gate — now
+   has to contain a timetable before it can replace one.
+9. **A stalled response body hung Sync for the session.** `fetch_text`
+   raced its timeout against `send()` only, which resolves at the headers;
+   a relay that answered and then stalled left `run_update` awaiting
+   forever with its `updating` flag set, so every later Sync returned at
+   the door. The body now gets whatever is left of the tier's budget.
+10. **Saving the user's own data reported nothing.** `persist_selection` /
+   `_overrides` / `_customs` discarded the `Result`, so a full localStorage
+   dropped their courses and changes silently — while the sync flow said
+   "Your courses and changes are safe". Failure now raises a sticky banner
+   that says the session is still correct but the data may not come back.
+   (Preferences stay silent on purpose: re-derivable, and a banner for them
+   would hide a real one.)
+
+Then the restored audit landed (see below) and its confirmed findings were
+fixed too — including two hazards in the round's own work:
+
+11. **The removal fix above was wrong, and its replacement is the third
+    design.** Raising a conflict for a stale base looked safer than dropping
+    it, but a stale-base conflict's only candidates are the classes the
+    course runs NOW, and `resolve_conflict` re-points the override at one:
+    "keep it removed" struck out a lecture the student never removed, "keep
+    mine" hid one. Such changes now LAPSE — reported in `MergeResult::lapsed`
+    and toasted, a removal dropped, a move kept as a time of their own.
+12. **The single-month term window matched the tail of a range.** "August to
+    November 2026" (a phrasing `validate::label_semantics` already expects)
+    exported a four-week calendar for a four-month term. `to` and the figure
+    and horizontal bars are separators now, and the single-month path only
+    fires when the label really names one month; anything else returns None
+    and the export dialog's visible default stands.
+13. **`select_and_override` added a SECOND override** for a meeting that
+    already had one, so dragging an already-customised course in the master
+    grid while unselected rendered the one meeting twice.
+14. **A truncated lecturehalls.php passed the gate** — new rule 8 (§4).
+15. **A sync landing with a conflict destroyed the open course editor** —
+    one dialog slot, and the conflicts dialog took it (§4, e2e t60).
+16. **`save_course_edit` could delete a user-added meeting** that coincided
+    with a CMI meeting the user had moved away, depending on row order —
+    now two claim passes (§4, e2e t61).
+
+Also: the Halls day picker now reads All, Mon, Tue, … (user request
+mid-round).
+
+The audit itself: 18 probe/review agents plus adversarial verification (two
+independent skeptics per finding, each told to REFUTE). The first run died
+on a session limit with 75 of 79 agents lost; it was resumed from the same
+run id, so the four survivors replayed from cache and everything else
+re-ran — 51 agents, no errors. 151 raw findings; the 16 most severe were
+verified, of which 15 were confirmed and 1 refuted. The confirmed ones not
+fixed here are listed in the round's closing message and are all
+medium-severity parser-robustness cases (a misspelled hall-grid day header
+merging that day into the previous one; a sheared hall name from a stray
+`|`; case-sensitive code matching in `join`; annotations dropped when the
+halls legend disagrees with the timetable legend). None of them affects the
+current pages; each needs an upstream edit that has not happened. Named, so
+the next round can pick them up:
+
+- **A hall-grid day header the parser can't read merges that day into the
+  previous one, and the gate passes.** `parse_halls_page` keeps a
+  `current_day` that only advances on a recognised day label; a misspelling
+  ("Thrusday"), a dated header ("Thursday - 6 Nov", which `Day::from_label`
+  rejects BY DESIGN so it can refuse "Mon-Fri" ranges), or a header typed
+  without its empty cells all make the following hall rows land on the day
+  before. A skeptic's control showed deleting the header outright corrupts
+  identically, so the invariant that catches every variant is "a hall name
+  must not repeat within one day" (0 at baseline, 24 in every broken
+  variant) — a natural gate rule, and the right fix.
+- The same shape on the timetable page: a branch grid whose day rows aren't
+  recognised is dropped by `classify`, and its legend is then credited to
+  the PREVIOUS branch (`page.sections.last_mut()`).
+- A hall row whose pipe count differs from the header's has its name sheared
+  by `slice_at`'s nudge, inventing a phantom room ("Lecture Hall 803|").
+- `join_pages` keys courses case-sensitively, so a code cased differently in
+  the hall grid and the branch grid strips the hall off the real course and
+  invents a phantom one. (`OverridesStore` was fixed this round; `join` was
+  not.)
+- Course annotations ("(starts 12 Aug)", "(2 credits)", "(Oct-Nov)") are
+  dropped when the halls-page legend's name lacks them, even though `join`
+  already knows the two legends disagree.
+
+Also considered and deliberately NOT changed: a gate failure on the DIRECT
+tier still skips the mirror. It reads like over-reach, but the alternative
+is worse — if CMI redesigns the page, the mirror would quietly serve the
+last CI-validated snapshot and the honest "this app needs an update"
+message would never appear.
+
+Verification: **94 native + 61/61 e2e**, `cargo fmt --all` and
+`cargo clippy --workspace --features html --all-targets -W
+clippy::redundant_clone` clean. NOT pushed and NOT deployed — the standing
+rule holds until the user says otherwise.

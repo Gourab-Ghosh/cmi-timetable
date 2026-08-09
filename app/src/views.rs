@@ -1624,19 +1624,26 @@ fn catalog_row(app: App, course: Course) -> impl IntoView {
 
 /// A chip in the Halls grid: draggable (in edit mode) so a meeting can be
 /// moved to another hall row and/or time column in one gesture.
-/// The grid column a meeting lands in: exact start-time match first, then
-/// any column whose range contains the start — custom times don't have to
-/// line up with CMI's slot scheme.
-fn hall_col_of(slot_grid: &[Slot], m: &Meeting) -> Option<u16> {
+/// The grid column a TIME lands in: exact start match first, then any
+/// column whose range contains that start. Neither a time the user chose
+/// nor one CMI published has to line up with the slot scheme — a column
+/// gets no synthetic twin for a start that already falls inside it (see
+/// `push_extra_column`), so everything that places something in this grid
+/// has to ask through here rather than compare starts for equality.
+fn hall_col_for_slot(slot_grid: &[Slot], slot: Slot) -> Option<u16> {
     slot_grid
         .iter()
-        .find(|s| s.start_min == m.slot.start_min)
+        .find(|s| s.start_min == slot.start_min)
         .or_else(|| {
             slot_grid
                 .iter()
-                .find(|s| (s.start_min..s.end_min).contains(&m.slot.start_min))
+                .find(|s| (s.start_min..s.end_min).contains(&slot.start_min))
         })
         .map(|s| s.start_min)
+}
+
+fn hall_col_of(slot_grid: &[Slot], m: &Meeting) -> Option<u16> {
+    hall_col_for_slot(slot_grid, m.slot)
 }
 
 /// What one of CMI's hall bookings means for THIS user's timetable.
@@ -1664,14 +1671,29 @@ fn hall_booking_state(
     columns: &[Slot],
     code: &str,
     day: Day,
+    // `slot` is the booking's own time as CMI published it — what identifies
+    // the official meeting behind it. `column` is the column it is being
+    // drawn in, which is not always the same: a booking at 12:00 belongs to
+    // the 11:50 column.
     slot: Slot,
+    column: Slot,
     temp: bool,
     hall: &str,
 ) -> BookingCell {
     // The user's own course under this code wins, as everywhere else: its
     // own meetings are drawn from `user_placements`, and CMI's booking would
     // otherwise render a second chip carrying the custom's name.
-    if app.is_custom(code) {
+    //
+    // Only while it is ON their timetable, though — that is the whole of
+    // when `user_placements` draws it. A course of their own they are not
+    // currently taking must not delete CMI's booking from the one page
+    // whose job is to say whether a room is free.
+    // (Matched the way `is_custom` matches — CMI's spelling of a code and
+    // the user's need not agree.)
+    let taking_their_own = app
+        .selection
+        .with(|sel| sel.iter().any(|c| c.eq_ignore_ascii_case(code)));
+    if app.is_custom(code) && taking_their_own {
         return BookingCell::Gone;
     }
     let Some(course) = snapshot.course(code) else {
@@ -1712,7 +1734,7 @@ fn hall_booking_state(
     if eff.overridden {
         let lands_here = eff.meeting.day == day
             && same_hall(eff.meeting.hall.as_deref(), Some(hall))
-            && hall_col_of(columns, &eff.meeting) == Some(slot.start_min);
+            && hall_col_of(columns, &eff.meeting) == Some(column.start_min);
         if !lands_here {
             return BookingCell::Gone;
         }
@@ -1731,12 +1753,13 @@ fn hall_booking_chip(
     code: &str,
     day: Day,
     slot: Slot,
+    column: Slot,
     temp: bool,
     hall: &str,
 ) -> Option<AnyView> {
-    match hall_booking_state(app, snapshot, columns, code, day, slot, temp, hall) {
+    match hall_booking_state(app, snapshot, columns, code, day, slot, column, temp, hall) {
         BookingCell::Reference => Some(chip(app, ChipProps::list(code)).into_any()),
-        BookingCell::Here(eff) => Some(hall_eff_chip(app, code, eff, slot)),
+        BookingCell::Here(eff) => Some(hall_eff_chip(app, code, eff, column)),
         BookingCell::Gone => None,
     }
 }
@@ -1848,17 +1871,31 @@ fn hall_cell_busy(
     day: Day,
     start: u16,
 ) -> bool {
+    // The column being asked about, so a booking drawn in it is judged
+    // against the same column the table drew it in.
+    let column = cols
+        .iter()
+        .find(|s| s.start_min == start)
+        .copied()
+        .unwrap_or(Slot::new(start, start + 1));
     let cmi_has_it = snapshot
         .hall_bookings
         .iter()
-        .filter(|b| b.hall == hall && b.day == day && b.slot.start_min == start)
+        // Same column rule the table draws with — a booking that starts
+        // inside this column occupies the room, and answering "free" for it
+        // would send someone to a room with a class in it.
+        .filter(|b| {
+            b.hall == hall && b.day == day && hall_col_for_slot(cols, b.slot) == Some(start)
+        })
         .any(|b| {
             // A bare TMP cell carries no codes at all (the halls page books
             // the room without naming a course) — the room is taken.
             b.codes.is_empty()
                 || b.codes.iter().any(|code| {
                     !matches!(
-                        hall_booking_state(app, snapshot, cols, code, day, b.slot, b.temp, hall),
+                        hall_booking_state(
+                            app, snapshot, cols, code, day, b.slot, column, b.temp, hall,
+                        ),
                         BookingCell::Gone,
                     )
                 })
@@ -1968,10 +2005,12 @@ fn hall_row(
                     let slot = *slot;
                     let extra = *extra;
                     let hall_hl = hall.clone();
-                    // Matched on the START, like every other column lookup:
-                    // CMI's two pages can disagree about where a slot ends,
-                    // and full-Slot equality would empty the whole table when
-                    // they do.
+                    // Placed by the same rule as the user's own meetings
+                    // (`hall_col_of`): the column a booking starts in, or
+                    // failing that the column it starts INSIDE. CMI's two
+                    // pages can disagree about the times, and a booking at
+                    // 12:00 against an 11:50 column must not fall through
+                    // the table and leave the room reading as free.
                     // Borrowed, not cloned: the merged week draws a cell for
                     // every hall × day × slot, and each booking carries its
                     // own Vec of course codes.
@@ -1979,8 +2018,9 @@ fn hall_row(
                         .hall_bookings
                         .iter()
                         .filter(|b| {
-                            b.hall == hall && b.day == day
-                                && b.slot.start_min == slot.start_min
+                            b.hall == hall
+                                && b.day == day
+                                && hall_col_for_slot(cols, b.slot) == Some(slot.start_min)
                         })
                         .collect();
                     view! {
@@ -2015,6 +2055,7 @@ fn hall_row(
                                                     cols,
                                                     code,
                                                     day,
+                                                    b.slot,
                                                     slot,
                                                     b.temp,
                                                     &hall_chip,
@@ -2219,6 +2260,21 @@ fn halls_view(app: App) -> impl IntoView {
             <div class="toolbar">
                 <h2 style="margin:0">"Halls"</h2>
                 <div class="seg" role="group" aria-label="Day">
+                    // The whole week first, then the days in week order: the
+                    // widest view is where reading starts, and narrowing to a
+                    // day is the step you take from it.
+                    <button
+                        aria-pressed=move || {
+                            if view_mode() == HallsView::All { "true" } else { "false" }
+                        }
+                        title="Every day at once"
+                        on:click=move |_| {
+                            app.prefs.update(|p| p.halls_view = Some(HallsView::All));
+                            app.persist_prefs();
+                        }
+                    >
+                        "All"
+                    </button>
                     {move || {
                         app.hall_days()
                             .into_iter()
@@ -2247,18 +2303,6 @@ fn halls_view(app: App) -> impl IntoView {
                             })
                             .collect_view()
                     }}
-                    <button
-                        aria-pressed=move || {
-                            if view_mode() == HallsView::All { "true" } else { "false" }
-                        }
-                        title="Every day at once"
-                        on:click=move |_| {
-                            app.prefs.update(|p| p.halls_view = Some(HallsView::All));
-                            app.persist_prefs();
-                        }
-                    >
-                        "All"
-                    </button>
                 </div>
                 <div class="grow"></div>
                 {custom_changes_pill(app)}

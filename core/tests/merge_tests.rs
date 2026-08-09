@@ -57,6 +57,32 @@ fn store_with(course: &str, base: Option<Meeting>, to: Meeting) -> OverridesStor
 
 const WED_OFFICIAL: fn() -> Meeting = || mtg(Day::Wed, 840, 915, "Lecture Hall 6");
 
+/// The week the student actually sees: CMI's meetings with their changes
+/// layered on, the same rule /app applies. Used to state the property that
+/// matters most about a merge — a class they never edited is still there,
+/// where CMI puts it.
+fn effective(store: &OverridesStore, code: &str, official: &[Meeting]) -> Vec<Meeting> {
+    let ovs: Vec<&_> = store.for_course(code).collect();
+    let mut out: Vec<Meeting> = Vec::new();
+    for m in official {
+        match ovs
+            .iter()
+            .find(|o| o.base.as_ref().is_some_and(|b| b.same_place_time(m)))
+        {
+            // A change to this meeting: its new time, or nothing if struck out.
+            Some(o) => out.extend(o.to.clone()),
+            None => out.push(m.clone()),
+        }
+    }
+    // Times of their own, replacing nothing.
+    for o in &ovs {
+        if o.base.is_none() {
+            out.extend(o.to.clone());
+        }
+    }
+    out
+}
+
 /// Row 1 — CMI unchanged, no override: nothing happens.
 #[test]
 fn row1_no_change_no_override() {
@@ -329,24 +355,59 @@ fn removal_conflicts_when_cmi_moves_the_meeting() {
     assert!(dropped.items.is_empty(), "use-CMI's restores the meeting");
 }
 
-/// A removal whose base is in NEITHER snapshot is inert (suppresses
-/// nothing): dropped silently, no conflict. One whose base still matches a
-/// CURRENT official meeting (e.g. share-imported against fresher data)
-/// keeps suppressing it and must survive.
+/// A change whose meeting is in NEITHER snapshot has lost the thing it was
+/// about: CMI has not run that class for at least a term. It may not be
+/// silently dropped (that is how a struck-out class comes back without a
+/// word) and it may not be re-pointed at whatever the course runs now
+/// (nothing there is a class the student edited). So it LAPSES and is
+/// reported: a removal goes, a move keeps its destination as a time of the
+/// student's own. A base that still matches a CURRENT official meeting is a
+/// different thing entirely — it is doing its job, and survives.
 #[test]
-fn stale_removals_drop_only_when_truly_inert() {
+fn stale_changes_lapse_and_are_reported() {
     let phantom = mtg(Day::Mon, 550, 625, "Lecture Hall 1");
     let real = WED_OFFICIAL();
 
-    // Inert: base matches nothing anywhere.
+    // A removal of a class CMI no longer runs: nothing left to suppress.
     let old = snap(vec![course("MFD", vec![real.clone()])]);
-    let store = removal_store("MFD", phantom);
+    let store = removal_store("MFD", phantom.clone());
+    let r = merge_overrides(&old, &old, &[], &store);
+    assert!(
+        r.conflicts.is_empty(),
+        "never a question: {:#?}",
+        r.conflicts
+    );
+    assert_eq!(r.lapsed.len(), 1, "but never silent either");
+    assert!(r.overrides.items.is_empty());
+    // Above all: the class the student never touched is untouched.
+    assert_eq!(
+        effective(&r.overrides, "MFD", std::slice::from_ref(&real)),
+        vec![real.clone()],
+        "CMI's Wednesday lecture must still be in their week"
+    );
+
+    // A MOVE of a class CMI no longer runs keeps where they put it.
+    let mine = mtg(Day::Sat, 1020, 1095, "Seminar Hall");
+    let store = store_with("MFD", Some(phantom), mine.clone());
     let r = merge_overrides(&old, &old, &[], &store);
     assert!(r.conflicts.is_empty());
-    assert!(
-        r.overrides.items.is_empty(),
-        "inert removal must be dropped"
+    assert_eq!(r.lapsed.len(), 1);
+    assert_eq!(r.overrides.items.len(), 1);
+    assert_eq!(
+        r.overrides.items[0].base, None,
+        "it becomes a time of their own, claiming to replace nothing"
     );
+    let mut still = effective(&r.overrides, "MFD", std::slice::from_ref(&real));
+    still.sort_by_key(|m| (m.day.index(), m.slot.start_min));
+    assert_eq!(
+        still,
+        vec![real.clone(), mine],
+        "their Saturday slot stays AND CMI's lecture is still there"
+    );
+    // And it has stopped being stale, so the next sync is quiet.
+    let again = merge_overrides(&old, &old, &[], &r.overrides);
+    assert!(again.lapsed.is_empty());
+    assert!(again.conflicts.is_empty());
 
     // Meaningful: base missing from the OLD snapshot but present in the new.
     let old_without = snap(vec![course("MFD", vec![])]);
@@ -354,6 +415,53 @@ fn stale_removals_drop_only_when_truly_inert() {
     let store = removal_store("MFD", real);
     let r = merge_overrides(&old_without, &new_with, &[], &store);
     assert!(r.conflicts.is_empty());
+    assert!(r.lapsed.is_empty());
     assert_eq!(r.overrides.items.len(), 1, "active removal must survive");
     assert!(r.overrides.items[0].is_removal());
+}
+
+/// The two-sync story behind [`stale_changes_lapse_and_are_reported`].
+///
+/// A student strikes out one of a course's classes. CMI then moves that
+/// class, so the next sync asks whether to keep it removed — and they close
+/// the dialog without answering. Unanswered conflicts are not persisted and
+/// the cached snapshot has already moved on, so by the following sync the
+/// override's base is in neither snapshot. What must NOT happen then is the
+/// removal quietly disappearing (the class reappears with no word) or being
+/// re-aimed at the class CMI moved it to (which the student never removed).
+#[test]
+fn an_unanswered_removal_lapses_out_loud() {
+    let monday = mtg(Day::Mon, 550, 625, "Lecture Hall 1");
+    let moved = mtg(Day::Mon, 630, 705, "Lecture Hall 2");
+    let other = mtg(Day::Thu, 840, 915, "Lecture Hall 1");
+
+    let before = snap(vec![course("MFD", vec![monday.clone(), other.clone()])]);
+    let after = snap(vec![course("MFD", vec![moved.clone(), other.clone()])]);
+    let selection = vec!["MFD".to_string()];
+    let store = removal_store("MFD", monday);
+
+    // Sync 1 — CMI moved the class they had struck out, so they are asked.
+    let first = merge_overrides(&before, &after, &selection, &store);
+    assert_eq!(first.conflicts.len(), 1);
+    assert_eq!(first.overrides.items.len(), 1);
+    assert!(first.lapsed.is_empty());
+
+    // They close the dialog. The snapshot is stored anyway; the question is
+    // not. Sync 2 sees a base that is in neither snapshot.
+    let second = merge_overrides(&after, &after, &selection, &first.overrides);
+    assert!(second.conflicts.is_empty(), "{:#?}", second.conflicts);
+    assert_eq!(second.lapsed.len(), 1, "it must be said out loud");
+    assert_eq!(second.lapsed[0].course, "MFD");
+    assert!(second.overrides.items.is_empty());
+
+    // Both of CMI's classes are in their week, untouched. In particular the
+    // class CMI moved is NOT struck out — they never removed that one.
+    let mut still = effective(&second.overrides, "MFD", &[moved.clone(), other.clone()]);
+    still.sort_by_key(|m| (m.day.index(), m.slot.start_min));
+    assert_eq!(still, vec![moved, other]);
+
+    // And it does not come round again.
+    let third = merge_overrides(&after, &after, &selection, &second.overrides);
+    assert!(third.lapsed.is_empty());
+    assert!(third.conflicts.is_empty());
 }

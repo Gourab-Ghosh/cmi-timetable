@@ -109,6 +109,7 @@ pub fn parse_and_validate(
 
     run_gate(&tt.semester_label, &hp.semester_label, &joined, &mut report);
     report.gate.push(per_grid_checks(&tt));
+    report.gate.push(halls_page_completeness(&tt, &hp, &joined));
 
     let snapshot = if report.gate_passed() {
         Some(Snapshot {
@@ -332,6 +333,63 @@ fn run_gate(
         passed: slots_ok,
         detail,
     });
+}
+
+/// Rule 8 — the halls page arrived whole.
+///
+/// Rule 7 catches a truncated TIMETABLE page; nothing was symmetric for the
+/// halls page, which fails in a quieter way. A transfer cut short still
+/// parses: the day sections simply stop, so every class after the cut keeps
+/// its time and loses its room, while the count floors (≥ 3 days, ≥ 3
+/// halls) stay satisfied and the snapshot replaces the good cached one. A
+/// measured 50 % cut of the live page left 60 of 146 classes reading "Hall
+/// TBA" with the gate perfectly happy.
+///
+/// The signal is a whole DAY that the timetable schedules and the halls page
+/// never mentions — weighed by how much of the week it carries, so the rule
+/// is scale-free and cannot fire on the innocent version of the same shape:
+/// one Saturday make-up class with no room listed is 1 meeting in 150, while
+/// a lost Friday is 24. Below that (a cut landing inside the last day) some
+/// classes simply read "Hall TBA", which is what the page now says, not
+/// something invented.
+fn halls_page_completeness(
+    tt: &crate::parse::TimetablePage,
+    hp: &crate::parse::HallsPage,
+    joined: &Joined,
+) -> GateCheck {
+    let missing: std::collections::BTreeSet<crate::model::Day> = tt
+        .sections
+        .iter()
+        .flat_map(|s| s.days.iter().copied())
+        .filter(|d| !hp.days.contains(d))
+        .collect();
+    let total = joined.stats.meetings_total;
+    let stranded = joined
+        .courses
+        .iter()
+        .flat_map(|c| &c.meetings)
+        .filter(|m| missing.contains(&m.day))
+        .count();
+
+    let named: Vec<&str> = missing.iter().map(|d| d.short()).collect();
+    let passed = missing.is_empty() || total == 0 || stranded * 10 < total;
+    GateCheck {
+        rule: "halls page completeness".into(),
+        passed,
+        detail: if missing.is_empty() {
+            format!("the halls page covers every day the timetable schedules ({total} classes)")
+        } else if passed {
+            format!(
+                "the halls page never mentions {}, but only {stranded} of {total} classes                  meet then — a room CMI has not allocated, not a missing page",
+                named.join(", ")
+            )
+        } else {
+            format!(
+                "the halls page never mentions {}, where {stranded} of {total} classes                  meet — it looks cut short",
+                named.join(", ")
+            )
+        },
+    }
 }
 
 /// Extra rule-2 detail: verify every branch grid has ≥ 3 day rows and ≥ 4

@@ -23,7 +23,7 @@ Environment knobs: `CHROME_BIN` (default `/usr/bin/chromium`), `DIST_DIR`,
 `PORT`, `CARGO_TARGET_DIR` (for the seed generator; defaults to
 `~/.rust-target-e2e`).
 
-Covered flows (57 tests): Sync-now header + hidden developer mode (URL
+Covered flows (61 tests): Sync-now header + hidden developer mode (URL
 endpoint only), `?c=` selection + clash badges/panel (any casing), unknown-
 code warning, credits defaulting to 4 and per-course credit overwrites,
 master-grid ⚠ would-clash markers and clash toast on add, the ⓘ details
@@ -72,7 +72,18 @@ replaces and a list of the ones you struck out so they can be put back;
 deleting one of CMI's courses (it leaves the timetable, the catalog and the
 master grid, is listed under Your changes with a Restore, and a link naming
 it lifts the deletion); courses you added and deleted appearing in that same
-list; and every button that takes something away wearing the same red.
+list; and every button that takes something away wearing the same red —
+and, guarding the two places where the app used to lie about CMI's data:
+developer mode's parse-failure simulator (it must actually fail the gate,
+keep the cached timetable, and not take the app down with it) and a hall
+booking published at a time that starts inside an official column (it
+belongs in the column that contains it, and the free-hall finder must not
+call that room empty) — plus the two ways a save or a sync could quietly
+take something away: a sync landing with a conflict while the course editor
+is open (there is one dialog slot, and the conflict must wait in its banner
+rather than throw the form away) and a meeting added exactly where a moved
+CMI meeting used to be (two rows want the same official meeting; the added
+one used to vanish on save).
 
 The app ships no timetable data, so the suite derives a snapshot from
 `core/fixtures/` at startup (via core's `snapshot_json` example — cargo must

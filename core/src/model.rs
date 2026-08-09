@@ -556,11 +556,17 @@ impl OverridesStore {
     }
 
     pub fn for_course<'a>(&'a self, code: &'a str) -> impl Iterator<Item = &'a MeetingOverride> {
-        self.items.iter().filter(move |o| o.course == code)
+        self.items
+            .iter()
+            .filter(move |o| o.course.eq_ignore_ascii_case(code))
     }
 
     pub fn set_credits(&mut self, course: &str, credits: u8, now: f64) {
-        match self.credits.iter_mut().find(|c| c.course == course) {
+        match self
+            .credits
+            .iter_mut()
+            .find(|c| c.course.eq_ignore_ascii_case(course))
+        {
             Some(c) => c.credits = credits,
             None => self.credits.push(CreditOverride {
                 course: course.to_string(),
@@ -571,19 +577,24 @@ impl OverridesStore {
     }
 
     pub fn remove_credits(&mut self, course: &str) {
-        self.credits.retain(|c| c.course != course);
+        self.credits
+            .retain(|c| !c.course.eq_ignore_ascii_case(course));
     }
 
     pub fn credits_for(&self, course: &str) -> Option<u8> {
         self.credits
             .iter()
-            .find(|c| c.course == course)
+            .find(|c| c.course.eq_ignore_ascii_case(course))
             .map(|c| c.credits)
     }
 
-    /// Codes are compared case-insensitively throughout: a deletion can be
-    /// made from a URL the user typed by hand, and CMI's own casing is not
-    /// something anyone should have to reproduce.
+    /// Codes are compared case-insensitively throughout the store: a
+    /// deletion can be made from a URL the user typed by hand, CMI's own
+    /// casing is not something anyone should have to reproduce, and a
+    /// student whose course is re-typed in another case upstream must not
+    /// keep their deletion while quietly losing their credit correction and
+    /// their moved classes. Two catalog codes differing only in case are one
+    /// course typed twice, which is how [`Snapshot::course_ci`] reads them.
     pub fn is_hidden(&self, course: &str) -> bool {
         self.hidden
             .iter()
@@ -719,5 +730,48 @@ pub struct ParseReport {
 impl ParseReport {
     pub fn gate_passed(&self) -> bool {
         !self.gate.is_empty() && self.gate.iter().all(|g| g.passed)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Everything the user's overrides store holds is keyed by course code,
+    /// and every one of those keys is matched the same way — otherwise a
+    /// code CMI re-types in another case keeps the student's deletion while
+    /// dropping their credit correction and their moved classes.
+    #[test]
+    fn the_store_reads_codes_the_same_way_throughout() {
+        let meeting = Meeting {
+            day: Day::Tue,
+            slot: Slot::new(550, 625),
+            hall: Some("Lecture Hall 803".to_string()),
+            temp_booking: false,
+        };
+        let mut store = OverridesStore::default();
+        store.add("TOC", Some(meeting), None, 0.0);
+        store.set_credits("TOC", 2, 0.0);
+        store.hide("QCOM", 0.0);
+
+        for spelling in ["TOC", "toc", "Toc"] {
+            assert_eq!(store.for_course(spelling).count(), 1, "{spelling}");
+            assert_eq!(store.credits_for(spelling), Some(2), "{spelling}");
+        }
+        for spelling in ["QCOM", "qcom", "QCom"] {
+            assert!(store.is_hidden(spelling), "{spelling}");
+        }
+
+        // Setting again in another case corrects the entry rather than
+        // adding a second one that shadows it.
+        store.set_credits("toc", 3, 1.0);
+        assert_eq!(store.credits.len(), 1);
+        assert_eq!(store.credits_for("TOC"), Some(3));
+
+        store.remove_credits("Toc");
+        assert!(store.credits.is_empty());
+        assert!(store.unhide("qcom"));
+        assert!(!store.unhide("qcom"));
+        assert!(!store.is_empty(), "the meeting override is still there");
     }
 }

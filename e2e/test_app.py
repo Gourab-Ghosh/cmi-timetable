@@ -2011,7 +2011,7 @@ def t50_halls_all_days_one_table(app):
     # A hall is NAMED ONCE, in a cell spanning its days; the days run down a
     # gutter of their own, in order.
     days = [b.text for b in section.find_elements(
-        By.XPATH, ".//div[@aria-label='Day']//button")][:-1]  # minus "All"
+        By.XPATH, ".//div[@aria-label='Day']//button")][1:]  # "All" comes first
     rows = table.find_elements(By.CSS_SELECTOR, "tbody tr")
     names = table.find_elements(By.CSS_SELECTOR, "tbody th.hallhead")
     assert len(rows) == len(names) * len(days), (len(rows), len(names))
@@ -2334,6 +2334,198 @@ def t57_editor_keeps_a_meeting_whose_cmi_original_moved(app):
     assert not app.chips("TOC", "td[data-day='4'][data-slot='1020']"), "it left Friday"
 
 
+def t58_simulated_parse_failure_keeps_everything(app):
+    """Developer mode's parse-failure simulator has to actually fail.
+
+    It mangles the saved timetable page and runs it through the real
+    pipeline to show the gate keeping the cached data. Since parser v3 a
+    page that merely lost its vertical rules still reads perfectly, so the
+    mangling has to break something the parser truly depends on — and if it
+    ever stops failing, this button demonstrates nothing. The toast and the
+    banner below only exist on the far side of that check, so this also
+    catches the simulator taking the whole app down with it."""
+    app.boot("/#/developer", selection=["TOC"])
+    section = app.wait_css("section[aria-label='Developer mode']")
+    section.find_element(
+        By.XPATH, ".//button[normalize-space()='Simulate parse failure']"
+    ).click()
+
+    app.wait_toast("Simulated parse failure")
+    banner = app.wait_css(".banner")
+    assert "Simulated a parse failure" in banner.text, banner.text
+    assert "Nothing was lost" in banner.text, banner.text
+
+    # The report is filed under its own name and its gate really did fail —
+    # and the panel re-rendering at all proves the app is still running.
+    summary = WebDriverWait(app.d, 10).until(
+        lambda d: next(
+            (s for s in d.find_elements(By.CSS_SELECTOR,
+                                        "section[aria-label='Developer mode'] summary")
+             if "simulated-failure" in s.text),
+            False,
+        ),
+        message="no simulated-failure parse report appeared",
+    )
+    assert "gate FAILED" in summary.text, summary.text
+
+    # And the cached timetable is untouched: the course is still there.
+    app.d.execute_script("window.location.hash = '';")
+    app.wait_css("td button.chip[aria-label^='TOC,']")
+
+
+def t59_a_booking_inside_a_slot_still_occupies_the_room(app):
+    """CMI's two pages can disagree about the clock.
+
+    A class published at 12:00 against an 11:50 column gets no column of its
+    own — a time starting inside an official slot deliberately gets no extra
+    column — so it has to be drawn in the slot that contains it, exactly as
+    a meeting the user dragged there would be. Falling through the table
+    instead would hide the class AND tell the free-hall finder the room is
+    empty, which is the one wrong answer on this page that sends somebody to
+    a room with a lecture in it."""
+    seed = json.loads(SEED_SNAPSHOT_JSON)
+
+    def pick():
+        for b in seed["hall_bookings"]:
+            if b["day"] != "Mon" or not b["codes"]:
+                continue
+            code = b["codes"][0]
+            course = next((c for c in seed["courses"] if c["code"] == code), None)
+            if course is None:
+                continue
+            for m in course["meetings"]:
+                if (m["day"] == "Mon"
+                        and m["slot"]["start_min"] == b["slot"]["start_min"]
+                        and m.get("hall") == b["hall"]):
+                    return b, code, m
+        raise AssertionError("seed has no Monday booking backed by a meeting")
+
+    booking, code, meeting = pick()
+    hall, column = booking["hall"], booking["slot"]["start_min"]
+    # Ten minutes late: still inside its official column, matching none.
+    moved = {"start_min": column + 10, "end_min": booking["slot"]["end_min"]}
+    booking["slot"] = moved
+    meeting["slot"] = moved
+
+    app.boot("/", raw_snapshot=json.dumps(seed), selection=[code])
+    app.open_tab("Halls")
+    _halls_day(app, "Mon")
+    cell = f"td[data-day='0'][data-slot='{column}'][data-hall='{hall}']"
+    app.wait_css(f"{cell} button.chip[aria-label^='{code},']")
+
+    # And the finder must not offer a room that has a class standing in it.
+    section = app.css("section[aria-label='Lecture halls']")
+    section.find_element(
+        By.CSS_SELECTOR,
+        f"select[aria-label='Time slot'] option[value='{column}']").click()
+    section.find_element(
+        By.CSS_SELECTOR, "select[aria-label='Day'] option[value='0']").click()
+    app.wait_css(".finder-result")
+    free = [li.text for li in app.css_all(".hall-list li")]
+    assert hall not in free, (hall, free)
+
+
+def t60_a_conflicting_sync_does_not_steal_the_open_editor(app):
+    """There is one dialog slot, and a sync can land at any moment.
+
+    When CMI's update conflicts with something the user changed, the app
+    opens the conflicts dialog — but if the course editor is open, taking
+    the slot throws away the name they were typing, the rows they added,
+    all of it. The conflicts banner is already on screen with Review, so
+    the question can wait until they are finished."""
+    def mutate(snap):
+        for c in snap["courses"]:
+            if c["code"] != "TOC":
+                continue
+            for m in c["meetings"]:
+                if m["day"] == "Tue" and m["slot"]["start_min"] == 550:
+                    m["day"] = "Fri"
+                    m["slot"] = {"start_min": 840, "end_min": 915}
+
+    write_fake_mirror(mutate)
+    try:
+        app.boot("/", selection=["TOC"], overrides=TOC_OVR)
+        app.open_tab("My courses")
+        app.wait_css("section[aria-label='My courses']")
+        app.xpath("//button[normalize-space()='Edit course']").click()
+        app.wait_css(".dialog .course-form")
+        Select(app.css("#ce-day-0")).select_by_visible_text("Friday")
+
+        sync = app.xpath("//button[normalize-space()='Sync now']")
+        app.d.execute_script("arguments[0].click();", sync)
+        WebDriverWait(app.d, 30).until(
+            lambda d: "Synced" in app.css(".sync-pill").text,
+            message=f"sync should finish; pill: {app.css('.sync-pill').text!r}",
+        )
+
+        # The editor is still there, still holding what they chose.
+        assert app.css_all(".course-form"), "the sync must not close the editor"
+        assert Select(app.css("#ce-day-0")).first_selected_option.text == "Friday", \
+            "and must not reset what they had picked"
+
+        # The conflict is not lost — it is waiting in the banner.
+        banner = next(
+            b for b in app.css_all(".banner") if "conflict" in b.text
+        )
+        assert "Review" in banner.text, banner.text
+
+        # Finish the edit, then review the conflict.
+        app.xpath(
+            "//div[@class='dialog']//button[normalize-space()='Save changes']"
+        ).click()
+        app.wait_gone(".dialog")
+        next(b for b in app.css_all(".banner") if "conflict" in b.text).find_element(
+            By.XPATH, ".//button[normalize-space()='Review']"
+        ).click()
+        dialog = app.wait_css(".dialog")
+        assert "TOC" in dialog.text, dialog.text
+    finally:
+        remove_fake_mirror()
+
+
+def t61_adding_a_meeting_where_a_moved_one_used_to_be(app):
+    """Two rows can want the same CMI meeting, and only one may have it.
+
+    TOC's Tuesday 09:10 class has been moved to Wednesday 17:00. The student
+    now adds a class of their own back at Tuesday 09:10 — the slot CMI's
+    meeting vacated. The added row coincides with a CMI meeting that the
+    moved row already speaks for, and rows are processed in day order, so
+    the newcomer used to claim it first, store nothing, and disappear on
+    save while the move stored itself against a base already spoken for."""
+    app.boot("/", selection=["TOC"], overrides=TOC_OVR)  # Tue 09:10 -> Wed 17:00
+    app.open_tab("My courses")
+    app.wait_css("section[aria-label='My courses']")
+    app.xpath("//button[normalize-space()='Edit course']").click()
+    form = app.wait_css(".dialog .course-form")
+
+    # Add a row and put it exactly where CMI's Tuesday class used to be.
+    n = len(app.css_all(".course-form .meeting-draft"))
+    app.css("#ce-add-meeting").click()
+    app.wait_css(f"#ce-day-{n}")
+    app.css(f"#ce-day-{n} option[value='1']").click()  # Tuesday
+    row = app.css_all(".course-form .meeting-draft")[n]
+    Select(
+        row.find_element(By.CSS_SELECTOR, "select[aria-label='Time']")
+    ).select_by_value("550")
+    assert form is not None
+    app.xpath("//div[@class='dialog']//button[normalize-space()='Save changes']").click()
+    app.wait_toast("Saved your changes to TOC")
+    app.wait_gone(".dialog")
+
+    # Both survive: the moved class where they put it, and the new one where
+    # CMI's used to be.
+    app.open_tab("My timetable")
+    app.wait_css("td[data-day='2'][data-slot='1020'] button.chip[aria-label^='TOC,']")
+    assert app.chips("TOC", "td[data-day='1'][data-slot='550']"), \
+        "the meeting added where CMI's used to be must not vanish on save"
+
+    # …and they survive a reload, i.e. they were really stored.
+    app.boot("/", fresh=False)
+    app.open_tab("My timetable")
+    app.wait_css("td[data-day='1'][data-slot='550'] button.chip[aria-label^='TOC,']")
+    assert app.chips("TOC", "td[data-day='2'][data-slot='1020']")
+
+
 TESTS = [
     t01_header_sync_button_and_hidden_dev,
     t02_developer_endpoint_only,
@@ -2392,6 +2584,10 @@ TESTS = [
     t55_destructive_actions_are_red,
     t56_a_link_brings_a_deleted_course_back,
     t57_editor_keeps_a_meeting_whose_cmi_original_moved,
+    t58_simulated_parse_failure_keeps_everything,
+    t59_a_booking_inside_a_slot_still_occupies_the_room,
+    t60_a_conflicting_sync_does_not_steal_the_open_editor,
+    t61_adding_a_meeting_where_a_moved_one_used_to_be,
 ]
 
 

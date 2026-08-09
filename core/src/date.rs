@@ -171,17 +171,77 @@ pub fn month_short_name(m: u8) -> &'static str {
 /// one visible, deletable first-week event (and the export dialog's dates
 /// stay user-editable either way).
 pub fn semester_range_from_label(label: &str) -> Option<(CivilDate, CivilDate)> {
-    let re =
-        regex_lite::Regex::new(r"([A-Za-z]{3,})\s*(?:--|\u{2013}|-)\s*([A-Za-z]{3,})\s+(\d{4})")
-            .ok()?;
-    let caps = re.captures(label)?;
-    let m1 = month_from_token(caps.get(1)?.as_str())?;
-    let m2 = month_from_token(caps.get(2)?.as_str())?;
-    let year = caps.get(3)?.as_str().parse::<i32>().ok()?;
-    let start = CivilDate::new(year, m1, 1);
-    let end_year = if m2 < m1 { year + 1 } else { year };
-    let end = CivilDate::new(end_year, m2, last_day_of_month(end_year, m2));
-    Some((start, end))
+    // Every way CMI might write "from … to …": the dash family (including
+    // the figure and horizontal bars the validation gate already treats as
+    // dashes) and the word itself. A separator this code does not know
+    // makes the label unreadable, and an unreadable label must yield None
+    // rather than a confident half-answer — see the single-month rule below.
+    let dash = r"\s*(?:--|[-\u{2012}\u{2013}\u{2014}\u{2015}]|\bto\b)\s*";
+
+    // "December 2026--March 2027" — a term crossing New Year, written with
+    // both years. Tried first: the one-year pattern below would otherwise
+    // read this as "2026--March 2027" and lose December.
+    if let Some(caps) = regex_lite::Regex::new(&format!(
+        r"([A-Za-z]{{3,}})\s+(\d{{4}}){dash}([A-Za-z]{{3,}})\s+(\d{{4}})"
+    ))
+    .ok()
+    .and_then(|re| re.captures(label))
+        && let (Some(m1), Some(y1), Some(m2), Some(y2)) = (
+            month_from_token(caps.get(1)?.as_str()),
+            caps.get(2)?.as_str().parse::<i32>().ok(),
+            month_from_token(caps.get(3)?.as_str()),
+            caps.get(4)?.as_str().parse::<i32>().ok(),
+        )
+    {
+        return Some((
+            CivilDate::new(y1, m1, 1),
+            CivilDate::new(y2, m2, last_day_of_month(y2, m2)),
+        ));
+    }
+
+    // "August--November 2026" — the usual form, one year for both months.
+    if let Some(caps) = regex_lite::Regex::new(&format!(
+        r"([A-Za-z]{{3,}}){dash}([A-Za-z]{{3,}})\s+(\d{{4}})"
+    ))
+    .ok()
+    .and_then(|re| re.captures(label))
+        && let (Some(m1), Some(m2), Some(year)) = (
+            month_from_token(caps.get(1)?.as_str()),
+            month_from_token(caps.get(2)?.as_str()),
+            caps.get(3)?.as_str().parse::<i32>().ok(),
+        )
+    {
+        let start = CivilDate::new(year, m1, 1);
+        let end_year = if m2 < m1 { year + 1 } else { year };
+        return Some((
+            start,
+            CivilDate::new(end_year, m2, last_day_of_month(end_year, m2)),
+        ));
+    }
+
+    // "January 2027" — a single-month term. Only when the label really
+    // names ONE month: otherwise a range whose separator this code failed
+    // to read ("August ~ November 2026") would match its tail and export a
+    // four-week calendar for a four-month term, which is worse than the
+    // export dialog's visible, editable default. Matched with the strict
+    // month-name rule too, so a word merely beginning "mar"/"jun" in a
+    // reworded heading cannot invent a term.
+    let months = label
+        .split(|c: char| !c.is_ascii_alphanumeric() && c != '.')
+        .filter_map(month_from_word)
+        .count();
+    if months != 1 {
+        return None;
+    }
+    let caps = regex_lite::Regex::new(r"([A-Za-z]{3,}\.?)\s+(\d{4})")
+        .ok()
+        .and_then(|re| re.captures(label))?;
+    let month = month_from_word(caps.get(1)?.as_str())?;
+    let year = caps.get(2)?.as_str().parse::<i32>().ok()?;
+    Some((
+        CivilDate::new(year, month, 1),
+        CivilDate::new(year, month, last_day_of_month(year, month)),
+    ))
 }
 
 #[cfg(test)]
@@ -210,5 +270,48 @@ mod tests {
         let (s3, e3) = semester_range_from_label("December--March 2027").unwrap();
         assert_eq!(s3.to_iso(), "2027-12-01");
         assert_eq!(e3.to_iso(), "2028-03-31");
+
+        // …and when both years are spelled out, they are believed as given.
+        for label in [
+            "December 2026--March 2027",
+            "Dec 2026 - Mar 2027",
+            "Timetable for December 2026 \u{2013} March 2027",
+        ] {
+            let (s, e) = semester_range_from_label(label).unwrap_or_else(|| panic!("{label}"));
+            assert_eq!(s.to_iso(), "2026-12-01", "{label}");
+            assert_eq!(e.to_iso(), "2027-03-31", "{label}");
+        }
+
+        // A one-month term is a term, not a missing one: without this the
+        // .ics export falls back to a generic window months too long.
+        let (s, e) = semester_range_from_label("January 2027").unwrap();
+        assert_eq!(s.to_iso(), "2027-01-01");
+        assert_eq!(e.to_iso(), "2027-01-31");
+        let (s, e) = semester_range_from_label("Feb. 2028").unwrap();
+        assert_eq!(s.to_iso(), "2028-02-01");
+        assert_eq!(e.to_iso(), "2028-02-29", "2028 is a leap year");
+
+        // "to", and every dash CMI might type, read as the same range.
+        for label in [
+            "August to November 2026",
+            "August \u{2012} November 2026",
+            "August \u{2015} November 2026",
+            "Aug--Nov 2026",
+        ] {
+            let (s, e) = semester_range_from_label(label).unwrap_or_else(|| panic!("{label}"));
+            assert_eq!(s.to_iso(), "2026-08-01", "{label}");
+            assert_eq!(e.to_iso(), "2026-11-30", "{label}");
+        }
+
+        // A range whose separator this code CANNOT read must give up, not
+        // match its tail: a four-week calendar for a four-month term is
+        // worse than the export dialog's visible default.
+        assert_eq!(semester_range_from_label("August ~ November 2026"), None);
+        assert_eq!(semester_range_from_label("August and November 2026"), None);
+
+        // A heading with no month names invents nothing.
+        assert_eq!(semester_range_from_label("Timetable 2026"), None);
+        assert_eq!(semester_range_from_label("Marathon 2026"), None);
+        assert_eq!(semester_range_from_label("no dates here"), None);
     }
 }

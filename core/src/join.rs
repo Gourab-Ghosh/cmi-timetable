@@ -347,9 +347,26 @@ pub fn join_pages(tt: &TimetablePage, hp: &HallsPage) -> Joined {
                 section.branch.code
             ));
             for s in &section.slots {
-                if !slot_grid.contains(s) {
-                    slot_grid.push(*s);
+                // A column is identified by the minute it starts: everything
+                // downstream places a class by its start time. Two columns
+                // starting together are one column two grids describe with
+                // different end times — keeping both would draw every class
+                // in that hour twice, once per column. Keep the first
+                // reading; each class still carries its own exact times.
+                if let Some(kept) = slot_grid.iter().find(|g| g.start_min == s.start_min) {
+                    if kept.end_min != s.end_min {
+                        warnings.push(format!(
+                            "branch {} ends the {} column at {} instead of {}; \
+                             using the first grid's column",
+                            section.branch.code,
+                            s.start_label(),
+                            s.end_label(),
+                            kept.end_label(),
+                        ));
+                    }
+                    continue;
                 }
+                slot_grid.push(*s);
             }
             slot_grid.sort_by_key(|s| (s.start_min, s.end_min));
         }
