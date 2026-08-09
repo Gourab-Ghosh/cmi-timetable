@@ -112,7 +112,7 @@ OVERRIDES = {
 
 
 def boot(theme, tab, query="", seed=True, prefs_extra=None, selection=None,
-         port=PORT, customs=None):
+         port=PORT, customs=None, overrides=None):
     d.get(f"http://127.0.0.1:{port}/e2e-blank")
     if seed:
         prefs = {
@@ -131,7 +131,7 @@ def boot(theme, tab, query="", seed=True, prefs_extra=None, selection=None,
         args = [
             json.dumps(prefs),
             json.dumps(selection or ["TOC", "QCOM", "MFD", "RFLR", "SVA"]),
-            json.dumps(OVERRIDES),
+            json.dumps(overrides if overrides is not None else OVERRIDES),
             SNAPSHOT_JSON,
         ]
         if customs is not None:
@@ -205,6 +205,46 @@ shot("08-light-halls-with-arrival")
 # Every day at once: one table, each hall's week together.
 boot("Light", "Halls", prefs_extra={"halls_view": "All"})
 shot("32-light-halls-all-days")
+
+
+def _m(day, start, end, hall):
+    return {"day": day, "slot": {"start_min": start, "end_min": end},
+            "hall": hall, "temp_booking": False}
+
+
+# Your changes, one group per kind — the point being that a particular
+# change is findable in a list of many.
+MANY_CHANGES = {
+    "next_id": 4,
+    "items": [
+        {"id": 0, "course": "TOC", "base": _m("Tue", 550, 625, "Lecture Hall 803"),
+         "to": _m("Wed", 1020, 1095, "Lecture Hall 803"),
+         "created_at": 1754000000000.0},
+        {"id": 1, "course": "ISS", "base": _m("Tue", 550, 625, "Lecture Hall 803"),
+         "to": _m("Tue", 550, 625, "Seminar Hall"), "created_at": 1754000001000.0},
+        {"id": 2, "course": "TOC", "base": _m("Thu", 550, 625, "Lecture Hall 803"),
+         "to": None, "created_at": 1754000002000.0},
+        {"id": 3, "course": "SVA", "base": None,
+         "to": _m("Wed", 1020, 1095, "Seminar Hall"),
+         "created_at": 1754000003000.0},
+    ],
+    "credits": [{"course": "QCOM", "credits": 2, "created_at": 1754000004000.0}],
+}
+boot("Light", "MyTimetable", selection=["TOC", "ISS", "QCOM", "SVA"],
+     overrides=MANY_CHANGES)
+d.execute_script(
+    "document.querySelector(\"[data-testid='your-changes']\")"
+    ".scrollIntoView({block: 'center'});"
+)
+time.sleep(0.4)
+shot("33-light-your-changes")
+
+# A course dialog carrying both lists at once: several meetings, and more
+# than one clash (TOC and ISS collide on Tuesday AND Thursday).
+boot("Light", "MyTimetable", selection=["TOC", "ISS", "QCOM", "SVA"])
+d.find_element(By.CSS_SELECTOR, "button.chip[aria-label^='TOC,']").click()
+time.sleep(0.5)
+shot("34-light-details-meetings-and-clashes")
 
 boot("Light", "MyTimetable")
 d.find_element(By.CSS_SELECTOR, "button.chip[aria-label^='TOC,']").click()

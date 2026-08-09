@@ -182,7 +182,28 @@ and no committed mirror (fixtures exist only for tests/e2e seed).
   the free-hall answer leads with the count (`.finder-count`) and lays the
   rooms out as `.hall-list` pills; clashes are one row per collision
   (`.clash-list`, code × code · when) on both My timetable and the details
-  dialog. Prose is for explanation, not for data (R22).
+  dialog; the selection in My data and the unknown codes in the ?c= banner
+  are chips, not commas. Prose is for explanation, not for data (R22, R25).
+- **One grammar for every change, and the KIND comes first.** `change_tag`
+  and `change_delta` in ui.rs render every difference the app shows —
+  the user's overrides, CMI's edits since the last sync (`diff::ChangeLine`
+  carries `kind`/`before`/`after`, never a pre-formatted sentence), a merge
+  conflict's two options, the provenance line under a moved meeting — as a
+  tag, then `before → after` (`.was` receding, `.now` read, a struck `.was`
+  alone meaning gone). Violet is the user's, blue is CMI's. `overrides_list`
+  groups by kind with a count per group, and a row prints only the part
+  that CHANGED (a room move shows two room names, the unchanged time as
+  `.ctx`) — twenty changes have to be four short lists you can pick from,
+  not twenty sentences differing in one word. The delta is deliberately
+  inline, not flex: it must copy and be read aloud as one line (R25).
+- **Rows that repeat are a table, not sentences.** A course's meetings
+  (`ul.meetings`, three grid columns: when · where · actions, extra notes on
+  a full-width line under the row) and its clashes (one row per OTHER
+  course, every colliding time as its own `.when` pill) align down the page
+  so five of them read as fast as one (R25).
+- Deleting a custom course belongs to the course's own dialog, beside Edit —
+  never inside the edit form, where it sits next to Save while a change is
+  half-made (R25).
 - **Hall text is user input, so it is canonicalised on the way in and
   compared loosely on the way out.** `App::canonical_hall` (trim, and adopt
   CMI's spelling when it matches case-insensitively) runs on every save;
@@ -270,7 +291,7 @@ CARGO_TARGET_DIR=~/.rust-target-e2e cargo test --workspace --features html
 # `__wbindgen_externref_table_alloc`. Emptying it for this build restores
 # the wasm defaults without touching anything outside the repo.
 cd app && RUSTFLAGS="" CARGO_TARGET_DIR=~/.rust-target-e2e trunk build --release --dist dist-e2e
-# e2e (50 tests; self-generates seed via core example, needs cargo on PATH)
+# e2e (51 tests; self-generates seed via core example, needs cargo on PATH)
 cd e2e && DIST_DIR=../app/dist-e2e .venv/bin/python test_app.py
 # ...or just a few, by name fragment
 cd e2e && DIST_DIR=../app/dist-e2e .venv/bin/python test_app.py t44 t45
@@ -288,7 +309,7 @@ regenerates the .ics golden.
 
 ## 6. Current state
 
-- Tests: 66 native + 50/50 e2e green. Meeting removals: `MeetingOverride.to`
+- Tests: 66 native + 51/51 e2e green. Meeting removals: `MeetingOverride.to`
   is `Option<Meeting>` (None = removed; legacy JSON/share payloads still
   load — present meeting ⇒ Some). Out-of-grid times: **all three tables grow
   synthetic `.extra` columns**, each from its own source, all built by the
@@ -810,3 +831,20 @@ regenerates the .ics golden.
   here (wasm-bindgen: missing `__wbindgen_externref_table_alloc`) — the
   §5 build command now passes `RUSTFLAGS=""`; the user's config was left
   alone. 66 native + 50/50 e2e. Committed locally, NOT pushed.
+- **R25 (changes, meetings and clashes made readable):** user: "the changes
+  are not easily readable… what kind of change is done should be easily
+  readable so that it can be easily found among a bunch of changes", then
+  "find all such unreadable things and fix them smartly", then the meetings
+  and clashes lists in a course's dialog. Answered with ONE grammar for a
+  change (kind tag + before → after) used in all four places that show one,
+  and by giving the repeating lists real columns — see the §4 rules. Core's
+  `CourseChange.summary` became `Vec<ChangeLine>` (kind kept apart from the
+  values) so "What changed" can tag its lines too; `same_hall` moved to
+  state.rs, since the changes list must group by the same notion of "same
+  room" the grids use. Also: the selection in My data and the unknown-code
+  banner became chips; the "Delete this course" button was removed from the
+  custom-course EDIT form (it stays in the course's own dialog, beside
+  Edit — user's request). e2e t51 (groups, counts, only-the-changed-part,
+  strike-through removals, Restore vs Remove); t41 now asserts the edit form
+  offers no delete; t04/t17/t18/t30/t35 follow the new markup. Shots 33 and
+  34. 66 native + 51/51 e2e. Committed locally, NOT pushed.

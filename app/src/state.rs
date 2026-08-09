@@ -1481,6 +1481,17 @@ fn removed_stub(code: &str) -> Course {
     }
 }
 
+/// Halls compare on trimmed, case-insensitive text everywhere they are
+/// matched: the user types theirs by hand, so "lecture hall 803" and a
+/// pasted " LH9 " have to land in CMI's row rather than nowhere at all.
+pub fn same_hall(a: Option<&str>, b: Option<&str>) -> bool {
+    match (a, b) {
+        (Some(a), Some(b)) => a.trim().eq_ignore_ascii_case(b.trim()),
+        (None, None) => true,
+        _ => false,
+    }
+}
+
 /// Note a time that CMI's slot grid has no room for, so the table can grow a
 /// column of its own for it. Times already covered — exactly, or by falling
 /// inside an official slot — are left alone.

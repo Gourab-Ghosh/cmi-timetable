@@ -636,12 +636,28 @@ pub fn BannerView() -> impl IntoView {
                         <div class="banner warn" role="status">
                             <span>
                                 {format!(
-                                    "Unknown course code{}: {} — {} may be from an older \
-                                     timetable, or someone's own course. Self-made courses \
-                                     only travel with the full share link (the one \"with \
-                                     custom changes\").",
+                                    "Unknown course code{}:",
                                     if unknown.len() == 1 { "" } else { "s" },
-                                    unknown.join(", "),
+                                )}
+                                // The codes are the point of the message, so
+                                // they stand out of it rather than sitting
+                                // inside a sentence three lines long.
+                                <span class="chipline" style="display:inline-flex">
+                                    {unknown
+                                        .iter()
+                                        .map(|code| {
+                                            view! {
+                                                <span class="chip mono" style="--hue:35">
+                                                    {code.clone()}
+                                                </span>
+                                            }
+                                        })
+                                        .collect_view()}
+                                </span>
+                                {format!(
+                                    " — {} may be from an older timetable, or someone's \
+                                     own course. Self-made courses only travel with the \
+                                     full share link (the one \"with custom changes\").",
                                     if unknown.len() == 1 { "it" } else { "they" },
                                 )}
                             </span>
@@ -1259,6 +1275,42 @@ fn close_button(app: App) -> impl IntoView {
 }
 
 // ---------------------------------------------------------------------------
+// One grammar for every change the app shows
+//
+// A change is always the same three things: WHAT KIND it is, the value it
+// replaces, and the value standing now. The kind goes first and in a tag of
+// its own, because that is what someone scanning twenty changes is looking
+// for — "which of these moved a room?" should be answerable without reading
+// a single sentence. Violet (`mine`) is the app's "this is yours"; CMI's own
+// changes wear the blue accent.
+// ---------------------------------------------------------------------------
+
+/// The kind of a change, as a tag. `mine` marks a change the USER made.
+pub fn change_tag(label: &str, mine: bool) -> impl IntoView + use<> {
+    let label = label.to_string();
+    view! { <span class="ck" class:mine=mine>{label}</span> }
+}
+
+/// The values: `before → after`. A missing side means there is nothing
+/// there — a meeting that only appeared, or one that only went away (struck
+/// through, because that reads as "gone" before any word does).
+pub fn change_delta(before: Option<String>, after: Option<String>) -> impl IntoView + use<> {
+    let gone = after.is_none();
+    let before_shown = before.is_some();
+    view! {
+        <span class="delta">
+            {before.map(|b| view! { <span class="was" class:gone=gone>{b}</span> })}
+            // Only between two values — a line that opens with a bare arrow
+            // reads as if something went missing. Real spaces, not CSS
+            // margins: this has to copy, and be read aloud, as one sentence.
+            {(before_shown && after.is_some())
+                .then(|| view! { <span class="arrow">" → "</span> })}
+            {after.map(|a| view! { <span class="now">{a}</span> })}
+        </span>
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Course details (the popover behind every compact rendering)
 // ---------------------------------------------------------------------------
 
@@ -1292,30 +1344,62 @@ pub fn meeting_row(app: App, course: &Course, eff: EffMeeting) -> impl IntoView 
     let edit_code = code.clone();
     let edit_eff = eff.clone();
     let reset_code = code.clone();
-    // Say inline exactly which CMI data this custom meeting overwrites.
-    let provenance = eff.overridden.then(|| match (&eff.base, eff.user_created) {
-        (Some(base), false) => format!("overwrites CMI's {}", base.describe()),
-        _ => "not on CMI's timetable — created by you".to_string(),
-    });
+    // Say inline exactly which CMI data this custom meeting overwrites —
+    // the value struck through, as everywhere else a change is shown.
+    let replaces = eff
+        .overridden
+        .then(|| match (&eff.base, eff.user_created) {
+            (Some(base), false) => Some(base.describe()),
+            _ => None,
+        })
+        .flatten();
+    let invented = eff.overridden && replaces.is_none();
 
+    // Three aligned columns — WHEN, WHERE, and what you can do about it —
+    // so a course with five meetings reads as a small table rather than
+    // five sentences of differing length. Anything extra to say about the
+    // row (what CMI had here) goes on a line of its own underneath.
+    let hall = m.hall.clone();
     view! {
         <li>
             <span class="when">
-                {format!("{} {}", m.day.short(), m.slot.label())}
+                <span class="d">{m.day.short()}</span>
+                " "
+                <span class="t">{m.slot.label()}</span>
             </span>
-            <span>{m.hall.clone().unwrap_or_else(|| "Hall TBA".to_string())}</span>
-            {m.temp_booking
-                .then(|| view! { <span class="badge warn">"temporary booking"</span> })}
-            {eff.overridden
-                .then(|| {
+            <span class="where">
+                {match hall {
+                    Some(h) => view! { <span class="hall">{h}</span> }.into_any(),
+                    None => view! { <span class="hall tba">"Hall TBA"</span> }.into_any(),
+                }}
+                {m.temp_booking
+                    .then(|| view! { <span class="badge warn">"temporary booking"</span> })}
+                {eff.overridden
+                    .then(|| {
+                        view! {
+                            <span class="badge accent">
+                                {if eff.user_created { "✎ your meeting" } else { "✎ your time" }}
+                            </span>
+                        }
+                    })}
+                {clash.then(|| view! { <span class="badge alarm">"⚠ clash"</span> })}
+            </span>
+            {replaces
+                .map(|text| {
                     view! {
-                        <span class="badge accent">
-                            {if eff.user_created { "✎ your meeting" } else { "✎ your time" }}
+                        <span class="replaces small">
+                            "CMI: "
+                            <span class="was gone">{text}</span>
                         </span>
                     }
                 })}
-            {provenance.map(|text| view! { <span class="muted small">{text}</span> })}
-            {clash.then(|| view! { <span class="badge alarm">"⚠ clash"</span> })}
+            {invented
+                .then(|| {
+                    view! {
+                        <span class="replaces small">"not on CMI's timetable — created by you"</span>
+                    }
+                })}
+            <span class="acts">
             <button
                 class="btn small"
                 on:click=move |_| {
@@ -1372,6 +1456,7 @@ pub fn meeting_row(app: App, course: &Course, eff: EffMeeting) -> impl IntoView 
                     </button>
                 }
             }
+            </span>
         </li>
     }
 }
@@ -1566,7 +1651,11 @@ fn details_dialog(app: App, code: String) -> impl IntoView {
 
     let selected = app.is_selected(&code);
     let eff = app.effective_meetings(&course);
-    let clashes: Vec<String> = app
+    // (other course, day, time) rather than a sentence per clash: with three
+    // of them the only thing that differs is a code and a time, and those
+    // are exactly what a sentence buries. Sorted by day, then by time, so
+    // the list reads in the order the week happens.
+    let mut clashes: Vec<(String, Day, Slot)> = app
         .clashes()
         .into_iter()
         .filter(|c| c.a == code || c.b == code)
@@ -1576,9 +1665,22 @@ fn details_dialog(app: App, code: String) -> impl IntoView {
             } else {
                 (c.a, c.a_slot)
             };
-            format!("{other} on {} {}", c.day.short(), slot.label())
+            (other, c.day, slot)
         })
         .collect();
+    clashes.sort_by_key(|(other, day, slot)| {
+        (day.index(), slot.start_min, other.clone())
+    });
+    // …then one row per COURSE, carrying every time you collide with it: the
+    // same course twice on two days is one thing to fix, not two.
+    let mut clash_groups: Vec<(String, Vec<String>)> = Vec::new();
+    for (other, day, slot) in clashes {
+        let when = format!("{} · {}", day.full(), slot.label());
+        match clash_groups.iter_mut().find(|(c, _)| *c == other) {
+            Some((_, whens)) => whens.push(when),
+            None => clash_groups.push((other, vec![when])),
+        }
+    }
     let removed = app.is_removed_upstream(&code);
 
     let toggle_code = course.code.clone();
@@ -1709,20 +1811,38 @@ fn details_dialog(app: App, code: String) -> impl IntoView {
                 }
                     .into_any()
             }}
-            {(!clashes.is_empty())
+            {(!clash_groups.is_empty())
                 .then(|| {
+                    let n = clash_groups.len();
                     view! {
-                        // Each clash on its own line: "TOC × QCOM" run
-                        // together with semicolons was unreadable the moment
+                        // One row per course you collide with — as a chip you
+                        // can open — then every time it happens. Clashes run
+                        // together in a sentence were unreadable the moment
                         // there was more than one.
-                        <p class="row" style="margin:0.6rem 0 0">
+                        <h3 class="clash-head">
                             <span class="badge alarm">"⚠"</span>
-                            <span>"Clashes with"</span>
-                        </p>
+                            {format!(
+                                "Clashes with {n} course{}",
+                                if n == 1 { "" } else { "s" },
+                            )}
+                        </h3>
                         <ul class="clash-list">
-                            {clashes
-                                .iter()
-                                .map(|c| view! { <li>{c.clone()}</li> })
+                            {clash_groups
+                                .into_iter()
+                                .map(|(other, whens)| {
+                                    view! {
+                                        <li>
+                                            {chip(app, ChipProps::list(&other))}
+                                            <span class="x" aria-label="clashes with">"✗"</span>
+                                            <span class="whens">
+                                                {whens
+                                                    .into_iter()
+                                                    .map(|w| view! { <span class="when">{w}</span> })
+                                                    .collect_view()}
+                                            </span>
+                                        </li>
+                                    }
+                                })
                                 .collect_view()}
                         </ul>
                     }
@@ -1852,9 +1972,38 @@ pub fn custom_changes_pill(app: App) -> impl IntoView {
     }
 }
 
+/// What a single change of the user's did. The list groups by this, so
+/// "which of my changes moved a room?" is one glance, not twenty reads.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum OwnChange {
+    Time,
+    Room,
+    TimeAndRoom,
+    Added,
+    Removed,
+    Credits,
+}
+
+impl OwnChange {
+    /// The group heading. Written as what YOU did, because every one of
+    /// these exists only because you did it.
+    fn label(&self, n: usize) -> String {
+        let plural = |one: &str, many: &str| if n == 1 { one.into() } else { many.into() };
+        match self {
+            OwnChange::Time => plural("Moved to another time", "Moved to other times"),
+            OwnChange::Room => plural("Moved to another room", "Moved to other rooms"),
+            OwnChange::TimeAndRoom => "Moved to another time and room".to_string(),
+            OwnChange::Added => plural("Meeting you added", "Meetings you added"),
+            OwnChange::Removed => plural("Meeting you removed", "Meetings you removed"),
+            OwnChange::Credits => plural("Credits you set", "Credits you set"),
+        }
+    }
+}
+
 /// Every overwrite together — moved/created meetings and changed credits —
-/// each row showing exactly which CMI data it replaces, with one-click
-/// removal. Shared by the "Your changes" panel and the My data dialog.
+/// grouped by what kind of change it is, each row showing exactly which CMI
+/// value it replaces, with one-click removal. Shared by the "Your changes"
+/// panel and the My data dialog.
 pub fn overrides_list(app: App) -> impl IntoView {
     view! {
         {move || {
@@ -1869,39 +2018,69 @@ pub fn overrides_list(app: App) -> impl IntoView {
                     .into_any();
             }
             let snapshot = app.snapshot.get();
-            let time_rows = overrides
-                .items
-                .iter()
-                .map(|o| {
-                    let id = o.id;
-                    let course = o.course.clone();
-                    let line = match (&o.base, &o.to) {
-                        (Some(base), Some(to)) => {
-                            format!("{} → {}", base.describe(), to.describe())
+            // (kind, row) for everything, then one section per kind.
+            let mut rows: Vec<(OwnChange, AnyView)> = Vec::new();
+            for o in &overrides.items {
+                let id = o.id;
+                let course = o.course.clone();
+                // What actually changed decides the group AND what the row
+                // shows: a room move prints two room names, not two copies
+                // of a sentence differing in one word.
+                let (kind, before, after, context) = match (&o.base, &o.to) {
+                    (Some(base), Some(to)) => {
+                        let when_same = base.day == to.day && base.slot == to.slot;
+                        let where_same = crate::state::same_hall(
+                            base.hall.as_deref(),
+                            to.hall.as_deref(),
+                        );
+                        let when = |m: &Meeting| {
+                            format!("{} {}", m.day.short(), m.slot.label())
+                        };
+                        let hall = |m: &Meeting| {
+                            m.hall.clone().unwrap_or_else(|| "Hall TBA".to_string())
+                        };
+                        if where_same && !when_same {
+                            (OwnChange::Time, Some(when(base)), Some(when(to)), Some(hall(to)))
+                        } else if when_same && !where_same {
+                            (OwnChange::Room, Some(hall(base)), Some(hall(to)), Some(when(to)))
+                        } else {
+                            (
+                                OwnChange::TimeAndRoom,
+                                Some(base.describe()),
+                                Some(to.describe()),
+                                None,
+                            )
                         }
-                        (Some(base), None) => {
-                            format!("removed CMI's {}", base.describe())
-                        }
-                        (None, Some(to)) => format!("added a meeting — {}", to.describe()),
-                        // Unreachable: removing a user-created meeting
-                        // deletes its override outright.
-                        (None, None) => "removed a meeting".to_string(),
-                    };
-                    let selected = app.is_selected(&course);
-                    // Undoing a removal RESTORES a meeting; undoing a move or
-                    // an added meeting removes the change. Same action, but
-                    // the button must say what will happen.
-                    let action_label = if o.is_removal() { "Restore" } else { "Remove" };
+                    }
+                    (Some(base), None) => {
+                        (OwnChange::Removed, Some(base.describe()), None, None)
+                    }
+                    (None, Some(to)) => (OwnChange::Added, None, Some(to.describe()), None),
+                    // Unreachable: removing a user-created meeting deletes
+                    // its override outright.
+                    (None, None) => (OwnChange::Removed, None, None, None),
+                };
+                let selected = app.is_selected(&course);
+                // Undoing a removal RESTORES a meeting; undoing a move or an
+                // added meeting removes the change. Same action, but the
+                // button must say what will happen.
+                let action_label = if o.is_removal() { "Restore" } else { "Remove" };
+                rows.push((
+                    kind,
                     view! {
                         <li>
                             {chip(app, ChipProps::list(&course))}
-                            <span class="small">{line}</span>
-                            {(!selected)
-                                .then(|| {
-                                    view! {
-                                        <span class="badge">"not currently selected"</span>
-                                    }
-                                })}
+                            <span class="change-what">
+                                {change_delta(before, after)}
+                                {context
+                                    .map(|c| view! { <span class="ctx">{c}</span> })}
+                                {(!selected)
+                                    .then(|| {
+                                        view! {
+                                            <span class="badge">"not currently selected"</span>
+                                        }
+                                    })}
+                            </span>
                             <button
                                 class="btn small"
                                 on:click=move |_| {
@@ -1915,34 +2094,34 @@ pub fn overrides_list(app: App) -> impl IntoView {
                             </button>
                         </li>
                     }
-                })
-                .collect_view();
-            let credit_rows = overrides
-                .credits
-                .iter()
-                .map(|c| {
-                    let course = c.course.clone();
-                    let remove_course = c.course.clone();
-                    let official = match snapshot.course(&c.course) {
-                        Some(cr) if cr.credits_assumed() => {
-                            format!("{} (assumed)", cr.effective_credits())
-                        }
-                        Some(cr) => cr.effective_credits().to_string(),
-                        None => "?".to_string(),
-                    };
-                    let selected = app.is_selected(&course);
+                        .into_any(),
+                ));
+            }
+            for c in &overrides.credits {
+                let course = c.course.clone();
+                let remove_course = c.course.clone();
+                let official = match snapshot.course(&c.course) {
+                    Some(cr) if cr.credits_assumed() => {
+                        format!("{} (assumed)", cr.effective_credits())
+                    }
+                    Some(cr) => cr.effective_credits().to_string(),
+                    None => "?".to_string(),
+                };
+                let selected = app.is_selected(&course);
+                rows.push((
+                    OwnChange::Credits,
                     view! {
                         <li>
                             {chip(app, ChipProps::list(&course))}
-                            <span class="small">
-                                {format!("credits: {official} → {}", c.credits)}
+                            <span class="change-what">
+                                {change_delta(Some(official), Some(c.credits.to_string()))}
+                                {(!selected)
+                                    .then(|| {
+                                        view! {
+                                            <span class="badge">"not currently selected"</span>
+                                        }
+                                    })}
                             </span>
-                            {(!selected)
-                                .then(|| {
-                                    view! {
-                                        <span class="badge">"not currently selected"</span>
-                                    }
-                                })}
                             <button
                                 class="btn small"
                                 on:click=move |_| app.remove_credit_override(&remove_course)
@@ -1951,13 +2130,37 @@ pub fn overrides_list(app: App) -> impl IntoView {
                             </button>
                         </li>
                     }
+                        .into_any(),
+                ));
+            }
+            // Stable sort on the enum's own order, then one section per run:
+            // the groups come out in a fixed order however the changes were
+            // made, and inside a group they stay in the order they were made.
+            rows.sort_by_key(|(kind, _)| *kind);
+            let mut sections: Vec<(OwnChange, Vec<AnyView>)> = Vec::new();
+            for (kind, row) in rows {
+                match sections.last_mut() {
+                    Some((k, list)) if *k == kind => list.push(row),
+                    _ => sections.push((kind, vec![row])),
+                }
+            }
+            let groups = sections
+                .into_iter()
+                .map(|(kind, list)| {
+                    let n = list.len();
+                    view! {
+                        <div class="change-group">
+                            <h4>
+                                {change_tag(&kind.label(n), true)}
+                                <span class="cg-count">{n.to_string()}</span>
+                            </h4>
+                            <ul class="changes">{list}</ul>
+                        </div>
+                    }
                 })
                 .collect_view();
             view! {
-                <ul class="meetings">
-                    {time_rows}
-                    {credit_rows}
-                </ul>
+                {groups}
                 <button
                     class="btn small"
                     on:click=move |_| {
@@ -2046,20 +2249,29 @@ fn my_data_dialog(app: App) -> impl IntoView {
                             })
                     }}
                 </header>
-                <p class="small">
-                    {move || {
-                        let n = app.selection.with(|s| s.len());
-                        if n == 0 {
-                            "No courses selected yet.".to_string()
-                        } else {
-                            format!(
-                                "{n} course{}: {}",
-                                if n == 1 { "" } else { "s" },
-                                app.selection.with(|s| s.join(", ")),
-                            )
-                        }
-                    }}
-                </p>
+                // The codes ARE the content here, so they are chips you can
+                // pick out (and open) — not a comma-separated sentence that
+                // has to be read from the start to find one of them.
+                {move || {
+                    let codes = app.selection.get();
+                    if codes.is_empty() {
+                        return view! { <p class="small">"No courses selected yet."</p> }
+                            .into_any();
+                    }
+                    let n = codes.len();
+                    view! {
+                        <p class="small muted">
+                            {format!("{n} course{}", if n == 1 { "" } else { "s" })}
+                        </p>
+                        <div class="chipline">
+                            {codes
+                                .iter()
+                                .map(|code| chip(app, ChipProps::list(code)))
+                                .collect_view()}
+                        </div>
+                    }
+                        .into_any()
+                }}
             </section>
 
             <section class="data-section">
@@ -3177,23 +3389,10 @@ fn custom_course_dialog(
                     (!e.is_empty()).then_some(e)
                 }}
             </p>
+            // No "Delete this course" here. This form is for editing one;
+            // deleting lives in the course's own dialog, next to Edit, where
+            // it can't be hit while you are half-way through a change.
             <div class="actions">
-                {editing
-                    .clone()
-                    .map(|del_code| {
-                        view! {
-                            <button
-                                class="btn danger"
-                                on:click=move |_| {
-                                    app.delete_custom_course(&del_code, false);
-                                    app.dialog.set(None);
-                                }
-                            >
-                                "Delete this course"
-                            </button>
-                            <div class="grow"></div>
-                        }
-                    })}
                 <button class="btn" on:click=move |_| app.dialog.set(None)>
                     "Cancel"
                 </button>
@@ -3257,23 +3456,21 @@ fn conflicts_dialog(app: App) -> impl IntoView {
                 .iter()
                 .enumerate()
                 .map(|(i, c)| {
-                    let mine_label = match &c.mine {
-                        Some(m) => format!("Keep my time: {}", m.describe()),
-                        None => "Keep it removed (you removed this meeting)".to_string(),
+                    // Both sides read as the same kind of thing — a tag
+                    // saying whose it is, then the time itself — so the
+                    // choice is between two values, not two sentences.
+                    let mine_value = match &c.mine {
+                        Some(m) => m.describe(),
+                        None => "removed — no meeting at all".to_string(),
                     };
-                    let theirs_label = match c.theirs.len() {
-                        0 => "Use CMI's version: this meeting was removed".to_string(),
-                        1 => format!("Use CMI's new time: {}", c.theirs[0].describe()),
-                        _ => {
-                            format!(
-                                "Use CMI's new times: {}",
-                                c.theirs
-                                    .iter()
-                                    .map(|m| m.describe())
-                                    .collect::<Vec<_>>()
-                                    .join(" · "),
-                            )
-                        }
+                    let theirs_value = match c.theirs.len() {
+                        0 => "removed — no meeting at all".to_string(),
+                        _ => c
+                            .theirs
+                            .iter()
+                            .map(|m| m.describe())
+                            .collect::<Vec<_>>()
+                            .join(" · "),
                     };
                     let group = format!("conflict-{i}");
                     view! {
@@ -3288,7 +3485,10 @@ fn conflicts_dialog(app: App) -> impl IntoView {
                                     prop:checked=move || !keep_mine.with(|v| v[i])
                                     on:change=move |_| keep_mine.update(|v| v[i] = false)
                                 />
-                                <span>{theirs_label}</span>
+                                <span class="change-what">
+                                    {change_tag("CMI's new time", false)}
+                                    <span class="now">{theirs_value}</span>
+                                </span>
                             </label>
                             <label class="opt">
                                 <input
@@ -3297,7 +3497,10 @@ fn conflicts_dialog(app: App) -> impl IntoView {
                                     prop:checked=move || keep_mine.with(|v| v[i])
                                     on:change=move |_| keep_mine.update(|v| v[i] = true)
                                 />
-                                <span>{mine_label}</span>
+                                <span class="change-what">
+                                    {change_tag("your time", true)}
+                                    <span class="now">{mine_value}</span>
+                                </span>
                             </label>
                         </div>
                     }
@@ -3700,10 +3903,22 @@ fn what_changed_dialog(app: App) -> impl IntoView {
                                     {chip(app, ChipProps::list(&c.code))}
                                     <span class="name">{name}</span>
                                     {mine_badge(mine(&c.code))}
-                                    <ul class="diff-lines">
+                                    <ul class="diff-lines changes">
                                         {c.summary
                                             .iter()
-                                            .map(|line| view! { <li>{line.clone()}</li> })
+                                            .map(|line| {
+                                                view! {
+                                                    <li>
+                                                        {change_tag(line.kind.label(), false)}
+                                                        <span class="change-what">
+                                                            {change_delta(
+                                                                line.before.clone(),
+                                                                line.after.clone(),
+                                                            )}
+                                                        </span>
+                                                    </li>
+                                                }
+                                            })
                                             .collect_view()}
                                     </ul>
                                 </div>

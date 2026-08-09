@@ -306,7 +306,9 @@ def t04_unknown_code_warning(app):
     """Unknown codes warn without breaking the known selection."""
     app.boot("/?c=TOC,XYZQ")
     banner = app.wait_css(".banner")
-    assert "Unknown course code: XYZQ" in banner.text, banner.text
+    assert "Unknown course code" in banner.text, banner.text
+    # The code is a chip of its own, not buried in the sentence.
+    assert banner.find_element(By.CSS_SELECTOR, ".chip").text == "XYZQ"
     app.chip("TOC")  # TOC still selected and rendered
     banner.find_element(By.XPATH, ".//button[normalize-space()='Dismiss']").click()
     app.wait_gone(".banner")
@@ -561,7 +563,8 @@ def t17_credit_override(app):
     # The 'Your changes' panel shows official → yours; removing it restores.
     app.open_tab("My timetable")
     panel = app.wait_css("[data-testid='your-changes']")
-    assert "credits: 4 (assumed) → 3" in panel.text, panel.text
+    assert "Credits you set" in panel.text, panel.text
+    assert "4 (assumed) → 3" in panel.text, panel.text
     app.xpath("//button[contains(.,'1 change')]")  # toolbar pill
     panel.find_element(
         By.XPATH, ".//li[contains(.,'TOC')]//button[normalize-space()='Remove']"
@@ -589,12 +592,12 @@ def t18_overwrites_panel_and_remove_all(app):
     # Inline provenance on the course card's meeting row.
     app.open_tab("My courses")
     section = app.wait_css("section[aria-label='My courses']")
-    assert "overwrites CMI's Tue 09:10–10:25" in section.text, section.text
+    assert "CMI: Tue 09:10–10:25" in section.text, section.text
     # The panel lists both overwrites; the pill counts them.
     app.open_tab("My timetable")
     panel = app.wait_css("[data-testid='your-changes']")
     assert "→ Wed 17:00–18:15" in panel.text, panel.text
-    assert "credits: 4 (assumed) → 2" in panel.text, panel.text
+    assert "4 (assumed) → 2" in panel.text, panel.text
     app.xpath("//button[contains(.,'2 changes')]")
     panel.find_element(
         By.XPATH, ".//button[normalize-space()='Remove all changes']"
@@ -923,7 +926,7 @@ def t30_sync_merge_conflict_flow(app):
         app.boot("/", selection=["TOC", "QCOM"], overrides=TOC_OVR)
         app.xpath("//button[normalize-space()='Sync now']").click()
         dialog = app.wait_css(".dialog", timeout=30)
-        assert "Keep my time" in dialog.text and "Fri 14:00" in dialog.text, dialog.text
+        assert "your time" in dialog.text and "Fri 14:00" in dialog.text, dialog.text
         # Default is "Use CMI's" — actively keep the user's time instead.
         dialog.find_element(
             By.XPATH, ".//button[normalize-space()='Keep mine for all']"
@@ -1147,7 +1150,8 @@ def t35_remove_meeting(app):
         "removal must survive a reload"
     app.xpath("//button[contains(.,'change')]").click()
     dialog_text = app.wait_css(".dialog").text
-    assert "removed CMI's Tue" in dialog_text, dialog_text[:300]
+    assert "Meeting you removed" in dialog_text, dialog_text[:300]
+    assert "Tue 09:10" in dialog_text, dialog_text[:300]
     app.xpath("//div[@class='dialog']//button[normalize-space()='Restore']").click()
     app.wait_toast("TOC back on CMI's time")
     app.d.find_element(By.CSS_SELECTOR, "body").send_keys(Keys.ESCAPE)
@@ -1463,7 +1467,12 @@ def t41_custom_course_edit_park_share_delete(app):
 
     # Edit the course itself: Wednesday → Friday. The chip follows.
     app.xpath("//button[normalize-space()='Edit course']").click()
-    app.wait_css(".dialog .custom-form")
+    form = app.wait_css(".dialog .custom-form")
+    # Deleting is not offered from inside the edit form — it belongs to the
+    # course's own dialog, beside Edit.
+    assert not form.find_elements(
+        By.XPATH, ".//button[normalize-space()='Delete this course']"
+    ), "the edit form must not offer to delete the course"
     app.css("#cc-day-0 option[value='4']").click()
     app.xpath("//button[normalize-space()='Save changes']").click()
     app.wait_gone(".dialog")
@@ -1993,6 +2002,69 @@ def t50_halls_all_days_one_table(app):
     app.wait_css(f"{dst} button.chip[aria-label^='TOC,']")
 
 
+def _meeting(day, start, end, hall):
+    return {"day": day, "slot": {"start_min": start, "end_min": end},
+            "hall": hall, "temp_booking": False}
+
+
+def t51_changes_are_grouped_by_what_they_did(app):
+    """Your changes are grouped by WHAT KIND of change they are, each group
+    headed by its kind and count, and a row shows only the part that
+    actually changed — a room move prints two room names, not two nearly
+    identical sentences."""
+    hall, other = "Lecture Hall 803", "Seminar Hall"
+    overrides = {
+        "next_id": 3,
+        "items": [
+            # time only, room only, and a removal
+            {"id": 0, "course": "TOC",
+             "base": _meeting("Tue", 550, 625, hall),
+             "to": _meeting("Wed", 1020, 1095, hall),
+             "created_at": 1754000000000.0},
+            {"id": 1, "course": "ISS",
+             "base": _meeting("Tue", 550, 625, hall),
+             "to": _meeting("Tue", 550, 625, other),
+             "created_at": 1754000001000.0},
+            {"id": 2, "course": "TOC",
+             "base": _meeting("Thu", 550, 625, hall),
+             "to": None,
+             "created_at": 1754000002000.0},
+        ],
+        "credits": [{"course": "ISS", "credits": 2,
+                     "created_at": 1754000003000.0}],
+    }
+    app.boot("/", selection=["TOC", "ISS"], overrides=overrides)
+    panel = app.wait_css("[data-testid='your-changes']")
+
+    # One group per kind, in a fixed order, each headed by kind and count.
+    heads = [h.text for h in panel.find_elements(
+        By.CSS_SELECTOR, ".change-group h4 .ck")]
+    assert heads == ["Moved to another time", "Moved to another room",
+                     "Meeting you removed", "Credits you set"], heads
+    counts = [c.text for c in panel.find_elements(
+        By.CSS_SELECTOR, ".change-group .cg-count")]
+    assert counts == ["1", "1", "1", "1"], counts
+
+    groups = panel.find_elements(By.CSS_SELECTOR, ".change-group")
+    # A room move says the rooms, and keeps the unchanged time as context.
+    room = groups[1].find_element(By.CSS_SELECTOR, "li")
+    assert room.find_element(By.CSS_SELECTOR, ".was").text == hall
+    assert room.find_element(By.CSS_SELECTOR, ".now").text == other
+    assert "Tue 09:10" in room.find_element(By.CSS_SELECTOR, ".ctx").text
+    # A time move says the times, and keeps the unchanged room as context.
+    moved = groups[0].find_element(By.CSS_SELECTOR, "li")
+    assert "Tue 09:10" in moved.find_element(By.CSS_SELECTOR, ".was").text
+    assert "Wed 17:00" in moved.find_element(By.CSS_SELECTOR, ".now").text
+    assert hall in moved.find_element(By.CSS_SELECTOR, ".ctx").text
+    # A removal has nothing on the right and is struck through.
+    gone = groups[2].find_element(By.CSS_SELECTOR, "li .was.gone")
+    assert "Thu 09:10" in gone.text, gone.text
+    assert not groups[2].find_elements(By.CSS_SELECTOR, "li .now")
+    # Restoring is what the removal's button offers; the others remove.
+    assert groups[2].find_element(By.CSS_SELECTOR, "li .btn").text == "Restore"
+    assert groups[0].find_element(By.CSS_SELECTOR, "li .btn").text == "Remove"
+
+
 TESTS = [
     t01_header_sync_button_and_hidden_dev,
     t02_developer_endpoint_only,
@@ -2044,6 +2116,7 @@ TESTS = [
     t48_master_grid_extra_column,
     t49_halls_day_selection,
     t50_halls_all_days_one_table,
+    t51_changes_are_grouped_by_what_they_did,
 ]
 
 

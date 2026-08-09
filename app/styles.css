@@ -749,26 +749,157 @@ table.tt td.kbd-cursor { box-shadow: inset 0 0 0 2px var(--accent); }
    block — chips stacked above their titles and inline gap/align-items did
    nothing. Several call sites had patched it with inline display:flex. */
 .row { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
-/* Meeting/overwrite rows — used in cards, dialogs AND panels. */
+/* Meeting rows — used in cards and dialogs. Three aligned columns (WHEN,
+   WHERE, what you can do) so five meetings read as a small table instead of
+   five sentences of differing length; anything extra to say about a row
+   drops onto a full-width line underneath it. */
 ul.meetings { margin: 0.45rem 0 0; padding: 0; list-style: none; }
 ul.meetings li {
-  display: flex;
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr) max-content;
   align-items: center;
-  gap: 0.5rem;
-  flex-wrap: wrap;
-  padding: 0.24rem 0;
+  gap: 0.3rem 0.8rem;
+  padding: 0.36rem 0;
   font-size: 0.86rem;
 }
 ul.meetings li + li { border-top: 1px dashed var(--line); }
-/* Row actions share one right edge instead of trailing ragged text.
-   (The leading chip is itself a <button>, so :first-of-type would never
-   match — push the FIRST .btn right and reset the rest.) */
-ul.meetings li .btn { margin-left: auto; }
-ul.meetings li .btn ~ .btn { margin-left: 0; }
-ul.meetings .when {
+ul.meetings .when { grid-column: 1; white-space: nowrap; }
+/* The day is what you look for first, so it leads and every row's time
+   starts at the same x. */
+ul.meetings .when .d { display: inline-block; min-width: 2.4rem; font-weight: 700; }
+ul.meetings .when .t {
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
   font-size: 0.8rem;
+}
+ul.meetings .where {
+  grid-column: 2;
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+ul.meetings .where .hall { overflow-wrap: anywhere; }
+/* No room yet is a fact about the room, so it reads as one — not as a name. */
+ul.meetings .where .hall.tba { color: var(--muted); font-style: italic; }
+ul.meetings .acts {
+  grid-column: 3;
+  justify-self: end;
+  display: flex;
+  gap: 0.35rem;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+ul.meetings .replaces { grid-column: 1 / -1; }
+@media (max-width: 640px) {
+  ul.meetings li { grid-template-columns: minmax(0, 1fr); }
+  ul.meetings .when, ul.meetings .where, ul.meetings .acts { grid-column: 1; }
+  ul.meetings .acts { justify-self: start; justify-content: flex-start; }
+}
+
+/* ==========================================================================
+   Changes: one grammar wherever the app shows something being replaced —
+   your overrides, CMI's edits since the last sync, a merge conflict, the
+   provenance line under a moved meeting.
+
+       [ kind ]   old value  →  new value
+
+   The kind is a tag of its own so a column of them can be scanned; the old
+   value recedes and the new one is the one you read. Violet is the app's
+   "this is yours"; CMI's own changes wear the blue accent.
+   ========================================================================== */
+
+.ck {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.1rem 0.45rem;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+  background: var(--accent-wash);
+  color: var(--accent);
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  white-space: nowrap;
+  flex: none;
+}
+.ck.mine {
+  border-color: color-mix(in srgb, var(--accent2) 35%, transparent);
+  background: var(--accent2-wash);
+  color: var(--accent2);
+}
+
+/* Deliberately inline (not flex): the three parts have to stay ONE run of
+   text so "Tue 09:10 → Wed 17:00" copies, and reads to a screen reader, as
+   one line rather than three. Spacing comes from the arrow's margins. */
+.delta { min-width: 0; }
+.delta .was, .replaces .was {
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+/* Nothing replaces it — it is simply gone, and a line through says that
+   faster than any wording. */
+.delta .was.gone, .replaces .was.gone { text-decoration: line-through; }
+.delta .arrow { color: var(--muted); font-size: 0.8rem; }
+.delta .now {
+  color: var(--text);
+  font-weight: 600;
+  font-size: 0.85rem;
+}
+/* The part that did NOT change, kept for context and kept quiet. */
+.change-what .ctx {
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-family: var(--font-mono);
+}
+.change-what {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.45rem;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+.replaces { color: var(--muted); }
+
+/* One group per kind of change, headed by the kind and how many there are:
+   twenty changes become four short lists you can pick from. */
+.change-group + .change-group { margin-top: 0.7rem; }
+.change-group h4 {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin: 0;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--muted);
+}
+.cg-count {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--muted);
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 0 0.4rem;
+}
+ul.changes { margin: 0.3rem 0 0; padding: 0; list-style: none; }
+/* Three columns, so within a group every change starts at the same place:
+   the eye runs straight down the values instead of following a ragged edge
+   set by how long each course code happens to be. */
+ul.changes li {
+  display: grid;
+  grid-template-columns: max-content 1fr max-content;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.28rem 0;
+  font-size: 0.86rem;
+}
+ul.changes li + li { border-top: 1px dashed var(--line); }
+.change-group + .btn { margin-top: 0.8rem; }
+@media (max-width: 640px) {
+  ul.changes li { grid-template-columns: max-content 1fr; }
+  ul.changes li .btn { grid-column: 2; justify-self: start; }
 }
 
 .toolbar {
@@ -1179,12 +1310,30 @@ details.facet .menu .menu-empty { margin: 0.2rem 0 0; }
   border-top: 1px solid var(--line);
 }
 .clash-list li:first-child { border-top: 0; }
+/* Every time a pair collides, each as its own quiet pill: two of them side
+   by side read as two occasions, where "Tuesday · 09:10 Thursday · 09:10"
+   in one run reads as noise. */
+.clash-list .whens { display: flex; flex-wrap: wrap; gap: 0.3rem; min-width: 0; }
 .clash-list .when {
   color: var(--muted);
   font-family: var(--font-mono);
-  font-size: 0.8rem;
+  font-size: 0.76rem;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 0.02rem 0.45rem;
+  white-space: nowrap;
 }
 .clash-list .x { color: var(--alarm); font-weight: 700; }
+/* In the details dialog the clashes get a heading of their own, with the
+   count in it: "how many" is the first thing you want to know. */
+.clash-head {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  margin: 0.9rem 0 0;
+}
+
 
 /* Hall chooser: the dropdown, and the free-text box that "Other place…"
    reveals beside it. Wraps rather than squeezing the two together. */
@@ -1271,6 +1420,12 @@ details.facet .menu .menu-empty { margin: 0.2rem 0 0; }
   left: 0.15rem;
   color: var(--line-strong);
 }
+/* Inside "What changed", each line already leads with its kind tag — the
+   ↳ marker and a dashed rule between lines would just be more furniture. */
+.diff-lines.changes li { padding-left: 0; font-family: inherit; }
+.diff-lines.changes li::before { content: none; }
+.diff-lines.changes li + li { border-top: none; }
+
 .diff-add { color: var(--ok); }
 .diff-del { color: var(--alarm); }
 

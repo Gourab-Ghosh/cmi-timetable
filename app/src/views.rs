@@ -2,7 +2,9 @@
 //! and days/halls run down the left column — never transposed.
 
 use crate::fetch;
-use crate::state::{effective_meetings, App, Density, Dialog, EffMeeting, HallsView, Tab};
+use crate::state::{
+    effective_meetings, same_hall, App, Density, Dialog, EffMeeting, HallsView, Tab,
+};
 use crate::ui::{
     branch_chip, chip, custom_changes_pill, edit_toggle, filter_bar, overrides_list, ChipClick,
     ChipProps,
@@ -520,9 +522,15 @@ fn my_timetable(app: App) -> impl IntoView {
                                 // when. Reads as a table you scan, not a
                                 // paragraph you parse.
                                 <ul class="clash-list">
-                                    {clashes
-                                        .into_iter()
-                                        .map(|c| {
+                                    {
+                                        // One row per PAIR, with every time
+                                        // they collide on it: two courses
+                                        // that meet at the same hour twice a
+                                        // week are one problem, and printing
+                                        // the same pair twice reads as two.
+                                        let mut groups: Vec<((String, String), Vec<String>)> =
+                                            Vec::new();
+                                        for c in clashes {
                                             let times = if c.a_slot == c.b_slot {
                                                 c.a_slot.label()
                                             } else {
@@ -532,20 +540,34 @@ fn my_timetable(app: App) -> impl IntoView {
                                                     c.b_slot.label(),
                                                 )
                                             };
-                                            view! {
-                                                <li>
-                                                    <span class="mono">{c.a.clone()}</span>
-                                                    <span class="x" aria-label="clashes with">
-                                                        "×"
-                                                    </span>
-                                                    <span class="mono">{c.b.clone()}</span>
-                                                    <span class="when">
-                                                        {format!("{} · {times}", c.day.full())}
-                                                    </span>
-                                                </li>
+                                            let when = format!("{} · {times}", c.day.full());
+                                            let key = (c.a.clone(), c.b.clone());
+                                            match groups.iter_mut().find(|(k, _)| *k == key) {
+                                                Some((_, whens)) => whens.push(when),
+                                                None => groups.push((key, vec![when])),
                                             }
-                                        })
-                                        .collect_view()}
+                                        }
+                                        groups
+                                            .into_iter()
+                                            .map(|((a, b), whens)| {
+                                                view! {
+                                                    <li>
+                                                        <span class="mono">{a}</span>
+                                                        <span class="x" aria-label="clashes with">
+                                                            "×"
+                                                        </span>
+                                                        <span class="mono">{b}</span>
+                                                        <span class="whens">
+                                                            {whens
+                                                                .into_iter()
+                                                                .map(|w| view! { <span class="when">{w}</span> })
+                                                                .collect_view()}
+                                                        </span>
+                                                    </li>
+                                                }
+                                            })
+                                            .collect_view()
+                                    }
                                 </ul>
                             </div>
                         }
@@ -1635,17 +1657,6 @@ fn hall_booking_state(
         }
     }
     BookingCell::Here(eff)
-}
-
-/// Halls compare on trimmed, case-insensitive text everywhere they are
-/// matched: the user types theirs by hand, so "lecture hall 803" and a
-/// pasted " LH9 " have to land in CMI's row rather than nowhere at all.
-fn same_hall(a: Option<&str>, b: Option<&str>) -> bool {
-    match (a, b) {
-        (Some(a), Some(b)) => a.trim().eq_ignore_ascii_case(b.trim()),
-        (None, None) => true,
-        _ => false,
-    }
 }
 
 /// Chip for one official hall booking — or `None` when the user removed or
