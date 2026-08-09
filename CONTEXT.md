@@ -180,14 +180,21 @@ and no committed mirror (fixtures exist only for tests/e2e seed).
   (`prefs.halls_view`, written only by a real click, so it survives
   reloads); with none stored the tab opens on TODAY, or on every day when
   today isn't a teaching day.
-- **`HallsView::All` is ONE table, not five.** `hall_table(app, days,
-  merged)` builds both layouts and `hall_row` builds every row, so the
-  merged week and a single day cannot drift apart. Merged rows are hall ×
-  day, hall-major — a room's week reads down the page — and each row head
-  carries the day (`.day-tag`) with the repeated hall name faded
-  (`th.rowhead.cont`) and a rule at each hall's first row (`tr.group-start`).
-  Every cell still carries its own `data-day`/`data-slot`/`data-hall`, so a
-  drop into a merged row means that row's day (R24).
+- **`HallsView::All` is ONE table, and a hall is NAMED ONCE in it.**
+  `hall_table(app, days, merged)` builds both layouts and `hall_row` builds
+  every row, so the merged week and a single day cannot drift apart. Merged
+  rows are hall × day with TWO sticky gutters: `th.hallhead` spans the
+  hall's days (`rowspan`, with a "N booked slots"/"free all week" line under
+  the name) and `th.dayhead` carries the day — repeating the hall name on
+  every row read as noise and hid which rows belonged together (R28). A day
+  with nothing in it shrinks (`tr.quiet`), alternate halls carry a faint
+  band (`tr.alt`), today is marked, and a rule opens each block
+  (`tr.group-start`). Every cell still carries its own
+  `data-day`/`data-slot`/`data-hall`, so a drop into a merged row means that
+  row's day (R24, R28).
+- The grid's per-hall summary and the free-hall finder both ask
+  `hall_cell_busy` — one definition of "something is standing here", so the
+  two can never disagree on the same page (R28).
 - Keyboard move mode addresses the COLUMN a chip renders in (`column_for`),
   on the grid the user is looking at (`active_slot_grid` switches on the
   tab) — a cursor holding a raw start time highlights no cell and jumps on
@@ -909,3 +916,18 @@ regenerates the .ics golden.
   their plain twins. e2e t52 (plain commas in the bar; a `%2C` link opens
   and is rewritten to the readable form); url_tests cover the decoder.
   66 native + 52/52 e2e. Pushed and deployed on the user's instruction.
+- **R28 (one name per hall; a polish pass):** user: the merged halls week
+  repeated "Seminar Hall Monday, Seminar Hall Tuesday…" and looked
+  unprofessional — one name per hall, days under it. Rebuilt as two sticky
+  gutters with a spanning name cell (see the §4 rule), plus the things that
+  make a week of mostly-empty cells readable: empty days shrink to a line,
+  alternate halls band, today is marked, and each hall's name carries how
+  busy it is all week (`hall_cell_busy`, now shared with the finder).
+  Then "make the whole website look as beautiful as possible", answered
+  with hierarchy rather than gloss (the design system already had focus
+  rings, themed scrollbars, selection colour, card hover): a course card's
+  actions sit below a hairline with the destructive one to the far right in
+  quiet-danger, and per-row actions in a meetings list stay at 62% until
+  hover/focus (full always on touch). t49/t50 updated for the new gutters;
+  shots 32 and 35 (dark). 66 native + 52/52 e2e. Committed locally, NOT
+  pushed — the user asked to hold pushes again.

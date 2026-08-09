@@ -1123,7 +1123,7 @@ fn course_card(app: App, course: Course) -> impl IntoView {
                     })}
             </div>
             {has_meetings.then(|| view! { <ul class="meetings">{meeting_rows}</ul> })}
-            <div class="row" style="margin-top:0.4rem">
+            <div class="row card-actions">
                 {is_custom
                     .then(|| {
                         let edit_code = code.clone();
@@ -1178,7 +1178,12 @@ fn course_card(app: App, course: Course) -> impl IntoView {
                             </button>
                         }
                     })}
-                <button class="btn small" on:click=move |_| app.remove_course(&remove_code)>
+                <div class="grow"></div>
+                <button
+                    class="btn small quiet-danger"
+                    title="Take this course off your timetable — its times stay if you add it back"
+                    on:click=move |_| app.remove_course(&remove_code)
+                >
                     "Remove"
                 </button>
             </div>
@@ -1782,6 +1787,62 @@ fn hall_eff_chip(app: App, code: &str, eff: EffMeeting, column: Slot) -> AnyView
 /// still carries its own day/slot/hall, so a drop means the same thing in
 /// either layout.
 #[allow(clippy::too_many_arguments)]
+/// Is anything standing in this hall, on this day, at this time?
+///
+/// The grid's per-hall summary and the free-hall finder both ask through
+/// this, so "free" cannot come to mean two different things on one page.
+fn hall_cell_busy(
+    app: App,
+    snapshot: &Snapshot,
+    cols: &[Slot],
+    placed: &[(String, u16, String, EffMeeting)],
+    hall: &str,
+    day: Day,
+    start: u16,
+) -> bool {
+    let cmi_has_it = snapshot
+        .hall_bookings
+        .iter()
+        .filter(|b| b.hall == hall && b.day == day && b.slot.start_min == start)
+        .any(|b| {
+            // A bare TMP cell carries no codes at all (the halls page books
+            // the room without naming a course) — the room is taken.
+            b.codes.is_empty()
+                || b.codes.iter().any(|code| {
+                    !matches!(
+                        hall_booking_state(app, snapshot, cols, code, day, b.slot, b.temp, hall),
+                        BookingCell::Gone,
+                    )
+                })
+        });
+    let yours = placed
+        .iter()
+        .any(|(h, col, _, _)| h.trim().eq_ignore_ascii_case(hall.trim()) && *col == start);
+    cmi_has_it || yours
+}
+
+/// How a row is dressed. The two layouts differ only here: in the merged
+/// week a row is a hall ON A DAY, so the hall is named once for the block
+/// (a cell spanning it) and each row carries only its day.
+#[derive(Clone, Copy)]
+struct RowChrome {
+    merged: bool,
+    /// First row of this hall's block — the one carrying the name.
+    first: bool,
+    /// How many rows that name spans.
+    span: usize,
+    /// Every other hall gets a faint band, so a block reads as one thing.
+    alt: bool,
+    /// Nothing at all on this day: the row shrinks, so a week of empty
+    /// afternoons doesn't push the next room off the screen.
+    quiet: bool,
+    today: bool,
+    /// Cells busy across the whole week, for the one-line summary under the
+    /// hall's name.
+    weekly: usize,
+}
+
+#[allow(clippy::too_many_arguments)]
 fn hall_row(
     app: App,
     snapshot: &Snapshot,
@@ -1791,27 +1852,68 @@ fn hall_row(
     hall: &str,
     own: bool,
     day: Day,
-    day_tag: bool,
-    group_start: bool,
+    chrome: RowChrome,
 ) -> AnyView {
     let hall = hall.to_string();
-    view! {
-        <tr class:own-hall=own class:group-start=group_start>
-            <th class="rowhead" scope="row" class:cont=day_tag && !group_start>
+    let badge = own.then(|| {
+        view! {
+            <span
+                class="badge custom"
+                title="A place you added — CMI's allocation does not list it"
+            >
+                "your own"
+            </span>
+        }
+    });
+    // Named once per hall, not once per row: five copies of "Seminar Hall"
+    // down the left edge is noise, and the eye has to work out which rows
+    // belong together. One cell spanning the block says it outright.
+    let name_cell = if chrome.merged {
+        chrome
+            .first
+            .then(|| {
+                view! {
+                    <th class="rowhead hallhead" scope="rowgroup" rowspan=chrome.span>
+                        <span class="hall-name">{hall.clone()}</span>
+                        {badge}
+                        <span class="hall-load" class:free=chrome.weekly == 0>
+                            {match chrome.weekly {
+                                0 => "free all week".to_string(),
+                                1 => "1 booked slot".to_string(),
+                                n => format!("{n} booked slots"),
+                            }}
+                        </span>
+                    </th>
+                }
+            })
+            .into_any()
+    } else {
+        view! {
+            <th class="rowhead hallhead" scope="row">
                 <span class="hall-name">{hall.clone()}</span>
-                {day_tag.then(|| view! { <span class="day-tag">{day.short()}</span> })}
-                {own
-                    .then(|| {
-                        view! {
-                            <span
-                                class="badge custom"
-                                title="A place you added — CMI's allocation does not list it"
-                            >
-                                "your own"
-                            </span>
-                        }
-                    })}
+                {badge}
             </th>
+        }
+        .into_any()
+    };
+    view! {
+        <tr
+            class:own-hall=own
+            class:group-start=chrome.merged && chrome.first
+            class:alt=chrome.alt
+            class:quiet=chrome.quiet
+            class:today=chrome.today
+        >
+            {name_cell}
+            {chrome
+                .merged
+                .then(|| {
+                    view! {
+                        <th class="rowhead dayhead" scope="row">
+                            {day.short()}
+                        </th>
+                    }
+                })}
             {columns
                 .iter()
                 .map(|(slot, extra)| {
@@ -1931,20 +2033,31 @@ fn hall_row(
 /// layout — the whole week, hall by hall, so a room's week reads down the
 /// page instead of across five separate tables.
 fn hall_table(app: App, days: Vec<Day>, merged: bool) -> AnyView {
-    let corner = if merged {
-        "Hall · day".to_string()
+    let day_corner = if merged {
+        "Day".to_string()
     } else {
         days.first()
             .map(|d| d.full().to_string())
             .unwrap_or_default()
     };
+    let today = crate::domx::today_local().weekday();
     view! {
         <div class="grid-scroll">
             <table class="tt" class:halls-merged=merged>
                 <thead>
                     <tr>
-                        <th class="rowhead corner" scope="col">
-                            {corner}
+                        // Two gutters in the merged week — the hall, then the
+                        // day — so both stay put when the week scrolls sideways.
+                        {merged
+                            .then(|| {
+                                view! {
+                                    <th class="rowhead corner corner-hall" scope="col">
+                                        "Hall"
+                                    </th>
+                                }
+                            })}
+                        <th class="rowhead corner corner-day" class:day-only=!merged scope="col">
+                            {day_corner}
                         </th>
                         {move || {
                             app.hall_slot_grid()
@@ -1976,13 +2089,42 @@ fn hall_table(app: App, days: Vec<Day>, merged: bool) -> AnyView {
                         // — a course you put in "1002" has to be visible on the
                         // page that shows where things are.
                         let own_halls = app.user_halls();
+                        let span = arrivals.len();
                         snapshot
                             .halls
                             .iter()
                             .cloned()
                             .map(|h| (h, false))
                             .chain(own_halls.into_iter().map(|h| (h, true)))
-                            .map(|(hall, own)| {
+                            .enumerate()
+                            .map(|(n, (hall, own))| {
+                                // How busy the hall is all week, said once
+                                // under its name: on a page whose whole point
+                                // is finding a room, "free all week" is the
+                                // answer before you have read a single cell.
+                                let per_day: Vec<usize> = if merged {
+                                    arrivals
+                                        .iter()
+                                        .map(|(day, placed)| {
+                                            cols.iter()
+                                                .filter(|s| {
+                                                    hall_cell_busy(
+                                                        app,
+                                                        &snapshot,
+                                                        &cols,
+                                                        placed,
+                                                        &hall,
+                                                        *day,
+                                                        s.start_min,
+                                                    )
+                                                })
+                                                .count()
+                                        })
+                                        .collect()
+                                } else {
+                                    Vec::new()
+                                };
+                                let weekly: usize = per_day.iter().sum();
                                 arrivals
                                     .iter()
                                     .enumerate()
@@ -1996,8 +2138,15 @@ fn hall_table(app: App, days: Vec<Day>, merged: bool) -> AnyView {
                                             &hall,
                                             own,
                                             *day,
-                                            merged,
-                                            i == 0,
+                                            RowChrome {
+                                                merged,
+                                                first: i == 0,
+                                                span,
+                                                alt: n % 2 == 1,
+                                                quiet: per_day.get(i) == Some(&0),
+                                                today: merged && *day == today,
+                                                weekly,
+                                            },
                                         )
                                     })
                                     .collect_view()
@@ -2160,34 +2309,7 @@ fn halls_view(app: App) -> impl IntoView {
                         .halls
                         .iter()
                         .filter(|hall| {
-                            let cmi_has_it = snapshot
-                                .hall_bookings
-                                .iter()
-                                .filter(|b| {
-                                    b.hall == **hall && b.day == day
-                                        && b.slot.start_min == start
-                                })
-                                .any(|b| {
-                                    // A bare TMP cell carries no codes at all
-                                    // (the halls page books the room without
-                                    // naming a course) — the room is taken.
-                                    b.codes.is_empty()
-                                        || b.codes.iter().any(|code| {
-                                            !matches!(
-                                                hall_booking_state(
-                                                    app, &snapshot, &cols, code, day, b.slot,
-                                                    b.temp, hall,
-                                                ),
-                                                BookingCell::Gone,
-                                            )
-                                        })
-                                });
-                            let yours = placed
-                                .iter()
-                                .any(|(h, col, _, _)| {
-                                    h.eq_ignore_ascii_case(hall) && *col == start
-                                });
-                            !cmi_has_it && !yours
+                            !hall_cell_busy(app, &snapshot, &cols, &placed, hall, day, start)
                         })
                         .cloned()
                         .collect();

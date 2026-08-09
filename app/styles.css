@@ -626,28 +626,85 @@ table.tt tr.own-hall th.rowhead {
 }
 table.tt tr.own-hall th.rowhead .badge { margin-left: 0.4rem; }
 
-/* The merged halls table holds the whole week: one row per hall and day,
-   a hall's days kept together. The row head has to carry both, so the day
-   sits in a chip and a rule marks where each hall's block starts. */
-table.tt.halls-merged th.rowhead { min-width: 11rem; }
-table.tt th.rowhead .day-tag {
-  display: inline-block;
-  margin-left: 0.4rem;
-  padding: 0.02rem 0.3rem;
-  border: 1px solid var(--line);
-  border-radius: var(--r-sm);
+/* The merged halls table holds the whole week. A hall is NAMED ONCE, in a
+   cell spanning its days; the days themselves run down a narrow gutter of
+   their own. Both gutters stay put when the week scrolls sideways, so a
+   cell in the middle of Thursday always says which room and which day it
+   belongs to. */
+table.tt.halls-merged { --hall-gutter: 11rem; --day-gutter: 3.6rem; }
+table.tt.halls-merged th.hallhead {
+  left: 0;
+  z-index: 3;
+  width: var(--hall-gutter);
+  min-width: var(--hall-gutter);
+  max-width: var(--hall-gutter);
+  vertical-align: middle;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  padding: 0.5rem 0.6rem;
+  border-right: 1px solid var(--line-strong);
+}
+table.tt.halls-merged th.hallhead .hall-name {
+  display: block;
+  font-size: 0.84rem;
+  line-height: 1.25;
+}
+/* How busy the room is, all week, in one line under its name — on a page
+   for finding a room, that is the answer before you read a single cell. */
+table.tt.halls-merged th.hallhead .hall-load {
+  display: block;
+  margin-top: 0.15rem;
+  font-family: var(--font-sans);
+  font-size: 0.68rem;
+  font-weight: 500;
+  color: var(--muted);
+}
+table.tt.halls-merged th.hallhead .hall-load.free { color: var(--ok); }
+table.tt.halls-merged th.hallhead .badge { margin: 0.2rem 0 0; }
+table.tt.halls-merged th.dayhead {
+  left: calc(var(--hall-gutter) + 1px);
+  z-index: 2;
+  width: var(--day-gutter);
+  min-width: var(--day-gutter);
   background: var(--surface);
   color: var(--muted);
-  font-size: 0.68rem;
-  font-weight: 600;
+  font-size: 0.74rem;
+  letter-spacing: 0.03em;
+  vertical-align: middle;
 }
-/* Repeated hall names fade after the first row of a block: the name is
-   there when you scroll into the middle of one, without five equally loud
-   copies of it competing down the column. */
-table.tt th.rowhead.cont .hall-name { opacity: 0.45; font-weight: 500; }
+table.tt.halls-merged thead th.corner-day { left: calc(var(--hall-gutter) + 1px); }
+/* Today, on a week view, is worth finding at a glance. */
+table.tt.halls-merged tr.today th.dayhead {
+  color: var(--accent);
+  font-weight: 700;
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+/* Alternate halls carry a faint band so a block reads as one thing, and a
+   rule marks where the next room starts. */
+table.tt.halls-merged tr.alt td:not(.extra),
+table.tt.halls-merged tr.alt th.dayhead,
+table.tt.halls-merged tr.alt th.hallhead {
+  background: color-mix(in srgb, var(--surface-2) 85%, var(--surface));
+}
+/* A day with nothing in it needs a line, not a cell: shrinking the empty
+   rows keeps a room's whole week in view and lets the busy ones stand out
+   by size alone. */
+table.tt.halls-merged tr.quiet td,
+table.tt.halls-merged tr.quiet th.dayhead {
+  height: 30px;
+  padding-top: 0.15rem;
+  padding-bottom: 0.15rem;
+}
+table.tt.halls-merged tr.quiet th.dayhead { opacity: 0.6; }
+table.tt.halls-merged tbody tr:hover td:not(.extra) { background: var(--surface-2); }
 table.tt tbody tr.group-start:not(:first-child) > th,
 table.tt tbody tr.group-start:not(:first-child) > td {
   border-top: 2px solid var(--line-strong);
+}
+/* A phone can't spare 14rem of gutter. */
+@media (max-width: 640px) {
+  table.tt.halls-merged { --hall-gutter: 7rem; --day-gutter: 3rem; }
+  table.tt.halls-merged th.hallhead .hall-load { display: none; }
 }
 .day-list .slotrow.extra { border-color: var(--accent); border-style: dashed; }
 
@@ -739,6 +796,29 @@ table.tt td.kbd-cursor { box-shadow: inset 0 0 0 2px var(--accent); }
   transition: border-color 140ms var(--ease), box-shadow 140ms var(--ease),
     transform 140ms var(--ease);
 }
+/* A card's own actions sit below a hairline, so the meetings above them
+   read as the content and these read as what you can do about it. The
+   destructive one keeps to the far right, away from the everyday ones. */
+.card .card-actions {
+  margin-top: 0.55rem;
+  padding-top: 0.55rem;
+  border-top: 1px solid var(--line);
+}
+.btn.quiet-danger { color: var(--alarm); border-color: var(--line); }
+.btn.quiet-danger:hover {
+  border-color: color-mix(in srgb, var(--alarm) 45%, var(--line));
+  background: color-mix(in srgb, var(--alarm) 8%, var(--surface));
+}
+/* Row actions are always available but never the loudest thing in a list:
+   they come up to full strength on hover or keyboard focus, and stay full
+   on touch, where there is no hover to reveal them. */
+ul.meetings .acts { opacity: 0.62; transition: opacity 120ms var(--ease); }
+ul.meetings li:hover .acts,
+ul.meetings li:focus-within .acts { opacity: 1; }
+@media (pointer: coarse) {
+  ul.meetings .acts { opacity: 1; }
+}
+
 .card:hover {
   border-color: var(--line-strong);
   box-shadow: var(--shadow-md);

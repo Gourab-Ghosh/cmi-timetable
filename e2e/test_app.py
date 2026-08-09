@@ -1903,22 +1903,21 @@ def t49_halls_day_selection(app):
         for t in app.css_all(tables)
     ]
     if weekday in (0, 6):
-        # Every day at once, and the all-days view is merged by default —
-        # so that is one table, headed for a hall and a day.
-        assert corners == ["Hall · day"], corners
+        # Every day at once — one table, whose first gutter is the hall.
+        assert corners == ["Hall"], corners
     else:
         assert len(corners) == 1, corners
         today = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday",
                  "Friday", "Saturday"][weekday]
         assert corners[0] == today, corners
 
-    # "All" shows every day — as ONE table, headed for a hall and a day.
+    # "All" shows every day — as ONE table, gutters for hall and day.
     _halls_all(app)
     corners = [
         t.find_element(By.CSS_SELECTOR, "th.corner").text
         for t in app.css_all(tables)
     ]
-    assert corners == ["Hall · day"], corners
+    assert corners == ["Hall"], corners
 
     # A chosen day survives a reload — the preference is stored, not guessed
     # afresh from the clock.
@@ -1969,21 +1968,30 @@ def t50_halls_all_days_one_table(app):
     tables = "section[aria-label='Lecture halls'] table.tt"
     _halls_all(app)
 
-    # Every day, and still a single table.
+    # Every day, and still a single table, with a gutter each for the hall
+    # and the day.
     assert len(app.css_all(tables)) == 1, "the all-days view is one table"
     table = app.css(tables)
-    assert table.find_element(By.CSS_SELECTOR, "th.corner").text == "Hall · day"
+    assert [c.text for c in table.find_elements(
+        By.CSS_SELECTOR, "th.corner")] == ["Hall", "Day"]
 
-    # Rows are hall × day, with each hall's days together and in order.
+    # A hall is NAMED ONCE, in a cell spanning its days; the days run down a
+    # gutter of their own, in order.
     days = [b.text for b in section.find_elements(
         By.XPATH, ".//div[@aria-label='Day']//button")][:-1]  # minus "All"
     rows = table.find_elements(By.CSS_SELECTOR, "tbody tr")
-    assert len(rows) % len(days) == 0 and len(rows) >= len(days), len(rows)
+    names = table.find_elements(By.CSS_SELECTOR, "tbody th.hallhead")
+    assert len(rows) == len(names) * len(days), (len(rows), len(names))
+    assert all(n.get_attribute("rowspan") == str(len(days)) for n in names), \
+        "each hall's name must span its days"
+    assert len({n.find_element(By.CSS_SELECTOR, ".hall-name").text
+                for n in names}) == len(names), "one name per hall, no repeats"
     first = rows[:len(days)]
-    assert [r.find_element(By.CSS_SELECTOR, "th .day-tag").text
+    assert [r.find_element(By.CSS_SELECTOR, "th.dayhead").text
             for r in first] == days
-    assert len({r.find_element(By.CSS_SELECTOR, "th .hall-name").text
-                for r in first}) == 1, "a hall's days must sit together"
+    assert len(first[0].find_elements(By.CSS_SELECTOR, "th.hallhead")) == 1
+    assert not first[1].find_elements(By.CSS_SELECTOR, "th.hallhead"), \
+        "only the first row of a hall's block carries its name"
 
     # A drop lands on the day of the ROW, not on some day the merge lost.
     src = "td[data-day='1'][data-hall='Lecture Hall 803'][data-slot='550']"
