@@ -85,6 +85,13 @@ rather than throw the form away) and a meeting added exactly where a moved
 CMI meeting used to be (two rows want the same official meeting; the added
 one used to vanish on save).
 
+`design-check-url.txt` holds the link to open when checking how the app
+LOOKS rather than what it does: eleven courses, several customised, so the
+grid is dense, the clash panel has something in it and "Your changes" shows
+most of its groups at once. `shoot.py` reads that file and captures it in
+light, dark and mobile (`00-*-design-link`). Use it — a two-course planner
+hides almost every spacing problem.
+
 The app ships no timetable data, so the suite derives a snapshot from
 `core/fixtures/` at startup (via core's `snapshot_json` example — cargo must
 be on PATH) and seeds it into localStorage before each test.

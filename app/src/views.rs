@@ -477,6 +477,80 @@ fn my_timetable(app: App) -> impl IntoView {
                 }
             }}
 
+            // Unscheduled tray. Directly under the grid on purpose: a
+            // course you have selected but that has no time yet is part of
+            // your timetable, and burying it below the clash and change
+            // panels made it look like a footnote — or made it easy to miss
+            // that you had picked something the grid could not show.
+            {move || {
+                let items = unscheduled();
+                (!items.is_empty())
+                    .then(|| {
+                        // Whose doing the missing time is decides the
+                        // wording: CMI hasn't scheduled its own course yet,
+                        // while one of YOUR courses is waiting for you.
+                        let mine = items.iter().filter(|c| app.is_custom(&c.code)).count();
+                        let note = if mine == items.len() {
+                            "your own courses, waiting for a time you set"
+                        } else if mine == 0 {
+                            "CMI lists these courses but hasn't put them on the timetable"
+                        } else {
+                            "waiting for a time"
+                        };
+                        view! {
+                            <div class="tray noprint">
+                                <h3>
+                                    // The name the rest of the app promises
+                                    // ("it's waiting in 'No fixed slot yet'").
+                                    "No fixed slot yet "
+                                    <span class="badge warn">{note}</span>
+                                </h3>
+                                <div class="items">
+                                    {items
+                                        .into_iter()
+                                        .map(|course| {
+                                            let code = course.code;
+                                            let give_code = code.clone();
+                                            view! {
+                                                <span style="display:inline-flex;align-items:center;gap:0.3rem">
+                                                    {chip(
+                                                        app,
+                                                        ChipProps {
+                                                            code,
+                                                            eff: None,
+                                                            show_hall: false,
+                                                            draggable: true,
+                                                            from_master: false,
+                                                            click: ChipClick::Details,
+                                                            sublabel: None,
+                                                            warn_wont_fit: false,
+                                                        },
+                                                    )}
+                                                    <button
+                                                        class="btn small"
+                                                        on:click=move |_| {
+                                                            app.dialog
+                                                                .set(
+                                                                    Some(Dialog::EditCourse {
+                                                                        code: Some(give_code.clone()),
+                                                                        prefill: None,
+                                                                        add_meeting: true,
+                                                                    }),
+                                                                );
+                                                        }
+                                                    >
+                                                        "Give it a time"
+                                                    </button>
+                                                </span>
+                                            }
+                                        })
+                                        .collect_view()}
+                                </div>
+                            </div>
+                        }
+                    })
+            }}
+
             // Print-only clash strip: a wall poster must shout about
             // overlaps at least as loudly as the screen does.
             {move || {
@@ -591,76 +665,6 @@ fn my_timetable(app: App) -> impl IntoView {
                                      version — every change is also undoable (Ctrl+Z)."
                                 </p>
                                 {overrides_list(app)}
-                            </div>
-                        }
-                    })
-            }}
-
-            // Unscheduled tray
-            {move || {
-                let items = unscheduled();
-                (!items.is_empty())
-                    .then(|| {
-                        // Whose doing the missing time is decides the
-                        // wording: CMI hasn't scheduled its own course yet,
-                        // while one of YOUR courses is waiting for you.
-                        let mine = items.iter().filter(|c| app.is_custom(&c.code)).count();
-                        let note = if mine == items.len() {
-                            "your own courses, waiting for a time you set"
-                        } else if mine == 0 {
-                            "CMI lists these courses but hasn't put them on the timetable"
-                        } else {
-                            "waiting for a time"
-                        };
-                        view! {
-                            <div class="tray noprint">
-                                <h3>
-                                    // The name the rest of the app promises
-                                    // ("it's waiting in 'No fixed slot yet'").
-                                    "No fixed slot yet "
-                                    <span class="badge warn">{note}</span>
-                                </h3>
-                                <div class="items">
-                                    {items
-                                        .into_iter()
-                                        .map(|course| {
-                                            let code = course.code;
-                                            let give_code = code.clone();
-                                            view! {
-                                                <span style="display:inline-flex;align-items:center;gap:0.3rem">
-                                                    {chip(
-                                                        app,
-                                                        ChipProps {
-                                                            code,
-                                                            eff: None,
-                                                            show_hall: false,
-                                                            draggable: true,
-                                                            from_master: false,
-                                                            click: ChipClick::Details,
-                                                            sublabel: None,
-                                                            warn_wont_fit: false,
-                                                        },
-                                                    )}
-                                                    <button
-                                                        class="btn small"
-                                                        on:click=move |_| {
-                                                            app.dialog
-                                                                .set(
-                                                                    Some(Dialog::EditCourse {
-                                                                        code: Some(give_code.clone()),
-                                                                        prefill: None,
-                                                                        add_meeting: true,
-                                                                    }),
-                                                                );
-                                                        }
-                                                    >
-                                                        "Give it a time"
-                                                    </button>
-                                                </span>
-                                            }
-                                        })
-                                        .collect_view()}
-                                </div>
                             </div>
                         }
                     })

@@ -949,23 +949,57 @@ ul.meetings .replaces { grid-column: 1 / -1; }
 }
 
 /* One group per kind of change, headed by the kind and how many there are:
-   twenty changes become four short lists you can pick from. */
-.change-group + .change-group { margin-top: 0.7rem; }
-.change-group h4 {
+   twenty changes become four short lists you can pick from.
+
+   The heading has to look like a heading. It used to be the same rounded
+   pill (.ck) the app uses for inline change tags, in muted grey at the same
+   size as everything around it — so it sat *in* the list instead of opening
+   it, and the groups ran together. What separates it now is everything a
+   heading normally has and a tag normally doesn't: a colour rail, upright
+   letter-spaced small caps, full-strength text colour, and a rule beneath
+   it that runs the width of the group. The count moves to the far end, so
+   the eye can also read the list as "3 moved, 1 removed" without stopping.
+
+   The rail colour says which DIRECTION the change goes, before any word is
+   read: violet for things you added, red for things you took away (the same
+   red the app uses for every destructive thing), blue for what you altered
+   in place. */
+.change-group { --cg: var(--accent); }
+.change-group[data-kind="added"] { --cg: var(--accent2); }
+.change-group[data-kind="gone"] { --cg: var(--alarm); }
+.change-group + .change-group { margin-top: 1.15rem; }
+.cg-head {
   display: flex;
   align-items: center;
-  gap: 0.4rem;
-  margin: 0;
-  font-size: 0.8rem;
-  font-weight: 600;
-  color: var(--muted);
-}
-.cg-count {
-  font-family: var(--font-mono);
+  gap: 0.45rem;
+  margin: 0 0 0.15rem;
+  /* A tinted band with the rail as its left edge. A heading you have to
+     look for is not doing its job, and a rule alone was still too close to
+     the rows: a band reads as "a new section starts here" at a glance, the
+     way a table's section header does. Kept at 8% so six of them down a
+     panel stay calm. */
+  padding: 0.3rem 0.55rem;
+  border-left: 3px solid var(--cg);
+  border-radius: 0 var(--r-sm) var(--r-sm) 0;
+  background: color-mix(in srgb, var(--cg) 8%, var(--surface-2));
   font-size: 0.72rem;
-  color: var(--muted);
-  background: var(--surface-2);
-  border: 1px solid var(--line);
+  font-weight: 800;
+  letter-spacing: 0.075em;
+  text-transform: uppercase;
+  color: var(--text);
+}
+/* Beside its own label, not stranded at the far edge of the panel: the
+   number belongs to the heading it counts. */
+.cg-title { min-width: 0; }
+.cg-count {
+  flex: none;
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0;
+  color: var(--cg);
+  background: color-mix(in srgb, var(--cg) 14%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--cg) 30%, transparent);
   border-radius: 999px;
   padding: 0 0.4rem;
 }
@@ -1202,7 +1236,12 @@ details.facet .menu .menu-empty { margin: 0.2rem 0 0; }
   border: 1px dashed var(--line-strong);
   border-radius: var(--r-md);
   padding: 0.65rem 0.8rem;
-  margin-top: 0.8rem;
+  /* Bottom margin as well as top: the tray sits directly under the grid
+     now, with the clash and change panels beneath it, and those carry
+     their own bottom margin only — so without this the tray and the panel
+     under it touch. Matches .panel's 0.9rem so the whole column has one
+     rhythm. */
+  margin: 0.8rem 0 0.9rem;
   background: var(--surface);
 }
 .tray .items { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.4rem; }

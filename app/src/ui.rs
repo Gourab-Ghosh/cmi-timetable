@@ -1899,6 +1899,21 @@ impl OwnChange {
             OwnChange::Credits => plural("Credits you set", "Credits you set"),
         }
     }
+
+    /// Which direction the change goes: it added something, took something
+    /// away, or altered something that is still there. Only the heading's
+    /// colour depends on this, so the three kinds of change can be told
+    /// apart before a word of the list is read — and "took something away"
+    /// gets the same red the app uses everywhere else for that.
+    fn tone(&self) -> &'static str {
+        match self {
+            OwnChange::CourseAdded | OwnChange::Added => "added",
+            OwnChange::CourseDeleted | OwnChange::Removed => "gone",
+            OwnChange::Time | OwnChange::Room | OwnChange::TimeAndRoom | OwnChange::Credits => {
+                "changed"
+            }
+        }
+    }
 }
 
 /// Everything of the user's together — courses they added or deleted,
@@ -2160,9 +2175,15 @@ pub fn overrides_list(app: App) -> impl IntoView {
                 .map(|(kind, list)| {
                     let n = list.len();
                     view! {
-                        <div class="change-group">
-                            <h4>
-                                {change_tag(&kind.label(n), true)}
+                        // A heading, not another tag: this used to be the
+                        // same little pill the rows themselves use, so it
+                        // read as one more label in the list rather than as
+                        // the thing that opens a group. It now gets a
+                        // heading's weight, a coloured rail, and a rule
+                        // under it that separates one group from the next.
+                        <div class="change-group" data-kind=kind.tone()>
+                            <h4 class="cg-head">
+                                <span class="cg-title">{kind.label(n)}</span>
                                 <span class="cg-count">{n.to_string()}</span>
                             </h4>
                             <ul class="changes">{list}</ul>

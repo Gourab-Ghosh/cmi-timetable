@@ -696,7 +696,10 @@ def t17_credit_override(app):
     # The 'Your changes' panel shows official → yours; removing it restores.
     app.open_tab("My timetable")
     panel = app.wait_css("[data-testid='your-changes']")
-    assert "Credits you set" in panel.text, panel.text
+    # Case-insensitive: the group heading is small caps via CSS, and
+    # .text returns painted text. The wording is the assertion, not the
+    # styling.
+    assert "credits you set" in panel.text.lower(), panel.text
     assert "4 (assumed) → 3" in panel.text, panel.text
     app.xpath("//button[contains(.,'1 change')]")  # toolbar pill
     panel.find_element(
@@ -1286,7 +1289,7 @@ def t35_remove_meeting(app):
         "removal must survive a reload"
     app.xpath("//button[contains(.,'change')]").click()
     dialog_text = app.wait_css(".dialog").text
-    assert "Meeting you removed" in dialog_text, dialog_text[:300]
+    assert "meeting you removed" in dialog_text.lower(), dialog_text[:300]
     assert "Tue 09:10" in dialog_text, dialog_text[:300]
     app.xpath("//div[@class='dialog']//button[normalize-space()='Restore']").click()
     app.wait_toast("TOC back on CMI's time")
@@ -1645,7 +1648,7 @@ def t41_custom_course_edit_park_share_delete(app):
     # is listed with everything else you changed.
     app.xpath("//button[contains(.,'1 change')]").click()
     dialog = app.wait_css(".dialog")
-    assert "Course you added" in dialog.text, dialog.text
+    assert "course you added" in dialog.text.lower(), dialog.text
     assert "GYM" in dialog.text, dialog.text
     app.xpath("//div[@class='dialog']//button[normalize-space()='Close']").click()
     app.wait_gone(".dialog")
@@ -2202,10 +2205,18 @@ def t51_changes_are_grouped_by_what_they_did(app):
     panel = app.wait_css("[data-testid='your-changes']")
 
     # One group per kind, in a fixed order, each headed by kind and count.
-    heads = [h.text for h in panel.find_elements(
-        By.CSS_SELECTOR, ".change-group h4 .ck")]
+    # textContent, not .text: the heading is small caps via text-transform,
+    # and .text would return what is painted (upper case) rather than the
+    # label the app actually wrote.
+    heads = [h.get_attribute("textContent") for h in panel.find_elements(
+        By.CSS_SELECTOR, ".change-group h4 .cg-title")]
     assert heads == ["Moved to another time", "Moved to another room",
                      "Meeting you removed", "Credits you set"], heads
+    # Each heading is coloured by what the change does, so the three kinds
+    # are told apart before the list is read.
+    tones = [g.get_attribute("data-kind") for g in panel.find_elements(
+        By.CSS_SELECTOR, ".change-group")]
+    assert tones == ["changed", "changed", "gone", "changed"], tones
     counts = [c.text for c in panel.find_elements(
         By.CSS_SELECTOR, ".change-group .cg-count")]
     assert counts == ["1", "1", "1", "1"], counts
@@ -2294,7 +2305,7 @@ def t53_delete_a_cmi_course(app):
         "the deletion must survive a reload"
     app.xpath("//button[contains(.,'change')]").click()
     dialog = app.wait_css(".dialog")
-    assert "Course you deleted" in dialog.text, dialog.text
+    assert "course you deleted" in dialog.text.lower(), dialog.text
     dialog.find_element(
         By.XPATH, ".//li[contains(.,'TOC')]//button[normalize-space()='Restore']"
     ).click()

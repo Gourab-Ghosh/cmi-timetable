@@ -10,7 +10,8 @@ multi-clash sheet — into e2e/shots/ (gitignored).
 
 Environment knobs: DIST_DIR, CHROME_BIN, PORT, CARGO_TARGET_DIR (for the
 seed generator; defaults to ~/.rust-target-e2e). Like the e2e tests, the
-browser blackholes all non-localhost DNS — nothing touches the network.
+browser blackholes all non-localhost DNS — nothing touches the network, so
+the app is always in its "CMI unreachable" state and runs on the seed.
 """
 import base64
 import http.server
@@ -46,9 +47,9 @@ gen = subprocess.run(
     ],
     capture_output=True, text=True, cwd=REPO, env=env, check=True,
 )
-SNAPSHOT = json.loads(gen.stdout)["snapshot"]
+SNAPSHOT = json.loads(gen.stdout)
 SNAPSHOT["fetched_at"] = time.time() * 1000.0
-SNAPSHOT["source"] = "Mirror"
+SNAPSHOT["source"] = "Direct"
 SNAPSHOT_JSON = json.dumps(SNAPSHOT)
 
 
@@ -62,23 +63,6 @@ srv = http.server.ThreadingHTTPServer(
 )
 threading.Thread(target=srv.serve_forever, daemon=True).start()
 
-
-class NoData(Quiet):
-    """404 the mirror files so true first-run states are capturable —
-    same-origin /data always succeeds otherwise (DNS blackhole excludes
-    127.0.0.1)."""
-    def send_head(self):
-        if self.path.startswith("/data/"):
-            self.send_error(404)
-            return None
-        return super().send_head()
-
-
-NODATA_PORT = PORT + 1
-srv2 = http.server.ThreadingHTTPServer(
-    ("127.0.0.1", NODATA_PORT), lambda *a, **k: NoData(*a, directory=DIST, **k)
-)
-threading.Thread(target=srv2.serve_forever, daemon=True).start()
 
 opts = Options()
 opts.binary_location = CHROME_BIN
@@ -154,6 +138,32 @@ def shot(name):
     print("shot", name)
 
 
+# The design-check link: a real, busy planner the user keeps for exactly this
+# purpose (see design-check-url.txt). A two-course timetable hides most
+# spacing and hierarchy problems; this one does not.
+DESIGN_QUERY = next(
+    line.strip() for line in open(
+        os.path.join(HERE, "design-check-url.txt"), encoding="utf-8")
+    if line.strip() and not line.startswith("#")
+)
+
+
+def boot_design_link(theme):
+    """Open the design-check link the way a student receives it: nothing in
+    storage but the snapshot, everything else carried by the URL."""
+    d.get(f"http://127.0.0.1:{PORT}/e2e-blank")
+    d.execute_script(
+        "localStorage.clear();"
+        "localStorage.setItem('cmitt.v1.prefs', arguments[0]);"
+        "localStorage.setItem('cmitt.v1.snapshot', arguments[1]);",
+        json.dumps({"theme": theme, "last_update_attempt": time.time() * 1000.0}),
+        SNAPSHOT_JSON,
+    )
+    d.get(f"http://127.0.0.1:{PORT}/?{DESIGN_QUERY}")
+    wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, ".header h1")))
+    time.sleep(1.1)
+
+
 def print_pdf(name):
     pdf = d.execute_cdp_cmd(
         "Page.printToPDF",
@@ -197,6 +207,18 @@ shot("06b-light-catalog-filterchips")
 
 boot("Dark", "MyCourses")
 shot("07-dark-my-courses")
+
+# The design-check link: eleven courses, several customised — a dense
+# timetable, a clash panel with something in it, and Your changes showing
+# most of its groups at once.
+boot_design_link("Light")
+shot("00-light-design-link")
+boot_design_link("Dark")
+shot("00-dark-design-link")
+d.set_window_size(390, 900)
+boot_design_link("Light")
+shot("00-mobile-design-link")
+d.set_window_size(1440, 900)
 
 # Halls on Wednesday: the SVA override lands in Seminar Hall 17:00 (arrival).
 boot("Light", "Halls", prefs_extra={"halls_view": {"Day": "Wed"}})
@@ -267,12 +289,12 @@ shot("11-light-my-data-dialog")
 boot("Light", "MyCourses")
 shot("07b-light-my-courses")
 
-# First-run welcome: served WITHOUT /data so the mirror tier fails too and
-# the real hero card renders (all other hosts are blackholed already).
-boot("Light", "MyTimetable", seed=False, port=NODATA_PORT)
+# First-run welcome: with every host blackholed there is no route to CMI at
+# all, which is exactly the state the hero card is for.
+boot("Light", "MyTimetable", seed=False)
 time.sleep(2.5)
 shot("12-light-welcome")
-boot("Dark", "MyTimetable", seed=False, port=NODATA_PORT)
+boot("Dark", "MyTimetable", seed=False)
 time.sleep(2.5)
 shot("13-dark-welcome")
 
@@ -495,7 +517,7 @@ add.click()
 time.sleep(0.4)
 shot("24-mobile-custom-form")
 d.find_element(By.XPATH, "//button[normalize-space()='Cancel']").click()
-boot("Light", "MyTimetable", seed=False, port=NODATA_PORT)
+boot("Light", "MyTimetable", seed=False)
 time.sleep(2.5)
 shot("17-mobile-welcome")
 d.set_window_size(1440, 900)
@@ -520,4 +542,3 @@ print_pdf("print-clash.pdf")
 
 d.quit()
 srv.shutdown()
-srv2.shutdown()

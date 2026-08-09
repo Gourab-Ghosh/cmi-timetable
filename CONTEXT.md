@@ -494,6 +494,22 @@ and no committed mirror (fixtures exist only for tests/e2e seed).
   bare `now_ms()` from render code, that freezes the label until an
   unrelated re-render. Header mounts once (outside the route switch), so
   the forgotten handles are page-lifetime, not leaks-per-mount.
+- **Vertical rhythm in the My-timetable column is carried by BOTTOM margins**
+  (`.panel { margin-bottom: 0.9rem }`). Anything inserted into that column
+  needs its own bottom margin or it will touch the block beneath it. This
+  bit `.tray` in R33: it had `margin-top` only, which was invisible while it
+  was the last element and became a collision the moment it moved above the
+  panels. `qa_shots.py`-style gap measurement (walk
+  `section[aria-label='My timetable']`'s children and diff
+  `getBoundingClientRect()` tops/bottoms) catches this in one run — a
+  screenshot alone does not, because a 0 px gap still looks like a border.
+- **A group heading must not reuse `.ck`.** That class is the inline change
+  TAG used inside rows and dialogs; styling a heading with it made the
+  "Your changes" groups read as more list content (R33). Group headings are
+  `.cg-head` — colour rail, small caps, count pill — and their colour comes
+  from `OwnChange::tone()`: violet added, red taken away, blue altered.
+  Because they are `text-transform: uppercase`, Selenium's `.text` returns
+  UPPER CASE; assert with `.lower()` or read `textContent`.
 - e2e Chrome flags: `--force-prefers-reduced-motion` (dialog animations),
   `--host-resolver-rules=MAP www.cmi.ac.in 127.0.0.1:$CMI_PORT, MAP *
   ~NOTFOUND, EXCLUDE 127.0.0.1` and `--ignore-certificate-errors`. Nothing
@@ -531,6 +547,15 @@ cd e2e && .venv/bin/python shoot.py
 ./deploy.sh            # or --skip-tests
 ```
 
+**Checking how it LOOKS: always open the design-check link once.** The query
+lives in `e2e/design-check-url.txt` (user-supplied, R33) — eleven courses
+with several customised, so the grid is dense, the clash panel has content
+and "Your changes" shows most of its groups at once. Append it to the dev
+server: `http://127.0.0.1:8080/?<the line in that file>`. `shoot.py` reads
+the same file and shoots it light/dark/mobile as `00-*-design-link`. A
+two-course planner hides nearly every spacing and hierarchy problem, which
+is how the tray/panel collision in R33 reached the user.
+
 Dev server: background task `trunk serve --release` at
 `http://127.0.0.1:8080/` (auto-rebuilds ~30 s after source changes).
 The e2e venv (`e2e/.venv`, selenium only) serves both scripts.
@@ -539,6 +564,11 @@ regenerates the .ics golden.
 
 ## 6. Current state
 
+- My-timetable column order (R33): grid → **"No fixed slot yet" tray** →
+  clashes → Your changes → print-only legend. The tray used to be last; a
+  selected course with no time is part of the timetable, not a footnote.
+- "Your changes" groups are headed by `.cg-head` (colour rail + small caps
+  + count), coloured by `OwnChange::tone()`. See §4.
 - Tests: 94 native + 61/61 e2e green. Meeting removals: `MeetingOverride.to`
   is `Option<Meeting>` (None = removed; legacy JSON/share payloads still
   load — present meeting ⇒ Some). Out-of-grid times: **all three tables grow
@@ -1433,6 +1463,64 @@ produces a `dist` with no `data/` directory at all.
 Not done, on the user's explicit instruction: git history still contains the
 files in older commits. The live site still serves them until the next
 deploy, since `gh-pages` is only replaced when `deploy.sh` runs.
+
+### R33 — "the group headings don't look like headings", "keep the unscheduled courses next to the timetable", "no margin below No fixed slot yet", "make it look extremely good"
+
+Four messages, one round, all UI.
+
+**1. The "Your changes" group headings.** The complaint was exact: they did
+not read as headings. The cause was that each one WAS an inline change tag —
+`change_tag()` renders `.ck`, the same small grey pill the app uses for
+labels inside rows and dialogs — so a heading and a piece of list content
+were the same object. The groups ran together and nothing said where one
+ended.
+
+Replaced with a real heading, `.cg-head`: a 3 px colour rail down the left,
+the label in letter-spaced small caps at full text colour, the count in a
+pill beside its own label (it used to be pushed to the far right, where it
+belonged to nothing), and a tinted band across the group's width so the
+break is visible before anything is read. The band is 8 % tint so six of
+them down a panel stay calm.
+
+The rail colour comes from a new `OwnChange::tone()`: **violet** for what
+you added, **red** for what you took away — the same red the app uses for
+every destructive thing — **blue** for what you altered in place. So the
+list can be read as shape before it is read as text.
+
+Two knock-on effects worth knowing: `.ck` is no longer used for headings
+anywhere, and because `.cg-head` is `text-transform: uppercase`, Selenium's
+`.text` now returns UPPER CASE. Four assertions were comparing against
+sentence case and started failing; they compare with `.lower()` now, so they
+pin the wording and not the styling. (The fifth, t51, reads `textContent`.)
+
+**2. The unscheduled tray moved up** to sit directly under the grid, ahead
+of the clash and change panels. A course you picked that CMI hasn't given a
+time is part of your timetable; below two panels it looked like a footnote.
+
+**3. The margin bug the user found.** Moving the tray exposed that `.tray`
+had `margin-top` only — invisible while it was the last element, a collision
+the moment anything followed it. The column's rhythm is carried by BOTTOM
+margins (`.panel { margin-bottom: 0.9rem }`), so the tray now matches. Noted
+as an invariant in §4, because anything else inserted into that column will
+hit the same thing.
+
+**4. "Make sure it looks extremely good"** — so the check stopped being one
+screenshot. A QA sweep measured the actual pixel gap between every pair of
+adjacent blocks in the column across all seven states (plain / tray / tray +
+changes / clashes + tray + changes / deleted-only / phone / dialog) in both
+themes: a 0 px gap still LOOKS like a border in a screenshot, so it has to
+be measured, not eyeballed. All gaps 14–15 px.
+
+The user also supplied a share link they want used for design checks and
+asked that it be kept somewhere reachable. It is now
+`e2e/design-check-url.txt`, and `shoot.py` reads that file and captures it
+light/dark/mobile as `00-*-design-link`. It is a far better test load than
+the default two-course planner: eleven courses, seven change groups, four
+clashes, five courses in the tray — the states where spacing actually
+fails. This round's bug would have been visible on it immediately.
+
+Verification: **94 native + 61/61 e2e**, fmt and clippy clean, design
+screenshots regenerated and read.
 
 ## 8. Open bugs — found, confirmed, NOT fixed (do not delete)
 
