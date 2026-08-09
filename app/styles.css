@@ -1048,6 +1048,10 @@ details.facet .menu .menu-empty { margin: 0.2rem 0 0; }
   max-height: min(85vh, 720px);
   max-height: min(85dvh, 720px);
   overflow: auto;
+  /* The sticky actions bar floats over the content, so anything scrolled
+     to (focus, scrollIntoView) must stop clear of it — otherwise the last
+     control lands underneath and can't be tapped. */
+  scroll-padding-bottom: 5.5rem;
   padding: 1.15rem 1.3rem;
   animation: dialog-in 160ms var(--ease);
 }
@@ -1063,11 +1067,13 @@ details.facet .menu .menu-empty { margin: 0.2rem 0 0; }
   margin-top: 1rem;
   padding-top: 0.85rem;
   border-top: 1px solid var(--line);
-  /* Long forms scroll; the buttons don't leave. */
+  /* Long forms scroll; the buttons don't leave. The shadow makes content
+     read as sliding UNDER the bar instead of colliding with it. */
   position: sticky;
   bottom: 0;
   background: var(--surface);
   padding-bottom: 0.15rem;
+  box-shadow: 0 -10px 14px -10px rgb(0 0 0 / 0.18);
   flex-wrap: wrap;
 }
 .dialog .fieldrow { display: flex; gap: 0.6rem; flex-wrap: wrap; margin: 0.5rem 0; align-items: center; }
@@ -1373,6 +1379,17 @@ pre.devpre {
 /* The create/edit form. */
 .custom-form .form-lede { margin: -0.4rem 0 0.8rem; }
 .custom-form .fieldrow { flex-wrap: wrap; }
+/* Phones: labels take their own line so every control starts at the same
+   left edge. Without this, rows whose input happens to fit stay inline
+   while wider ones wrap, and the form reads as ragged. Controls keep
+   flowing in a row, so paired inputs (18:00 – 19:15) stay side by side. */
+@media (max-width: 560px) {
+  .dialog .fieldrow > label:first-child,
+  .dialog .fieldrow > .fieldlabel:first-child {
+    flex-basis: 100%;
+    min-width: 0;
+  }
+}
 .custom-form .code-input {
   font-family: var(--font-mono);
   text-transform: uppercase;

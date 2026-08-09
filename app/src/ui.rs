@@ -2441,7 +2441,15 @@ fn custom_course_dialog(
     prefill: Option<String>,
 ) -> impl IntoView {
     let editing = edit.clone();
-    let existing = edit.as_deref().and_then(|c| app.custom_course(c));
+    // Every read in this builder is UNTRACKED on purpose. DialogHost builds
+    // the body inside its own reactive closure, so a tracked read here
+    // subscribes the whole dialog: a background sync landing (or an Undo
+    // toast click) would rebuild the form and silently throw away
+    // everything typed so far. Live bits — the shadow note below — are
+    // rendered through their own closures instead.
+    let existing = edit
+        .as_deref()
+        .and_then(|c| app.customs.with_untracked(|cs| cs.get(c).cloned()));
     let slots = app.snapshot.with_untracked(|s| s.slot_grid.clone());
     let halls = app.snapshot.with_untracked(|s| s.halls.clone());
     let first_slot = slots.first().copied();
@@ -2549,10 +2557,15 @@ fn custom_course_dialog(
     } else {
         "Add your own course".to_string()
     };
-    let shadows = editing
-        .as_deref()
-        .map(|c| app.custom_shadows_official(c))
-        .unwrap_or(false);
+    // Its own closure, so the note can appear the moment a sync introduces
+    // the code — without rebuilding the form around it.
+    let shadows = {
+        let code = editing.clone();
+        move || {
+            code.as_deref()
+                .is_some_and(|c| app.custom_shadows_official(c))
+        }
+    };
 
     let add_row = move |_| {
         let key = next_key();
@@ -2667,33 +2680,38 @@ fn custom_course_dialog(
                      anything CMI's pages don't list."
                 }}
             </p>
-            {shadows
-                .then(|| {
-                    let switch_code = editing.clone().unwrap_or_default();
-                    view! {
-                        <div class="shadow-note" role="note">
-                            <p>
-                                "CMI's timetable now lists a course with this code too. \
-                                 You're seeing your own version."
-                            </p>
-                            <button
-                                class="btn small"
-                                on:click=move |_| {
-                                    app.delete_custom_course(&switch_code, true);
-                                    app.dialog.set(None);
-                                }
-                            >
-                                "Use CMI's version instead"
-                            </button>
-                        </div>
-                    }
-                })}
+            {
+                let switch_code = editing.clone().unwrap_or_default();
+                move || {
+                    let switch_code = switch_code.clone();
+                    shadows()
+                        .then(|| {
+                            view! {
+                                <div class="shadow-note" role="note">
+                                    <p>
+                                        "CMI's timetable now lists a course with this code \
+                                         too. You're seeing your own version."
+                                    </p>
+                                    <button
+                                        class="btn small"
+                                        on:click=move |_| {
+                                            app.delete_custom_course(&switch_code, true);
+                                            app.dialog.set(None);
+                                        }
+                                    >
+                                        "Use CMI's version instead"
+                                    </button>
+                                </div>
+                            }
+                        })
+                }
+            }
             <div class="fieldrow">
                 <label for="cc-name">"Name"</label>
                 <input
                     id="cc-name"
                     type="text"
-                    placeholder="German A1, Algebra reading group…"
+                    placeholder="e.g. German A1"
                     prop:value=name.get_untracked()
                     on:input=move |ev| {
                         name.set(event_target_value(&ev));
@@ -2919,14 +2937,16 @@ fn custom_course_dialog(
                                 >
                                     "✕"
                                 </button>
-                                {move || {
-                                    let text = clash.get();
-                                    view! {
-                                        <p class="clash-note" aria-live="polite">
-                                            {(!text.is_empty()).then(|| format!("⚠ {text}"))}
-                                        </p>
-                                    }
-                                }}
+                                // The live region itself must persist — a
+                                // screen reader announces changes INSIDE
+                                // one, not the arrival of a new node — so
+                                // only the text is reactive.
+                                <p class="clash-note" aria-live="polite">
+                                    {move || {
+                                        let text = clash.get();
+                                        (!text.is_empty()).then(|| format!("⚠ {text}"))
+                                    }}
+                                </p>
                             </div>
                         }
                     }
@@ -2954,14 +2974,12 @@ fn custom_course_dialog(
                     .collect_view()}
             </datalist>
 
-            {move || {
-                let e = error.get();
-                view! {
-                    <p class="form-error" aria-live="polite">
-                        {(!e.is_empty()).then_some(e)}
-                    </p>
-                }
-            }}
+            <p class="form-error" aria-live="polite">
+                {move || {
+                    let e = error.get();
+                    (!e.is_empty()).then_some(e)
+                }}
+            </p>
             <div class="actions">
                 {editing
                     .clone()

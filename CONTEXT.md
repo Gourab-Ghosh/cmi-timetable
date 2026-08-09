@@ -44,7 +44,7 @@ and no committed mirror (fixtures exist only for tests/e2e seed).
         welcome()), dnd.rs (pointer+keyboard drag), storage.rs, dev.rs,
         domx.rs; styles.css = whole design system (tokens, light+dark).
 /sync   native mirror publisher (CI cron writes app/public/data/).
-/e2e    test_app.py — 42 Selenium tests, self-seeding (see §5); shoot.py —
+/e2e    test_app.py — 43 Selenium tests, self-seeding (see §5); shoot.py —
         design-review screenshots + print PDFs.
 /githooks  pre-push — builds+publishes via deploy.sh when main is pushed
         (activate per clone: `git config core.hooksPath githooks`; skip
@@ -121,7 +121,13 @@ and no committed mirror (fixtures exist only for tests/e2e seed).
   `.grid-scroll` owns the gap under every grid (`.panel` has no margin-top,
   so without it the clashes/changes panels sit flush against the table).
   `.dialog .actions` is sticky (long forms) and `.dialog` sizes with `dvh`
-  (phone keyboards don't shrink the layout viewport).
+  (phone keyboards don't shrink the layout viewport); because that bar
+  floats over the content, `.dialog` also sets `scroll-padding-bottom` —
+  without it the last control scrolls to a position UNDER the bar and
+  can't be tapped. Below 560px, `.fieldrow` labels take their own line so
+  every control starts at the same left edge (mixed wrapping read as
+  ragged), while controls still flow in a row so paired time inputs stay
+  side by side.
 - Toast auto-dismiss pauses while hovered/focused (`HOVERED_TOASTS`
   thread_local, deliberately NOT a signal).
 - **Custom (user-created) courses** reuse `Course` wholesale in a
@@ -160,7 +166,7 @@ and no committed mirror (fixtures exist only for tests/e2e seed).
 CARGO_TARGET_DIR=~/.rust-target-e2e cargo test --workspace --features html
 # app build for e2e (never plain dist while trunk serve runs)
 cd app && CARGO_TARGET_DIR=~/.rust-target-e2e trunk build --release --dist dist-e2e
-# e2e (42 tests; self-generates seed via core example, needs cargo on PATH)
+# e2e (43 tests; self-generates seed via core example, needs cargo on PATH)
 cd e2e && DIST_DIR=../app/dist-e2e .venv/bin/python test_app.py
 # screenshots + print PDFs for design review (writes e2e/shots/, gitignored)
 cd e2e && .venv/bin/python shoot.py
@@ -176,7 +182,7 @@ regenerates the .ics golden.
 
 ## 6. Current state
 
-- Tests: 66 native + 42/42 e2e green. Meeting removals: `MeetingOverride.to`
+- Tests: 66 native + 43/43 e2e green. Meeting removals: `MeetingOverride.to`
   is `Option<Meeting>` (None = removed; legacy JSON/share payloads still
   load — present meeting ⇒ Some). Out-of-grid times: `display_slot_grid()`
   (views.rs) = official slots + synthetic `.extra` columns; `column_for`
@@ -541,4 +547,30 @@ regenerates the .ics golden.
   catalog rows (now a Memo — t42 pins the live refresh), the
   keep_selected casing mismatch, and the credits editor citing a "CMI
   value" for a course CMI never had. 66 native + 42/42 e2e; shots 18–26 +
-  24-mobile. Committed locally, NOT pushed.
+  24-mobile. Committed locally as 01d10f8, NOT pushed.
+- **R18b (finishing the agents that died mid-review):** user asked whether
+  the session-limit casualties' work was ever done. Audit of every
+  workflow journal (started-vs-result per agent): R14/R15/R16 rounds were
+  already consumed; the local-deploy review's survivors are all
+  implemented in deploy.sh (staleness guard + `--allow-stale`, rootless
+  chown trap, `set -euo` before `rustup target add`, per-OS/arch trunk
+  cache, `commit-tree` publish — its CI findings are moot, there are no
+  workflows); the privacy audit re-run by hand found no secrets, emails or
+  machine paths in tracked files. Genuinely outstanding were 4 findings
+  from this round's review and the whole design critique. Fixed: the
+  custom-course dialog did TRACKED reads (`custom_course`,
+  `custom_shadows_official`) inside DialogHost's closure, so a background
+  sync or an Undo-toast click rebuilt the form and threw away everything
+  typed — builder is now fully untracked, the shadow note lives in its own
+  closure (t43 pins it); the two aria-live regions were re-created per
+  change instead of updated (screen readers announce changes INSIDE a live
+  region, not a new node); t41's "no override" assertion was vacuous (the
+  form path structurally cannot create one) — it now moves the meeting
+  through the per-meeting Edit dialog, i.e. `apply_override`'s custom
+  branch, and checks the definition itself moved. Design critique done by
+  hand from the shots: mobile `.fieldrow` wrapping was ragged (labels now
+  take their own line under 560px), the sticky action bar could cover the
+  last control and make it untappable (`scroll-padding-bottom`), it now
+  casts a soft shadow so content reads as sliding under it, and the Name
+  placeholder no longer overflows on phones. 66 native + 43/43 e2e.
+  Committed locally, NOT pushed.

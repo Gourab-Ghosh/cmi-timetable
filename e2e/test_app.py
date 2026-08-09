@@ -1452,8 +1452,7 @@ def t41_custom_course_edit_park_share_delete(app):
     pills = [p.text for p in app.css_all(".credit-summary .cs-pill")]
     assert "1 course at 0 credits" in pills, pills
 
-    # Edit: Wednesday → Friday. The chip follows; nothing lands in the
-    # overrides list (the definition IS the schedule).
+    # Edit the course itself: Wednesday → Friday. The chip follows.
     app.xpath("//button[normalize-space()='Edit course']").click()
     app.wait_css(".dialog .custom-form")
     app.css("#cc-day-0 option[value='4']").click()
@@ -1461,9 +1460,37 @@ def t41_custom_course_edit_park_share_delete(app):
     app.wait_gone(".dialog")
     app.open_tab("My timetable")
     app.wait_css("td[data-day='4'][data-slot='550'] button.chip[aria-label^='GYM,']")
+
+    # Now move the meeting the OTHER way — the per-meeting edit dialog,
+    # which goes through apply_override. For a custom course that must
+    # rewrite the definition itself, so no "✎ N changes" appears. (Editing
+    # via the course form can't create an override by construction; this
+    # path can, which is what makes the assertion mean something.)
+    app.open_tab("My courses")
+    gym_row = app.xpath(
+        "//section[@aria-label='My courses']//div[contains(@class,'card')]"
+        "[.//button[starts-with(@aria-label,'GYM,')]]//ul[@class='meetings']/li"
+    )
+    gym_row.find_element(By.XPATH, ".//button[normalize-space()='Edit']").click()
+    app.wait_css("#em-day")
+    app.css("#em-day option[value='3']").click()   # Friday → Thursday
+    app.xpath("//button[normalize-space()='Save']").click()
+    app.wait_gone(".dialog")
+    app.open_tab("My timetable")
+    app.wait_css("td[data-day='3'][data-slot='550'] button.chip[aria-label^='GYM,']")
+    assert not app.chips("GYM", "td[data-day='4'][data-slot='550']"), \
+        "the old cell must be empty — the definition moved, not a copy"
     assert not app.d.find_elements(
         By.XPATH, "//button[contains(., '✎') and contains(., 'change')]"
     ), "moving a custom course's meeting must not create an override"
+    # And the course form now shows the moved time (one source of truth).
+    app.open_tab("My courses")
+    app.xpath("//button[normalize-space()='Edit course']").click()
+    app.wait_css(".dialog .custom-form")
+    assert app.css("#cc-day-0").get_attribute("value") == "3", \
+        app.css("#cc-day-0").get_attribute("value")
+    app.xpath("//button[normalize-space()='Cancel']").click()
+    app.wait_gone(".dialog")
 
     # The full share link reproduces the course on a fresh browser.
     app.xpath("//button[normalize-space()='Share']").click()
@@ -1473,7 +1500,8 @@ def t41_custom_course_edit_park_share_delete(app):
         "input[aria-label='Share link including custom times']"
     ).get_attribute("value")
     app.boot("/?" + url.split("?", 1)[1])
-    app.wait_css("td[data-day='4'][data-slot='550'] button.chip[aria-label^='GYM,']")
+    # Thursday: the definition the per-meeting edit wrote, not the form's.
+    app.wait_css("td[data-day='3'][data-slot='550'] button.chip[aria-label^='GYM,']")
     app.open_tab("My courses")
     app.wait_css("section[aria-label='My courses'] .badge.custom")
 
@@ -1561,6 +1589,41 @@ def t42_custom_course_shadowed_by_cmi(app):
     assert not app.css_all("section[aria-label='My courses'] .badge.custom")
 
 
+def t43_custom_form_survives_a_sync(app):
+    """A sync landing while the create/edit form is open must not rebuild
+    it: the dialog is constructed inside DialogHost's reactive closure, so
+    every read in its builder is untracked and typed-but-unsaved input
+    stays put. The live shadow note is the one exception (own closure)."""
+    write_fake_mirror()
+    try:
+        app.boot("/", selection=["TOC"])
+        app.open_tab("My courses")
+        app.wait_css(".add-own-card").click()
+        app.wait_css(".dialog .custom-form")
+        app.css("#cc-name").send_keys("Half-typed seminar")
+        app.css("#cc-add-meeting").click()
+        app.wait_css(".custom-form .meeting-draft")
+
+        # Sync from behind the modal overlay, the way the background
+        # 12-hour re-check would land on its own.
+        sync = app.xpath("//button[normalize-space()='Sync now']")
+        app.d.execute_script("arguments[0].click();", sync)
+        WebDriverWait(app.d, 30).until(
+            lambda d: "Synced" in app.css(".sync-pill").text,
+            message=f"sync should finish; pill: {app.css('.sync-pill').text!r}",
+        )
+
+        app.css(".dialog .custom-form")  # still open
+        assert app.css("#cc-name").get_attribute("value") == "Half-typed seminar", \
+            app.css("#cc-name").get_attribute("value")
+        assert app.css("#cc-code").get_attribute("value") == "HALFTYPE", \
+            app.css("#cc-code").get_attribute("value")
+        assert len(app.css_all(".custom-form .meeting-draft")) == 1, \
+            "the meeting row the user added must survive the sync"
+    finally:
+        remove_fake_mirror()
+
+
 TESTS = [
     t01_header_sync_button_and_hidden_dev,
     t02_developer_endpoint_only,
@@ -1604,6 +1667,7 @@ TESTS = [
     t40_custom_course_create,
     t41_custom_course_edit_park_share_delete,
     t42_custom_course_shadowed_by_cmi,
+    t43_custom_form_survives_a_sync,
 ]
 
 

@@ -23,7 +23,7 @@ Environment knobs: `CHROME_BIN` (default `/usr/bin/chromium`), `DIST_DIR`,
 `PORT`, `CARGO_TARGET_DIR` (for the seed generator; defaults to
 `~/.rust-target-e2e`).
 
-Covered flows (41 tests): Sync-now header + hidden developer mode (URL
+Covered flows (43 tests): Sync-now header + hidden developer mode (URL
 endpoint only), `?c=` selection + clash badges/panel (any casing), unknown-
 code warning, credits defaulting to 4 and per-course credit overwrites,
 master-grid ⚠ would-clash markers and clash toast on add, the ⓘ details
@@ -61,8 +61,10 @@ create form (auto-suggested code, segmented credits, official-slot and
 custom-time meeting rows, live clash line), grid chips including a
 synthetic out-of-grid column, editing the definition in place with no
 override bookkeeping, parking off the timetable instead of deleting,
-share links carrying full definitions to a fresh browser, and delete as
-one undoable step.
+share links carrying full definitions to a fresh browser, delete as one
+undoable step, a course whose code a later CMI sync also introduces (your
+version keeps winning, the catalog chip refreshes live when you switch to
+CMI's), and the create form surviving a sync that lands mid-typing.
 
 The app ships no timetable data, so the suite derives a snapshot from
 `core/fixtures/` at startup (via core's `snapshot_json` example — cargo must
