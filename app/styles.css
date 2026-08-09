@@ -617,6 +617,14 @@ table.tt thead th.extra {
   box-shadow: inset 0 -2px 0 var(--accent);
 }
 table.tt td.extra { background: var(--accent-wash); }
+/* Halls the user invented (a room CMI's allocation page never lists). Same
+   idea as an extra column, one row down: violet, the app's "this is yours"
+   colour, so the official allocation still reads as CMI's. */
+table.tt tr.own-hall th.rowhead {
+  background: var(--accent2-wash);
+  box-shadow: inset 2px 0 0 var(--accent2);
+}
+table.tt tr.own-hall th.rowhead .badge { margin-left: 0.4rem; }
 .day-list .slotrow.extra { border-color: var(--accent); border-style: dashed; }
 
 table.tt th.rowhead {

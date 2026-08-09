@@ -311,6 +311,18 @@ d.find_element(By.XPATH, "//button[normalize-space()='Cancel']").click()
 boot("Light", "MyTimetable", selection=CUSTOM_SEL, customs=CUSTOMS)
 shot("23-light-tt-custom-panels")
 
+# Halls with the user's own data in it: a row for a place CMI never listed
+# ("Sports annexe", badged "yours") and a column for the evening meeting
+# sitting in it.
+boot("Light", "Halls", selection=CUSTOM_SEL, customs=CUSTOMS,
+     prefs_extra={"halls_day": "Mon"})
+# The own row sits below CMI's fifteen, so bring it into frame.
+d.execute_script(
+    "document.querySelector('tr.own-hall').scrollIntoView({block:'center'});"
+)
+time.sleep(0.4)
+shot("29-light-halls-own-place")
+
 # The foot of My courses: the create tile and the parked group (RG is in
 # the custom store but not in the selection).
 boot("Light", "MyCourses", selection=CUSTOM_SEL, customs=CUSTOMS)

@@ -120,6 +120,39 @@ and no committed mirror (fixtures exist only for tests/e2e seed).
 - Halls grid renders official bookings MINUS moved-away meetings PLUS
   "arrivals" (overridden/user-created meetings landing in a cell, matched
   via `hall_col_of`); re-drags reuse the override matched on its BASE.
+  **The page shows CMI's allocation AND the user's own placements — never
+  only CMI's** (R21). Three helpers carry that: `user_placements()` (every
+  overridden meeting + every meeting of a SELECTED custom course — customs
+  carry no overrides, so the old "snapshot courses that have an override"
+  loop never saw them at all), `App::user_halls()` (places CMI doesn't list
+  → their own `tr.own-hall` rows, badged "yours", after CMI's), and
+  `App::hall_slot_grid()` (official slots + synthetic `.extra` columns for
+  hall bookings and user placements at out-of-grid times — the halls table
+  needs its own version because `display_slot_grid` only covers the
+  SELECTION). The free-hall finder must go through `hall_booking_state()`
+  and `user_placements()` too, or it will call a hall free that the grid
+  above shows as occupied (and vice versa after a meeting moves away).
+  `perform_drop` resolves a dropped cell against BOTH grids — a cell that
+  lights up as a drop target must accept the drop. Bookings match their
+  column on the START only (`b.slot.start_min`), never full `Slot` equality:
+  join.rs warns that CMI's two pages can disagree about where a slot ends,
+  and equality would empty the entire table when they do. A booking with no
+  matching meeting in the course (join.rs keeps and warns about these) is a
+  `BookingCell::Reference` — a plain, undraggable chip; fabricating a base
+  for it turned one drag into a brand-new weekly meeting. A code the user
+  owns is `Gone` here: their own definition draws itself through
+  `user_placements`. A bare `TMP*` cell has NO codes (parse.rs) — the room is
+  still taken, and its badge stays; the badge is dropped only when the cell's
+  own courses have all moved away. Keyboard move mode walks days × times, a
+  shape the Halls table (rooms down the side) doesn't have, so M there says
+  so instead of starting an invisible move.
+- **Hall text is user input, so it is canonicalised on the way in and
+  compared loosely on the way out.** `App::canonical_hall` (trim, and adopt
+  CMI's spelling when it matches case-insensitively) runs on every save;
+  `same_hall` (trim + `eq_ignore_ascii_case`) does every render-side match.
+  Without both, " lecture hall 803 " sat in CMI's row for one comparison and
+  spawned a separate, permanently empty "yours" row for another, and the chip
+  disappeared entirely between them.
 - `--alarm` color is reserved EXCLUSIVELY for clashes — and that includes
   VOLUME: `.btn.danger` is quiet (muted) at rest and turns alarm only on
   hover/focus; standing red exists solely in the My-data danger zone. One
@@ -195,7 +228,7 @@ and no committed mirror (fixtures exist only for tests/e2e seed).
 CARGO_TARGET_DIR=~/.rust-target-e2e cargo test --workspace --features html
 # app build for e2e (never plain dist while trunk serve runs)
 cd app && CARGO_TARGET_DIR=~/.rust-target-e2e trunk build --release --dist dist-e2e
-# e2e (45 tests; self-generates seed via core example, needs cargo on PATH)
+# e2e (47 tests; self-generates seed via core example, needs cargo on PATH)
 cd e2e && DIST_DIR=../app/dist-e2e .venv/bin/python test_app.py
 # ...or just a few, by name fragment
 cd e2e && DIST_DIR=../app/dist-e2e .venv/bin/python test_app.py t44 t45
@@ -213,7 +246,7 @@ regenerates the .ics golden.
 
 ## 6. Current state
 
-- Tests: 66 native + 45/45 e2e green. Meeting removals: `MeetingOverride.to`
+- Tests: 66 native + 47/47 e2e green. Meeting removals: `MeetingOverride.to`
   is `Option<Meeting>` (None = removed; legacy JSON/share payloads still
   load — present meeting ⇒ Some). Out-of-grid times: `display_slot_grid()`
   (views.rs) = official slots + synthetic `.extra` columns; `column_for`
@@ -639,3 +672,40 @@ regenerates the .ics golden.
   create form) and t45 (edit form survives a sync); t40 now drives the new
   control; test_app.py takes name fragments on argv. 66 native + 45/45 e2e.
   Committed locally, NOT pushed.
+- **R21 (your own halls and times on the Halls page):** user: a hall they
+  typed ("1002") never appeared in the Halls section, then "same happens
+  when I change time outside the current timetable time — it should add a
+  new row like My timetable. Check these things for all the tables", plus
+  "check for all such possible bugs, probably with multiple agents".
+  Root causes were two: hall rows came only from `snapshot.halls`, and the
+  arrivals loop iterated `snapshot.courses` that HAVE an override — so a
+  custom course (which never has one) was invisible on that page entirely,
+  official hall or not. Fixed via `user_halls()`, `hall_slot_grid()` and
+  `user_placements()` (see §4); the hall chooser now offers places you
+  invented under "Your own places", the Hall facet lists them (read
+  UNTRACKED — an option list that subscribed to overrides would rebuild
+  under the cursor), and the free-hall finder shares the grid's own
+  `hall_booking_state` so the two can't contradict each other. The master
+  grid deliberately keeps CMI's columns and sublabels the real time
+  instead ("don't let the column lie", R13) — checked, not changed.
+  Two read-only audit agents then swept the area; their real findings, all
+  fixed: a bare `TMP*` booking (no codes) was reported as a free hall; a
+  custom course shadowing a CMI code rendered twice and dragging the CMI
+  chip silently appended a meeting to the user's own course; overrides on a
+  course CMI had dropped drew an empty row, column and day tab but no chip;
+  hall text differing only in case or spacing made the chip vanish from the
+  page (now `canonical_hall` + `same_hall`); bookings matched their column
+  by full `Slot` equality; a booking with no matching meeting handed drags a
+  fabricated base; the "temporary booking" badge outlived its own chips; a
+  halls chip never showed its real time when it differed from the column; a
+  stored `halls_day` could name a day the strip no longer offers; the
+  Unscheduled tray called the user's own course one of CMI's (now "No fixed
+  slot yet", the name the toast already promised); searching the catalog for
+  a course you already own offered to create it again and then rejected the
+  duplicate code (now points at My courses); `grid_days` deep-cloned the
+  snapshot on every call. Deliberately NOT done: keyboard move mode in the
+  Halls tab needs a rooms axis it doesn't have — M there now says where
+  moving works instead of starting an invisible move. e2e t46 (own place +
+  own column + finder agreement) and t47 (the user's exact report);
+  `boot()` takes `customs=`; shot 29. 66 native + 47/47 e2e. Committed
+  locally, NOT pushed.

@@ -168,12 +168,12 @@ class App:
     # -- lifecycle ---------------------------------------------------------
 
     def boot(self, path="/", fresh=True, seed=True, selection=None,
-             overrides=None, raw_snapshot=None):
+             overrides=None, raw_snapshot=None, customs=None):
         """Load the app. fresh=True wipes storage; seed=True (the default)
         pre-loads the fixture-derived snapshot and suppresses the background
         sync, so tests run on deterministic data. seed=False boots the app
-        the way a first-time visitor sees it: empty. selection/overrides
-        pre-seed those stores; raw_snapshot stores an arbitrary (e.g.
+        the way a first-time visitor sees it: empty. selection/overrides/
+        customs pre-seed those stores; raw_snapshot stores an arbitrary (e.g.
         corrupt) blob in the snapshot slot."""
         if fresh:
             self.d.get(f"{BASE}/e2e-blank")  # same-origin 404 page
@@ -193,6 +193,9 @@ class App:
                 if overrides is not None:
                     script += f"localStorage.setItem('cmitt.v1.overrides', arguments[{len(args)}]);"
                     args.append(json.dumps(overrides))
+                if customs is not None:
+                    script += f"localStorage.setItem('cmitt.v1.custom', arguments[{len(args)}]);"
+                    args.append(json.dumps(customs))
                 self.d.execute_script(script, *args)
             else:
                 self.d.execute_script("localStorage.clear();")
@@ -1693,11 +1696,15 @@ def t44_hall_is_a_working_dropdown(app):
     app.xpath("//div[@class='dialog']//button[normalize-space()='Save']").click()
     app.wait_toast("Moved TOC")
 
-    # A place CMI does not list survives, and comes back on "Other place…".
+    # A place CMI doesn't list survives — and comes back as an ordinary
+    # choice under "Your own places", so it is typed once and picked after.
     sel = Select(_open_toc_tuesday_edit(app))
-    assert sel.first_selected_option.text == "Other place…", \
-        sel.first_selected_option.text
-    assert app.css("#em-hall-other").get_attribute("value") == "Seminar room"
+    assert sel.first_selected_option.get_attribute("value") == "Seminar room", \
+        sel.first_selected_option.get_attribute("value")
+    group = app.css("#em-hall optgroup[label='Your own places']")
+    assert "Seminar room" in group.text, group.text
+    assert not app.css_all("#em-hall-other"), \
+        "a known place needs no free-text box"
     app.d.find_element(By.CSS_SELECTOR, "body").send_keys(Keys.ESCAPE)
 
     # The same control, same behaviour, in the create-your-own-course form.
@@ -1707,7 +1714,11 @@ def t44_hall_is_a_working_dropdown(app):
     app.css("#cc-name").send_keys("Reading group")
     app.css("#cc-add-meeting").click()
     row_hall = Select(app.wait_css("#cc-hall-0"))
-    assert len(row_hall.options) == len(halls) + 2
+    # CMI's halls, the "Seminar room" invented above, and the two standing
+    # rows — a place typed once is offered everywhere afterwards.
+    assert len(row_hall.options) == len(halls) + 3, len(row_hall.options)
+    assert "Seminar room" in app.css(
+        "#cc-hall-0 optgroup[label='Your own places']").text
     row_hall.select_by_value(halls[1])
     app.xpath("//button[normalize-space()='Add to my timetable']").click()
     app.wait_toast("Added READING")
@@ -1751,6 +1762,122 @@ def t45_edit_meeting_form_survives_a_sync(app):
         app.wait_toast("Moved TOC to Fri")
     finally:
         remove_fake_mirror()
+
+
+def _halls_day(app, short):
+    """Switch the Halls tab to a day by its short name."""
+    app.xpath(
+        "//section[@aria-label='Lecture halls']//div[@role='group' and @aria-label='Day']"
+        f"//button[normalize-space()='{short}']"
+    ).click()
+    time.sleep(0.3)
+
+
+# One custom course that exercises both halves of the problem: an official
+# hall at a time CMI's grid doesn't have, and a place CMI never listed.
+HALL_CUSTOM = {"courses": [{
+    "code": "GERMAN", "name": "German A1", "instructors": [], "branches": [],
+    "credits": 2, "starts": None, "part_of_semester": None,
+    "optional_flag": False, "status": "Scheduled",
+    "meetings": [
+        {"day": "Mon", "slot": {"start_min": 1110, "end_min": 1185},
+         "hall": "Lecture Hall 803", "temp_booking": False},
+        {"day": "Mon", "slot": {"start_min": 550, "end_min": 625},
+         "hall": "Room 1002", "temp_booking": False},
+    ],
+}]}
+
+
+def t46_halls_show_your_own_places_and_times(app):
+    """The Halls page has to show the user's own placements, not only CMI's
+    allocation: a place CMI never listed gets its own row (marked "yours"),
+    a time outside CMI's hours gets its own column, and the user's own
+    courses appear at all — they have no override, so the old arrivals loop
+    (snapshot courses with overrides) never saw them."""
+    app.boot("/", selection=["TOC", "GERMAN"], customs=HALL_CUSTOM)
+    app.open_tab("Halls")
+    app.wait_css("section[aria-label='Lecture halls']")
+    _halls_day(app, "Mon")
+
+    # A row of the user's own, badged, after CMI's halls.
+    own = app.wait_css("section[aria-label='Lecture halls'] tr.own-hall")
+    head = own.find_element(By.CSS_SELECTOR, "th.rowhead")
+    assert "Room 1002" in head.text and "yours" in head.text, head.text
+    assert app.chips("GERMAN", "td[data-hall='Room 1002'][data-slot='550']"), \
+        "the custom course must render in the place the user invented"
+
+    # An out-of-grid time gets its own column here too, exactly like the
+    # personal timetable — 18:30 starts after CMI's last slot ends.
+    extra = app.css("section[aria-label='Lecture halls'] thead th.extra")
+    assert "18:30" in extra.text, extra.text
+    assert app.chips("GERMAN", "td[data-hall='Lecture Hall 803'][data-slot='1110']"), \
+        "an evening meeting must land in the evening column, not vanish"
+
+    # The finder speaks about the same world: it never calls a hall free
+    # when one of your own meetings is sitting in it, and it says plainly
+    # that your own places are not CMI's to allocate.
+    section = app.css("section[aria-label='Lecture halls']")
+    section.find_element(
+        By.CSS_SELECTOR, "select[aria-label='Time slot'] option[value='550']"
+    ).click()
+    section.find_element(
+        By.CSS_SELECTOR, "select[aria-label='Day'] option[value='0']"
+    ).click()  # Monday
+    WebDriverWait(app.d, 10).until(
+        lambda d: "Free on Monday" in app.css(
+            "section[aria-label='Lecture halls']").text
+    )
+    text = app.css("section[aria-label='Lecture halls']").text
+    assert "Room 1002" in text.split("Free on Monday")[1].split("\n")[1], text
+    assert "Room 1002" not in text.split("Free on Monday")[1].split("\n")[0], \
+        "a place CMI doesn't allocate must not be offered as a free hall"
+
+
+def t47_moved_out_of_grid_meeting_keeps_its_hall_row(app):
+    """The user's own report: change a course to a time outside CMI's hours
+    and the Halls table must grow a column for it, like My timetable does.
+    Its official cell empties, and the free-hall finder agrees — the room it
+    left really is free now."""
+    evening = {
+        "next_id": 1,
+        "items": [{
+            "id": 0, "course": "TOC",
+            "base": {"day": "Tue", "slot": {"start_min": 550, "end_min": 625},
+                     "hall": "Lecture Hall 803", "temp_booking": False},
+            "to": {"day": "Tue", "slot": {"start_min": 1110, "end_min": 1185},
+                   "hall": "Lecture Hall 803", "temp_booking": False},
+            "created_at": 1754000000000.0}],
+        "credits": [],
+    }
+    app.boot("/", selection=["TOC"], overrides=evening)
+    app.open_tab("Halls")
+    app.wait_css("section[aria-label='Lecture halls']")
+    _halls_day(app, "Tue")
+
+    extra = app.css("section[aria-label='Lecture halls'] thead th.extra")
+    assert "18:30" in extra.text, extra.text
+    assert app.chips("TOC", "td[data-hall='Lecture Hall 803'][data-slot='1110']"), \
+        "the moved meeting must render in its new column"
+    assert not app.chips("TOC", "td[data-hall='Lecture Hall 803'][data-slot='550']"), \
+        "and must leave the cell it came from"
+
+    section = app.css("section[aria-label='Lecture halls']")
+    section.find_element(
+        By.CSS_SELECTOR, "select[aria-label='Time slot'] option[value='550']"
+    ).click()
+    section.find_element(
+        By.CSS_SELECTOR, "select[aria-label='Day'] option[value='1']"
+    ).click()  # Tuesday
+    WebDriverWait(app.d, 10).until(
+        lambda d: "Free on Tuesday" in app.css(
+            "section[aria-label='Lecture halls']").text
+    )
+    line = next(
+        l for l in app.css("section[aria-label='Lecture halls']").text.splitlines()
+        if l.startswith("Free on Tuesday")
+    )
+    assert "Lecture Hall 803" in line, \
+        f"the hall TOC moved out of is free now, and the grid already says so: {line}"
 
 
 TESTS = [
@@ -1799,6 +1926,8 @@ TESTS = [
     t43_custom_form_survives_a_sync,
     t44_hall_is_a_working_dropdown,
     t45_edit_meeting_form_survives_a_sync,
+    t46_halls_show_your_own_places_and_times,
+    t47_moved_out_of_grid_meeting_keeps_its_hall_row,
 ]
 
 

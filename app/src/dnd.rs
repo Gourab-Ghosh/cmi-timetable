@@ -151,9 +151,13 @@ pub fn perform_drop(
     // Resolve against the DISPLAY grid, not just the official one: cells in
     // synthetic (out-of-grid) columns carry starts the official grid doesn't
     // know, and a cell that lights up as a drop target must accept the drop.
+    // The Halls table has columns of its own on top of those (a room CMI
+    // booked at an odd hour, or a meeting of a course you haven't selected),
+    // so search both or those cells would swallow the drop in silence.
     let Some(slot) = app
         .display_slot_grid()
         .into_iter()
+        .chain(app.hall_slot_grid())
         .map(|(s, _)| s)
         .find(|s| s.start_min == slot_start)
     else {
@@ -296,6 +300,17 @@ fn cancel_drag(app: App) {
 
 /// Enter move mode for a focused chip (M key).
 pub fn enter_move_mode(app: App, spec: DragSpec, from: Option<Meeting>) {
+    // The cursor walks days × times, which is the shape of the personal and
+    // master grids. The Halls table stacks ROOMS down its side, so the cursor
+    // has nowhere to draw itself there — say that plainly instead of starting
+    // an invisible move whose Enter lands somewhere the user never saw.
+    if app.prefs.with_untracked(|p| p.tab) == crate::state::Tab::Halls {
+        app.say(
+            "Keyboard moving works on My timetable. Here, drag with the pointer, \
+             or open the course and edit the meeting.",
+        );
+        return;
+    }
     let cursor = from.map(|m| (m.day, m.slot.start_min)).unwrap_or_else(|| {
         // Start at the grid's first day/slot — derived from the data.
         let m = app.default_meeting();

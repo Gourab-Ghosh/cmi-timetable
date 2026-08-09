@@ -942,7 +942,19 @@ pub fn filter_bar(app: App, result_count: Signal<usize>) -> impl IntoView {
                 "Hall",
                 move || app.filters().halls.len(),
                 std::sync::Arc::new(move || {
-                    snapshot().halls.iter().map(|h| (h.clone(), h.clone())).collect()
+                    // CMI's halls plus any place the user typed themselves —
+                    // the filter matches on effective meetings, so a course
+                    // you moved into "1002" is findable by that too. The
+                    // own-hall read is UNTRACKED: an option list that
+                    // subscribed to the overrides would rebuild itself under
+                    // the cursor on every drag or undo (see §4).
+                    snapshot()
+                        .halls
+                        .iter()
+                        .cloned()
+                        .chain(untrack(|| app.user_halls()))
+                        .map(|h| (h.clone(), h))
+                        .collect()
                 }),
                 |f, k| f.halls.iter().any(|x| x == k),
                 |f, k, on| toggle_vec(&mut f.halls, k.to_string(), on),
@@ -2155,27 +2167,29 @@ fn my_data_dialog(app: App) -> impl IntoView {
 /// writing your own.
 fn hall_picker(
     halls: Vec<String>,
+    own: Vec<String>,
     hall: RwSignal<String>,
     select_id: String,
     aria: &'static str,
     empty: &'static str,
 ) -> impl IntoView {
     let current = hall.get_untracked();
-    // A hall CMI doesn't list — typed by hand, or dropped by a later sync —
-    // must still be editable, so such a value starts on "Other place…".
+    let known: Vec<String> = halls.iter().chain(own.iter()).cloned().collect();
+    // A place nobody has on file — typed here for the first time — starts on
+    // "Other place…" with the box open.
     let is_other =
-        !current.is_empty() && !halls.iter().any(|h| h.eq_ignore_ascii_case(&current));
+        !current.is_empty() && !known.iter().any(|h| h.eq_ignore_ascii_case(&current));
     let is_other = RwSignal::new(is_other);
     let other_id = format!("{select_id}-other");
 
     let on_change = {
-        let halls = halls.clone();
+        let known = known.clone();
         let other_id = other_id.clone();
         move |ev: web_sys::Event| {
             let v = event_target_value(&ev);
             // Match against the real hall list rather than a sentinel value,
             // so no hall name can ever be mistaken for the "Other" row.
-            match halls.iter().find(|h| h.as_str() == v) {
+            match known.iter().find(|h| h.as_str() == v) {
                 Some(h) => {
                     is_other.set(false);
                     hall.set(h.clone());
@@ -2210,6 +2224,28 @@ fn hall_picker(
                         }
                     })
                     .collect_view()}
+                // Places invented earlier come back as ordinary choices, so
+                // "the seminar room" is typed once and picked ever after.
+                {(!own.is_empty())
+                    .then(|| {
+                        view! {
+                            <optgroup label="Your own places">
+                                {own
+                                    .iter()
+                                    .map(|h| {
+                                        view! {
+                                            <option
+                                                value=h.clone()
+                                                selected=h.eq_ignore_ascii_case(&current)
+                                            >
+                                                {h.clone()}
+                                            </option>
+                                        }
+                                    })
+                                    .collect_view()}
+                            </optgroup>
+                        }
+                    })}
                 <option value="__other" selected=is_other.get_untracked()>
                     "Other place…"
                 </option>
@@ -2251,6 +2287,7 @@ fn edit_meeting_dialog(
     let (slots, halls) = app
         .snapshot
         .with_untracked(|s| (s.slot_grid.clone(), s.halls.clone()));
+    let own_halls = untrack(|| app.user_halls());
 
     let day_idx = RwSignal::new(init.day.index());
     let is_custom = RwSignal::new(!slots.iter().any(|s| *s == init.slot));
@@ -2302,11 +2339,13 @@ fn edit_meeting_dialog(
                 }
             }
         };
-        let hall_value = hall.get_untracked();
         let to = Meeting {
             day,
             slot,
-            hall: (!hall_value.is_empty()).then_some(hall_value),
+            // Trimmed, and spelled CMI's way when it is one of theirs —
+            // otherwise the Halls tab grows a second, empty row for what is
+            // really the same room.
+            hall: app.canonical_hall(&hall.get_untracked()),
             temp_booking: false,
         };
         if create {
@@ -2440,6 +2479,7 @@ fn edit_meeting_dialog(
                 <label for="em-hall">"Hall"</label>
                 {hall_picker(
                     halls,
+                    own_halls,
                     hall,
                     "em-hall".to_string(),
                     "Hall",
@@ -2565,6 +2605,7 @@ fn custom_course_dialog(
         .and_then(|c| app.customs.with_untracked(|cs| cs.get(c).cloned()));
     let slots = app.snapshot.with_untracked(|s| s.slot_grid.clone());
     let halls = app.snapshot.with_untracked(|s| s.halls.clone());
+    let own_halls = untrack(|| app.user_halls());
     let first_slot = slots.first().copied();
 
     let name = RwSignal::new(
@@ -2749,7 +2790,11 @@ fn custom_course_dialog(
             let mut meetings: Vec<Meeting> = Vec::new();
             for (i, row) in rows.get_untracked().iter().enumerate() {
                 match row.to_meeting(&slots) {
-                    Ok(m) => meetings.push(m),
+                    Ok(mut m) => {
+                        // Store the hall the way everything else spells it.
+                        m.hall = m.hall.as_deref().and_then(|h| app.canonical_hall(h));
+                        meetings.push(m);
+                    }
                     Err(e) => {
                         error.set(format!("Meeting {}: {e}.", i + 1));
                         return;
@@ -3035,6 +3080,7 @@ fn custom_course_dialog(
                                 }}
                                 {hall_picker(
                                     halls.clone(),
+                                    own_halls.clone(),
                                     row.hall,
                                     format!("cc-hall-{row_key}"),
                                     "Hall or place",

@@ -546,13 +546,24 @@ fn my_timetable(app: App) -> impl IntoView {
                 let items = unscheduled();
                 (!items.is_empty())
                     .then(|| {
+                        // Whose doing the missing time is decides the
+                        // wording: CMI hasn't scheduled its own course yet,
+                        // while one of YOUR courses is waiting for you.
+                        let mine = items.iter().filter(|c| app.is_custom(&c.code)).count();
+                        let note = if mine == items.len() {
+                            "your own courses — give them a time whenever you like"
+                        } else if mine == 0 {
+                            "CMI lists these courses but hasn't put them on the timetable"
+                        } else {
+                            "waiting for a time"
+                        };
                         view! {
                             <div class="tray noprint">
                                 <h3>
-                                    "Unscheduled "
-                                    <span class="badge warn">
-                                        "CMI lists these courses but hasn't put them on the timetable"
-                                    </span>
+                                    // The name the rest of the app promises
+                                    // ("it's waiting in 'No fixed slot yet'").
+                                    "No fixed slot yet "
+                                    <span class="badge warn">{note}</span>
                                 </h3>
                                 <div class="items">
                                     {items
@@ -1329,10 +1340,48 @@ fn catalog(app: App) -> impl IntoView {
                     .with(|c| c.is_empty())
                     .then(|| {
                         let search = app.filters().text.trim().to_string();
+                        let needle = search.to_lowercase();
+                        let mine = (!needle.is_empty())
+                            .then(|| {
+                                app.customs
+                                    .with(|cs| {
+                                        cs.courses
+                                            .iter()
+                                            .find(|c| {
+                                                c.code.to_lowercase().contains(&needle)
+                                                    || c.name.to_lowercase().contains(&needle)
+                                            })
+                                            .map(|c| (c.code.clone(), c.name.clone()))
+                                    })
+                            })
+                            .flatten();
                         view! {
                             <div class="empty panel">
                                 <p class="big">"No courses match."</p>
                                 <p>"Loosen a filter or clear the search to see more."</p>
+                                // Your own courses aren't in CMI's catalog,
+                                // so searching for one lands here. Say where
+                                // it actually is instead of offering to
+                                // create it a second time and failing on the
+                                // duplicate code.
+                                {mine
+                                    .map(|(code, name)| {
+                                        view! {
+                                            <p class="muted">
+                                                {format!(
+                                                    "You already have “{name}” ({code}) — \
+                                                     it's one of your own, so it lives in \
+                                                     My courses rather than CMI's catalog.",
+                                                )}
+                                            </p>
+                                            <button
+                                                class="btn"
+                                                on:click=move |_| app.set_tab(Tab::MyCourses)
+                                            >
+                                                "Show it in My courses"
+                                            </button>
+                                        }
+                                    })}
                                 {(!search.is_empty())
                                     .then(|| {
                                         let prefill = search.clone();
@@ -1450,20 +1499,42 @@ fn hall_col_of(slot_grid: &[Slot], m: &Meeting) -> Option<u16> {
         .map(|s| s.start_min)
 }
 
-/// Chip for one official hall booking — or `None` when the user moved this
-/// meeting elsewhere: it renders at its new cell instead (see `halls_view`),
-/// so a drop is visible in the grid immediately.
-fn hall_booking_chip(
+/// What one of CMI's hall bookings means for THIS user's timetable.
+enum BookingCell {
+    /// Nothing of the user's to reconcile it with — a code the catalog
+    /// doesn't list, or a room CMI allocated without a matching meeting in
+    /// any branch grid. Shown, but as a plain reference: there is no meeting
+    /// behind it to move.
+    Reference,
+    /// Still belongs in this cell, with the effective meeting behind it.
+    Here(EffMeeting),
+    /// The user removed this meeting, moved it elsewhere, or replaced the
+    /// whole course with one of their own — it renders at its new spot
+    /// instead, and this cell is empty.
+    Gone,
+}
+
+/// Decide the above. Shared by the grid (which chip to draw) and the
+/// free-hall finder (whether the room is taken), so the two can never
+/// disagree about what is sitting in a cell.
+fn hall_booking_state(
     app: App,
     snapshot: &Snapshot,
+    columns: &[Slot],
     code: &str,
     day: Day,
     slot: Slot,
+    temp: bool,
     hall: &str,
-) -> Option<AnyView> {
+) -> BookingCell {
+    // The user's own course under this code wins, as everywhere else: its
+    // own meetings are drawn from `user_placements`, and CMI's booking would
+    // otherwise render a second chip carrying the custom's name.
+    if app.is_custom(code) {
+        return BookingCell::Gone;
+    }
     let Some(course) = snapshot.course(code) else {
-        // A booking whose code isn't in the catalog: plain reference chip.
-        return Some(chip(app, ChipProps::list(code)).into_any());
+        return BookingCell::Reference;
     };
     // The official meeting this booking represents — matched on the override
     // BASE, so an already-customised meeting drags with its existing
@@ -1472,7 +1543,7 @@ fn hall_booking_chip(
         day,
         slot,
         hall: Some(hall.to_string()),
-        temp_booking: false,
+        temp_booking: temp,
     };
     // A removed meeting has no effective meeting at all, so it would fall
     // through to the "untouched" default below and wrongly keep its chip —
@@ -1486,36 +1557,133 @@ fn hall_booking_chip(
         })
     });
     if removed {
-        return None;
+        return BookingCell::Gone;
     }
-    let eff = app
-        .effective_meetings(course)
-        .into_iter()
-        .find(|e| {
-            e.base.as_ref().is_some_and(|b| {
-                b.day == day && b.slot == slot && b.hall.as_deref() == Some(hall)
-            })
+    let Some(eff) = app.effective_meetings(course).into_iter().find(|e| {
+        e.base.as_ref().is_some_and(|b| {
+            b.day == day
+                && b.slot.start_min == slot.start_min
+                && same_hall(b.hall.as_deref(), Some(hall))
         })
-        .unwrap_or(EffMeeting {
-            meeting: booking.clone(),
-            overridden: false,
-            ov_id: None,
-            base: Some(booking),
-            user_created: false,
-        });
+    }) else {
+        // CMI allocated the room but no branch grid schedules the course
+        // there (join.rs keeps such bookings and warns). There is no meeting
+        // to move, so don't invent one: a fabricated base would turn a drag
+        // into a brand-new weekly meeting the course never had.
+        return BookingCell::Reference;
+    };
     if eff.overridden {
         let lands_here = eff.meeting.day == day
-            && eff.meeting.hall.as_deref() == Some(hall)
-            && hall_col_of(&snapshot.slot_grid, &eff.meeting) == Some(slot.start_min);
+            && same_hall(eff.meeting.hall.as_deref(), Some(hall))
+            && hall_col_of(columns, &eff.meeting) == Some(slot.start_min);
         if !lands_here {
-            return None;
+            return BookingCell::Gone;
         }
     }
-    Some(hall_eff_chip(app, code, eff))
+    BookingCell::Here(eff)
+}
+
+/// Halls compare on trimmed, case-insensitive text everywhere they are
+/// matched: the user types theirs by hand, so "lecture hall 803" and a
+/// pasted " LH9 " have to land in CMI's row rather than nowhere at all.
+fn same_hall(a: Option<&str>, b: Option<&str>) -> bool {
+    match (a, b) {
+        (Some(a), Some(b)) => a.trim().eq_ignore_ascii_case(b.trim()),
+        (None, None) => true,
+        _ => false,
+    }
+}
+
+/// Chip for one official hall booking — or `None` when the user removed or
+/// moved that meeting: it renders at its new cell instead (see
+/// `halls_view`), so a drop is visible in the grid immediately.
+#[allow(clippy::too_many_arguments)]
+fn hall_booking_chip(
+    app: App,
+    snapshot: &Snapshot,
+    columns: &[Slot],
+    code: &str,
+    day: Day,
+    slot: Slot,
+    temp: bool,
+    hall: &str,
+) -> Option<AnyView> {
+    match hall_booking_state(app, snapshot, columns, code, day, slot, temp, hall) {
+        BookingCell::Reference => Some(chip(app, ChipProps::list(code)).into_any()),
+        BookingCell::Here(eff) => Some(hall_eff_chip(app, code, eff, slot)),
+        BookingCell::Gone => None,
+    }
+}
+
+/// Every meeting the user placed themselves that lands on `day` with a
+/// hall: an overridden CMI meeting, or a meeting of one of their own
+/// courses (customs carry no overrides — their definition IS the placement).
+/// Returned as (hall, column start, code, meeting).
+///
+/// The grid draws these at their new spot, and the free-hall finder counts
+/// them as occupying the room — one source, so the two agree.
+fn user_placements(
+    app: App,
+    snapshot: &Snapshot,
+    columns: &[Slot],
+    day: Day,
+) -> Vec<(String, u16, String, EffMeeting)> {
+    let overrides = app.overrides.get();
+    let mut out: Vec<(String, u16, String, EffMeeting)> = Vec::new();
+    let mut push = |code: &str, eff: EffMeeting| {
+        if eff.meeting.day != day {
+            return;
+        }
+        let (Some(hall), Some(col)) = (
+            eff.meeting.hall.clone(),
+            hall_col_of(columns, &eff.meeting),
+        ) else {
+            return;
+        };
+        out.push((hall, col, code.to_string(), eff));
+    };
+    // Everything on the timetable first — that includes the user's own
+    // courses (every meeting of theirs is a placement: customs carry no
+    // overrides) and the stubs for courses CMI has since dropped, whose
+    // meetings survive only as overrides.
+    let mut done: Vec<String> = Vec::new();
+    for course in app.selected_courses() {
+        let own = app.is_custom(&course.code);
+        for eff in effective_meetings(&course, &overrides) {
+            // Anything CMI still schedules itself is drawn from its own
+            // booking; only what the user changed is an arrival.
+            if own || eff.overridden {
+                push(&course.code, eff);
+            }
+        }
+        done.push(course.code.clone());
+    }
+    // …then courses the user customised without keeping selected: their
+    // changes still show on this page, as they always have.
+    for course in &snapshot.courses {
+        if done.iter().any(|c| c.eq_ignore_ascii_case(&course.code))
+            || !overrides
+                .items
+                .iter()
+                .any(|o| o.course.eq_ignore_ascii_case(&course.code))
+        {
+            continue;
+        }
+        for eff in effective_meetings(course, &overrides) {
+            if eff.overridden {
+                push(&course.code, eff);
+            }
+        }
+    }
+    out
 }
 
 /// The common chip styling for anything sitting in a halls-grid cell.
-fn hall_eff_chip(app: App, code: &str, eff: EffMeeting) -> AnyView {
+/// `column` is the slot the cell stands for: when the meeting's real time
+/// differs (a 09:30 start borrowing the 09:10 column), the chip says so
+/// rather than letting the column speak for it.
+fn hall_eff_chip(app: App, code: &str, eff: EffMeeting, column: Slot) -> AnyView {
+    let sublabel = (eff.meeting.slot != column).then(|| eff.meeting.slot.label());
     chip(
         app,
         ChipProps {
@@ -1527,7 +1695,7 @@ fn hall_eff_chip(app: App, code: &str, eff: EffMeeting) -> AnyView {
             // and selected courses carry the ✓ mark here too.
             from_master: true,
             click: ChipClick::Details,
-            sublabel: None,
+            sublabel,
             warn_wont_fit: false,
         },
     )
@@ -1538,7 +1706,18 @@ fn halls_view(app: App) -> impl IntoView {
     let finder_day = RwSignal::new(None::<usize>); // day index
     let finder_start = RwSignal::new(None::<u16>); // slot start_min
 
-    let sel_day = move || app.prefs.with(|p| p.halls_day);
+    // Clamped to the days this tab actually offers: a stored Saturday whose
+    // only class has since been removed would otherwise title a day the
+    // strip has no button for, and no arrangement of clicks could leave it.
+    let sel_day = move || {
+        let stored = app.prefs.with(|p| p.halls_day);
+        let days = app.hall_days();
+        if days.contains(&stored) {
+            stored
+        } else {
+            days.first().copied().unwrap_or(Day::Mon)
+        }
+    };
 
     view! {
         <section aria-label="Lecture halls">
@@ -1582,10 +1761,15 @@ fn halls_view(app: App) -> impl IntoView {
                         <tr>
                             <th class="rowhead corner" scope="col">{move || sel_day().full()}</th>
                             {move || {
-                                app.snapshot
-                                    .with(|s| s.slot_grid.clone())
+                                app.hall_slot_grid()
                                     .into_iter()
-                                    .map(|s| view! { <th scope="col">{s.label()}</th> })
+                                    .map(|(s, extra)| {
+                                        view! {
+                                            <th scope="col" class:extra=extra>
+                                                {s.label()}
+                                            </th>
+                                        }
+                                    })
                                     .collect_view()
                             }}
                         </tr>
@@ -1594,49 +1778,57 @@ fn halls_view(app: App) -> impl IntoView {
                         {move || {
                             let snapshot = app.snapshot.get();
                             let day = sel_day();
-                            // Custom placements landing on this day (moved or
-                            // user-created meetings with a hall): rendered in
-                            // their new cell so a drop updates the grid, not
+                            let columns = app.hall_slot_grid();
+                            let cols: Vec<Slot> = columns.iter().map(|(s, _)| *s).collect();
+                            // Everything the user placed on this day, drawn at
+                            // its new spot so a drop updates the grid and not
                             // just the toast.
-                            let overrides = app.overrides.get();
-                            let mut arrivals: Vec<(String, u16, String, EffMeeting)> = Vec::new();
-                            for course in &snapshot.courses {
-                                if !overrides.items.iter().any(|o| o.course == course.code) {
-                                    continue;
-                                }
-                                for eff in effective_meetings(course, &overrides) {
-                                    if !eff.overridden || eff.meeting.day != day {
-                                        continue;
-                                    }
-                                    let Some(hall) = eff.meeting.hall.clone() else {
-                                        continue;
-                                    };
-                                    let Some(col) = hall_col_of(&snapshot.slot_grid, &eff.meeting)
-                                    else {
-                                        continue;
-                                    };
-                                    arrivals.push((hall, col, course.code.clone(), eff));
-                                }
-                            }
+                            let arrivals = user_placements(app, &snapshot, &cols, day);
+                            // CMI's halls first, then the places the user
+                            // invented — a course you put in "1002" has to be
+                            // visible on the page that shows where things are.
+                            let own_halls = app.user_halls();
                             snapshot
                                 .halls
                                 .iter()
-                                .map(|hall| {
-                                    let hall = hall.clone();
+                                .cloned()
+                                .map(|h| (h, false))
+                                .chain(own_halls.into_iter().map(|h| (h, true)))
+                                .map(|(hall, own)| {
                                     view! {
-                                        <tr>
-                                            <th class="rowhead" scope="row">{hall.clone()}</th>
-                                            {snapshot
-                                                .slot_grid
+                                        <tr class:own-hall=own>
+                                            <th class="rowhead" scope="row">
+                                                {hall.clone()}
+                                                {own
+                                                    .then(|| {
+                                                        view! {
+                                                            <span
+                                                                class="badge custom"
+                                                                title="Your own place — CMI doesn't list this hall"
+                                                            >
+                                                                "yours"
+                                                            </span>
+                                                        }
+                                                    })}
+                                            </th>
+                                            {columns
                                                 .iter()
-                                                .map(|slot| {
+                                                .map(|(slot, extra)| {
                                                     let slot = *slot;
+                                                    let extra = *extra;
                                                     let hall_hl = hall.clone();
+                                                    // Matched on the START, like
+                                                    // every other column lookup:
+                                                    // CMI's two pages can disagree
+                                                    // about where a slot ends, and
+                                                    // full-Slot equality would empty
+                                                    // the whole table when they do.
                                                     let bookings: Vec<_> = snapshot
                                                         .hall_bookings
                                                         .iter()
                                                         .filter(|b| {
-                                                            b.hall == hall && b.day == day && b.slot == slot
+                                                            b.hall == hall && b.day == day
+                                                                && b.slot.start_min == slot.start_min
                                                         })
                                                         .cloned()
                                                         .collect();
@@ -1645,6 +1837,7 @@ fn halls_view(app: App) -> impl IntoView {
                                                             data-day=day.index().to_string()
                                                             data-slot=slot.start_min.to_string()
                                                             data-hall=hall.clone()
+                                                            class:extra=extra
                                                             class:drop-ok=move || {
                                                                 app.drag.with(|d| {
                                                                     d.as_ref().is_some_and(|d| {
@@ -1661,21 +1854,34 @@ fn halls_view(app: App) -> impl IntoView {
                                                                     .iter()
                                                                     .map(|b| {
                                                                         let hall_chip = hall.clone();
+                                                                        let chips: Vec<_> = b
+                                                                            .codes
+                                                                            .iter()
+                                                                            .filter_map(|code| {
+                                                                                hall_booking_chip(
+                                                                                    app,
+                                                                                    &snapshot,
+                                                                                    &cols,
+                                                                                    code,
+                                                                                    day,
+                                                                                    slot,
+                                                                                    b.temp,
+                                                                                    &hall_chip,
+                                                                                )
+                                                                            })
+                                                                            .collect();
+                                                                        // The badge belongs to a booking
+                                                                        // that is still standing: once the
+                                                                        // user moves its only course away,
+                                                                        // an orphan "temporary booking"
+                                                                        // would mark an empty cell. A bare
+                                                                        // TMP cell has no codes and keeps it.
+                                                                        let badge = b.temp
+                                                                            && (b.codes.is_empty()
+                                                                                || !chips.is_empty());
                                                                         view! {
-                                                                            {b.codes
-                                                                                .iter()
-                                                                                .map(|code| {
-                                                                                    hall_booking_chip(
-                                                                                        app,
-                                                                                        &snapshot,
-                                                                                        code,
-                                                                                        day,
-                                                                                        slot,
-                                                                                        &hall_chip,
-                                                                                    )
-                                                                                })
-                                                                                .collect_view()}
-                                                                            {b.temp
+                                                                            {chips.into_iter().collect_view()}
+                                                                            {badge
                                                                                 .then(|| {
                                                                                     view! {
                                                                                         <span class="badge warn">"temporary booking"</span>
@@ -1687,19 +1893,29 @@ fn halls_view(app: App) -> impl IntoView {
                                                                 {arrivals
                                                                     .iter()
                                                                     .filter(|(h, col, code, eff)| {
-                                                                        *h == hall && *col == slot.start_min
+                                                                        // Case-insensitive: a hall typed
+                                                                        // "lecture hall 803" belongs in
+                                                                        // CMI's row, not a row of its own.
+                                                                        h.trim().eq_ignore_ascii_case(hall.trim())
+                                                                            && *col == slot.start_min
                                                                             // Already rendered above via its
                                                                             // official booking in this cell.
                                                                             && !(eff.base.as_ref().is_some_and(|b| {
-                                                                                b.day == day && b.slot == slot
-                                                                                    && b.hall.as_deref() == Some(hall.as_str())
+                                                                                b.day == day
+                                                                                    && b.slot.start_min == slot.start_min
+                                                                                    && same_hall(
+                                                                                        b.hall.as_deref(),
+                                                                                        Some(hall.as_str()),
+                                                                                    )
                                                                             })
                                                                                 && bookings.iter().any(|bk| {
-                                                                                    bk.codes.iter().any(|c| c == code)
+                                                                                    bk.codes.iter().any(|c| {
+                                                                                        c.eq_ignore_ascii_case(code)
+                                                                                    })
                                                                                 }))
                                                                     })
                                                                     .map(|(_, _, code, eff)| {
-                                                                        hall_eff_chip(app, code, eff.clone())
+                                                                        hall_eff_chip(app, code, eff.clone(), slot)
                                                                     })
                                                                     .collect_view()}
                                                             </div>
@@ -1756,10 +1972,11 @@ fn halls_view(app: App) -> impl IntoView {
                             "Pick a slot…"
                         </option>
                         {move || {
-                            app.snapshot
-                                .with(|s| s.slot_grid.clone())
+                            // The same columns the table shows, so a time you
+                            // can see is a time you can ask about.
+                            app.hall_slot_grid()
                                 .into_iter()
-                                .map(|s| {
+                                .map(|(s, _)| {
                                     view! {
                                         <option
                                             value=s.start_min.to_string()
@@ -1777,26 +1994,57 @@ fn halls_view(app: App) -> impl IntoView {
                     let (day_idx, start) = (finder_day.get()?, finder_start.get()?);
                     let day = *Day::ALL.get(day_idx)?;
                     let snapshot = app.snapshot.get();
-                    let slot_label = snapshot
-                        .slot_grid
+                    let columns = app.hall_slot_grid();
+                    let cols: Vec<Slot> = columns.iter().map(|(s, _)| *s).collect();
+                    let slot_label = cols
                         .iter()
                         .find(|s| s.start_min == start)
                         .map(|s| s.label())
                         .unwrap_or_default();
+                    let placed = user_placements(app, &snapshot, &cols, day);
+                    // "Free" has to mean the same thing the grid above shows:
+                    // a room CMI hasn't allocated AND that nothing of yours
+                    // has been moved into. A meeting you moved AWAY frees its
+                    // official hall, exactly as the empty cell says it does.
                     let free: Vec<String> = snapshot
                         .halls
                         .iter()
                         .filter(|hall| {
-                            !snapshot
+                            let cmi_has_it = snapshot
                                 .hall_bookings
                                 .iter()
-                                .any(|b| {
+                                .filter(|b| {
                                     b.hall == **hall && b.day == day
                                         && b.slot.start_min == start
                                 })
+                                .any(|b| {
+                                    // A bare TMP cell carries no codes at all
+                                    // (the halls page books the room without
+                                    // naming a course) — the room is taken.
+                                    b.codes.is_empty()
+                                        || b.codes.iter().any(|code| {
+                                            !matches!(
+                                                hall_booking_state(
+                                                    app, &snapshot, &cols, code, day, b.slot,
+                                                    b.temp, hall,
+                                                ),
+                                                BookingCell::Gone,
+                                            )
+                                        })
+                                });
+                            let yours = placed
+                                .iter()
+                                .any(|(h, col, _, _)| {
+                                    h.eq_ignore_ascii_case(hall) && *col == start
+                                });
+                            !cmi_has_it && !yours
                         })
                         .cloned()
                         .collect();
+                    // Places of the user's own are not CMI's to allocate, so
+                    // they are never offered here — say so rather than let
+                    // the list look incomplete.
+                    let own = app.user_halls();
                     Some(view! {
                         <p style="margin-top:0.6rem">
                             {if free.is_empty() {
@@ -1809,6 +2057,21 @@ fn halls_view(app: App) -> impl IntoView {
                                 )
                             }}
                         </p>
+                        {(!own.is_empty())
+                            .then(|| {
+                                view! {
+                                    <p class="muted small" style="margin:0.3rem 0 0">
+                                        {format!(
+                                            "Your own place{} ({}) {} not part of CMI's \
+                                             allocation, so this can't say whether {} free.",
+                                            if own.len() == 1 { "" } else { "s" },
+                                            own.join(", "),
+                                            if own.len() == 1 { "is" } else { "are" },
+                                            if own.len() == 1 { "it is" } else { "they are" },
+                                        )}
+                                    </p>
+                                }
+                            })}
                     })
                 }}
             </div>

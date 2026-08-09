@@ -1212,16 +1212,20 @@ impl App {
     /// invisible). One list for every grid AND for drag/keyboard-move
     /// targets, so a row that exists on screen is always reachable.
     pub fn grid_days(&self) -> Vec<Day> {
-        let snapshot = self.snapshot.get();
         let overrides = self.overrides.get();
         let mut days = vec![Day::Mon, Day::Tue, Day::Wed, Day::Thu, Day::Fri];
-        for c in &snapshot.courses {
-            for e in effective_meetings(c, &overrides) {
-                if !days.contains(&e.meeting.day) {
-                    days.push(e.meeting.day);
+        // `with`, not `get`: this runs for every grid body, day strip and
+        // facet, and `get` would deep-clone the whole Snapshot (gzipped raw
+        // pages included) each time.
+        self.snapshot.with(|snapshot| {
+            for c in &snapshot.courses {
+                for e in effective_meetings(c, &overrides) {
+                    if !days.contains(&e.meeting.day) {
+                        days.push(e.meeting.day);
+                    }
                 }
             }
-        }
+        });
         for c in self.selected_courses() {
             for e in effective_meetings(&c, &overrides) {
                 if !days.contains(&e.meeting.day) {
@@ -1231,6 +1235,122 @@ impl App {
         }
         days.sort_by_key(|d| d.index());
         days
+    }
+
+    /// Columns for the Halls tab: CMI's official slots, plus a synthetic
+    /// column for every time that doesn't fit one — a booking CMI published
+    /// at an unusual hour, or a meeting the user moved outside the grid.
+    ///
+    /// Same idea as `display_slot_grid`, different source data: this table
+    /// shows rooms rather than the user's selection, so it must cover
+    /// everything that can appear in it. Without this a 19:00 meeting has no
+    /// column and vanishes from the page instead of moving house.
+    pub fn hall_slot_grid(&self) -> Vec<(Slot, bool)> {
+        let official = self.snapshot.with(|s| s.slot_grid.clone());
+        let mut extra: Vec<Slot> = Vec::new();
+        {
+            let mut add = |slot: Slot| {
+                let start = slot.start_min;
+                if official
+                    .iter()
+                    .any(|s| s.start_min == start || (start >= s.start_min && start < s.end_min))
+                {
+                    return;
+                }
+                match extra.iter_mut().find(|s| s.start_min == start) {
+                    Some(s) => s.end_min = s.end_min.max(slot.end_min),
+                    None => extra.push(slot),
+                }
+            };
+            self.snapshot
+                .with(|s| s.hall_bookings.iter().for_each(|b| add(b.slot)));
+            // Only placements WITH a hall can land in this table.
+            self.overrides.with(|ovs| {
+                for o in &ovs.items {
+                    if let Some(m) = o.to.as_ref().filter(|m| m.hall.is_some()) {
+                        add(m.slot);
+                    }
+                }
+            });
+            for course in self.selected_courses() {
+                if !self.is_custom(&course.code) {
+                    continue;
+                }
+                for m in course.meetings.iter().filter(|m| m.hall.is_some()) {
+                    add(m.slot);
+                }
+            }
+        }
+        let mut all: Vec<(Slot, bool)> = official.into_iter().map(|s| (s, false)).collect();
+        all.extend(extra.into_iter().map(|s| (s, true)));
+        all.sort_by_key(|(s, _)| s.start_min);
+        all
+    }
+
+    /// The hall as it should be STORED: trimmed, and spelled the way CMI (or
+    /// an earlier meeting of the user's own) spells it. Everything that
+    /// matches halls does so case-insensitively, so a stray " lecture hall
+    /// 803 " would otherwise sit in CMI's row while showing up as a separate,
+    /// permanently empty "yours" row in the Halls tab. `None` = to be
+    /// announced.
+    pub fn canonical_hall(&self, raw: &str) -> Option<String> {
+        let raw = raw.trim();
+        if raw.is_empty() {
+            return None;
+        }
+        let known = self
+            .snapshot
+            .with_untracked(|s| s.halls.clone())
+            .into_iter()
+            .chain(self.user_halls())
+            .find(|h| h.eq_ignore_ascii_case(raw));
+        Some(known.unwrap_or_else(|| raw.to_string()))
+    }
+
+    /// Places the user put a course themselves that CMI's hall list doesn't
+    /// contain: typed by hand ("Seminar room", "1002"), or a hall CMI has
+    /// since dropped from its allocation page.
+    ///
+    /// Same rule as everywhere else — the user's own data must never be
+    /// invisible. The Halls tab gives these their own rows, the hall
+    /// chooser offers them again (a place you invented once is a click away
+    /// the next time), and the hall facet can filter by them.
+    ///
+    /// The set matches what can actually render: every override's
+    /// destination, plus the meetings of the user's own courses that are ON
+    /// the timetable (a parked course occupies nothing).
+    pub fn user_halls(&self) -> Vec<String> {
+        let official = self.snapshot.with(|s| s.halls.clone());
+        let mut out: Vec<String> = Vec::new();
+        let mut add = |hall: &str| {
+            let hall = hall.trim();
+            if hall.is_empty()
+                || official.iter().any(|h| h.eq_ignore_ascii_case(hall))
+                || out.iter().any(|h: &String| h.eq_ignore_ascii_case(hall))
+            {
+                return;
+            }
+            out.push(hall.to_string());
+        };
+        self.overrides.with(|ovs| {
+            for o in &ovs.items {
+                if let Some(hall) = o.to.as_ref().and_then(|m| m.hall.as_deref()) {
+                    add(hall);
+                }
+            }
+        });
+        for course in self.selected_courses() {
+            if !self.is_custom(&course.code) {
+                continue;
+            }
+            for m in &course.meetings {
+                if let Some(hall) = m.hall.as_deref() {
+                    add(hall);
+                }
+            }
+        }
+        out.sort();
+        out
     }
 
     /// Days for the Halls tab and the free-hall finder: grid days UNION any
