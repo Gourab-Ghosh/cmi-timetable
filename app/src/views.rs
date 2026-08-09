@@ -624,14 +624,14 @@ fn my_timetable(app: App) -> impl IntoView {
                                     {items
                                         .into_iter()
                                         .map(|course| {
-                                            let code = course.code.clone();
+                                            let code = course.code;
                                             let give_code = code.clone();
                                             view! {
                                                 <span style="display:inline-flex;align-items:center;gap:0.3rem">
                                                     {chip(
                                                         app,
                                                         ChipProps {
-                                                            code: code.clone(),
+                                                            code,
                                                             eff: None,
                                                             show_hall: false,
                                                             draggable: true,
@@ -735,7 +735,7 @@ fn my_timetable(app: App) -> impl IntoView {
                                                     <div class="pc-body">
                                                         <div class="pc-top">
                                                             <span class="pc-name">
-                                                                {course.name.clone()}
+                                                                {course.name}
                                                             </span>
                                                             {instructor.map(|i| {
                                                                 view! {
@@ -975,7 +975,7 @@ fn my_courses(app: App) -> impl IntoView {
                                         view! {
                                             <div class="row parked-row">
                                                 {crate::ui::chip(app, crate::ui::ChipProps::list(&c.code))}
-                                                <strong>{c.name.clone()}</strong>
+                                                <strong>{c.name}</strong>
                                                 <span class="muted small">
                                                     {if when.is_empty() {
                                                         "no fixed time".to_string()
@@ -1022,6 +1022,7 @@ fn course_card(app: App, course: Course) -> impl IntoView {
     let shadows = is_custom && app.custom_shadows_official(&code);
     let eff = app.effective_meetings(&course);
     let has_overrides = eff.iter().any(|e| e.overridden);
+    let has_meetings = !eff.is_empty();
     let clash = app.course_has_clash(&code);
     let removed = app.is_removed_upstream(&code);
     let remove_code = code.clone();
@@ -1042,6 +1043,16 @@ fn course_card(app: App, course: Course) -> impl IntoView {
         }
         notes
     };
+    // Built here rather than inside the markup: an `impl IntoView` return
+    // captures every lifetime in scope (edition 2024), so anything borrowing
+    // `course` from inside the view would have to outlive it. Building the
+    // rows eagerly also lets the meetings MOVE out of `eff` instead of being
+    // cloned one by one.
+    let branch_chips: Vec<_> = course.branches.iter().map(|b| branch_chip(app, b)).collect();
+    let meeting_rows: Vec<_> = eff
+        .into_iter()
+        .map(|e| crate::ui::meeting_row(app, &course, e))
+        .collect();
 
     view! {
         <div class="card">
@@ -1092,7 +1103,7 @@ fn course_card(app: App, course: Course) -> impl IntoView {
                             </span>
                         }
                     })}
-                {course.branches.iter().map(|b| branch_chip(app, b)).collect_view()}
+                {branch_chips}
                 {course
                     .optional_flag
                     .then(|| view! { <span class="badge">"+ optional"</span> })}
@@ -1108,16 +1119,7 @@ fn course_card(app: App, course: Course) -> impl IntoView {
                         view! { <span class="badge warn">"No longer on CMI's timetable"</span> }
                     })}
             </div>
-            {(!eff.is_empty())
-                .then(|| {
-                    view! {
-                        <ul class="meetings">
-                            {eff.iter()
-                                .map(|e| crate::ui::meeting_row(app, &course, e.clone()))
-                                .collect_view()}
-                        </ul>
-                    }
-                })}
+            {has_meetings.then(|| view! { <ul class="meetings">{meeting_rows}</ul> })}
             <div class="row" style="margin-top:0.4rem">
                 {is_custom
                     .then(|| {
@@ -1187,13 +1189,17 @@ fn course_card(app: App, course: Course) -> impl IntoView {
 
 fn master_grid(app: App) -> impl IntoView {
     let filtered = Memo::new(move |_| {
-        let snapshot = app.snapshot.get();
+        // This re-runs on every keystroke in the search box, and `.get`
+        // would deep-clone the WHOLE snapshot — halls, bookings and the
+        // gzipped raw pages included — to walk its course list. Take the
+        // courses out and let go of the signal first: `course_matches` can
+        // reach the snapshot itself (the "fits my schedule" filter does),
+        // and that must not happen inside a read of it.
         let f = app.filters();
-        snapshot
-            .courses
-            .iter()
+        let courses = app.snapshot.with(|s| s.courses.clone());
+        courses
+            .into_iter()
             .filter(|c| crate::state::course_matches(&app, c, &f))
-            .cloned()
             .collect::<Vec<_>>()
     });
     let count = Signal::derive(move || filtered.get().len());
@@ -1354,13 +1360,17 @@ fn master_grid(app: App) -> impl IntoView {
 
 fn catalog(app: App) -> impl IntoView {
     let filtered = Memo::new(move |_| {
-        let snapshot = app.snapshot.get();
+        // This re-runs on every keystroke in the search box, and `.get`
+        // would deep-clone the WHOLE snapshot — halls, bookings and the
+        // gzipped raw pages included — to walk its course list. Take the
+        // courses out and let go of the signal first: `course_matches` can
+        // reach the snapshot itself (the "fits my schedule" filter does),
+        // and that must not happen inside a read of it.
         let f = app.filters();
-        snapshot
-            .courses
-            .iter()
+        let courses = app.snapshot.with(|s| s.courses.clone());
+        courses
+            .into_iter()
             .filter(|c| crate::state::course_matches(&app, c, &f))
-            .cloned()
             .collect::<Vec<_>>()
     });
     let count = Signal::derive(move || filtered.get().len());
@@ -1473,6 +1483,9 @@ fn catalog(app: App) -> impl IntoView {
 fn catalog_row(app: App, course: Course) -> impl IntoView {
     let code = course.code.clone();
     let toggle_code = code.clone();
+    let click_code = code.clone();
+    // See course_card: built out here so the markup borrows nothing.
+    let branch_chips: Vec<_> = course.branches.iter().map(|b| branch_chip(app, b)).collect();
     // Rows live in a keyed <For>, so this body runs once per course and is
     // NOT re-run when selection or overrides change — anything derived from
     // those signals must be a memo/closure, or it stays frozen until the
@@ -1527,7 +1540,7 @@ fn catalog_row(app: App, course: Course) -> impl IntoView {
                         }}
                     </div>
                 </div>
-                {course.branches.iter().map(|b| branch_chip(app, b)).collect_view()}
+                {branch_chips}
                 {course.optional_flag.then(|| view! { <span class="badge">"+"</span> })}
                 {(course.status == ScheduleStatus::UnscheduledListed)
                     .then(|| view! { <span class="badge warn">"unscheduled"</span> })}
@@ -1539,15 +1552,11 @@ fn catalog_row(app: App, course: Course) -> impl IntoView {
                 <button
                     class="btn small"
                     class:ghost-accent=move || !app.is_selected(&toggle_code)
-                    on:click={
-                        let c = code.clone();
-                        move |_| app.toggle_select(&c)
-                    }
+                    on:click=move |_| app.toggle_select(&click_code)
                 >
-                    {
-                        let c = code.clone();
-                        move || if app.is_selected(&c) { "Remove" } else { "Add" }
-                    }
+                    // `code` itself: the view macro builds children before
+                    // attributes, so this is its last use either way.
+                    {move || if app.is_selected(&code) { "Remove" } else { "Add" }}
                 </button>
             </div>
         </div>
@@ -1593,6 +1602,7 @@ enum BookingCell {
 /// Decide the above. Shared by the grid (which chip to draw) and the
 /// free-hall finder (whether the room is taken), so the two can never
 /// disagree about what is sitting in a cell.
+#[allow(clippy::too_many_arguments)]
 fn hall_booking_state(
     app: App,
     snapshot: &Snapshot,
@@ -1815,14 +1825,16 @@ fn hall_row(
                     // CMI's two pages can disagree about where a slot ends,
                     // and full-Slot equality would empty the whole table when
                     // they do.
-                    let bookings: Vec<_> = snapshot
+                    // Borrowed, not cloned: the merged week draws a cell for
+                    // every hall × day × slot, and each booking carries its
+                    // own Vec of course codes.
+                    let bookings: Vec<&_> = snapshot
                         .hall_bookings
                         .iter()
                         .filter(|b| {
                             b.hall == hall && b.day == day
                                 && b.slot.start_min == slot.start_min
                         })
-                        .cloned()
                         .collect();
                     view! {
                         <td

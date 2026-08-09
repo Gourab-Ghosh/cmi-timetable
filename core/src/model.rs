@@ -301,7 +301,7 @@ impl Course {
             && self
                 .months_span()
                 .is_some_and(|n| n < Self::DEFAULT_CREDITS))
-        .then(|| self.part_of_semester.as_deref())
+        .then_some(self.part_of_semester.as_deref())
         .flatten()
     }
 

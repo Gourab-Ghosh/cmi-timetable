@@ -290,9 +290,7 @@ pub fn parse_timetable_page(blocks: &[PreBlock]) -> TimetablePage {
                 // label; heading text as fallback; the code as a last resort.
                 let title = grid
                     .leading
-                    .iter()
-                    .filter(|l| find_semester_label(l).is_none())
-                    .next_back()
+                    .iter().rfind(|l| find_semester_label(l).is_none())
                     .cloned()
                     .or_else(|| {
                         let h = block.heading.trim();
@@ -374,7 +372,7 @@ pub fn parse_timetable_page(blocks: &[PreBlock]) -> TimetablePage {
         };
         let fallback = blocks.iter().find_map(|b| {
             year_line(&b.heading)
-                .or_else(|| b.text.lines().take(5).find_map(|l| year_line(l)))
+                .or_else(|| b.text.lines().take(5).find_map(&year_line))
         });
         if let Some(label) = fallback {
             page.warnings.push(format!(

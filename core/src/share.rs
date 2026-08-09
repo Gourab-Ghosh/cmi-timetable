@@ -80,28 +80,26 @@ pub struct UrlState {
 /// Resolve the two query parameters into one state. A malformed `s=` falls
 /// back to `c=` rather than breaking anything.
 pub fn resolve_url_state(c: Option<&str>, s: Option<&str>) -> UrlState {
-    if let Some(encoded) = s {
-        if let Some(payload) = decode_share(encoded) {
-            let mut selection: Vec<String> = Vec::new();
-            for code in payload.c {
-                let code = code.trim().to_string();
-                if !code.is_empty()
-                    && !selection.iter().any(|c| c.eq_ignore_ascii_case(&code))
-                {
-                    selection.push(code);
-                }
+    if let Some(encoded) = s
+        && let Some(payload) = decode_share(encoded)
+    {
+        let mut selection: Vec<String> = Vec::new();
+        for code in payload.c {
+            let code = code.trim().to_string();
+            if !code.is_empty() && !selection.iter().any(|c| c.eq_ignore_ascii_case(&code)) {
+                selection.push(code);
             }
-            let next_id = payload.o.iter().map(|o| o.id + 1).max().unwrap_or(0);
-            return UrlState {
-                selection,
-                overrides: Some(OverridesStore {
-                    next_id,
-                    items: payload.o,
-                    credits: payload.k,
-                }),
-                customs: payload.x,
-            };
         }
+        let next_id = payload.o.iter().map(|o| o.id + 1).max().unwrap_or(0);
+        return UrlState {
+            selection,
+            overrides: Some(OverridesStore {
+                next_id,
+                items: payload.o,
+                credits: payload.k,
+            }),
+            customs: payload.x,
+        };
     }
     UrlState {
         selection: c.map(parse_c_param).unwrap_or_default(),

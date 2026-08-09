@@ -128,7 +128,7 @@ fn apply_url_state(app: App) {
                 None => true,
                 Some(mine) => {
                     if mine != *c {
-                        kept_yours.push(mine.code.clone());
+                        kept_yours.push(mine.code);
                     }
                     false
                 }

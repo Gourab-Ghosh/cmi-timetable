@@ -178,7 +178,7 @@ pub fn merge_overrides(
             None => {
                 // User-created meeting for an unscheduled course.
                 let newly_scheduled = new_meetings.is_some_and(|m| !m.is_empty())
-                    && old_meetings.map_or(true, |m| m.is_empty());
+                    && old_meetings.is_none_or(|m| m.is_empty());
                 if newly_scheduled {
                     let new_m = new_meetings.unwrap();
                     let matches_mine = ov

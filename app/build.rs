@@ -27,12 +27,12 @@ fn git_stamp_deps() -> Vec<String> {
         return Vec::new();
     }
     let mut deps = vec!["../.git/HEAD".to_string()];
-    if let Ok(text) = std::fs::read_to_string(head) {
-        if let Some(git_ref) = text.strip_prefix("ref: ") {
-            let path = format!("../.git/{}", git_ref.trim());
-            if std::path::Path::new(&path).is_file() {
-                deps.push(path);
-            }
+    if let Ok(text) = std::fs::read_to_string(head)
+        && let Some(git_ref) = text.strip_prefix("ref: ")
+    {
+        let path = format!("../.git/{}", git_ref.trim());
+        if std::path::Path::new(&path).is_file() {
+            deps.push(path);
         }
     }
     deps

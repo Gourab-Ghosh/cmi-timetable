@@ -56,10 +56,10 @@ fn label_semantics(label: &str) -> Option<(Vec<u8>, i32)> {
             if !months.contains(&m) {
                 months.push(m);
             }
-        } else if let Ok(y) = token.parse::<i32>() {
-            if (1900..2200).contains(&y) {
-                year = Some(y);
-            }
+        } else if let Ok(y) = token.parse::<i32>()
+            && (1900..2200).contains(&y)
+        {
+            year = Some(y);
         }
     }
     months.sort_unstable();
@@ -335,6 +335,35 @@ fn run_gate(
     });
 }
 
+/// Extra rule-2 detail: verify every branch grid has ≥ 3 day rows and ≥ 4
+/// slot columns. Returns gate checks to append.
+pub fn per_grid_checks(tt: &crate::parse::TimetablePage) -> GateCheck {
+    let mut bad: Vec<String> = Vec::new();
+    for s in &tt.sections {
+        if s.days.len() < 3 || s.slots.len() < 4 {
+            bad.push(format!(
+                "{} ({} day rows, {} slots)",
+                s.branch.code,
+                s.days.len(),
+                s.slots.len()
+            ));
+        }
+    }
+    if bad.is_empty() {
+        GateCheck {
+            rule: "branch grid substance".into(),
+            passed: true,
+            detail: "every branch grid has ≥ 3 day rows and ≥ 4 slots".into(),
+        }
+    } else {
+        GateCheck {
+            rule: "branch grid substance".into(),
+            passed: false,
+            detail: format!("too thin: {}", bad.join(", ")),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -362,34 +391,5 @@ mod tests {
         // mismatch, never passes by default).
         assert_eq!(s("Timetable 2026"), None);
         assert_eq!(s("August--November"), None);
-    }
-}
-
-/// Extra rule-2 detail: verify every branch grid has ≥ 3 day rows and ≥ 4
-/// slot columns. Returns gate checks to append.
-pub fn per_grid_checks(tt: &crate::parse::TimetablePage) -> GateCheck {
-    let mut bad: Vec<String> = Vec::new();
-    for s in &tt.sections {
-        if s.days.len() < 3 || s.slots.len() < 4 {
-            bad.push(format!(
-                "{} ({} day rows, {} slots)",
-                s.branch.code,
-                s.days.len(),
-                s.slots.len()
-            ));
-        }
-    }
-    if bad.is_empty() {
-        GateCheck {
-            rule: "branch grid substance".into(),
-            passed: true,
-            detail: "every branch grid has ≥ 3 day rows and ≥ 4 slots".into(),
-        }
-    } else {
-        GateCheck {
-            rule: "branch grid substance".into(),
-            passed: false,
-            detail: format!("too thin: {}", bad.join(", ")),
-        }
     }
 }

@@ -367,7 +367,7 @@ fn cache_inspector(app: App) -> impl IntoView {
                         view! {
                             <details style="margin-bottom:0.5rem">
                                 <summary>
-                                    <span class="mono">{key.clone()}</span>
+                                    <span class="mono">{key}</span>
                                     <span class="muted small">{format!(" · {size} bytes")}</span>
                                 </summary>
                                 <div class="row" style="display:flex;gap:0.4rem;flex-wrap:wrap;margin:0.4rem 0">
@@ -392,7 +392,7 @@ fn cache_inspector(app: App) -> impl IntoView {
                                     >
                                         "Export to file"
                                     </button>
-                                    <label class="btn small" for=input_id_for.clone()>
+                                    <label class="btn small" for=input_id_for>
                                         "Import from file"
                                     </label>
                                     <input
@@ -414,11 +414,10 @@ fn cache_inspector(app: App) -> impl IntoView {
                                             leptos::task::spawn_local(async move {
                                                 if let Ok(text) = wasm_bindgen_futures::JsFuture::from(file.text())
                                                     .await
+                                                    && let Some(text) = text.as_string()
                                                 {
-                                                    if let Some(text) = text.as_string() {
-                                                        let _ = storage::set_raw(&key, &text);
-                                                        let _ = domx::window().location().reload();
-                                                    }
+                                                    let _ = storage::set_raw(&key, &text);
+                                                    let _ = domx::window().location().reload();
                                                 }
                                             });
                                         }

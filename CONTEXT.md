@@ -70,6 +70,13 @@ and no committed mirror (fixtures exist only for tests/e2e seed).
 - **Build isolation:** `trunk serve` (bg task) races other builds via the
   shared target dir. ALL manual builds/tests use
   `CARGO_TARGET_DIR=~/.rust-target-e2e`, app builds to `--dist dist-e2e`.
+- **Edition 2024** (workspace-wide, `resolver = "3"`). Its one real trap:
+  an `impl Trait` return now captures every lifetime in scope, so a view
+  helper taking `&str`/`&Course` and returning `impl IntoView` must say
+  `+ use<>` (it borrows nothing) or every caller has to keep the argument
+  alive for `'static`. `let` chains (`if let Some(x) = a && cond {}`) are
+  available and used; keep `cargo clippy --workspace --features html
+  --all-targets -- -W clippy::redundant_clone` clean (R26).
 - **Leptos reactivity trap:** a reactive `prop:checked`/`prop:value` closure
   run at build time subscribes the SURROUNDING dynamic-children closure →
   menu rebuilds each filter tick → focus/scroll loss. Pattern: NodeRef +
@@ -89,8 +96,19 @@ and no committed mirror (fixtures exist only for tests/e2e seed).
   input away. Watch the helpers: `course_by_code`, `effective_meetings`,
   `is_custom` all read signals tracked, so wrap them in `untrack(…)`
   (e2e t43, t45 pin this).
-- `snapshot.with(…)`, never `snapshot.get()`, in per-chip/per-check paths:
-  the Snapshot carries the gzipped raw pages, and `.get()` deep-clones it.
+- **`.with(…)`, never `.get()`, for a store you only READ.** The Snapshot
+  carries the gzipped raw pages and `.get()` deep-clones the lot; the same
+  goes for the override store, which `effective_meetings` is asked for once
+  per chip and once per code in every halls cell. Two rules go with it:
+  (1) never nest two reads of the SAME signal — take what you need out
+  first (`let courses = snapshot.with(|s| s.courses.clone())`), because
+  `course_matches` → `fits_schedule` → `selected_courses` reaches the
+  snapshot again; (2) different signals may nest (overrides around snapshot
+  in `grid_days`) (R26).
+- Clash checks are `App::overlaps_selection` — one pass with an early exit,
+  the same pair rule `clashes()` uses (a course never clashes with itself).
+  `clashes()` itself builds the full list, which only the panel needs; a
+  chip asking "am I clashing?" must not pay for it (R26).
 - Empty snapshot (`courses.is_empty()`) ⇔ "never synced" (gate guarantees
   non-empty otherwise). `SourceTier::Bundled` is legacy: discard on load.
 - First sync: `adopt()` canonicalizes verbatim URL codes, skips the
@@ -848,3 +866,23 @@ regenerates the .ics golden.
   strike-through removals, Restore vs Remove); t41 now asserts the edit form
   offers no delete; t04/t17/t18/t30/t35 follow the new markup. Shots 33 and
   34. 66 native + 51/51 e2e. Committed locally, NOT pushed.
+- **R26 (edition 2024 + fewer clones):** user asked to cut cloning and
+  optimize without changing behaviour, and to move to Rust edition 2024.
+  Workspace is now `edition = "2024"` / `resolver = "3"`; the only breakage
+  was the RPIT capture rule — `branch_chip`, `branch_chip_full`,
+  `meeting_row` and `credits_editor` take references and return
+  `impl IntoView`, which now captures those lifetimes, so they say
+  `+ use<>`, and `course_card`/`catalog_row` build their branch chips and
+  meeting rows into a `Vec` before the markup (which also lets the meetings
+  MOVE out of `eff`). Clone/alloc reductions, all behaviour-neutral and
+  clippy-verified: every filter-bar facet reads the snapshot with `.with`
+  instead of deep-cloning it per menu build; the catalog/master-grid filter
+  memos take only the course list (they re-run on every keystroke);
+  `App::effective_meetings` borrows the override store; `grid_days`,
+  `clashes` and `fits_schedule` too; `course_has_clash`/`meeting_has_clash`
+  became `overlaps_selection` (early exit, no pair list); the halls grid
+  borrows its per-cell bookings instead of cloning them; `active_filter_chips`
+  moves each filter list out of its own copy of the filters; ~25 redundant
+  clones removed across app/ and core/. Nested `if let`s became let chains.
+  Verified: clippy clean (incl. `-W clippy::redundant_clone`), 66 native +
+  51/51 e2e, release wasm builds (1.44 MB). Committed locally, NOT pushed.

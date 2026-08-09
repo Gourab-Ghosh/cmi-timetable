@@ -925,10 +925,10 @@ impl App {
                 course,
                 &format!("remove a meeting from {course_name}"),
                 |meetings| {
-                    if let Some(b) = &base {
-                        if let Some(i) = meetings.iter().position(|m| m == b) {
-                            meetings.remove(i);
-                        }
+                    if let Some(b) = &base
+                        && let Some(i) = meetings.iter().position(|m| m == b)
+                    {
+                        meetings.remove(i);
                     }
                 },
             );
@@ -1070,9 +1070,11 @@ impl App {
     // -- derived data --------------------------------------------------------
 
     /// Official meetings with the user's overrides layered on top.
+    /// This is asked once per chip, and once per course code in every cell
+    /// of the halls week — `.with`, so the whole override store isn't cloned
+    /// each time just to be read.
     pub fn effective_meetings(&self, course: &Course) -> Vec<EffMeeting> {
-        let overrides = self.overrides.get();
-        effective_meetings(course, &overrides)
+        self.overrides.with(|overrides| effective_meetings(course, overrides))
     }
 
     /// A selected course no longer present upstream ("No longer on CMI's
@@ -1144,13 +1146,14 @@ impl App {
     /// overrides. Clashes are warnings, never blockers.
     pub fn clashes(&self) -> Vec<ClashPair> {
         let courses = self.selected_courses();
-        let overrides = self.overrides.get();
         let mut all: Vec<(String, Meeting)> = Vec::new();
-        for c in &courses {
-            for eff in effective_meetings(c, &overrides) {
-                all.push((c.code.clone(), eff.meeting));
+        self.overrides.with(|overrides| {
+            for c in &courses {
+                for eff in effective_meetings(c, overrides) {
+                    all.push((c.code.clone(), eff.meeting));
+                }
             }
-        }
+        });
         let mut out = Vec::new();
         for i in 0..all.len() {
             for j in i + 1..all.len() {
@@ -1170,14 +1173,48 @@ impl App {
         out
     }
 
+    /// Does anything else on the timetable overlap this course?
+    ///
+    /// Asked once per chip, and every grid draws dozens of them, so it stops
+    /// at the first overlap instead of building the full list of pairs the
+    /// way `clashes()` has to for the panel.
     pub fn course_has_clash(&self, code: &str) -> bool {
-        self.clashes().iter().any(|c| c.a == code || c.b == code)
+        self.overlaps_selection(code, None)
     }
 
+    /// The same question about ONE meeting of a course.
     pub fn meeting_has_clash(&self, code: &str, meeting: &Meeting) -> bool {
-        self.clashes().iter().any(|c| {
-            (c.a == code && c.day == meeting.day && c.a_slot == meeting.slot)
-                || (c.b == code && c.day == meeting.day && c.b_slot == meeting.slot)
+        self.overlaps_selection(code, Some(meeting))
+    }
+
+    /// Shared engine for both: does `code` (all of it, or just `only`) run
+    /// into any other selected course? Pair selection matches `clashes()`
+    /// exactly — a course never clashes with itself.
+    fn overlaps_selection(&self, code: &str, only: Option<&Meeting>) -> bool {
+        let courses = self.selected_courses();
+        let Some(mine) = courses.iter().find(|c| c.code == code) else {
+            return false;
+        };
+        self.overrides.with(|overrides| {
+            let mut my_slots: Vec<(Day, Slot)> = effective_meetings(mine, overrides)
+                .into_iter()
+                .map(|e| (e.meeting.day, e.meeting.slot))
+                .collect();
+            if let Some(m) = only {
+                my_slots.retain(|(d, s)| *d == m.day && *s == m.slot);
+            }
+            if my_slots.is_empty() {
+                return false;
+            }
+            courses
+                .iter()
+                .filter(|c| c.code != code)
+                .flat_map(|c| effective_meetings(c, overrides))
+                .any(|e| {
+                    my_slots
+                        .iter()
+                        .any(|(d, s)| *d == e.meeting.day && s.overlaps(&e.meeting.slot))
+                })
         })
     }
 
@@ -1186,20 +1223,21 @@ impl App {
         if self.is_selected(&course.code) {
             return true;
         }
-        let overrides = self.overrides.get();
-        let mine: Vec<(Day, Slot)> = self
-            .selected_courses()
-            .iter()
-            .flat_map(|c| {
-                effective_meetings(c, &overrides)
-                    .into_iter()
-                    .map(|e| (e.meeting.day, e.meeting.slot))
-            })
-            .collect();
-        effective_meetings(course, &overrides).iter().all(|e| {
-            !mine
+        let selected = self.selected_courses();
+        self.overrides.with(|overrides| {
+            let mine: Vec<(Day, Slot)> = selected
                 .iter()
-                .any(|(d, s)| *d == e.meeting.day && s.overlaps(&e.meeting.slot))
+                .flat_map(|c| {
+                    effective_meetings(c, overrides)
+                        .into_iter()
+                        .map(|e| (e.meeting.day, e.meeting.slot))
+                })
+                .collect();
+            effective_meetings(course, overrides).iter().all(|e| {
+                !mine
+                    .iter()
+                    .any(|(d, s)| *d == e.meeting.day && s.overlaps(&e.meeting.slot))
+            })
         })
     }
 
@@ -1249,27 +1287,29 @@ impl App {
     /// invisible). One list for every grid AND for drag/keyboard-move
     /// targets, so a row that exists on screen is always reachable.
     pub fn grid_days(&self) -> Vec<Day> {
-        let overrides = self.overrides.get();
         let mut days = vec![Day::Mon, Day::Tue, Day::Wed, Day::Thu, Day::Fri];
-        // `with`, not `get`: this runs for every grid body, day strip and
-        // facet, and `get` would deep-clone the whole Snapshot (gzipped raw
-        // pages included) each time.
-        self.snapshot.with(|snapshot| {
-            for c in &snapshot.courses {
-                for e in effective_meetings(c, &overrides) {
+        // `with`, not `get`, for BOTH stores: this runs for every grid body,
+        // day strip and facet, and `get` would deep-clone the whole Snapshot
+        // (gzipped raw pages included) and every override each time.
+        let selected = self.selected_courses();
+        self.overrides.with(|overrides| {
+            self.snapshot.with(|snapshot| {
+                for c in &snapshot.courses {
+                    for e in effective_meetings(c, overrides) {
+                        if !days.contains(&e.meeting.day) {
+                            days.push(e.meeting.day);
+                        }
+                    }
+                }
+            });
+            for c in &selected {
+                for e in effective_meetings(c, overrides) {
                     if !days.contains(&e.meeting.day) {
                         days.push(e.meeting.day);
                     }
                 }
             }
         });
-        for c in self.selected_courses() {
-            for e in effective_meetings(&c, &overrides) {
-                if !days.contains(&e.meeting.day) {
-                    days.push(e.meeting.day);
-                }
-            }
-        }
         days.sort_by_key(|d| d.index());
         days
     }

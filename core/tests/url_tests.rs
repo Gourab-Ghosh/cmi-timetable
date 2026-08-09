@@ -187,7 +187,7 @@ fn custom_courses_ride_the_share_payload() {
     assert_eq!(timeless.status, ScheduleStatus::UnscheduledListed);
 
     let selection = codes(&["TOC", "YOGA"]);
-    let encoded = encode_share(&selection, &OverridesStore::default(), &[yoga.clone()]);
+    let encoded = encode_share(&selection, &OverridesStore::default(), std::slice::from_ref(&yoga));
     let state = resolve_url_state(None, Some(&encoded));
     assert_eq!(state.selection, selection);
     assert_eq!(state.customs, vec![yoga.clone()]);
@@ -203,7 +203,7 @@ fn custom_courses_ride_the_share_payload() {
     // Store semantics: case-insensitive lookup, upsert replaces, remove
     // reports whether anything went.
     let mut store = CustomStore::default();
-    store.upsert(yoga.clone());
+    store.upsert(yoga);
     assert!(store.get("yoga").is_some());
     let renamed = Course::custom("YOGA".into(), "Morning yoga".into(), vec![], 1, vec![]);
     store.upsert(renamed);

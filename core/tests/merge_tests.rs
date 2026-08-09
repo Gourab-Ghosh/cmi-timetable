@@ -103,7 +103,7 @@ fn row4_cmi_matches_override_dropped() {
     let mine = mtg(Day::Thu, 840, 915, "Lecture Hall 6");
     let old = snap(vec![course("MFD", vec![official.clone()])]);
     let new = snap(vec![course("MFD", vec![mine.clone()])]);
-    let store = store_with("MFD", Some(official), mine.clone());
+    let store = store_with("MFD", Some(official), mine);
     let r = merge_overrides(&old, &new, &[], &store);
     assert!(r.conflicts.is_empty());
     assert_eq!(r.dropped_matching.len(), 1);
@@ -140,20 +140,20 @@ fn conflict_resolution_paths() {
     let cmi_new = mtg(Day::Wed, 930, 1005, "Lecture Hall 803");
     let old = snap(vec![course("MFD", vec![official.clone()])]);
     let new = snap(vec![course("MFD", vec![cmi_new.clone()])]);
-    let store = store_with("MFD", Some(official), mine.clone());
+    let store = store_with("MFD", Some(official), mine);
     let r = merge_overrides(&old, &new, &[], &store);
     let conflict = r.conflicts[0].clone();
 
     // Keep mine → base becomes CMI's new meeting; re-merging is quiet.
     let mut kept = r.overrides.clone();
     resolve_conflict(&mut kept, &conflict, true);
-    assert_eq!(kept.items[0].base, Some(cmi_new.clone()));
+    assert_eq!(kept.items[0].base, Some(cmi_new));
     let r2 = merge_overrides(&new, &new, &[], &kept);
     assert!(r2.conflicts.is_empty());
     assert_eq!(r2.overrides.items.len(), 1);
 
     // Use CMI's → override removed.
-    let mut dropped = r.overrides.clone();
+    let mut dropped = r.overrides;
     resolve_conflict(&mut dropped, &conflict, false);
     assert!(dropped.items.is_empty());
 }
@@ -223,7 +223,7 @@ fn meeting_deleted_upstream() {
     let mine = mtg(Day::Thu, 840, 915, "Lecture Hall 6");
     let old = snap(vec![course("MFD", vec![official.clone(), other.clone()])]);
     let new = snap(vec![course("MFD", vec![other])]);
-    let store = store_with("MFD", Some(official), mine.clone());
+    let store = store_with("MFD", Some(official), mine);
     let r = merge_overrides(&old, &new, &[], &store);
     assert_eq!(r.conflicts.len(), 1);
     assert!(r.conflicts[0].theirs.is_empty());
@@ -241,7 +241,7 @@ fn hall_change_is_a_change() {
     let official = WED_OFFICIAL();
     let rehalled = Meeting {
         hall: Some("Lecture Hall 801".to_string()),
-        ..official.clone()
+        ..official
     };
     let mine = mtg(Day::Thu, 840, 915, "Lecture Hall 6");
     let old = snap(vec![course("MFD", vec![official.clone()])]);

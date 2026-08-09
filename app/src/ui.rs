@@ -138,9 +138,9 @@ pub fn chip(app: App, p: ChipProps) -> impl IntoView {
         aria_pre.push_str(&format!(
             ", {}",
             if hall_text == "TBA" {
-                "hall to be announced".to_string()
+                "hall to be announced"
             } else {
-                hall_text.clone()
+                hall_text.as_str()
             }
         ));
     }
@@ -162,7 +162,6 @@ pub fn chip(app: App, p: ChipProps) -> impl IntoView {
     let aria = {
         let code = p.code.clone();
         let warn_wont_fit = p.warn_wont_fit;
-        let aria_when = aria_when.clone();
         Memo::new(move |_| {
             let name = identity.with(|(n, _, _)| n.clone());
             let mut aria = format!("{code}, {name}{aria_when}{aria_pre}");
@@ -272,14 +271,14 @@ pub fn chip(app: App, p: ChipProps) -> impl IntoView {
             }}
             {p.warn_wont_fit
                 .then(|| view! { <span class="wontfit" aria-hidden="true">"⚠"</span> })}
-            <span class="code">{p.code.clone()}</span>
+            <span class="code">{p.code}</span>
             {sub.map(|s| view! { <span class="hall">{s}</span> })}
             {temp.then(|| view! { <span class="hall">"TMP"</span> })}
         </button>
     }
 }
 
-pub fn branch_chip(app: App, code: &str) -> impl IntoView {
+pub fn branch_chip(app: App, code: &str) -> impl IntoView + use<> {
     let code = code.to_string();
     let hue = hues::branch_hue(&code);
     // Reactive: a sync can rename a branch without touching any course, and
@@ -301,13 +300,13 @@ pub fn branch_chip(app: App, code: &str) -> impl IntoView {
             title=move || label.get()
             aria-label=move || label.get()
         >
-            {code.clone()}
+            {code}
         </span>
     }
 }
 
 /// Full-text variant for the details popover: "OCS2 · CS Electives 2".
-pub fn branch_chip_full(app: App, code: &str) -> impl IntoView {
+pub fn branch_chip_full(app: App, code: &str) -> impl IntoView + use<> {
     let title = app
         .snapshot
         .with(|s| s.branch(code).map(|b| b.title.clone()))
@@ -795,10 +794,9 @@ fn facet_menu(
                 if let Some(el) = ev
                     .target()
                     .and_then(|t| t.dyn_into::<web_sys::Element>().ok())
+                    && el.has_attribute("open")
                 {
-                    if el.has_attribute("open") {
-                        crate::domx::close_open_facets(Some(&el));
-                    }
+                    crate::domx::close_open_facets(Some(&el));
                 }
             }
         >
@@ -823,7 +821,7 @@ fn facet_menu(
                         class="btn small"
                         title="Tick every option shown below"
                         on:click=move |_| {
-                            let picks: Vec<String> = untrack(|| visible_all())
+                            let picks: Vec<String> = untrack(&visible_all)
                                 .into_iter()
                                 .map(|(k, _)| k)
                                 .collect();
@@ -840,7 +838,7 @@ fn facet_menu(
                         class="btn small"
                         title="Untick every option shown below"
                         on:click=move |_| {
-                            let picks: Vec<String> = untrack(|| visible_none())
+                            let picks: Vec<String> = untrack(&visible_none)
                                 .into_iter()
                                 .map(|(k, _)| k)
                                 .collect();
@@ -872,7 +870,10 @@ fn facet_menu(
 }
 
 pub fn filter_bar(app: App, result_count: Signal<usize>) -> impl IntoView {
-    let snapshot = move || app.snapshot.get();
+    // Every option list reads the snapshot through `.with`, never `.get`: a
+    // facet only ever wants one field of it, and `.get` would deep-clone the
+    // whole thing — courses, halls, bookings and the gzipped raw pages —
+    // each time a menu is built.
 
     view! {
         <div class="filterbar" role="group" aria-label="Filters">
@@ -884,7 +885,7 @@ pub fn filter_bar(app: App, result_count: Signal<usize>) -> impl IntoView {
                 on:input=move |ev| {
                     let text = event_target_value(&ev);
                     // Coalesced: one undo step per burst of typing.
-                    app.act_filters("the search text", true, move |f| f.text = text.clone());
+                    app.act_filters("the search text", true, move |f| f.text = text);
                 }
             />
             {facet_menu(
@@ -892,11 +893,12 @@ pub fn filter_bar(app: App, result_count: Signal<usize>) -> impl IntoView {
                 "Branch",
                 move || app.filters().branches.len(),
                 std::sync::Arc::new(move || {
-                    snapshot()
-                        .branches
-                        .iter()
-                        .map(|b| (b.code.clone(), format!("{} — {}", b.code, b.title)))
-                        .collect()
+                    app.snapshot.with(|s| {
+                        s.branches
+                            .iter()
+                            .map(|b| (b.code.clone(), format!("{} — {}", b.code, b.title)))
+                            .collect()
+                    })
                 }),
                 |f, k| f.branches.iter().any(|x| x == k),
                 |f, k, on| toggle_vec(&mut f.branches, k.to_string(), on),
@@ -906,11 +908,9 @@ pub fn filter_bar(app: App, result_count: Signal<usize>) -> impl IntoView {
                 "Instructor",
                 move || app.filters().instructors.len(),
                 std::sync::Arc::new(move || {
-                    let mut names: Vec<String> = snapshot()
-                        .courses
-                        .iter()
-                        .flat_map(|c| c.instructors.clone())
-                        .collect();
+                    let mut names: Vec<String> = app.snapshot.with(|s| {
+                        s.courses.iter().flat_map(|c| c.instructors.clone()).collect()
+                    });
                     names.sort();
                     names.dedup();
                     names.into_iter().map(|n| (n.clone(), n)).collect()
@@ -968,10 +968,9 @@ pub fn filter_bar(app: App, result_count: Signal<usize>) -> impl IntoView {
                     // own-hall read is UNTRACKED: an option list that
                     // subscribed to the overrides would rebuild itself under
                     // the cursor on every drag or undo (see §4).
-                    snapshot()
-                        .halls
-                        .iter()
-                        .cloned()
+                    app.snapshot
+                        .with(|s| s.halls.clone())
+                        .into_iter()
                         .chain(untrack(|| app.user_halls()))
                         .map(|h| (h.clone(), h))
                         .collect()
@@ -984,9 +983,9 @@ pub fn filter_bar(app: App, result_count: Signal<usize>) -> impl IntoView {
                 "Credits",
                 move || app.filters().credits.len(),
                 std::sync::Arc::new(move || {
-                    let snap = snapshot();
-                    let mut values: Vec<u8> =
-                        snap.courses.iter().map(|c| app.course_credits(c)).collect();
+                    let mut values: Vec<u8> = app
+                        .snapshot
+                        .with(|s| s.courses.iter().map(|c| app.course_credits(c)).collect());
                     values.sort_unstable();
                     values.dedup();
                     values
@@ -1006,11 +1005,12 @@ pub fn filter_bar(app: App, result_count: Signal<usize>) -> impl IntoView {
                 "Course",
                 move || app.filters().courses.len(),
                 std::sync::Arc::new(move || {
-                    snapshot()
-                        .courses
-                        .iter()
-                        .map(|c| (c.code.clone(), format!("{} — {}", c.code, c.name)))
-                        .collect()
+                    app.snapshot.with(|s| {
+                        s.courses
+                            .iter()
+                            .map(|c| (c.code.clone(), format!("{} — {}", c.code, c.name)))
+                            .collect()
+                    })
                 }),
                 |f, k| f.courses.iter().any(|x| x == k),
                 |f, k, on| toggle_vec(&mut f.courses, k.to_string(), on),
@@ -1070,44 +1070,48 @@ pub fn filter_bar(app: App, result_count: Signal<usize>) -> impl IntoView {
     }
 }
 
+/// A chip in the "active filters" line: its label, and how to take that one
+/// filter back off.
+type FilterChip = (String, Box<dyn Fn(&mut Filters) + Send + Sync>);
+
 fn active_filter_chips(app: App) -> impl IntoView {
+    // `f` is this component's own copy of the filters, so each list is MOVED
+    // out of it field by field — the labels are the same strings, not copies
+    // of them, and only the value each remover closure has to keep is cloned.
     let f = app.filters();
-    let mut chips: Vec<(String, Box<dyn Fn(&mut Filters) + Send + Sync>)> = Vec::new();
-    for b in f.branches.clone() {
+    let mut chips: Vec<FilterChip> = Vec::new();
+    for b in f.branches {
         let b2 = b.clone();
-        chips.push((b.clone(), Box::new(move |f| f.branches.retain(|x| x != &b2))));
+        chips.push((b, Box::new(move |f| f.branches.retain(|x| x != &b2))));
     }
-    for i in f.instructors.clone() {
+    for i in f.instructors {
         let i2 = i.clone();
-        chips.push((i.clone(), Box::new(move |f| f.instructors.retain(|x| x != &i2))));
+        chips.push((i, Box::new(move |f| f.instructors.retain(|x| x != &i2))));
     }
-    for d in f.days.clone() {
+    for d in f.days {
         chips.push((d.full().to_string(), Box::new(move |f| f.days.retain(|x| *x != d))));
     }
-    for s in f.slot_starts.clone() {
+    for s in f.slot_starts {
         chips.push((
             Slot::new(s, s).start_label(),
             Box::new(move |f| f.slot_starts.retain(|x| *x != s)),
         ));
     }
-    for h in f.halls.clone() {
+    for h in f.halls {
         let h2 = h.clone();
-        chips.push((h.clone(), Box::new(move |f| f.halls.retain(|x| x != &h2))));
+        chips.push((h, Box::new(move |f| f.halls.retain(|x| x != &h2))));
     }
-    for c in f.credits.clone() {
-        let c2 = c.clone();
-        chips.push((
-            format!("{c} credit{}", if c == "1" { "" } else { "s" }),
-            Box::new(move |f| f.credits.retain(|x| x != &c2)),
-        ));
+    for c in f.credits {
+        let label = format!("{c} credit{}", if c == "1" { "" } else { "s" });
+        chips.push((label, Box::new(move |f| f.credits.retain(|x| x != &c))));
     }
-    for flag in f.flags.clone() {
+    for flag in f.flags {
         let f2 = flag.clone();
-        chips.push((flag.clone(), Box::new(move |f| f.flags.retain(|x| x != &f2))));
+        chips.push((flag, Box::new(move |f| f.flags.retain(|x| x != &f2))));
     }
-    for c in f.courses.clone() {
+    for c in f.courses {
         let c2 = c.clone();
-        chips.push((c.clone(), Box::new(move |f| f.courses.retain(|x| x != &c2))));
+        chips.push((c, Box::new(move |f| f.courses.retain(|x| x != &c2))));
     }
     if !f.text.trim().is_empty() {
         chips.push((format!("“{}”", f.text.trim()), Box::new(|f| f.text.clear())));
@@ -1120,11 +1124,12 @@ fn active_filter_chips(app: App) -> impl IntoView {
         .into_iter()
         .map(|(label, remove)| {
             let undo_label = format!("remove the {label} filter");
+            let aria = format!("Remove filter {label}");
             view! {
                 <span class="filterchip">
-                    {label.clone()}
+                    {label}
                     <button
-                        aria-label=format!("Remove filter {label}")
+                        aria-label=aria
                         on:click=move |_| {
                             app.act_filters(&undo_label, false, |f| remove(f));
                         }
@@ -1337,7 +1342,7 @@ fn status_badges(course: &Course) -> impl IntoView + use<> {
         .collect_view()
 }
 
-pub fn meeting_row(app: App, course: &Course, eff: EffMeeting) -> impl IntoView {
+pub fn meeting_row(app: App, course: &Course, eff: EffMeeting) -> impl IntoView + use<> {
     let code = course.code.clone();
     let m = eff.meeting.clone();
     let clash = app.is_selected(&code) && app.meeting_has_clash(&code, &m);
@@ -1437,7 +1442,7 @@ pub fn meeting_row(app: App, course: &Course, eff: EffMeeting) -> impl IntoView 
             // The counterpart to "Add a meeting": strike this one from the
             // timetable. Restorable from Your changes / My data, undoable.
             {
-                let remove_code = code.clone();
+                let remove_code = code;
                 let remove_eff = eff.clone();
                 view! {
                     <button
@@ -1465,7 +1470,7 @@ pub fn meeting_row(app: App, course: &Course, eff: EffMeeting) -> impl IntoView 
 /// value, lets the user overwrite it, and offers a one-click reset back to
 /// it. For the user's own courses there is no official value: editing
 /// writes the definition, so no comparison and no reset are shown.
-fn credits_editor(app: App, course: &Course) -> impl IntoView {
+fn credits_editor(app: App, course: &Course) -> impl IntoView + use<> {
     let code = course.code.clone();
     let official = course.effective_credits();
     let official_assumed = course.credits_assumed();
@@ -1509,7 +1514,7 @@ fn credits_editor(app: App, course: &Course) -> impl IntoView {
                 let official_short = official_short.clone();
                 let remember = remember.clone();
                 if editing.get() {
-                    let save_code = code.clone();
+                    let save_code = code;
                     let (remember_input, remember_save, remember_cancel) =
                         (remember.clone(), remember.clone(), remember);
                     view! {
@@ -1572,7 +1577,7 @@ fn credits_editor(app: App, course: &Course) -> impl IntoView {
                         None => official_label,
                     };
                     let edit_start = custom.unwrap_or(official);
-                    let reset_code = code.clone();
+                    let reset_code = code;
                     view! {
                         <span>{shown}</span>
                         <button
@@ -1617,7 +1622,7 @@ fn details_dialog(app: App, code: String) -> impl IntoView {
         let remove_code = code.clone();
         return view! {
             <div>
-                <h2 class="mono">{code.clone()}</h2>
+                <h2 class="mono">{code}</h2>
                 <p>"This course isn't in CMI's current timetable data."</p>
                 {selected
                     .then(|| {
@@ -1892,7 +1897,6 @@ fn details_dialog(app: App, code: String) -> impl IntoView {
                 // labeled differently when CMI gave it none to begin with.
                 {
                     let no_meetings = eff.is_empty();
-                    let give_code = give_code.clone();
                     view! {
                         <button
                             class="btn"
@@ -2296,7 +2300,7 @@ fn my_data_dialog(app: App) -> impl IntoView {
                                 view! {
                                     <div class="row data-row">
                                         <span class="mono">{c.code.clone()}</span>
-                                        <span>{c.name.clone()}</span>
+                                        <span>{c.name}</span>
                                         <span class="muted small">
                                             {if on_grid {
                                                 "on your timetable"
@@ -2435,7 +2439,6 @@ fn hall_picker(
     let other_id = format!("{select_id}-other");
 
     let on_change = {
-        let known = known.clone();
         let other_id = other_id.clone();
         move |ev: web_sys::Event| {
             let v = event_target_value(&ev);
@@ -2542,11 +2545,11 @@ fn edit_meeting_dialog(
     let own_halls = untrack(|| app.user_halls());
 
     let day_idx = RwSignal::new(init.day.index());
-    let is_custom = RwSignal::new(!slots.iter().any(|s| *s == init.slot));
+    let is_custom = RwSignal::new(!slots.contains(&init.slot));
     let slot_start = RwSignal::new(init.slot.start_min);
     let custom_start = RwSignal::new(init.slot.start_label());
     let custom_end = RwSignal::new(init.slot.end_label());
-    let hall = RwSignal::new(init.hall.clone().unwrap_or_default());
+    let hall = RwSignal::new(init.hall.unwrap_or_default());
     let error = RwSignal::new(String::new());
 
     let slots_for_save = slots.clone();
@@ -2791,7 +2794,7 @@ impl MeetRowDraft {
     }
 
     fn from_meeting(key: u64, m: &Meeting, slots: &[Slot]) -> MeetRowDraft {
-        let official = slots.iter().any(|s| *s == m.slot);
+        let official = slots.contains(&m.slot);
         MeetRowDraft {
             key,
             day: RwSignal::new(m.day.index()),
@@ -2803,7 +2806,7 @@ impl MeetRowDraft {
     }
 
     /// The row's meeting, if its fields parse. `Err` carries what's wrong.
-    fn to_meeting(&self, slots: &[Slot]) -> Result<Meeting, String> {
+    fn to_meeting(self, slots: &[Slot]) -> Result<Meeting, String> {
         let day = Day::ALL[self.day.get_untracked().min(Day::ALL.len() - 1)];
         let slot = match self.preset.get_untracked() {
             Some(start) => *slots
@@ -2922,11 +2925,11 @@ fn custom_course_dialog(
 
     // Live, per-row clash preview against everything else on the timetable.
     // Non-blocking, like every clash in this app.
-    let own_code = edit.clone().unwrap_or_default();
+    let own_code = edit.unwrap_or_default();
     let clash_text = {
         let slots = slots.clone();
         move |row: &MeetRowDraft| {
-            let row = row.clone();
+            let row = *row;
             let slots = slots.clone();
             let own = own_code.clone();
             Memo::new(move |_| {
@@ -3222,8 +3225,6 @@ fn custom_course_dialog(
                 each=move || rows.get()
                 key=|row| row.key
                 children={
-                    let slots = slots.clone();
-                    let halls = halls.clone();
                     move |row| {
                         let clash = clash_text(&row);
                         let row_key = row.key;
@@ -3245,7 +3246,7 @@ fn custom_course_dialog(
                                 aria-label=move || format!("Meeting {}", row_n())
                             >
                                 <select
-                                    id=day_id.clone()
+                                    id=day_id
                                     aria-label="Day"
                                     on:change=move |ev| {
                                         if let Ok(i) = event_target_value(&ev).parse::<usize>() {
@@ -3753,7 +3754,7 @@ fn share_dialog(app: App) -> impl IntoView {
                     }
                 })}
             <div class="fieldrow">
-                <input type="text" readonly prop:value=plain.clone() style="flex:1" aria-label="Share link" />
+                <input type="text" readonly prop:value=plain style="flex:1" aria-label="Share link" />
                 <button
                     class="btn"
                     on:click=move |_| {
@@ -3768,7 +3769,7 @@ fn share_dialog(app: App) -> impl IntoView {
                 <input
                     type="text"
                     readonly
-                    prop:value=with_times.clone()
+                    prop:value=with_times
                     style="flex:1"
                     aria-label="Share link including custom times"
                 />

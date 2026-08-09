@@ -102,12 +102,11 @@ pub fn all_entries() -> Vec<(String, String)> {
     let mut out = Vec::new();
     let len = storage.length().unwrap_or(0);
     for i in 0..len {
-        if let Ok(Some(key)) = storage.key(i) {
-            if key.starts_with("cmitt.") {
-                if let Ok(Some(value)) = storage.get_item(&key) {
-                    out.push((key, value));
-                }
-            }
+        if let Ok(Some(key)) = storage.key(i)
+            && key.starts_with("cmitt.")
+            && let Ok(Some(value)) = storage.get_item(&key)
+        {
+            out.push((key, value));
         }
     }
     out.sort();

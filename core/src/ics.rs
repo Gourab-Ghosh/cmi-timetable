@@ -113,27 +113,26 @@ fn course_range(
 ) -> (CivilDate, CivilDate) {
     let mut start = range_start;
     let mut end = range_end;
-    if let Some((d, mon)) = &course.starts {
-        if let Some(m) = month_from_token(mon) {
-            let candidate = month_date_in_range(range_start, range_end, m, |y| {
-                (*d).clamp(1, last_day_of_month(y, m))
-            });
-            if let Some(candidate) = candidate {
-                if candidate > start {
-                    start = candidate;
-                }
-            }
+    if let Some((d, mon)) = &course.starts
+        && let Some(m) = month_from_token(mon)
+    {
+        let candidate = month_date_in_range(range_start, range_end, m, |y| {
+            (*d).clamp(1, last_day_of_month(y, m))
+        });
+        if let Some(candidate) = candidate
+            && candidate > start
+        {
+            start = candidate;
         }
     }
     if let Some(part) = &course.part_of_semester {
         let mut months = part.split(['-', '\u{2013}']);
         let m1 = months.next().and_then(month_from_token);
-        if let Some(m1) = m1 {
-            if let Some(candidate) = month_date_in_range(range_start, range_end, m1, |_| 1) {
-                if candidate > start {
-                    start = candidate;
-                }
-            }
+        if let Some(m1) = m1
+            && let Some(candidate) = month_date_in_range(range_start, range_end, m1, |_| 1)
+            && candidate > start
+        {
+            start = candidate;
         }
         // A single-month note ("(Sep)") ends in its own month; a range ends
         // in its second month.
@@ -147,10 +146,10 @@ fn course_range(
             // that occurs twice in a long range picks the right year.
             let candidate =
                 month_date_in_range(start, range_end, m2, |y| last_day_of_month(y, m2));
-            if let Some(candidate) = candidate {
-                if candidate < end {
-                    end = candidate;
-                }
+            if let Some(candidate) = candidate
+                && candidate < end
+            {
+                end = candidate;
             }
         }
     }

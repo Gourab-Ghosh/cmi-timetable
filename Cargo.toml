@@ -1,10 +1,10 @@
 [workspace]
-resolver = "2"
+resolver = "3"
 members = ["core", "app", "sync"]
 
 [workspace.package]
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }

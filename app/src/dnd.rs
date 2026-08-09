@@ -85,11 +85,11 @@ pub fn chip_pointer_down(app: App, ev: &web_sys::PointerEvent, spec: DragSpec) {
         clear_longpress();
         let timer = gloo_timers::callback::Timeout::new(LONGPRESS_MS, move || {
             drag.update(|d| {
-                if let Some(d) = d {
-                    if d.awaiting_longpress {
-                        d.awaiting_longpress = false;
-                        d.started = true;
-                    }
+                if let Some(d) = d
+                    && d.awaiting_longpress
+                {
+                    d.awaiting_longpress = false;
+                    d.started = true;
                 }
             });
         });
@@ -120,18 +120,18 @@ fn edge_autoscroll(x: f64, y: f64) {
         win.scroll_by_with_x_and_y(0.0, EDGE_SCROLL_STEP);
     }
     // Horizontal: scroll the grid container under the pointer.
-    if let Some(el) = domx::document().element_from_point(x as f32, y as f32) {
-        if let Ok(Some(scroller)) = el.closest(".grid-scroll") {
-            let width = win
-                .inner_width()
-                .ok()
-                .and_then(|v| v.as_f64())
-                .unwrap_or(0.0);
-            if x < EDGE_SCROLL_ZONE {
-                scroller.set_scroll_left(scroller.scroll_left() - EDGE_SCROLL_STEP as i32);
-            } else if x > width - EDGE_SCROLL_ZONE {
-                scroller.set_scroll_left(scroller.scroll_left() + EDGE_SCROLL_STEP as i32);
-            }
+    if let Some(el) = domx::document().element_from_point(x as f32, y as f32)
+        && let Ok(Some(scroller)) = el.closest(".grid-scroll")
+    {
+        let width = win
+            .inner_width()
+            .ok()
+            .and_then(|v| v.as_f64())
+            .unwrap_or(0.0);
+        if x < EDGE_SCROLL_ZONE {
+            scroller.set_scroll_left(scroller.scroll_left() - EDGE_SCROLL_STEP as i32);
+        } else if x > width - EDGE_SCROLL_ZONE {
+            scroller.set_scroll_left(scroller.scroll_left() + EDGE_SCROLL_STEP as i32);
         }
     }
 }
@@ -168,7 +168,7 @@ pub fn perform_drop(
     let to = Meeting {
         day,
         slot,
-        hall: hall.clone(),
+        hall,
         temp_booking: false,
     };
     let mut where_label =
@@ -179,16 +179,15 @@ pub fn perform_drop(
 
     // Dropped back onto the official cell (and, in the Halls view, the
     // official hall) → reset any override.
-    if let Some(base) = &spec.base {
-        if base.day == day
-            && base.slot == slot
-            && (target_hall.is_none() || base.hall == target_hall)
-        {
-            if let Some(id) = spec.ov_id {
-                app.reset_override(id, Some(format!("{} back on CMI's time", spec.code)));
-            }
-            return true;
+    if let Some(base) = &spec.base
+        && base.day == day
+        && base.slot == slot
+        && (target_hall.is_none() || base.hall == target_hall)
+    {
+        if let Some(id) = spec.ov_id {
+            app.reset_override(id, Some(format!("{} back on CMI's time", spec.code)));
         }
+        return true;
     }
 
     if spec.from_master && !app.is_selected(&spec.code) {

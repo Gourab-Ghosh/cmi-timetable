@@ -62,10 +62,10 @@ fn parse_month_span(inner: &str) -> Option<String> {
 
 pub fn extract_name_notes(name: &str) -> NameNotes {
     let mut notes = NameNotes::default();
-    if let Some(caps) = STARTS_RE.captures(name) {
-        if let Ok(d) = caps.get(1).unwrap().as_str().parse::<u8>() {
-            notes.starts = Some((d, caps.get(2).unwrap().as_str().to_string()));
-        }
+    if let Some(caps) = STARTS_RE.captures(name)
+        && let Ok(d) = caps.get(1).unwrap().as_str().parse::<u8>()
+    {
+        notes.starts = Some((d, caps.get(2).unwrap().as_str().to_string()));
     }
     if let Some(caps) = CREDITS_RE.captures(name) {
         notes.credits = caps.get(1).unwrap().as_str().parse::<u8>().ok();
@@ -173,13 +173,13 @@ pub fn join_pages(tt: &TimetablePage, hp: &HallsPage) -> Joined {
     // 3. Halls legend (canonical names/instructors; also the full catalog).
     for entry in &hp.legend {
         let b = builders.entry(entry.code.clone()).or_default();
-        if let Some(tt_name) = &b.tt_name {
-            if *tt_name != entry.name {
-                warnings.push(format!(
-                    "{}: legends disagree on the name — timetable {tt_name:?}, halls {:?} (halls kept)",
-                    entry.code, entry.name
-                ));
-            }
+        if let Some(tt_name) = &b.tt_name
+            && *tt_name != entry.name
+        {
+            warnings.push(format!(
+                "{}: legends disagree on the name — timetable {tt_name:?}, halls {:?} (halls kept)",
+                entry.code, entry.name
+            ));
         }
         b.halls_name = Some(entry.name.clone());
         b.halls_instr = entry.instructors_raw.clone();
