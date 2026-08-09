@@ -149,7 +149,10 @@ fn removals_round_trip_and_old_payloads_still_load() {
     }"#;
     let o: MeetingOverride = serde_json::from_str(legacy).expect("legacy JSON loads");
     assert!(!o.is_removal());
-    assert_eq!(o.to.as_ref().and_then(|m| m.hall.clone()).as_deref(), Some("Lecture Hall 803"));
+    assert_eq!(
+        o.to.as_ref().and_then(|m| m.hall.clone()).as_deref(),
+        Some("Lecture Hall 803")
+    );
 }
 
 /// The user's own courses ride the share payload and come back whole; links
@@ -187,7 +190,11 @@ fn custom_courses_ride_the_share_payload() {
     assert_eq!(timeless.status, ScheduleStatus::UnscheduledListed);
 
     let selection = codes(&["TOC", "YOGA"]);
-    let encoded = encode_share(&selection, &OverridesStore::default(), std::slice::from_ref(&yoga));
+    let encoded = encode_share(
+        &selection,
+        &OverridesStore::default(),
+        std::slice::from_ref(&yoga),
+    );
     let state = resolve_url_state(None, Some(&encoded));
     assert_eq!(state.selection, selection);
     assert_eq!(state.customs, vec![yoga.clone()]);

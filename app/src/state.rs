@@ -7,8 +7,8 @@ use serde::{Deserialize, Serialize};
 use ttcore::diff::SnapshotDiff;
 use ttcore::merge::Conflict;
 use ttcore::model::{
-    Course, CustomStore, Day, Meeting, OverridesStore, ParseReport, ScheduleStatus, Slot,
-    Snapshot, SourceTier,
+    Course, CustomStore, Day, Meeting, OverridesStore, ParseReport, ScheduleStatus, Slot, Snapshot,
+    SourceTier,
 };
 
 pub const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -209,7 +209,9 @@ pub enum Dialog {
         create: bool,
     },
     Conflicts,
-    Export { scope: Option<String> },
+    Export {
+        scope: Option<String>,
+    },
     Share,
     WhatChanged,
     /// Create (`edit: None`) or edit one of the user's own courses.
@@ -413,7 +415,10 @@ impl App {
         // A transient banner (e.g. "couldn't sync") must never clobber a
         // sticky notice (e.g. "your data was set aside — nothing deleted"):
         // the sticky one carries information the user can't recover.
-        if self.banner.with_untracked(|b| b.as_ref().is_some_and(|b| b.sticky)) {
+        if self
+            .banner
+            .with_untracked(|b| b.as_ref().is_some_and(|b| b.sticky))
+        {
             return;
         }
         self.banner.set(Some(Banner {
@@ -476,9 +481,7 @@ impl App {
             // load, silently dropping courses from the selection.
             domx::replace_query(&format!(
                 "?c={}",
-                js_sys::encode_uri_component(&ttcore::share::selection_to_c_param(
-                    &selection
-                ))
+                js_sys::encode_uri_component(&ttcore::share::selection_to_c_param(&selection))
             ));
         }
     }
@@ -764,7 +767,8 @@ impl App {
                 sel.retain(|c| !c.eq_ignore_ascii_case(&code));
             }
             ovs.items.retain(|o| !o.course.eq_ignore_ascii_case(&code));
-            ovs.credits.retain(|c| !c.course.eq_ignore_ascii_case(&code));
+            ovs.credits
+                .retain(|c| !c.course.eq_ignore_ascii_case(&code));
         });
         self.removed_upstream.update(|r| r.retain(|c| c != &code));
         if keep_selected {
@@ -815,7 +819,10 @@ impl App {
         // definition itself, no override bookkeeping.
         if self.is_custom(course) {
             self.edit_custom_meetings(course, label, |meetings| {
-                match base.as_ref().and_then(|b| meetings.iter().position(|m| m == b)) {
+                match base
+                    .as_ref()
+                    .and_then(|b| meetings.iter().position(|m| m == b))
+                {
                     Some(i) => meetings[i] = to.clone(),
                     None => meetings.push(to.clone()),
                 }
@@ -861,7 +868,10 @@ impl App {
                     .iter_mut()
                     .find(|c| c.code.eq_ignore_ascii_case(&code))
                 {
-                    match base.as_ref().and_then(|b| c.meetings.iter().position(|m| m == b)) {
+                    match base
+                        .as_ref()
+                        .and_then(|b| c.meetings.iter().position(|m| m == b))
+                    {
                         Some(i) => c.meetings[i] = to.clone(),
                         None => c.meetings.push(to.clone()),
                     }
@@ -892,11 +902,9 @@ impl App {
     /// can gain any number of additional time slots.
     pub fn add_meeting(&self, course: &str, to: Meeting, toast: String) {
         if self.is_custom(course) {
-            self.edit_custom_meetings(
-                course,
-                &format!("add a meeting to {course}"),
-                |meetings| meetings.push(to.clone()),
-            );
+            self.edit_custom_meetings(course, &format!("add a meeting to {course}"), |meetings| {
+                meetings.push(to.clone())
+            });
             self.toast_undo(toast);
             return;
         }
@@ -1074,7 +1082,8 @@ impl App {
     /// of the halls week — `.with`, so the whole override store isn't cloned
     /// each time just to be read.
     pub fn effective_meetings(&self, course: &Course) -> Vec<EffMeeting> {
-        self.overrides.with(|overrides| effective_meetings(course, overrides))
+        self.overrides
+            .with(|overrides| effective_meetings(course, overrides))
     }
 
     /// A selected course no longer present upstream ("No longer on CMI's
@@ -1623,9 +1632,7 @@ pub fn course_matches(app: &App, course: &Course, f: &Filters) -> bool {
     if !f.branches.is_empty() && !course.branches.iter().any(|b| f.branches.contains(b)) {
         return false;
     }
-    if !f.instructors.is_empty()
-        && !course.instructors.iter().any(|i| f.instructors.contains(i))
-    {
+    if !f.instructors.is_empty() && !course.instructors.iter().any(|i| f.instructors.contains(i)) {
         return false;
     }
     let overrides = app.overrides.get();

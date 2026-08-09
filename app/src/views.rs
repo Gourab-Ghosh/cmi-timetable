@@ -3,11 +3,11 @@
 
 use crate::fetch;
 use crate::state::{
-    effective_meetings, same_hall, App, Density, Dialog, EffMeeting, HallsView, Tab,
+    App, Density, Dialog, EffMeeting, HallsView, Tab, effective_meetings, same_hall,
 };
 use crate::ui::{
-    branch_chip, chip, custom_changes_pill, edit_toggle, filter_bar, overrides_list, ChipClick,
-    ChipProps,
+    ChipClick, ChipProps, branch_chip, chip, custom_changes_pill, edit_toggle, filter_bar,
+    overrides_list,
 };
 use leptos::prelude::*;
 use ttcore::model::{Course, Day, Meeting, ScheduleStatus, Slot, Snapshot};
@@ -221,8 +221,7 @@ fn my_timetable(app: App) -> impl IntoView {
                             && column_for(&columns, &e.meeting) == Some(slot.start_min)
                     })
                     .map(|e| {
-                        let sublabel = (e.meeting.slot != slot)
-                            .then(|| e.meeting.slot.label());
+                        let sublabel = (e.meeting.slot != slot).then(|| e.meeting.slot.label());
                         chip(
                             app,
                             ChipProps {
@@ -1048,7 +1047,11 @@ fn course_card(app: App, course: Course) -> impl IntoView {
     // `course` from inside the view would have to outlive it. Building the
     // rows eagerly also lets the meetings MOVE out of `eff` instead of being
     // cloned one by one.
-    let branch_chips: Vec<_> = course.branches.iter().map(|b| branch_chip(app, b)).collect();
+    let branch_chips: Vec<_> = course
+        .branches
+        .iter()
+        .map(|b| branch_chip(app, b))
+        .collect();
     let meeting_rows: Vec<_> = eff
         .into_iter()
         .map(|e| crate::ui::meeting_row(app, &course, e))
@@ -1208,8 +1211,7 @@ fn master_grid(app: App) -> impl IntoView {
         // The display columns, not CMI's raw grid: a meeting moved to 19:00
         // gets a column of its own here exactly as it does on My timetable,
         // instead of being clamped into the 17:00 one.
-        let slot_grid: Vec<Slot> =
-            app.master_slot_grid().into_iter().map(|(s, _)| s).collect();
+        let slot_grid: Vec<Slot> = app.master_slot_grid().into_iter().map(|(s, _)| s).collect();
         filtered
             .get()
             .into_iter()
@@ -1217,8 +1219,7 @@ fn master_grid(app: App) -> impl IntoView {
                 // ⚠ marker on unselected courses that would clash with the
                 // current timetable (visible whether or not the
                 // "Fits my schedule" filter is on).
-                let warn_wont_fit =
-                    !app.is_selected(&course.code) && !app.fits_schedule(&course);
+                let warn_wont_fit = !app.is_selected(&course.code) && !app.fits_schedule(&course);
                 app.effective_meetings(&course)
                     .into_iter()
                     .filter(|e| {
@@ -1231,8 +1232,7 @@ fn master_grid(app: App) -> impl IntoView {
                         // meeting can still borrow a column it merely falls
                         // inside (09:30 in the 09:10 slot) — say the real
                         // time rather than let the header speak for it.
-                        let sublabel =
-                            (e.meeting.slot != slot).then(|| e.meeting.slot.label());
+                        let sublabel = (e.meeting.slot != slot).then(|| e.meeting.slot.label());
                         view! {
                             <span class="chipwrap">
                                 {chip(
@@ -1485,7 +1485,11 @@ fn catalog_row(app: App, course: Course) -> impl IntoView {
     let toggle_code = code.clone();
     let click_code = code.clone();
     // See course_card: built out here so the markup borrows nothing.
-    let branch_chips: Vec<_> = course.branches.iter().map(|b| branch_chip(app, b)).collect();
+    let branch_chips: Vec<_> = course
+        .branches
+        .iter()
+        .map(|b| branch_chip(app, b))
+        .collect();
     // Rows live in a keyed <For>, so this body runs once per course and is
     // NOT re-run when selection or overrides change — anything derived from
     // those signals must be a memo/closure, or it stays frozen until the
@@ -1500,9 +1504,7 @@ fn catalog_row(app: App, course: Course) -> impl IntoView {
                 "no fixed slot".to_string()
             } else {
                 eff.iter()
-                    .map(|e| {
-                        format!("{} {}", e.meeting.day.short(), e.meeting.slot.start_label())
-                    })
+                    .map(|e| format!("{} {}", e.meeting.day.short(), e.meeting.slot.start_label()))
                     .collect::<Vec<_>>()
                     .join(" · ")
             }
@@ -1635,12 +1637,8 @@ fn hall_booking_state(
     // through to the "untouched" default below and wrongly keep its chip —
     // check the overrides directly and leave the cell empty.
     let removed = app.overrides.with(|ovs| {
-        ovs.for_course(&course.code).any(|o| {
-            o.is_removal()
-                && o.base
-                    .as_ref()
-                    .is_some_and(|b| b.same_place_time(&booking))
-        })
+        ovs.for_course(&course.code)
+            .any(|o| o.is_removal() && o.base.as_ref().is_some_and(|b| b.same_place_time(&booking)))
     });
     if removed {
         return BookingCell::Gone;
@@ -1709,10 +1707,9 @@ fn user_placements(
         if eff.meeting.day != day {
             return;
         }
-        let (Some(hall), Some(col)) = (
-            eff.meeting.hall.clone(),
-            hall_col_of(columns, &eff.meeting),
-        ) else {
+        let (Some(hall), Some(col)) =
+            (eff.meeting.hall.clone(), hall_col_of(columns, &eff.meeting))
+        else {
             return;
         };
         out.push((hall, col, code.to_string(), eff));
@@ -1937,7 +1934,9 @@ fn hall_table(app: App, days: Vec<Day>, merged: bool) -> AnyView {
     let corner = if merged {
         "Hall · day".to_string()
     } else {
-        days.first().map(|d| d.full().to_string()).unwrap_or_default()
+        days.first()
+            .map(|d| d.full().to_string())
+            .unwrap_or_default()
     };
     view! {
         <div class="grid-scroll">

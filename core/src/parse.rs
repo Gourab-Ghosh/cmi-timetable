@@ -6,7 +6,7 @@
 //! extraction in /app) and natively (scraper extraction in /sync and tests).
 
 use crate::model::{Branch, Day, PreClassification, Slot};
-use crate::textgrid::{parse_cell, parse_grid, RawGrid, RawRow};
+use crate::textgrid::{RawGrid, RawRow, parse_cell, parse_grid};
 use regex_lite::Regex;
 use std::sync::LazyLock;
 
@@ -47,14 +47,12 @@ impl PreKind {
 
 // Deliberately loose: case-insensitive, "Time Table"/"Timetable", the
 // "for"/"of" connective optional — CMI can reword the heading any semester.
-static SEMESTER_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?i)time\s*-?\s*table\s+(?:(?:for|of)\s+)?(.+?\d{4})").unwrap()
-});
+static SEMESTER_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?i)time\s*-?\s*table\s+(?:(?:for|of)\s+)?(.+?\d{4})").unwrap());
 
 // Fallback signal when the phrasing changes entirely: a short line carrying
 // a plausible calendar year.
-static YEAR_LINE_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"\b(?:19|20)\d{2}\b").unwrap());
+static YEAR_LINE_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\b(?:19|20)\d{2}\b").unwrap());
 
 // Codes are 2–5 chars today; {1,12} leaves generous headroom so a longer
 // future code isn't silently dropped from the legend.
@@ -129,7 +127,8 @@ pub fn classify(text: &str) -> (PreKind, Option<RawGrid>) {
                 LEGEND_LINE_RE.captures(l).is_some_and(|c| {
                     let code = c.get(1).unwrap().as_str();
                     let name = c.get(2).unwrap().as_str();
-                    code.chars().all(|ch| ch.is_ascii_uppercase() || ch.is_ascii_digit())
+                    code.chars()
+                        .all(|ch| ch.is_ascii_uppercase() || ch.is_ascii_digit())
                         && !name.trim().is_empty()
                 })
             })
@@ -290,7 +289,8 @@ pub fn parse_timetable_page(blocks: &[PreBlock]) -> TimetablePage {
                 // label; heading text as fallback; the code as a last resort.
                 let title = grid
                     .leading
-                    .iter().rfind(|l| find_semester_label(l).is_none())
+                    .iter()
+                    .rfind(|l| find_semester_label(l).is_none())
                     .cloned()
                     .or_else(|| {
                         let h = block.heading.trim();
@@ -367,12 +367,10 @@ pub fn parse_timetable_page(blocks: &[PreBlock]) -> TimetablePage {
     if page.semester_label.is_none() {
         let year_line = |l: &str| {
             let t = l.trim();
-            (!t.is_empty() && t.len() <= 80 && YEAR_LINE_RE.is_match(t))
-                .then(|| t.to_string())
+            (!t.is_empty() && t.len() <= 80 && YEAR_LINE_RE.is_match(t)).then(|| t.to_string())
         };
         let fallback = blocks.iter().find_map(|b| {
-            year_line(&b.heading)
-                .or_else(|| b.text.lines().take(5).find_map(&year_line))
+            year_line(&b.heading).or_else(|| b.text.lines().take(5).find_map(&year_line))
         });
         if let Some(label) = fallback {
             page.warnings.push(format!(

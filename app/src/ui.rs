@@ -1,14 +1,12 @@
 //! Shared UI: chips, header, tabs, toasts, banner, filter bar, and every
 //! dialog (course details, meeting edit, conflicts, export, share).
 
-use crate::state::{
-    App, BannerKind, Dialog, DragSpec, EffMeeting, Filters, Route, Tab, ThemePref,
-};
+use crate::state::{App, BannerKind, Dialog, DragSpec, EffMeeting, Filters, Route, Tab, ThemePref};
 use crate::{dnd, domx, fetch, hues, storage};
 use leptos::prelude::*;
 use ttcore::model::{Course, Day, Meeting, ScheduleStatus, Slot, Snapshot, SourceTier};
-use wasm_bindgen::closure::Closure;
 use wasm_bindgen::JsCast;
+use wasm_bindgen::closure::Closure;
 
 pub fn parse_hhmm(s: &str) -> Option<u16> {
     let (h, m) = s.trim().split_once(':')?;
@@ -395,7 +393,11 @@ pub fn Header() -> impl IntoView {
         if s.fetched_at <= 0.0 {
             "No timetable data yet — press Sync now to fetch it from cmi.ac.in".to_string()
         } else {
-            format!("Synced {} — {}", domx::fmt_local(s.fetched_at), s.source.label())
+            format!(
+                "Synced {} — {}",
+                domx::fmt_local(s.fetched_at),
+                s.source.label()
+            )
         }
     };
     let stale = move || {
@@ -1089,7 +1091,10 @@ fn active_filter_chips(app: App) -> impl IntoView {
         chips.push((i, Box::new(move |f| f.instructors.retain(|x| x != &i2))));
     }
     for d in f.days {
-        chips.push((d.full().to_string(), Box::new(move |f| f.days.retain(|x| *x != d))));
+        chips.push((
+            d.full().to_string(),
+            Box::new(move |f| f.days.retain(|x| *x != d)),
+        ));
     }
     for s in f.slot_starts {
         chips.push((
@@ -1237,7 +1242,9 @@ fn trap_tab(ev: &web_sys::KeyboardEvent) {
     if ev.key() != "Tab" {
         return;
     }
-    let Some(target) = ev.current_target() else { return };
+    let Some(target) = ev.current_target() else {
+        return;
+    };
     let Some(dialog) = target.dyn_ref::<web_sys::Element>() else {
         return;
     };
@@ -1673,9 +1680,7 @@ fn details_dialog(app: App, code: String) -> impl IntoView {
             (other, c.day, slot)
         })
         .collect();
-    clashes.sort_by_key(|(other, day, slot)| {
-        (day.index(), slot.start_min, other.clone())
-    });
+    clashes.sort_by_key(|(other, day, slot)| (day.index(), slot.start_min, other.clone()));
     // …then one row per COURSE, carrying every time you collide with it: the
     // same course twice on two days is one thing to fix, not two.
     let mut clash_groups: Vec<(String, Vec<String>)> = Vec::new();
@@ -2433,8 +2438,7 @@ fn hall_picker(
     let known: Vec<String> = halls.iter().chain(own.iter()).cloned().collect();
     // A place nobody has on file — typed here for the first time — starts on
     // "Other place…" with the box open.
-    let is_other =
-        !current.is_empty() && !known.iter().any(|h| h.eq_ignore_ascii_case(&current));
+    let is_other = !current.is_empty() && !known.iter().any(|h| h.eq_ignore_ascii_case(&current));
     let is_other = RwSignal::new(is_other);
     let other_id = format!("{select_id}-other");
 
@@ -2631,11 +2635,7 @@ fn edit_meeting_dialog(
                 );
             }
         } else {
-            let toast = format!(
-                "Moved {course_save} to {} {}",
-                day.short(),
-                to.slot.label(),
-            );
+            let toast = format!("Moved {course_save} to {} {}", day.short(), to.slot.label(),);
             app.apply_override(
                 &course_save,
                 ov_id,
@@ -2849,11 +2849,7 @@ fn suggest_code(name: &str) -> String {
         .collect()
 }
 
-fn custom_course_dialog(
-    app: App,
-    edit: Option<String>,
-    prefill: Option<String>,
-) -> impl IntoView {
+fn custom_course_dialog(app: App, edit: Option<String>, prefill: Option<String>) -> impl IntoView {
     let editing = edit.clone();
     // Every read in this builder is UNTRACKED on purpose. DialogHost builds
     // the body inside its own reactive closure, so a tracked read here
@@ -2896,11 +2892,7 @@ fn custom_course_dialog(
             .map(|c| c.effective_credits())
             .unwrap_or(4),
     );
-    let credits_other = RwSignal::new(
-        existing
-            .as_ref()
-            .is_some_and(|c| c.effective_credits() > 4),
-    );
+    let credits_other = RwSignal::new(existing.as_ref().is_some_and(|c| c.effective_credits() > 4));
     let credits_text = RwSignal::new(credits.get_untracked().to_string());
 
     let row_seq = RwSignal::new(0u64);
@@ -2934,7 +2926,12 @@ fn custom_course_dialog(
             let own = own_code.clone();
             Memo::new(move |_| {
                 // Track the row's fields.
-                let _ = (row.day.get(), row.preset.get(), row.start.get(), row.end.get());
+                let _ = (
+                    row.day.get(),
+                    row.preset.get(),
+                    row.start.get(),
+                    row.end.get(),
+                );
                 let Ok(m) = row.to_meeting(&slots) else {
                     return String::new();
                 };
@@ -3006,8 +3003,7 @@ fn custom_course_dialog(
                 .collect();
             if code_v.is_empty() {
                 error.set(
-                    "Give it a short code — that's the label shown on your timetable."
-                        .to_string(),
+                    "Give it a short code — that's the label shown on your timetable.".to_string(),
                 );
                 return;
             }
@@ -3019,7 +3015,9 @@ fn custom_course_dialog(
             let taken_official = renaming_from
                 .map(|orig| !orig.eq_ignore_ascii_case(&code_v))
                 .unwrap_or(true)
-                && app.snapshot.with_untracked(|s| s.course_ci(&code_v).is_some());
+                && app
+                    .snapshot
+                    .with_untracked(|s| s.course_ci(&code_v).is_some());
             if taken_official {
                 error.set(format!(
                     "{code_v} is already on CMI's timetable — pick a different code, \
@@ -3069,8 +3067,7 @@ fn custom_course_dialog(
                 .filter(|s| !s.is_empty())
                 .collect();
             let no_meetings = meetings.is_empty();
-            let course =
-                Course::custom(code_v.clone(), name_v, instructors, credits_v, meetings);
+            let course = Course::custom(code_v.clone(), name_v, instructors, credits_v, meetings);
             let creating = editing.is_none();
             app.save_custom_course(editing.as_deref(), course);
             if creating {
@@ -3590,26 +3587,21 @@ fn export_dialog(app: App, scope: Option<String>) -> impl IntoView {
             })
             .collect();
         if courses.iter().all(|c| c.meetings.is_empty()) {
-            error.set(
-                "Nothing to export — none of these courses has a time yet.".to_string(),
-            );
+            error.set("Nothing to export — none of these courses has a time yet.".to_string());
             return;
         }
         // Percent-encoded: a code of the user's own may contain characters
         // a query string reads as syntax ('+', '&', '#').
-        let c_param = js_sys::encode_uri_component(
-            &ttcore::share::selection_to_c_param(&app.selection.get_untracked()),
-        );
+        let c_param = js_sys::encode_uri_component(&ttcore::share::selection_to_c_param(
+            &app.selection.get_untracked(),
+        ));
         let opts = ttcore::ics::IcsOptions {
             range_start: start,
             range_end: end,
             alarm: alarm.get_untracked(),
             app_url: domx::share_url(&format!("?c={c_param}")),
             dtstamp: domx::dtstamp_utc_now(),
-            calendar_name: format!(
-                "CMI Timetable {}",
-                snapshot.semester_label_display()
-            ),
+            calendar_name: format!("CMI Timetable {}", snapshot.semester_label_display()),
         };
         let ics = ttcore::ics::build_ics(&courses, &opts);
         domx::download_text(
@@ -3713,11 +3705,8 @@ fn share_dialog(app: App) -> impl IntoView {
             .filter_map(|code| cs.get(code).cloned())
             .collect()
     });
-    let custom_codes: Vec<String> =
-        shared_customs.iter().map(|c| c.code.clone()).collect();
-    let c_param = js_sys::encode_uri_component(
-        &ttcore::share::selection_to_c_param(&selection),
-    );
+    let custom_codes: Vec<String> = shared_customs.iter().map(|c| c.code.clone()).collect();
+    let c_param = js_sys::encode_uri_component(&ttcore::share::selection_to_c_param(&selection));
     let plain = domx::share_url(&format!("?c={c_param}"));
     let with_times = domx::share_url(&format!(
         "?c={c_param}&s={}",
@@ -3816,8 +3805,12 @@ fn what_changed_dialog(app: App) -> impl IntoView {
     let mut changed = diff.changed.clone();
     changed.sort_by_key(|c| (!mine(&c.code), c.code.clone()));
 
-    let course_name =
-        move |code: &str| snapshot.course(code).map(|c| c.name.clone()).unwrap_or_default();
+    let course_name = move |code: &str| {
+        snapshot
+            .course(code)
+            .map(|c| c.name.clone())
+            .unwrap_or_default()
+    };
 
     let mine_badge = |is_mine: bool| {
         is_mine.then(|| view! { <span class="badge accent">"in your timetable"</span> })

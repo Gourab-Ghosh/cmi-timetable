@@ -11,8 +11,8 @@ use crate::state::{App, Route, SyncMeta};
 use crate::{dev, dnd, domx, fetch, storage, ui, views};
 use leptos::prelude::*;
 use ttcore::model::{CustomStore, OverridesStore, Snapshot, SourceTier};
-use wasm_bindgen::closure::Closure;
 use wasm_bindgen::JsCast;
+use wasm_bindgen::closure::Closure;
 
 fn load_or<T: serde::de::DeserializeOwned>(
     key: &str,
@@ -33,14 +33,16 @@ fn load_or<T: serde::de::DeserializeOwned>(
 fn init_app() -> (App, bool) {
     let mut corrupt = false;
 
-    let prefs: crate::state::Prefs =
-        load_or(storage::KEY_PREFS, &mut corrupt, Default::default);
+    let prefs: crate::state::Prefs = load_or(storage::KEY_PREFS, &mut corrupt, Default::default);
     let selection: Vec<String> = load_or(storage::KEY_SELECTION, &mut corrupt, Vec::new);
-    let overrides: OverridesStore =
-        load_or(storage::KEY_OVERRIDES, &mut corrupt, OverridesStore::default);
-    let customs: CustomStore =
-        load_or(storage::KEY_CUSTOM, &mut corrupt, CustomStore::default);
-    let mut snapshot: Snapshot = load_or(storage::KEY_SNAPSHOT, &mut corrupt, Snapshot::placeholder);
+    let overrides: OverridesStore = load_or(
+        storage::KEY_OVERRIDES,
+        &mut corrupt,
+        OverridesStore::default,
+    );
+    let customs: CustomStore = load_or(storage::KEY_CUSTOM, &mut corrupt, CustomStore::default);
+    let mut snapshot: Snapshot =
+        load_or(storage::KEY_SNAPSHOT, &mut corrupt, Snapshot::placeholder);
     // Old app versions shipped a snapshot baked in at build time; that data
     // no longer exists, so a cached copy of it means "never really synced".
     if snapshot.source == SourceTier::Bundled {
@@ -107,9 +109,7 @@ fn apply_url_state(app: App) {
     // every change), keep the stored state as-is — a selected course that
     // vanished upstream must stay visible with its badge, not get stripped
     // as an "unknown code".
-    if state.overrides.is_none()
-        && app.selection.with_untracked(|sel| *sel == state.selection)
-    {
+    if state.overrides.is_none() && app.selection.with_untracked(|sel| *sel == state.selection) {
         app.sync_url();
         return;
     }
@@ -123,8 +123,8 @@ fn apply_url_state(app: App) {
     let incoming_customs: Vec<ttcore::model::Course> = state
         .customs
         .into_iter()
-        .filter(|c| {
-            match app.customs.with_untracked(|cs| cs.get(&c.code).cloned()) {
+        .filter(
+            |c| match app.customs.with_untracked(|cs| cs.get(&c.code).cloned()) {
                 None => true,
                 Some(mine) => {
                     if mine != *c {
@@ -132,8 +132,8 @@ fn apply_url_state(app: App) {
                     }
                     false
                 }
-            }
-        })
+            },
+        )
         .collect();
     if !kept_yours.is_empty() {
         // Sticky: the background sync that starts on this same load clears

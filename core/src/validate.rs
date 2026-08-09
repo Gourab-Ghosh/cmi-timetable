@@ -1,11 +1,9 @@
 //! The validation gate: a freshly fetched snapshot may replace cached data
 //! only if every rule passes. On failure the old cache stays untouched.
 
-use crate::join::{join_pages, Joined};
-use crate::model::{
-    GateCheck, ParseReport, RawHtml, Snapshot, SourceTier, PARSER_VERSION,
-};
-use crate::parse::{parse_halls_page, parse_timetable_page, PreBlock};
+use crate::join::{Joined, join_pages};
+use crate::model::{GateCheck, PARSER_VERSION, ParseReport, RawHtml, Snapshot, SourceTier};
+use crate::parse::{PreBlock, parse_halls_page, parse_timetable_page};
 
 pub struct SnapshotMeta {
     /// Milliseconds since the Unix epoch.
@@ -102,8 +100,12 @@ pub fn parse_and_validate(
     report.warnings.extend(tt.warnings.iter().cloned());
     report.warnings.extend(hp.warnings.iter().cloned());
     report.warnings.extend(joined.warnings.iter().cloned());
-    report.classifications.extend(tt.classifications.iter().cloned());
-    report.classifications.extend(hp.classifications.iter().cloned());
+    report
+        .classifications
+        .extend(tt.classifications.iter().cloned());
+    report
+        .classifications
+        .extend(hp.classifications.iter().cloned());
 
     run_gate(&tt.semester_label, &hp.semester_label, &joined, &mut report);
     report.gate.push(per_grid_checks(&tt));
@@ -130,9 +132,10 @@ pub fn parse_and_validate(
         })
     } else {
         for check in report.gate.iter().filter(|c| !c.passed) {
-            report
-                .errors
-                .push(format!("gate rule failed — {}: {}", check.rule, check.detail));
+            report.errors.push(format!(
+                "gate rule failed — {}: {}",
+                check.rule, check.detail
+            ));
         }
         None
     };
@@ -166,9 +169,7 @@ fn run_gate(
                     passed: true,
                     detail: format!("{t:?} ≈ {h:?}"),
                 }
-            } else if label_semantics(t).is_some()
-                && label_semantics(t) == label_semantics(h)
-            {
+            } else if label_semantics(t).is_some() && label_semantics(t) == label_semantics(h) {
                 // Same months, same year, different phrasing (independently
                 // edited pages) — pass with a warning. If semantics can't be
                 // extracted from BOTH labels, fall through to the hard fail:
@@ -203,8 +204,7 @@ fn run_gate(
         }
         (None, Some(h)) => {
             report.warnings.push(
-                "no semester label found on the timetable page; using the halls page's"
-                    .to_string(),
+                "no semester label found on the timetable page; using the halls page's".to_string(),
             );
             GateCheck {
                 rule: "semester label".into(),
@@ -216,10 +216,9 @@ fn run_gate(
             // The label is display-only metadata; rules 2–6 guard the data
             // itself. Rewording of the heading must not block a fresh
             // semester, so this is warn-only — CONFLICTING labels still fail.
-            report.warnings.push(
-                "no semester label found on either page; continuing without one"
-                    .to_string(),
-            );
+            report
+                .warnings
+                .push("no semester label found on either page; continuing without one".to_string());
             GateCheck {
                 rule: "semester label".into(),
                 passed: true,
@@ -372,7 +371,10 @@ mod tests {
     fn labels_normalize_dashes() {
         assert_eq!(norm_label("Aug–Nov 2026"), norm_label("aug-nov 2026"));
         assert_eq!(norm_label("Aug--Nov 2026"), norm_label("Aug-Nov 2026"));
-        assert_eq!(norm_label("Aug\u{2014}Nov  2026"), norm_label("AUG-NOV 2026"));
+        assert_eq!(
+            norm_label("Aug\u{2014}Nov  2026"),
+            norm_label("AUG-NOV 2026")
+        );
         assert_ne!(norm_label("Aug-Nov 2026"), norm_label("Aug-Nov 2027"));
     }
 

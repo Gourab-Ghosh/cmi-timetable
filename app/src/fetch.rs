@@ -6,10 +6,10 @@
 
 use crate::state::{App, BannerKind, FetchLogEntry, StoredReport};
 use crate::{domx, storage};
-use futures::future::{select, Either};
+use futures::future::{Either, select};
 use leptos::prelude::*;
 use ttcore::model::{Snapshot, SourceTier};
-use ttcore::validate::{parse_and_validate, ParseOutcome, SnapshotMeta};
+use ttcore::validate::{ParseOutcome, SnapshotMeta, parse_and_validate};
 
 pub const CMI_TIMETABLE_URL: &str = "https://www.cmi.ac.in/practical/timetable.php";
 pub const CMI_HALLS_URL: &str = "https://www.cmi.ac.in/practical/lecturehalls.php";
@@ -289,7 +289,8 @@ pub fn adopt(app: &App, new_snapshot: Snapshot, announce: bool, from: Adoption) 
     // arbitrate, and asking them to choose would be asking about our own
     // parser under CMI's name.
     let has_conflicts = !merge.conflicts.is_empty() && !quiet;
-    app.conflicts.set(if quiet { Vec::new() } else { merge.conflicts });
+    app.conflicts
+        .set(if quiet { Vec::new() } else { merge.conflicts });
     if has_conflicts {
         app.dialog.set(Some(crate::state::Dialog::Conflicts));
     }
@@ -352,9 +353,7 @@ async fn fetch_pages_tier(
                 // Gate failure on a proxy body with no CMI marker at all is
                 // almost certainly the proxy's own error page — keep trying
                 // other routes instead of announcing that CMI changed.
-                None if is_proxy
-                    && (!looks_like_cmi(&tt.text) || !looks_like_cmi(&halls.text)) =>
-                {
+                None if is_proxy && (!looks_like_cmi(&tt.text) || !looks_like_cmi(&halls.text)) => {
                     log(
                         &app,
                         &tier_name,
@@ -472,10 +471,7 @@ pub async fn run_update(app: App, manual: bool) {
     // sanity-checked and gate-validated); the first valid one wins and the
     // rest are dropped.
     if !adopted && !gate_failed_direct && (force.is_none() || force.as_deref() == Some("proxy")) {
-        progress(
-            &app,
-            &format!("Trying {} proxies at once…", PROXIES.len()),
-        );
+        progress(&app, &format!("Trying {} proxies at once…", PROXIES.len()));
         routes_tried += PROXIES.len();
         let mut pending: Vec<futures::future::LocalBoxFuture<'static, TierResult>> = PROXIES
             .iter()
@@ -659,7 +655,10 @@ pub fn simulate_parse_failure(app: App) {
         Ok(outcome) => {
             record_report(&app, "simulated-failure", outcome.report.clone());
             let saved_date = domx::fmt_local_date(snapshot.fetched_at);
-            assert!(outcome.snapshot.is_none(), "mangled pages must fail the gate");
+            assert!(
+                outcome.snapshot.is_none(),
+                "mangled pages must fail the gate"
+            );
             app.set_banner(
                 BannerKind::Warn,
                 format!(
@@ -673,4 +672,3 @@ pub fn simulate_parse_failure(app: App) {
         Err(e) => app.toast(format!("Simulation failed to run: {e}")),
     }
 }
-

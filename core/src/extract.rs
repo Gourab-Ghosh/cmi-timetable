@@ -5,9 +5,9 @@
 
 use crate::model::SourceTier;
 use crate::parse::PreBlock;
-use crate::validate::{parse_and_validate, ParseOutcome, SnapshotMeta};
-use scraper::node::Node;
+use crate::validate::{ParseOutcome, SnapshotMeta, parse_and_validate};
 use scraper::Html;
+use scraper::node::Node;
 
 /// Every `<pre>` block's raw text in document order, each paired with the
 /// nearest preceding heading (h1–h6) text. Whitespace inside `<pre>` is

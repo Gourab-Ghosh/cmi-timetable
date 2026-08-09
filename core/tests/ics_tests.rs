@@ -3,7 +3,7 @@
 //! `UPDATE_GOLDEN=1 cargo test -p cmi-timetable-core --test ics_tests`
 
 use cmi_timetable_core::date::CivilDate;
-use cmi_timetable_core::ics::{build_ics, ics_filename, IcsCourse, IcsOptions};
+use cmi_timetable_core::ics::{IcsCourse, IcsOptions, build_ics, ics_filename};
 use cmi_timetable_core::model::{Day, Meeting, Slot};
 
 fn mtg(day: Day, start: u16, end: u16, hall: &str) -> Meeting {
@@ -111,7 +111,10 @@ fn part_of_semester_clamps_range() {
     };
     let ics = build_ics(&[course], &opts);
     // First Monday on/after 1 Oct 2026 is 5 Oct.
-    assert!(ics.contains("DTSTART;TZID=Asia/Kolkata:20261005T091000"), "{ics}");
+    assert!(
+        ics.contains("DTSTART;TZID=Asia/Kolkata:20261005T091000"),
+        "{ics}"
+    );
 }
 
 #[test]
@@ -138,7 +141,10 @@ fn single_month_note_clamps_both_ends() {
     };
     let ics = build_ics(&[course], &opts);
     // First Monday on/after 1 Sep 2026 is 7 Sep.
-    assert!(ics.contains("DTSTART;TZID=Asia/Kolkata:20260907T091000"), "{ics}");
+    assert!(
+        ics.contains("DTSTART;TZID=Asia/Kolkata:20260907T091000"),
+        "{ics}"
+    );
     // Recurrence ends with September, not on 30 Nov.
     assert!(ics.contains("UNTIL=20260930T182959Z"), "{ics}");
 }
@@ -166,7 +172,10 @@ fn year_crossing_semester_keeps_events() {
     };
     let ics = build_ics(&[course], &opts);
     // First Monday on/after 1 Jan 2028 is 3 Jan 2028.
-    assert!(ics.contains("DTSTART;TZID=Asia/Kolkata:20280103T091000"), "{ics}");
+    assert!(
+        ics.contains("DTSTART;TZID=Asia/Kolkata:20280103T091000"),
+        "{ics}"
+    );
     // Ends within Feb 2028, not Feb of the start year.
     assert!(ics.contains("UNTIL=20280229T182959Z"), "{ics}");
 }
@@ -196,10 +205,7 @@ fn uids_distinguish_same_start_meetings() {
         calendar_name: "test".to_string(),
     };
     let ics = build_ics(&[course], &opts);
-    let uids: Vec<&str> = ics
-        .lines()
-        .filter(|l| l.starts_with("UID:"))
-        .collect();
+    let uids: Vec<&str> = ics.lines().filter(|l| l.starts_with("UID:")).collect();
     assert_eq!(uids.len(), 2, "{ics}");
     assert_ne!(uids[0], uids[1], "UIDs must be unique: {uids:?}");
 }

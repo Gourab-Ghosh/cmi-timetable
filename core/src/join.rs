@@ -2,9 +2,7 @@
 //! meetings from the timetable page, halls from the hall-allocation page,
 //! names/instructors canonically from the halls legend.
 
-use crate::model::{
-    Branch, Course, Day, ParseStats, ScheduleStatus, Slot,
-};
+use crate::model::{Branch, Course, Day, ParseStats, ScheduleStatus, Slot};
 use crate::parse::{HallsPage, TimetablePage};
 use regex_lite::Regex;
 use std::collections::{BTreeMap, BTreeSet};
@@ -51,8 +49,8 @@ fn parse_month_span(inner: &str) -> Option<String> {
     match tokens.as_slice() {
         [a] => Some(name(month(a)?).to_string()),
         [a, b] => Some(format!("{}-{}", name(month(a)?), name(month(b)?))),
-        [a, sep, b] if ["to", "till", "until", "through"]
-            .contains(&sep.to_ascii_lowercase().as_str()) =>
+        [a, sep, b]
+            if ["to", "till", "until", "through"].contains(&sep.to_ascii_lowercase().as_str()) =>
         {
             Some(format!("{}-{}", name(month(a)?), name(month(b)?)))
         }
@@ -247,9 +245,7 @@ pub fn join_pages(tt: &TimetablePage, hp: &HallsPage) -> Joined {
                     // re-reported as an ignored extra).
                     let overlap = hall_by_key
                         .iter()
-                        .filter(|((c, d, s), _)| {
-                            c == code && d == day && s.overlaps(slot)
-                        })
+                        .filter(|((c, d, s), _)| c == code && d == day && s.overlaps(slot))
                         .min_by_key(|((_, _, s), _)| s.start_min.abs_diff(slot.start_min))
                         .map(|(k, v)| (k.clone(), v.clone()));
                     match overlap {

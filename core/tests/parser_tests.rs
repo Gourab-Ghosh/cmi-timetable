@@ -33,8 +33,8 @@ fn t01_branches_and_semester_label() {
     assert_eq!(
         codes,
         [
-            "BM1", "BM2", "BP2", "HUM", "MC1", "MD1", "MD2", "MM1", "MO", "OCS1", "OCS2",
-            "OCS3", "OM1", "OM2", "OM3", "OP1", "OP2", "OPDS1"
+            "BM1", "BM2", "BP2", "HUM", "MC1", "MD1", "MD2", "MM1", "MO", "OCS1", "OCS2", "OCS3",
+            "OM1", "OM2", "OM3", "OP1", "OP2", "OPDS1"
         ]
     );
     assert_eq!(snap.semester_label, "August--November 2026");
@@ -102,7 +102,9 @@ fn t04_rflr_ambiguity() {
 #[test]
 fn t05_unscheduled_listed() {
     for code in ["RDBM", "SVA", "MATH", "MPML", "CSEM"] {
-        let c = SNAPSHOT.course(code).unwrap_or_else(|| panic!("{code} missing"));
+        let c = SNAPSHOT
+            .course(code)
+            .unwrap_or_else(|| panic!("{code} missing"));
         assert_eq!(
             c.status,
             ScheduleStatus::UnscheduledListed,
@@ -177,7 +179,10 @@ fn t08_name_notes() {
     let aat = SNAPSHOT.course("AAT").unwrap();
     assert_eq!(aat.name, "Applied Algebaric Topology");
     // Apostrophes and ampersands survive.
-    assert_eq!(SNAPSHOT.course("CALG").unwrap().instructors, ["Clare D'Cruz"]);
+    assert_eq!(
+        SNAPSHOT.course("CALG").unwrap().instructors,
+        ["Clare D'Cruz"]
+    );
     assert_eq!(
         SNAPSHOT.course("ALGO").unwrap().name,
         "Design & Analysis of Algorithms"
@@ -313,7 +318,10 @@ fn t08e_drift_tolerant_parsing() {
         out.report.gate
     );
     let snap = out.snapshot.unwrap();
-    assert_eq!(snap.slot_grid, SNAPSHOT.slot_grid, "same slots from 9.10-to-10.25");
+    assert_eq!(
+        snap.slot_grid, SNAPSHOT.slot_grid,
+        "same slots from 9.10-to-10.25"
+    );
     assert_eq!(snap.courses.len(), SNAPSHOT.courses.len());
     let toc = snap.course("TOC").unwrap();
     assert_eq!(
@@ -340,8 +348,7 @@ fn t08f_gate_accepts_small_term_rejects_garbage() {
              {} : Course {}        Prof B\n\
              {} : Course {}        Prof C\n\
              {} : Course {}        Prof D\n</pre>",
-            c[0], c[1], c[2], c[3], c[0],
-            c[0], c[0], c[1], c[1], c[2], c[2], c[3], c[3],
+            c[0], c[1], c[2], c[3], c[0], c[0], c[0], c[1], c[1], c[2], c[2], c[3], c[3],
         )
     };
     let tt = format!(
@@ -492,7 +499,10 @@ fn t11_fail_closed() {
     // Truncated timetable page (first 4 KB — most branch grids gone).
     let truncated = &TT[..4000.min(TT.len())];
     let out = parse_html_pages(truncated, HALLS, 0.0, SourceTier::Direct, false);
-    assert!(!out.report.gate_passed(), "truncated page must fail the gate");
+    assert!(
+        !out.report.gate_passed(),
+        "truncated page must fail the gate"
+    );
     assert!(out.snapshot.is_none());
     assert!(!out.report.errors.is_empty());
 
@@ -507,7 +517,10 @@ fn t11_fail_closed() {
     // Mangled halls page only: the hall-grid rule must fail.
     let mangled_halls = HALLS.replace('|', " ").replace(':', "");
     let out = parse_html_pages(TT, &mangled_halls, 0.0, SourceTier::Direct, false);
-    assert!(!out.report.gate_passed(), "mangled halls page must fail the gate");
+    assert!(
+        !out.report.gate_passed(),
+        "mangled halls page must fail the gate"
+    );
     assert!(out.snapshot.is_none());
 
     // Both pages empty.
@@ -609,15 +622,13 @@ fn label_and_legend_survive_rewording() {
     );
 
     // A colon inside the course name must not truncate it.
-    let entry =
-        parse_halls_legend_line("TQI : Topics: Quantum Information : R Rao").unwrap();
+    let entry = parse_halls_legend_line("TQI : Topics: Quantum Information : R Rao").unwrap();
     assert_eq!(entry.code, "TQI");
     assert_eq!(entry.name, "Topics: Quantum Information");
     assert_eq!(entry.instructors_raw.as_deref(), Some("R Rao"));
 
     // The plain two-field form still works.
-    let plain = parse_halls_legend_line("RFLR : Reinforcement Learning : I Murugeswari")
-        .unwrap();
+    let plain = parse_halls_legend_line("RFLR : Reinforcement Learning : I Murugeswari").unwrap();
     assert_eq!(plain.name, "Reinforcement Learning");
     assert_eq!(plain.instructors_raw.as_deref(), Some("I Murugeswari"));
 }
@@ -626,9 +637,19 @@ fn label_and_legend_survive_rewording() {
 /// the gate: the label is display-only, so (None, None) is warn-only.
 #[test]
 fn missing_labels_are_warn_only() {
-    let tt_reworded = TT.replace("Timetable", "Schedule").replace("timetable", "schedule");
-    let halls_reworded = HALLS.replace("Timetable", "Schedule").replace("timetable", "schedule");
-    let out = parse_html_pages(&tt_reworded, &halls_reworded, 0.0, SourceTier::Direct, false);
+    let tt_reworded = TT
+        .replace("Timetable", "Schedule")
+        .replace("timetable", "schedule");
+    let halls_reworded = HALLS
+        .replace("Timetable", "Schedule")
+        .replace("timetable", "schedule");
+    let out = parse_html_pages(
+        &tt_reworded,
+        &halls_reworded,
+        0.0,
+        SourceTier::Direct,
+        false,
+    );
     // Either the year-line fallback found a label, or the gate passed
     // without one — a heading reword must never block a fresh semester.
     assert!(

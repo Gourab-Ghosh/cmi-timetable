@@ -10,8 +10,8 @@ use crate::state::{App, DragSpec, DragState, MoveMode};
 use leptos::prelude::*;
 use std::cell::RefCell;
 use ttcore::model::{Day, Meeting, Slot};
-use wasm_bindgen::closure::Closure;
 use wasm_bindgen::JsCast;
+use wasm_bindgen::closure::Closure;
 
 const LONGPRESS_MS: u32 = 350;
 const MOVE_THRESHOLD_PX: f64 = 6.0;
@@ -104,7 +104,11 @@ fn cell_under_point(x: f64, y: f64) -> Option<(Day, u16, Option<String>)> {
     let cell = el.closest("[data-day][data-slot]").ok().flatten()?;
     let day_idx: usize = cell.get_attribute("data-day")?.parse().ok()?;
     let start: u16 = cell.get_attribute("data-slot")?.parse().ok()?;
-    Some((*Day::ALL.get(day_idx)?, start, cell.get_attribute("data-hall")))
+    Some((
+        *Day::ALL.get(day_idx)?,
+        start,
+        cell.get_attribute("data-hall"),
+    ))
 }
 
 fn edge_autoscroll(x: f64, y: f64) {
@@ -171,8 +175,11 @@ pub fn perform_drop(
         hall,
         temp_booking: false,
     };
-    let mut where_label =
-        format!("{} {}", day.short(), Slot::new(slot.start_min, slot.end_min).label());
+    let mut where_label = format!(
+        "{} {}",
+        day.short(),
+        Slot::new(slot.start_min, slot.end_min).label()
+    );
     if let Some(target) = &target_hall {
         where_label.push_str(&format!(" · {target}"));
     }
@@ -259,8 +266,8 @@ fn on_pointer_up(app: App, ev: &web_sys::PointerEvent) {
         // The release of a cancelled gesture (e.g. Esc mid-drag with the
         // button still held past the 250 ms window): re-arm suppression so
         // the click synthesized from this release can't toggle the chip.
-        let was_cancelled = CANCELLED_POINTER
-            .with(|c| c.borrow_mut().take_if(|id| *id == ev.pointer_id()));
+        let was_cancelled =
+            CANCELLED_POINTER.with(|c| c.borrow_mut().take_if(|id| *id == ev.pointer_id()));
         if was_cancelled.is_some() {
             suppress_next_click();
         }
@@ -352,10 +359,7 @@ fn move_cursor(app: App, dx: i32, dy: i32) {
     }
     app.move_mode.update(|mm| {
         if let Some(mm) = mm {
-            let day_idx = days
-                .iter()
-                .position(|d| *d == mm.cursor.0)
-                .unwrap_or(0) as i32;
+            let day_idx = days.iter().position(|d| *d == mm.cursor.0).unwrap_or(0) as i32;
             let slot_idx = slots
                 .iter()
                 .position(|s| s.start_min == mm.cursor.1)
@@ -499,23 +503,24 @@ pub fn install_global_handlers(app: App) {
                 cancel_drag(app);
             }
         });
-    let key = Closure::<dyn FnMut(web_sys::KeyboardEvent)>::new(
-        move |ev: web_sys::KeyboardEvent| {
+    let key =
+        Closure::<dyn FnMut(web_sys::KeyboardEvent)>::new(move |ev: web_sys::KeyboardEvent| {
             on_key_down(app, &ev);
-        },
-    );
+        });
 
     // Chips use `touch-action: manipulation` so a swipe starting on a chip
     // still scrolls the page. Once a drag IS active (after the long-press),
     // native scrolling must be suppressed or the browser cancels the drag —
     // hence this non-passive touchmove listener.
-    let touchmove = Closure::<dyn FnMut(web_sys::TouchEvent)>::new(
-        move |ev: web_sys::TouchEvent| {
-            if app.drag.with_untracked(|d| d.as_ref().is_some_and(|d| d.started)) {
+    let touchmove =
+        Closure::<dyn FnMut(web_sys::TouchEvent)>::new(move |ev: web_sys::TouchEvent| {
+            if app
+                .drag
+                .with_untracked(|d| d.as_ref().is_some_and(|d| d.started))
+            {
                 ev.prevent_default();
             }
-        },
-    );
+        });
     // On touch, the browser's native long-press context menu fires at
     // ~500 ms — AFTER our 350 ms drag lift-off — cancelling the pointer
     // stream and killing the drag. Suppress it whenever a drag gesture is

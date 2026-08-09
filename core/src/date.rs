@@ -153,10 +153,7 @@ pub fn month_from_word(token: &str) -> Option<u8> {
     if let Some(i) = MONTH_SHORT.iter().position(|m| *m == t) {
         return Some(i as u8 + 1);
     }
-    MONTH_FULL
-        .iter()
-        .position(|m| *m == t)
-        .map(|i| i as u8 + 1)
+    MONTH_FULL.iter().position(|m| *m == t).map(|i| i as u8 + 1)
 }
 
 /// "Oct" / "Nov" … with the app's display capitalization.
@@ -174,10 +171,9 @@ pub fn month_short_name(m: u8) -> &'static str {
 /// one visible, deletable first-week event (and the export dialog's dates
 /// stay user-editable either way).
 pub fn semester_range_from_label(label: &str) -> Option<(CivilDate, CivilDate)> {
-    let re = regex_lite::Regex::new(
-        r"([A-Za-z]{3,})\s*(?:--|\u{2013}|-)\s*([A-Za-z]{3,})\s+(\d{4})",
-    )
-    .ok()?;
+    let re =
+        regex_lite::Regex::new(r"([A-Za-z]{3,})\s*(?:--|\u{2013}|-)\s*([A-Za-z]{3,})\s+(\d{4})")
+            .ok()?;
     let caps = re.captures(label)?;
     let m1 = month_from_token(caps.get(1)?.as_str())?;
     let m2 = month_from_token(caps.get(2)?.as_str())?;

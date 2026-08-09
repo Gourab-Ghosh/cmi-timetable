@@ -46,7 +46,11 @@ pub struct ChangeLine {
 
 impl ChangeLine {
     fn edit(kind: ChangeKind, before: String, after: String) -> Self {
-        ChangeLine { kind, before: Some(before), after: Some(after) }
+        ChangeLine {
+            kind,
+            before: Some(before),
+            after: Some(after),
+        }
     }
 }
 
@@ -76,7 +80,14 @@ fn meetings_set(course: &Course) -> BTreeSet<(usize, u16, u16, Option<String>)> 
     course
         .meetings
         .iter()
-        .map(|m| (m.day.index(), m.slot.start_min, m.slot.end_min, m.hall.clone()))
+        .map(|m| {
+            (
+                m.day.index(),
+                m.slot.start_min,
+                m.slot.end_min,
+                m.hall.clone(),
+            )
+        })
         .collect()
 }
 

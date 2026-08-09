@@ -129,11 +129,7 @@ pub fn replace_query(query: &str) {
     let hash = location.hash().unwrap_or_default();
     let url = format!("{path}{query}{hash}");
     if let Ok(history) = window().history() {
-        let _ = history.replace_state_with_url(
-            &wasm_bindgen::JsValue::NULL,
-            "",
-            Some(&url),
-        );
+        let _ = history.replace_state_with_url(&wasm_bindgen::JsValue::NULL, "", Some(&url));
     }
 }
 
@@ -178,8 +174,7 @@ pub fn today_local() -> ttcore::date::CivilDate {
 }
 
 const MONTHS: [&str; 12] = [
-    "Jan", "Feb", "Mar", "Apr", "May", "Jun",
-    "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+    "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
 ];
 
 /// Exact local timestamp — unambiguous "6 Aug 2026, 15:19" (numeric d/m/y

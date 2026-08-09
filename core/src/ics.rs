@@ -2,7 +2,7 @@
 //! RRULE until the semester end, VTIMEZONE for Asia/Kolkata (fixed +05:30,
 //! no DST).
 
-use crate::date::{last_day_of_month, month_from_token, CivilDate, MONTH_SHORT};
+use crate::date::{CivilDate, MONTH_SHORT, last_day_of_month, month_from_token};
 use crate::model::{Course, Day, Meeting};
 
 #[derive(Debug, Clone)]
@@ -144,8 +144,7 @@ fn course_range(
         if let Some(m2) = m2 {
             // Anchor the end month at or after the resolved start so a month
             // that occurs twice in a long range picks the right year.
-            let candidate =
-                month_date_in_range(start, range_end, m2, |y| last_day_of_month(y, m2));
+            let candidate = month_date_in_range(start, range_end, m2, |y| last_day_of_month(y, m2));
             if let Some(candidate) = candidate
                 && candidate < end
             {
@@ -165,7 +164,10 @@ pub fn build_ics(courses: &[IcsCourse], opts: &IcsOptions) -> String {
     let mut out = String::new();
     push(&mut out, "BEGIN:VCALENDAR");
     push(&mut out, "VERSION:2.0");
-    push(&mut out, "PRODID:-//cmi-timetable//CMI Timetable Planner//EN");
+    push(
+        &mut out,
+        "PRODID:-//cmi-timetable//CMI Timetable Planner//EN",
+    );
     push(&mut out, "CALSCALE:GREGORIAN");
     push(&mut out, "METHOD:PUBLISH");
     push(
@@ -246,10 +248,7 @@ pub fn build_ics(courses: &[IcsCourse], opts: &IcsOptions) -> String {
                     fmt_time(meeting.slot.end_min)
                 ),
             );
-            push(
-                &mut out,
-                &format!("RRULE:FREQ=WEEKLY;UNTIL={until}"),
-            );
+            push(&mut out, &format!("RRULE:FREQ=WEEKLY;UNTIL={until}"));
             push(
                 &mut out,
                 &format!(
@@ -303,11 +302,10 @@ pub fn build_ics(courses: &[IcsCourse], opts: &IcsOptions) -> String {
 
 /// "August--November 2026" → "cmi-timetable-aug-nov-2026.ics".
 pub fn ics_filename(semester_label: &str) -> String {
-    if let Some(caps) = regex_lite::Regex::new(
-        r"([A-Za-z]{3,})\s*(?:--|\u{2013}|-)\s*([A-Za-z]{3,})\s+(\d{4})",
-    )
-    .ok()
-    .and_then(|re| re.captures(semester_label))
+    if let Some(caps) =
+        regex_lite::Regex::new(r"([A-Za-z]{3,})\s*(?:--|\u{2013}|-)\s*([A-Za-z]{3,})\s+(\d{4})")
+            .ok()
+            .and_then(|re| re.captures(semester_label))
     {
         let short = |i: usize| {
             month_from_token(caps.get(i).unwrap().as_str())

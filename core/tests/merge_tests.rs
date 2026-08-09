@@ -73,7 +73,10 @@ fn row1_no_change_no_override() {
 #[test]
 fn row2_cmi_changed_no_override() {
     let old = snap(vec![course("MFD", vec![WED_OFFICIAL()])]);
-    let new = snap(vec![course("MFD", vec![mtg(Day::Thu, 930, 1005, "Lecture Hall 803")])]);
+    let new = snap(vec![course(
+        "MFD",
+        vec![mtg(Day::Thu, 930, 1005, "Lecture Hall 803")],
+    )]);
     let r = merge_overrides(&old, &new, &[], &OverridesStore::default());
     assert!(r.conflicts.is_empty());
     assert!(r.dropped_matching.is_empty());
@@ -108,7 +111,10 @@ fn row4_cmi_matches_override_dropped() {
     assert!(r.conflicts.is_empty());
     assert_eq!(r.dropped_matching.len(), 1);
     assert_eq!(r.dropped_matching[0].course, "MFD");
-    assert!(r.overrides.items.is_empty(), "override removed from the store");
+    assert!(
+        r.overrides.items.is_empty(),
+        "override removed from the store"
+    );
 }
 
 /// Row 5 — CMI changed to something else: conflict queued, never
@@ -169,7 +175,11 @@ fn removed_course_reported() {
     let r = merge_overrides(&old, &new, &selection, &store);
     assert_eq!(r.removed_selected, vec!["GONE".to_string()]);
     assert_eq!(r.diff.removed, vec!["GONE".to_string()]);
-    assert_eq!(r.overrides.items.len(), 1, "override kept for the badge flow");
+    assert_eq!(
+        r.overrides.items.len(),
+        1,
+        "override kept for the badge flow"
+    );
     assert!(r.conflicts.is_empty());
 }
 
@@ -333,7 +343,10 @@ fn stale_removals_drop_only_when_truly_inert() {
     let store = removal_store("MFD", phantom);
     let r = merge_overrides(&old, &old, &[], &store);
     assert!(r.conflicts.is_empty());
-    assert!(r.overrides.items.is_empty(), "inert removal must be dropped");
+    assert!(
+        r.overrides.items.is_empty(),
+        "inert removal must be dropped"
+    );
 
     // Meaningful: base missing from the OLD snapshot but present in the new.
     let old_without = snap(vec![course("MFD", vec![])]);

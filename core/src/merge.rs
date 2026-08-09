@@ -13,7 +13,7 @@
 //! overrides are layered on top, "apply CMI silently" needs no work here —
 //! it only has to show up in the "What changed" digest.
 
-use crate::diff::{diff_snapshots, SnapshotDiff};
+use crate::diff::{SnapshotDiff, diff_snapshots};
 use crate::model::{Meeting, MeetingOverride, OverridesStore, Snapshot};
 use serde::{Deserialize, Serialize};
 
@@ -70,8 +70,14 @@ fn counterpart(
         .iter()
         .filter(|n| !old_meetings.iter().any(|o| o.same_place_time(n)))
         .collect();
-    let sort_key =
-        |m: &&Meeting| (m.day.index(), m.slot.start_min, m.slot.end_min, m.hall.clone());
+    let sort_key = |m: &&Meeting| {
+        (
+            m.day.index(),
+            m.slot.start_min,
+            m.slot.end_min,
+            m.hall.clone(),
+        )
+    };
     old_unmatched.sort_by_key(sort_key);
     new_unmatched.sort_by_key(sort_key);
 
@@ -215,7 +221,11 @@ pub fn merge_overrides(
 pub fn resolve_conflict(store: &mut OverridesStore, conflict: &Conflict, keep_mine: bool) {
     if keep_mine {
         let mut drop = false;
-        if let Some(ov) = store.items.iter_mut().find(|o| o.id == conflict.override_id) {
+        if let Some(ov) = store
+            .items
+            .iter_mut()
+            .find(|o| o.id == conflict.override_id)
+        {
             ov.base = if conflict.theirs.len() == 1 {
                 Some(conflict.theirs[0].clone())
             } else {

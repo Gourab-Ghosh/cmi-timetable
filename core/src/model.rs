@@ -13,9 +13,7 @@ use serde::{Deserialize, Serialize};
 /// floors, hall matching by overlap.
 pub const PARSER_VERSION: u32 = 3;
 
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
-)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum Day {
     Mon,
     Tue,
@@ -95,16 +93,29 @@ impl Day {
             Some(c) if c.is_ascii_alphabetic() => return None,
             _ => {}
         }
-        let names_second_day = rest
-            .split(|c: char| !c.is_ascii_alphabetic())
-            .any(|w| {
-                matches!(
-                    w.to_ascii_lowercase().as_str(),
-                    "mon" | "monday" | "tue" | "tues" | "tuesday" | "wed" | "weds"
-                        | "wednesday" | "thu" | "thur" | "thurs" | "thursday" | "fri"
-                        | "friday" | "sat" | "saturday" | "sun" | "sunday"
-                )
-            });
+        let names_second_day = rest.split(|c: char| !c.is_ascii_alphabetic()).any(|w| {
+            matches!(
+                w.to_ascii_lowercase().as_str(),
+                "mon"
+                    | "monday"
+                    | "tue"
+                    | "tues"
+                    | "tuesday"
+                    | "wed"
+                    | "weds"
+                    | "wednesday"
+                    | "thu"
+                    | "thur"
+                    | "thurs"
+                    | "thursday"
+                    | "fri"
+                    | "friday"
+                    | "sat"
+                    | "saturday"
+                    | "sun"
+                    | "sunday"
+            )
+        });
         if names_second_day {
             return None;
         }
@@ -143,9 +154,7 @@ impl Day {
 
 /// A lecture slot expressed in minutes from midnight, e.g. 09:10–10:25 is
 /// `Slot { start_min: 550, end_min: 625 }`.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
-)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct Slot {
     pub start_min: u16,
     pub end_min: u16,
@@ -508,7 +517,13 @@ pub struct OverridesStore {
 }
 
 impl OverridesStore {
-    pub fn add(&mut self, course: &str, base: Option<Meeting>, to: Option<Meeting>, now: f64) -> u64 {
+    pub fn add(
+        &mut self,
+        course: &str,
+        base: Option<Meeting>,
+        to: Option<Meeting>,
+        now: f64,
+    ) -> u64 {
         let id = self.next_id;
         self.next_id += 1;
         self.items.push(MeetingOverride {
@@ -593,8 +608,7 @@ impl CustomStore {
 
     pub fn remove(&mut self, code: &str) -> bool {
         let before = self.courses.len();
-        self.courses
-            .retain(|c| !c.code.eq_ignore_ascii_case(code));
+        self.courses.retain(|c| !c.code.eq_ignore_ascii_case(code));
         self.courses.len() != before
     }
 

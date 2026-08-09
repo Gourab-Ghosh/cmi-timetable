@@ -5,8 +5,8 @@
 //! `cmitt.corrupt.<ts>` and replaced with defaults — never silently deleted.
 //! Quota rule: if a snapshot won't fit, drop the raw-HTML copies first.
 
-use serde::de::DeserializeOwned;
 use serde::Serialize;
+use serde::de::DeserializeOwned;
 use ttcore::model::Snapshot;
 
 pub const KEY_SNAPSHOT: &str = "cmitt.v1.snapshot";

@@ -885,4 +885,8 @@ regenerates the .ics golden.
   moves each filter list out of its own copy of the filters; ~25 redundant
   clones removed across app/ and core/. Nested `if let`s became let chains.
   Verified: clippy clean (incl. `-W clippy::redundant_clone`), 66 native +
-  51/51 e2e, release wasm builds (1.44 MB). Committed locally, NOT pushed.
+  51/51 e2e, release wasm builds (1.44 MB). Then, at the user's request,
+  `cargo fmt --all` over the whole workspace (the tree had never been
+  rustfmt-clean; edition 2024 also reorders imports) and clippy again —
+  both clean, 66 native + 51/51 e2e still green. Pushed and deployed on the
+  user's explicit instruction.

@@ -60,5 +60,8 @@ fn main() {
         .unwrap_or_else(|| "unknown".to_string());
 
     println!("cargo:rustc-env=APP_GIT_COMMIT={git_commit}");
-    println!("cargo:rustc-env=APP_BUILD_TIME={}", iso_from_epoch_ms(build_ms));
+    println!(
+        "cargo:rustc-env=APP_BUILD_TIME={}",
+        iso_from_epoch_ms(build_ms)
+    );
 }

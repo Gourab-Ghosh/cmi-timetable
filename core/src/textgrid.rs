@@ -220,10 +220,7 @@ fn parse_grid_piped(lines: &[&str], header_idx: usize) -> Option<RawGrid> {
     let header = lines[header_idx];
     let header_segs = split_pipes(header);
     let header_pipes = header_segs.len() - 1;
-    let pipe_positions: Vec<usize> = header
-        .match_indices('|')
-        .map(|(i, _)| i)
-        .collect();
+    let pipe_positions: Vec<usize> = header.match_indices('|').map(|(i, _)| i).collect();
 
     let mut warnings = Vec::new();
 
@@ -276,11 +273,17 @@ fn parse_grid_piped(lines: &[&str], header_idx: usize) -> Option<RawGrid> {
         // segment's starting column, losing their real time slots.)
         let own_pipes = line.matches('|').count();
         let owned_segs: Vec<String> = if own_pipes == header_pipes {
-            split_pipes(line).into_iter().map(|s| s.to_string()).collect()
+            split_pipes(line)
+                .into_iter()
+                .map(|s| s.to_string())
+                .collect()
         } else {
             slice_at(line, &pipe_positions)
         };
-        let label = owned_segs.first().map(|s| s.trim().to_string()).unwrap_or_default();
+        let label = owned_segs
+            .first()
+            .map(|s| s.trim().to_string())
+            .unwrap_or_default();
         let cells: Vec<String> = col_map
             .iter()
             .map(|(j, _)| owned_segs.get(*j).cloned().unwrap_or_default())
@@ -305,9 +308,8 @@ fn parse_grid_piped(lines: &[&str], header_idx: usize) -> Option<RawGrid> {
 /// formatting change from zeroing the whole page.
 fn parse_grid_columns(lines: &[&str], header_idx: usize) -> Option<RawGrid> {
     let header = lines[header_idx];
-    let mut warnings = vec![
-        "grid has no '|' separators; columns derived from spacing alone".to_string(),
-    ];
+    let mut warnings =
+        vec!["grid has no '|' separators; columns derived from spacing alone".to_string()];
 
     let mut positions: Vec<usize> = Vec::new();
     let mut col_map: Vec<(usize, Slot)> = Vec::new();
@@ -335,7 +337,10 @@ fn parse_grid_columns(lines: &[&str], header_idx: usize) -> Option<RawGrid> {
     }
 
     let header_segs = slice_at_cols(header, &positions);
-    let label0 = header_segs.first().map(|s| s.trim().to_string()).unwrap_or_default();
+    let label0 = header_segs
+        .first()
+        .map(|s| s.trim().to_string())
+        .unwrap_or_default();
     let slots: Vec<Slot> = col_map.iter().map(|(_, s)| *s).collect();
 
     let leading: Vec<String> = lines[..header_idx]
@@ -357,17 +362,17 @@ fn parse_grid_columns(lines: &[&str], header_idx: usize) -> Option<RawGrid> {
             continue;
         }
         let owned_segs = slice_at_cols(line, &positions);
-        let label = owned_segs.first().map(|s| s.trim().to_string()).unwrap_or_default();
+        let label = owned_segs
+            .first()
+            .map(|s| s.trim().to_string())
+            .unwrap_or_default();
         // Without pipes there is nothing structural separating grid rows
         // from prose beneath the grid — filter what can't be a row: a
         // sentence-length label ("Note: rooms may change …" sliced at
         // column offsets), or a colon label whose cells carry TIMES (an
         // office-hours list like "Tuesday: 9:00-10:15, 2:00-3:15"). Real
         // labels are short day/hall names; real cells carry codes.
-        let cells_have_times = owned_segs
-            .iter()
-            .skip(1)
-            .any(|c| TIME_RANGE_RE.is_match(c));
+        let cells_have_times = owned_segs.iter().skip(1).any(|c| TIME_RANGE_RE.is_match(c));
         if label.chars().count() > 24 || (label.contains(':') && cells_have_times) {
             trailing.push(t.to_string());
             continue;
@@ -467,7 +472,10 @@ mod tests {
         assert_eq!(parse_slot("9:10am - 10:25 AM"), Some(Slot::new(550, 625)));
         assert_eq!(parse_slot("2:00-3:15"), Some(Slot::new(840, 915)));
         assert_eq!(parse_slot("12:50 PM - 1:45 pm"), Some(Slot::new(770, 825)));
-        assert_eq!(parse_slot("17:00\u{2013}18:15"), Some(Slot::new(1020, 1095)));
+        assert_eq!(
+            parse_slot("17:00\u{2013}18:15"),
+            Some(Slot::new(1020, 1095))
+        );
         // Ranges never run backwards: an unmarked end past the shifted
         // start belongs to the same half-day ("6:30-7:45" is evening).
         assert_eq!(parse_slot("6:30-7:45"), Some(Slot::new(1110, 1185)));
@@ -513,7 +521,11 @@ Wed | DDD        BBB       | CCC       |
         let wed = &grid.rows[1];
         assert_eq!(wed.label, "Wed");
         let col = |i: usize| -> Vec<String> {
-            parse_cell(&wed.cells[i]).codes.into_iter().map(|(t, _)| t).collect()
+            parse_cell(&wed.cells[i])
+                .codes
+                .into_iter()
+                .map(|(t, _)| t)
+                .collect()
         };
         assert_eq!(col(0), vec!["DDD".to_string()], "{:?}", wed.cells);
         assert_eq!(col(1), vec!["BBB".to_string()], "{:?}", wed.cells);
