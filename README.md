@@ -106,7 +106,12 @@ my custom changes"). When both are present, `s` wins. The query stays
   per burst of typing in the search box), and every filter dropdown has its
   own search field plus **All** / **None** shortcuts that act on whatever
   the search currently shows. A **Course** dropdown filters to hand-picked
-  courses.
+  courses. The same bar sits on **Catalog**, **Master grid** and **My
+  courses** — on My courses it narrows the courses you have picked, so
+  "which of mine meet on Thursday" is one click. It is one set of filters,
+  so what you set on one page is still set on the next; the credit total
+  keeps counting your whole timetable, and says so when the list below it
+  is showing fewer.
 - **One editor per course.** Clicking any course and pressing **Edit this
   course** opens the whole of it in one form — every weekly meeting (day,
   time, hall), its credits, and for a course of your own its name and code —
@@ -127,19 +132,32 @@ my custom changes"). When both are present, `s` wins. The query stays
   on My timetable (and the same list inside **My data**) shows each one as
   *official → yours*, grouped by what kind of change it is — courses you
   added, courses you deleted, meetings moved, added or removed, credits you
-  set — each with a one-click Remove or Restore, plus "Remove all changes"
-  (which keeps your own courses). A "✎ N changes" pill sits in the grid
+  set — each with a one-click way back that says what pressing it leaves
+  behind ("Put it back", "Back to CMI's time", "Back to CMI's room", "Back
+  to CMI's credits"), plus "Undo my changes to CMI's courses" (which keeps
+  your own courses). A "✎ N changes" pill sits in the grid
   toolbars whenever custom data is in play, counting exactly the rows in
   that list, and overridden meeting rows say inline which CMI time they
   overwrite.
 - **The wheel adjusts a box that has a step.** Click into the credits box
   (the one behind "Other…", which focuses itself), a meeting's start or end
-  time, or an export date, and scrolling moves it one step. It only does
-  this while the box has focus — these all sit inside dialogs that scroll,
-  and a value should never change because you scrolled past it.
+  time, or an export date, and scrolling moves it one step. Dropdowns count
+  too — a meeting's Day, Time and Hall, the export scope, the free-hall
+  finder's day and slot — because a list of options is a box with a step as
+  much as a number is. It only does this while the box has focus: these all
+  sit inside dialogs that scroll, and a value should never change because
+  you scrolled past it.
+- **Enter does the obvious thing.** In the course editor it saves, in Export
+  it downloads the file, and in a search box it puts the phone keyboard away.
+- **A half-written form isn't thrown away by a stray key.** Nothing in the
+  course editor is committed until you press Save, so Escape and a click on
+  the dark area ask first — but only once you've actually changed something.
 - **Any course can gain extra time slots**: "＋ Add a weekly meeting" in the
-  editor appends another one; a course CMI hasn't scheduled opens the same
-  form through "Give it a time".
+  editor appends another one. Every course, scheduled or not, has the same
+  one door — **"Edit this course"** — and it opens on what the course
+  actually has. A course CMI hasn't given a time opens with no meetings and
+  no row filled in on your behalf, so you can change its credits, or its
+  name, without it quietly acquiring a Monday morning class.
 - In the master grid your selected courses are unmistakable — a **✓ mark
   plus an accent ring** (never color alone); an **ⓘ** button opens full
   course details, and unselected courses that would clash with your current

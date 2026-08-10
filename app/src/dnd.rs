@@ -415,7 +415,7 @@ fn on_key_down(app: App, ev: &web_sys::KeyboardEvent) {
             return;
         }
         if app.dialog.with_untracked(|d| d.is_some()) {
-            app.dialog.set(None);
+            app.dismiss_dialog();
             ev.prevent_default();
             return;
         }

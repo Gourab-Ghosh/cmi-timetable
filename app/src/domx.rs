@@ -74,6 +74,70 @@ pub fn step_on_wheel(ev: web_sys::WheelEvent) {
     }
 }
 
+/// Turn the wheel over a focused dropdown and it moves to the next or the
+/// previous option.
+///
+/// Same focus gate, and for the same reason, as `step_on_wheel`: a day or a
+/// time slot picked because someone scrolled a dialog past it is a change
+/// they never asked for. A dropdown is a box with a step too — its steps are
+/// just named rather than numbered — and having the wheel move the start
+/// time but not the Time slot next to it is the kind of gap that makes an
+/// app feel arbitrary.
+pub fn cycle_on_wheel(ev: web_sys::WheelEvent) {
+    let Some(select) = ev
+        .target()
+        .and_then(|t| t.dyn_into::<web_sys::HtmlSelectElement>().ok())
+    else {
+        return;
+    };
+    if !select.matches(":focus").unwrap_or(false) {
+        return;
+    }
+    // An open dropdown scrolls its own list; only the closed box steps.
+    if ev.delta_y() == 0.0 {
+        return;
+    }
+    let count = select.length() as i32;
+    if count == 0 {
+        return;
+    }
+    let step = if ev.delta_y() < 0.0 { -1 } else { 1 };
+    let next = (select.selected_index() + step).clamp(0, count - 1);
+    if next == select.selected_index() {
+        // Already at the end: let the page have the scroll rather than
+        // swallowing it for nothing.
+        return;
+    }
+    select.set_selected_index(next);
+    ev.prevent_default();
+    // `change` is what a `<select>` says when a person picks something, and
+    // it is what every handler in the app listens for.
+    let init = web_sys::EventInit::new();
+    init.set_bubbles(true);
+    if let Ok(event) = web_sys::Event::new_with_event_init_dict("change", &init) {
+        let _ = select.dispatch_event(&event);
+    }
+}
+
+/// Enter in a box that filters as you type: put the keyboard away.
+///
+/// There is nothing to submit — the list narrowed on every keystroke — but
+/// on a phone the keyboard's Go key did nothing at all, so the keyboard
+/// stayed up covering the very results being filtered for. Dismissing it is
+/// the whole of what Enter should mean here.
+pub fn blur_on_enter(ev: web_sys::KeyboardEvent) {
+    if ev.key() != "Enter" {
+        return;
+    }
+    if let Some(el) = ev
+        .target()
+        .and_then(|t| t.dyn_into::<web_sys::HtmlElement>().ok())
+    {
+        ev.prevent_default();
+        let _ = el.blur();
+    }
+}
+
 /// Close every open filter-facet dropdown, except (optionally) one — the
 /// facets are native `<details>` elements, which never close on their own.
 pub fn close_open_facets(except: Option<&web_sys::Element>) {
@@ -92,6 +156,20 @@ pub fn close_open_facets(except: Option<&web_sys::Element>) {
             el.is_same_node(Some(node))
         }) {
             continue;
+        }
+        // Closing the menu un-renders whatever inside it had focus, which
+        // drops focus to the page body: a keyboard user pressing Esc lost
+        // their place in the filter bar and had to Tab from the top again.
+        // Hand it back to the button that opened the menu.
+        let holds_focus = document()
+            .active_element()
+            .is_some_and(|a| el.contains(Some(a.as_ref())));
+        if let Some(summary) = holds_focus
+            .then(|| el.query_selector("summary").ok().flatten())
+            .flatten()
+            .and_then(|s| s.dyn_into::<web_sys::HtmlElement>().ok())
+        {
+            let _ = summary.focus();
         }
         let _ = el.remove_attribute("open");
     }

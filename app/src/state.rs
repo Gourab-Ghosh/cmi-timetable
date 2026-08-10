@@ -209,12 +209,16 @@ pub enum Dialog {
     /// The one editor. `code: None` creates a course of the user's own;
     /// `Some(code)` edits that course, whether it is CMI's or theirs — every
     /// field of it, in one form, saved in one step. `prefill` seeds the name
-    /// from a failed catalog search; `add_meeting` opens with a fresh
-    /// meeting row waiting (the "Give it a time" path).
+    /// from a failed catalog search.
+    ///
+    /// It opens on what the course HAS and nothing more. A course with no
+    /// time used to open with a meeting row already waiting, filled in with
+    /// Monday and the first slot — so the one door to its credits also
+    /// stood ready to invent a time nobody asked for. Adding a meeting is
+    /// now always a thing the user does.
     EditCourse {
         code: Option<String>,
         prefill: Option<String>,
-        add_meeting: bool,
     },
 }
 
@@ -353,6 +357,12 @@ pub struct App {
     pub reports: RwSignal<Vec<StoredReport>>,
     pub route: RwSignal<Route>,
     pub dialog: RwSignal<Option<Dialog>>,
+    /// Set by the course editor once anything in it has been typed or
+    /// picked. A dialog is normally cheap to close — Esc, or a click on the
+    /// dark area — but that form holds work no undo can bring back, because
+    /// nothing is committed until Save. While this is true, those two
+    /// dismissals ask first. Cleared whenever the dialog changes.
+    pub dialog_dirty: RwSignal<bool>,
     pub drag: RwSignal<Option<DragState>>,
     pub move_mode: RwSignal<Option<MoveMode>>,
     /// Developer-mode simulator: force a specific tier on the next update.
@@ -447,6 +457,28 @@ impl App {
 
     pub fn say(&self, text: impl Into<String>) {
         self.announce.set(text.into());
+    }
+
+    /// Close a dialog the way the two *accidental* dismissals do — Escape,
+    /// and a click on the dark area beside the form.
+    ///
+    /// Cancel and Save close it outright: those are answers. These two are
+    /// often slips — Escape is also how a browser's autocomplete popup is
+    /// dismissed, and the dark area is a big target beside a tall form — and
+    /// the course editor commits nothing until Save, so a slip there is the
+    /// one loss in this app that Undo cannot reach. So it asks, but only
+    /// when there is something to lose.
+    pub fn dismiss_dialog(&self) {
+        if self.dialog_dirty.get_untracked()
+            && !crate::domx::window()
+                .confirm_with_message(
+                    "Close this form? What you have changed here hasn't been saved.",
+                )
+                .unwrap_or(true)
+        {
+            return;
+        }
+        self.dialog.set(None);
     }
 
     // -- persistence + URL -------------------------------------------------
@@ -670,7 +702,13 @@ impl App {
             sel.retain(|c| c != &code);
         });
         self.removed_upstream.update(|r| r.retain(|c| c != &code));
-        self.toast_undo(format!("Removed {code}"));
+        // Say that the times are kept: the course leaves the timetable but
+        // the work done on it does not, and finding that out by accident
+        // weeks later (from a "✎ N changes" count that never went down) is
+        // worse than three extra words here.
+        self.toast_undo(format!(
+            "Removed {code} — any times you set for it are kept"
+        ));
     }
 
     pub fn toggle_select(&self, code: &str) {

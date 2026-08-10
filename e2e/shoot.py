@@ -371,7 +371,7 @@ d.find_element(By.XPATH, "//button[normalize-space()='Cancel']").click()
 boot("Light", "MyCourses", selection=CUSTOM_SEL, customs=CUSTOMS)
 d.find_element(By.XPATH,
     "//div[contains(@class,'card')][.//span[normalize-space()='Custom']]"
-    "//button[normalize-space()='Edit course']").click()
+    "//button[normalize-space()='Edit this course']").click()
 time.sleep(0.4)
 shot("22-light-custom-form-edit")
 d.find_element(By.XPATH, "//button[normalize-space()='Cancel']").click()

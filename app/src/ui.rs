@@ -10,6 +10,15 @@ use ttcore::model::{Course, Day, Meeting, ScheduleStatus, Slot, Snapshot, Source
 use wasm_bindgen::JsCast;
 use wasm_bindgen::closure::Closure;
 
+/// Did this `input` event come from a number box holding something it cannot
+/// read? The value reads back as `""` either way; only the box knows the
+/// difference between empty and nonsense.
+fn bad_number(ev: &web_sys::Event) -> bool {
+    ev.target()
+        .and_then(|t| t.dyn_into::<web_sys::HtmlInputElement>().ok())
+        .is_some_and(|input| input.validity().bad_input())
+}
+
 pub fn parse_hhmm(s: &str) -> Option<u16> {
     let (h, m) = s.trim().split_once(':')?;
     let h: u16 = h.parse().ok()?;
@@ -332,14 +341,22 @@ pub fn edit_toggle(app: App) -> impl IntoView {
             class="btn"
             class:primary=move || app.edit_mode.get()
             aria-pressed=move || if app.edit_mode.get() { "true" } else { "false" }
-            title="While editing, drag chips between slots (or press M on a focused chip)"
+            title="While editing, drag chips between slots — or press M on a focused chip \
+                   and move it with the arrow keys. Drop one back where CMI put it to undo \
+                   the move."
             on:click=move |_| {
                 let on = !app.edit_mode.get_untracked();
                 app.edit_mode.set(on);
                 if on {
+                    // The one moment the user is certainly looking is the
+                    // moment they turn this on, so it is where the keyboard
+                    // route gets said out loud — a hover tooltip is no use
+                    // to the person who needs it, and none at all on a
+                    // touch screen.
                     app.toast(
-                        "Edit layout is on — drag any chip to a new slot (Esc cancels). \
-                         Click ✎ Done editing when you're finished.",
+                        "Edit layout is on — drag any chip to a new slot, or focus one and \
+                         press M to move it with the arrow keys. Esc cancels; ✎ Done \
+                         editing when you're finished.",
                     );
                 } else {
                     app.move_mode.set(None);
@@ -393,7 +410,9 @@ pub fn Header() -> impl IntoView {
     let pill_title = move || {
         let s = app.sync.get();
         if s.fetched_at <= 0.0 {
-            "No timetable data yet — press Sync now to fetch it from cmi.ac.in".to_string()
+            "No timetable data yet — press ⟳ Fetch the timetable to get it from \
+             cmi.ac.in"
+                .to_string()
         } else {
             format!(
                 "Synced {} — {}",
@@ -441,7 +460,17 @@ pub fn Header() -> impl IntoView {
                     });
                 }
             >
-                "Sync now"
+                // Before the first fetch this is the same job the welcome
+                // screen's big button does, so it wears the same name.
+                // Two names for one action left the failure messages
+                // pointing at a button the user could not see.
+                {move || {
+                    if app.sync.with(|s| s.fetched_at <= 0.0) {
+                        "⟳ Fetch the timetable"
+                    } else {
+                        "Sync now"
+                    }
+                }}
             </button>
             // Visible on every page: the data is only as fresh as the last
             // sync, and CMI edits its timetable all semester long.
@@ -556,12 +585,17 @@ pub fn Toasts() -> impl IntoView {
                         view! {
                             // Reading pace beats the timer: hovering or
                             // focusing a toast pauses its auto-dismiss.
+                            // A touch screen has neither, so a tap holds it
+                            // too — otherwise a two-line message and the
+                            // Undo it carries could expire mid-sentence
+                            // with no way to keep it on screen.
                             <div
                                 class="toast"
                                 on:mouseenter=move |_| app.set_toast_hovered(id, true)
                                 on:mouseleave=move |_| app.set_toast_hovered(id, false)
                                 on:focusin=move |_| app.set_toast_hovered(id, true)
                                 on:focusout=move |_| app.set_toast_hovered(id, false)
+                                on:pointerdown=move |_| app.set_toast_hovered(id, true)
                             >
                                 <span>{toast.text.clone()}</span>
                                 {toast
@@ -635,36 +669,53 @@ pub fn BannerView() -> impl IntoView {
             let unknown = app.unknown_codes.get();
             (!unknown.is_empty())
                 .then(|| {
+                    let one = unknown.len() == 1;
                     view! {
-                        <div class="banner warn" role="status">
-                            <span>
-                                {format!(
-                                    "Unknown course code{}:",
-                                    if unknown.len() == 1 { "" } else { "s" },
-                                )}
-                                // The codes are the point of the message, so
-                                // they stand out of it rather than sitting
-                                // inside a sentence three lines long.
-                                <span class="chipline" style="display:inline-flex">
+                        // Three parts, stacked, instead of one paragraph with
+                        // chips buried in the middle of it: what happened,
+                        // which codes, and why it might be. Read as a run of
+                        // text it came out as "Unknown course code: — it may
+                        // be…", with the codes themselves falling out of the
+                        // sentence they were the subject of.
+                        <div class="banner warn unknown-codes" role="status">
+                            <div class="banner-main">
+                                <p class="banner-title">
+                                    {if one {
+                                        "One course in that link isn't in CMI's timetable"
+                                            .to_string()
+                                    } else {
+                                        format!(
+                                            "{} courses in that link aren't in CMI's timetable",
+                                            unknown.len(),
+                                        )
+                                    }}
+                                </p>
+                                <div class="chipline">
                                     {unknown
                                         .iter()
                                         .map(|code| {
-                                            view! {
-                                                <span class="chip mono" style="--hue:35">
-                                                    {code.clone()}
-                                                </span>
-                                            }
+                                            view! { <code class="unknown-code">{code.clone()}</code> }
                                         })
                                         .collect_view()}
-                                </span>
-                                {format!(
-                                    " — {} may be from an older timetable, or someone's \
-                                     own course. Self-made courses only travel with the \
-                                     full share link (the one \"with custom changes\").",
-                                    if unknown.len() == 1 { "it" } else { "they" },
-                                )}
-                            </span>
-                            <button class="btn small" on:click=move |_| app.unknown_codes.set(vec![])>
+                                </div>
+                                <p class="banner-note muted small">
+                                    {if one {
+                                        "It may be from an earlier semester, or it may be a \
+                                         course someone made for themselves — those travel \
+                                         only with the full share link, the one “with custom \
+                                         changes”. Everything else in the link opened as usual."
+                                    } else {
+                                        "They may be from an earlier semester, or they may be \
+                                         courses someone made for themselves — those travel \
+                                         only with the full share link, the one “with custom \
+                                         changes”. Everything else in the link opened as usual."
+                                    }}
+                                </p>
+                            </div>
+                            <button
+                                class="btn small"
+                                on:click=move |_| app.unknown_codes.set(vec![])
+                            >
                                 "Dismiss"
                             </button>
                         </div>
@@ -777,6 +828,10 @@ fn facet_menu(
     is_checked: fn(&Filters, &str) -> bool,
     toggle: fn(&mut Filters, &str, bool),
 ) -> impl IntoView {
+    // Read in two places — the visible count badge and the summary's
+    // spoken name — so it is a Memo rather than a closure that can be
+    // called only once.
+    let count = Memo::new(move |_| count());
     let query = RwSignal::new(String::new());
     let visible = move || {
         let q = query.get().trim().to_ascii_lowercase();
@@ -804,10 +859,19 @@ fn facet_menu(
                 }
             }
         >
-            <summary>
+            // The count sits inside the summary, so read aloud it came out
+            // as "Branch 3" — which sounds like the name of a branch rather
+            // than three filters being on.
+            <summary aria-label=move || {
+                match count.get() {
+                    0 => name.to_string(),
+                    1 => format!("{name}, 1 selected"),
+                    n => format!("{name}, {n} selected"),
+                }
+            }>
                 {name}
                 {move || {
-                    let n = count();
+                    let n = count.get();
                     (n > 0).then(|| view! { <span class="facet-count">{format!(" {n}")}</span> })
                 }}
             </summary>
@@ -820,6 +884,7 @@ fn facet_menu(
                         aria-label=format!("Search {name} options")
                         prop:value=move || query.get()
                         on:input=move |ev| query.set(event_target_value(&ev))
+                        on:keydown=domx::blur_on_enter
                     />
                     <button
                         class="btn small"
@@ -891,6 +956,7 @@ pub fn filter_bar(app: App, result_count: Signal<usize>) -> impl IntoView {
                     // Coalesced: one undo step per burst of typing.
                     app.act_filters("the search text", true, move |f| f.text = text);
                 }
+                on:keydown=domx::blur_on_enter
             />
             {facet_menu(
                 app,
@@ -1164,6 +1230,13 @@ pub fn DialogHost() -> impl IntoView {
     use wasm_bindgen::JsCast;
     let app = App::use_ctx();
 
+    // Every dialog starts with nothing to lose; the course editor says so
+    // for itself the moment anything in it is touched.
+    Effect::new(move |_| {
+        let _ = app.dialog.get();
+        app.dialog_dirty.set(false);
+    });
+
     // Focus management: remember the trigger, focus the dialog's first
     // control once it paints, restore focus on close.
     Effect::new(move |prev: Option<bool>| {
@@ -1183,15 +1256,23 @@ pub fn DialogHost() -> impl IntoView {
                 // is a credits toggle — landing there turned a scroll into
                 // "this course is worth 0 credits". A form's first field is
                 // also simply where you want to start.
+                //
+                // The fallback skips the toggles and chips for the same
+                // reason: one of CMI's courses with no meetings has no field
+                // at all — no name, no code, no row — so the credits "0"
+                // would be the first button on screen, and it is now an
+                // ordinary thing to open that form just to set the credits.
                 let doc = domx::document();
                 if let Some(el) = doc
                     .query_selector(".dialog input, .dialog select, .dialog textarea")
                     .ok()
                     .flatten()
                     .or_else(|| {
-                        doc.query_selector(".dialog button, .dialog [href]")
-                            .ok()
-                            .flatten()
+                        doc.query_selector(
+                            ".dialog button:not(.seg button):not(.chip), .dialog [href]",
+                        )
+                        .ok()
+                        .flatten()
                     })
                     .and_then(|el| el.dyn_into::<web_sys::HtmlElement>().ok())
                 {
@@ -1221,12 +1302,12 @@ pub fn DialogHost() -> impl IntoView {
                         Dialog::Export { scope } => export_dialog(app, scope).into_any(),
                         Dialog::Share => share_dialog(app).into_any(),
                         Dialog::WhatChanged => what_changed_dialog(app).into_any(),
-                        Dialog::EditCourse { code, prefill, add_meeting } => {
-                            course_editor_dialog(app, code, prefill, add_meeting).into_any()
+                        Dialog::EditCourse { code, prefill } => {
+                            course_editor_dialog(app, code, prefill).into_any()
                         }
                     };
                     view! {
-                        <div class="overlay" on:click=move |_| app.dialog.set(None)>
+                        <div class="overlay" on:click=move |_| app.dismiss_dialog()>
                             <div
                                 class="dialog"
                                 role="dialog"
@@ -1255,8 +1336,12 @@ fn trap_tab(ev: &web_sys::KeyboardEvent) {
     let Some(dialog) = target.dyn_ref::<web_sys::Element>() else {
         return;
     };
+    // A disabled control cannot take focus, so counting one as the first or
+    // last stop hands Tab to an element that refuses it — and the focus
+    // escapes the dialog it was meant to stay in.
     let Ok(focusables) = dialog.query_selector_all(
-        "button, [href], input, select, textarea, [tabindex]:not([tabindex='-1'])",
+        "button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), \
+         textarea:not([disabled]), [tabindex]:not([tabindex='-1'])",
     ) else {
         return;
     };
@@ -1494,7 +1579,10 @@ fn details_dialog(app: App, code: String) -> impl IntoView {
         return view! {
             <div>
                 <h2 class="mono">{code}</h2>
-                <p>"This course isn't in CMI's current timetable data."</p>
+                <p>
+                    "CMI's timetable no longer lists this course. Anything you \
+                     placed for it stays on your week until you take it off."
+                </p>
                 {selected
                     .then(|| {
                         view! {
@@ -1657,8 +1745,12 @@ fn details_dialog(app: App, code: String) -> impl IntoView {
                                 "CMI's timetable now lists a course with this code too. \
                                  You're seeing your own version."
                             </p>
+                            // Red, because it deletes the user's own
+                            // course — the same call the "Delete" button
+                            // makes, and red is this app's word for
+                            // anything that takes something away.
                             <button
-                                class="btn small"
+                                class="btn small danger"
                                 on:click=move |_| {
                                     app.delete_custom_course(&switch_code, true);
                                     app.dialog.set(None);
@@ -1784,7 +1876,6 @@ fn details_dialog(app: App, code: String) -> impl IntoView {
                 // (for your own courses) the name and code, in one form.
                 {
                     let edit_code = code.clone();
-                    let no_meetings = eff.is_empty();
                     view! {
                         <button
                             class="btn"
@@ -1796,12 +1887,11 @@ fn details_dialog(app: App, code: String) -> impl IntoView {
                                         Some(Dialog::EditCourse {
                                             code: Some(edit_code.clone()),
                                             prefill: None,
-                                            add_meeting: no_meetings,
                                         }),
                                     );
                             }
                         >
-                            {if no_meetings { "Give it a time" } else { "Edit this course" }}
+                            "Edit this course"
                         </button>
                     }
                 }
@@ -2089,7 +2179,18 @@ pub fn overrides_list(app: App) -> impl IntoView {
                 // button must say what will happen — and wear the colour of
                 // it: red takes something away, plain gives it back.
                 let removal = o.is_removal();
-                let action_label = if removal { "Restore" } else { "Remove" };
+                // "Remove" on a moved meeting read as "remove this meeting"
+                // — the opposite of what it does. Each row now says what
+                // pressing it leaves behind, which depends on what the
+                // change was: a meeting you struck out comes back, a meeting
+                // you moved goes back to CMI's time, and a meeting you
+                // invented is simply taken away.
+                let action_label = match kind {
+                    OwnChange::Removed if o.base.is_some() => "Put it back",
+                    OwnChange::Room => "Back to CMI's room",
+                    OwnChange::Time | OwnChange::TimeAndRoom => "Back to CMI's time",
+                    _ => "Remove",
+                };
                 rows.push((
                     kind,
                     view! {
@@ -2152,7 +2253,9 @@ pub fn overrides_list(app: App) -> impl IntoView {
                                 class="btn small danger"
                                 on:click=move |_| app.remove_credit_override(&remove_course)
                             >
-                                "Remove"
+                                // Not "Remove", which read as "remove the
+                                // credits" — it restores CMI's figure.
+                                "Back to CMI's credits"
                             </button>
                         </li>
                     }
@@ -2208,11 +2311,16 @@ pub fn overrides_list(app: App) -> impl IntoView {
                                         ovs.hidden.clear();
                                     });
                                     app.toast_undo(
-                                        "All custom changes removed — back on CMI's data",
+                                        "Your changes to CMI's courses are undone — your \
+                                         own courses are untouched",
                                     );
                                 }
                             >
-                                "Remove all changes"
+                                // The button said "all", the tooltip said
+                                // "not your own courses", and the toast then
+                                // claimed you were back on CMI's data while
+                                // your own courses were still on screen.
+                                "Undo my changes to CMI's courses"
                             </button>
                         }
                     })}
@@ -2228,6 +2336,27 @@ pub fn overrides_list(app: App) -> impl IntoView {
 
 fn my_data_dialog(app: App) -> impl IntoView {
     let clear_snapshot = move |_| {
+        // Its neighbour, "Delete all app data", asks first — and this one
+        // takes the app back to its welcome screen, needs a working network
+        // to undo, and also drops an unresolved conflict queue that lives
+        // only in memory. It gets the same courtesy, and says what else
+        // goes when there is something else to go.
+        let pending = app.conflicts.with_untracked(|c| c.len());
+        let extra = match pending {
+            0 => String::new(),
+            1 => " One course change you haven't decided on yet goes with it.".to_string(),
+            n => format!(" {n} course changes you haven't decided on yet go with it."),
+        };
+        if !domx::window()
+            .confirm_with_message(&format!(
+                "Clear the cached timetable? The app goes back to its welcome screen \
+                 until it can fetch CMI's pages again — your courses and changes are \
+                 kept.{extra}"
+            ))
+            .unwrap_or(false)
+        {
+            return;
+        }
         storage::remove(storage::KEY_SNAPSHOT);
         app.sync.update(|s| {
             s.fetched_at = 0.0;
@@ -2236,7 +2365,7 @@ fn my_data_dialog(app: App) -> impl IntoView {
         app.snapshot.set(Snapshot::placeholder());
         app.what_changed.set(None);
         app.conflicts.set(Vec::new());
-        app.toast("Cached timetable cleared — press Sync now when you want it back.");
+        app.toast("Cached timetable cleared — fetch it again whenever you like.");
     };
 
     let delete_everything = move |_| {
@@ -2299,7 +2428,9 @@ fn my_data_dialog(app: App) -> impl IntoView {
                 {move || {
                     let codes = app.selection.get();
                     if codes.is_empty() {
-                        return view! { <p class="small">"No courses selected yet."</p> }
+                        return view! {
+                            <p class="muted small">"No courses selected yet."</p>
+                        }
                             .into_any();
                     }
                     let n = codes.len();
@@ -2367,17 +2498,32 @@ fn my_data_dialog(app: App) -> impl IntoView {
                     <h3>"Preferences"</h3>
                     <button
                         class="btn small danger"
+                        title="Theme and density only — your filters stay as they are"
                         on:click=move |_| {
-                            app.prefs.set(Default::default());
+                            // Filters and the current tab used to go too,
+                            // under a button that says "Reset" beside the
+                            // word "Preferences": a carefully built facet
+                            // set thrown away by someone putting the theme
+                            // back to auto. And it was the one filter change
+                            // Ctrl+Z could not reach, because it pushed no
+                            // undo entry.
+                            let d = crate::state::Prefs::default();
+                            app.prefs
+                                .update(|p| {
+                                    p.theme = d.theme;
+                                    p.density = d.density;
+                                });
                             app.persist_prefs();
                             crate::apply_theme(app);
-                            app.toast("Preferences reset.");
+                            app.toast("Theme and density reset.");
                         }
                     >
                         "Reset"
                     </button>
                 </header>
-                <p class="muted small">"Theme, density, filters and the current tab."</p>
+                <p class="muted small">
+                    "Theme and density. Your filters and the tab you're on stay put."
+                </p>
             </section>
 
             <section class="data-section danger-zone">
@@ -2464,6 +2610,8 @@ fn hall_picker(
             <select
                 id=select_id
                 aria-label=aria
+                title="Pick a hall, or scroll here to change it"
+                on:wheel=domx::cycle_on_wheel
                 // Same reason as the Day and Time controls: the option list
                 // is built once, so what is SHOWN must follow `hall`.
                 prop:value=move || {
@@ -2629,12 +2777,7 @@ fn suggest_code(name: &str) -> String {
 /// What CMI owns is shown but not editable: a course of theirs under another
 /// name is a course of your own. Their times, hall and credits are all
 /// overwritable, and each row says exactly what it replaces.
-fn course_editor_dialog(
-    app: App,
-    code: Option<String>,
-    prefill: Option<String>,
-    add_meeting: bool,
-) -> impl IntoView {
+fn course_editor_dialog(app: App, code: Option<String>, prefill: Option<String>) -> impl IntoView {
     // Every read in this builder is UNTRACKED on purpose. DialogHost builds
     // the body inside its own reactive closure, so a tracked read here
     // subscribes the whole dialog: a background sync landing (or an Undo
@@ -2790,13 +2933,6 @@ fn course_editor_dialog(
     };
     let restored: RwSignal<Vec<u64>> = RwSignal::new(Vec::new());
 
-    // "Give it a time": open with a row already waiting, so the first thing
-    // on screen is the thing to fill in.
-    if add_meeting && removed_meetings.is_empty() {
-        let key = next_key();
-        rows.update(|r| r.push(MeetRowDraft::blank(key, first_slot)));
-    }
-
     // Live, per-row clash preview against everything else on the timetable.
     // Non-blocking, like every clash in this app.
     let own_code = editing_code.clone().unwrap_or_default();
@@ -2873,14 +3009,19 @@ fn course_editor_dialog(
     let add_row = move |_| {
         let key = next_key();
         rows.update(|r| r.push(MeetRowDraft::blank(key, first_slot)));
+        app.dialog_dirty.set(true);
         focus_later(format!("ce-day-{key}"));
     };
 
-    let save = {
+    // A Callback, not a plain closure, because two things do this now: the
+    // Save button, and Enter in any of the form's own fields. Typing a name
+    // and pressing Enter did nothing at all before — the app has no <form>
+    // anywhere, so the browser had nothing to submit.
+    let save = Callback::new({
         let slots = slots.clone();
         let own_editing = own_editing.clone();
         let cmi_code = (is_cmi && !creating).then(|| subject_code.clone());
-        move |_| {
+        move |_: ()| {
             let credits_v = if credits_other.get_untracked() {
                 match credits_text.get_untracked().trim().parse::<u8>() {
                     Ok(v) if v <= 20 => v,
@@ -2962,7 +3103,10 @@ fn course_editor_dialog(
                         .unwrap_or(true)
             });
             if taken_custom {
-                error.set(format!("You already have a course called {code_v}."));
+                error.set(format!(
+                    "{code_v} is taken by one of your own courses — pick a different \
+                     code, or edit that one instead."
+                ));
                 return;
             }
             let instructors: Vec<String> = instructor
@@ -2989,14 +3133,40 @@ fn course_editor_dialog(
             }
             app.dialog.set(None);
         }
-    };
+    });
 
     let cmi_name = subject.name.clone();
     let cmi_code_text = subject.code.clone();
     let cmi_teachers = subject.instructors.join(" / ");
 
     view! {
-        <div class="course-form">
+        // One listener for the whole form instead of a line in thirty
+        // handlers: every field in here is an `input` or a `select`, and
+        // both events bubble. The buttons that change something without
+        // either — the credits toggles, adding and removing rows — say so
+        // themselves.
+        <div
+            class="course-form"
+            on:input=move |_| app.dialog_dirty.set(true)
+            on:change=move |_| app.dialog_dirty.set(true)
+            // Enter in a field saves, the way Enter in a form always has.
+            // Not from a `<select>`: there Enter is how a keyboard user
+            // closes the open option list, and saving on it would end the
+            // form on the keystroke that picked a day.
+            on:keydown=move |ev: web_sys::KeyboardEvent| {
+                if ev.key() != "Enter" {
+                    return;
+                }
+                let is_field = ev
+                    .target()
+                    .and_then(|t| t.dyn_into::<web_sys::HtmlInputElement>().ok())
+                    .is_some_and(|i| i.type_() != "checkbox");
+                if is_field {
+                    ev.prevent_default();
+                    save.run(());
+                }
+            }
+        >
             <h2>{title}</h2>
             <p class="muted small form-lede">{lede}</p>
             {
@@ -3012,7 +3182,7 @@ fn course_editor_dialog(
                                          too. You're seeing your own version."
                                     </p>
                                     <button
-                                        class="btn small"
+                                        class="btn small danger"
                                         on:click=move |_| {
                                             app.delete_custom_course(&switch_code, true);
                                             app.dialog.set(None);
@@ -3116,6 +3286,7 @@ fn course_editor_dialog(
                                     on:click=move |_| {
                                         credits_other.set(false);
                                         credits.set(v);
+                                        app.dialog_dirty.set(true);
                                     }
                                 >
                                     {v}
@@ -3126,7 +3297,10 @@ fn course_editor_dialog(
                     <button
                         type="button"
                         aria-pressed=move || if credits_other.get() { "true" } else { "false" }
-                        on:click=move |_| credits_other.set(true)
+                        on:click=move |_| {
+                            credits_other.set(true);
+                            app.dialog_dirty.set(true);
+                        }
                     >
                         "Other…"
                     </button>
@@ -3140,6 +3314,8 @@ fn course_editor_dialog(
                                     type="number"
                                     min="0"
                                     max="20"
+                                    step="1"
+                                    inputmode="numeric"
                                     aria-label="Credits"
                                     title="Type a number, or scroll here to change it"
                                     style="width:5rem"
@@ -3147,7 +3323,20 @@ fn course_editor_dialog(
                                     // Reactive, so "Use CMI's value" is seen
                                     // as well as saved.
                                     prop:value=move || credits_text.get()
-                                    on:input=move |ev| credits_text.set(event_target_value(&ev))
+                                    // A number box hands back "" for anything
+                                    // it cannot parse — a lone "-", an "e",
+                                    // a second ".". Storing that emptiness
+                                    // and writing it back through prop:value
+                                    // wiped the box under the typing cursor,
+                                    // so keep the last good text and let the
+                                    // half-typed number stand where it is.
+                                    on:input=move |ev| {
+                                        let text = event_target_value(&ev);
+                                        if text.is_empty() && bad_number(&ev) {
+                                            return;
+                                        }
+                                        credits_text.set(text);
+                                    }
                                     on:wheel=domx::step_on_wheel
                                 />
                             }
@@ -3198,6 +3387,15 @@ fn course_editor_dialog(
                         let row_key = row.key;
                         let remove = move |_| {
                             rows.update(|r| r.retain(|x| x.key != row_key));
+                            // A meeting of CMI's that was put back and then
+                            // taken away again belongs in "Meetings you
+                            // removed" once more. It used to fall out of
+                            // both lists and stay gone for the rest of the
+                            // dialog, reachable only by cancelling the form.
+                            if let Some(id) = origin_of(row_key).and_then(|e| e.ov_id) {
+                                restored.update(|r| r.retain(|x| *x != id));
+                            }
+                            app.dialog_dirty.set(true);
                             focus_later("ce-add-meeting".to_string());
                         };
                         let day_id = format!("ce-day-{row_key}");
@@ -3278,6 +3476,8 @@ fn course_editor_dialog(
                                 <select
                                     id=day_id
                                     aria-label="Day"
+                                    title="Pick a day, or scroll here to change it"
+                                    on:wheel=domx::cycle_on_wheel
                                     // The options are built once, so the
                                     // rendered choice has to follow the
                                     // signal — "Put it back" writes it.
@@ -3304,6 +3504,8 @@ fn course_editor_dialog(
                                 </select>
                                 <select
                                     aria-label="Time"
+                                    title="Pick one of CMI's slots, or scroll here to change it"
+                                    on:wheel=domx::cycle_on_wheel
                                     prop:value=move || {
                                         row.preset
                                             .get()
@@ -3518,7 +3720,7 @@ fn course_editor_dialog(
                 <button class="btn" on:click=move |_| app.dialog.set(None)>
                     "Cancel"
                 </button>
-                <button class="btn primary" on:click=save>
+                <button class="btn primary" on:click=move |_| save.run(())>
                     {if creating { "Add to my timetable" } else { "Save changes" }}
                 </button>
             </div>
@@ -3676,7 +3878,7 @@ fn export_dialog(app: App, scope: Option<String>) -> impl IntoView {
     let selection = app.selection.get_untracked();
     let selection_opts = selection.clone();
 
-    let download = move |_| {
+    let download = Callback::new(move |_: ()| {
         let (Some(start), Some(end)) = (
             ttcore::date::CivilDate::parse_iso(&from.get_untracked()),
             ttcore::date::CivilDate::parse_iso(&to.get_untracked()),
@@ -3686,6 +3888,18 @@ fn export_dialog(app: App, scope: Option<String>) -> impl IntoView {
         };
         if start > end {
             error.set("The start date must be before the end date.".to_string());
+            return;
+        }
+        // A mistyped year used to sail through and write weekly repeats for
+        // decades into a real calendar — where this app has no undo, and
+        // deleting them is the student's afternoon.
+        let days = end.to_days() - start.to_days();
+        if days > 400 {
+            error.set(format!(
+                "That range covers {} days. A semester is a few months — check the \
+                 year on both dates.",
+                days + 1
+            ));
             return;
         }
         let snapshot = app.snapshot.get_untracked();
@@ -3712,7 +3926,11 @@ fn export_dialog(app: App, scope: Option<String>) -> impl IntoView {
             })
             .collect();
         if courses.iter().all(|c| c.meetings.is_empty()) {
-            error.set("Nothing to export — none of these courses has a time yet.".to_string());
+            error.set(
+                "Nothing to export yet — none of these courses has a time. Open one \
+                 and add a weekly meeting, then come back."
+                    .to_string(),
+            );
             return;
         }
         let c_param = domx::c_param(&app.selection.get_untracked());
@@ -3732,14 +3950,29 @@ fn export_dialog(app: App, scope: Option<String>) -> impl IntoView {
         );
         app.toast("Calendar file downloaded.");
         app.dialog.set(None);
-    };
+    });
 
     view! {
-        <div>
+        <div on:keydown=move |ev: web_sys::KeyboardEvent| {
+            if ev.key() == "Enter"
+                && ev
+                    .target()
+                    .and_then(|t| t.dyn_into::<web_sys::HtmlInputElement>().ok())
+                    .is_some_and(|i| i.type_() == "date")
+            {
+                ev.prevent_default();
+                download.run(());
+            }
+        }>
             <h2>"Export to calendar (.ics)"</h2>
             <div class="fieldrow">
                 <label for="ex-scope">"Courses"</label>
-                <select id="ex-scope" on:change=move |ev| scope_sel.set(event_target_value(&ev))>
+                <select
+                    id="ex-scope"
+                    title="Choose what goes in the file, or scroll here to change it"
+                    on:wheel=domx::cycle_on_wheel
+                    on:change=move |ev| scope_sel.set(event_target_value(&ev))
+                >
                     <option value="__all__" selected=scope_sel.get_untracked() == "__all__">
                         {format!("All selected ({})", selection.len())}
                     </option>
@@ -3804,7 +4037,7 @@ fn export_dialog(app: App, scope: Option<String>) -> impl IntoView {
                 <button class="btn" on:click=move |_| app.dialog.set(None)>
                     "Cancel"
                 </button>
-                <button class="btn primary" on:click=download>
+                <button class="btn primary" on:click=move |_| download.run(())>
                     "Download .ics"
                 </button>
             </div>

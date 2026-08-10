@@ -74,6 +74,7 @@ fn init_app() -> (App, bool) {
         reports: RwSignal::new(Vec::new()),
         route: RwSignal::new(Route::Planner),
         dialog: RwSignal::new(None),
+        dialog_dirty: RwSignal::new(false),
         drag: RwSignal::new(None),
         move_mode: RwSignal::new(None),
         force_tier: RwSignal::new(None),
@@ -155,6 +156,14 @@ fn apply_url_state(app: App) {
     if !app.snapshot.with_untracked(|s| s.has_data()) {
         let shared_overrides = state.overrides;
         let selection = state.selection;
+        // A shared store is written wholesale, so anything the user had
+        // moved or re-credited themselves is gone. It is one undo step, but
+        // nothing pointed at it — the incoming custom *courses* raise a
+        // banner when they lose, while this went by in silence.
+        let replaced_own_work = shared_overrides.is_some()
+            && app
+                .overrides
+                .with_untracked(|o| !o.items.is_empty() || !o.credits.is_empty());
         if app.selection.with_untracked(|s| *s != selection)
             || shared_overrides.is_some()
             || !incoming_customs.is_empty()
@@ -170,6 +179,11 @@ fn apply_url_state(app: App) {
                 }
                 unhide_selected(sel, ovs);
             });
+            if replaced_own_work {
+                app.toast_undo(
+                    "This link brought its own times and credits, and they replaced yours",
+                );
+            }
         }
         return;
     }
@@ -202,6 +216,10 @@ fn apply_url_state(app: App) {
     }
 
     let shared_overrides = state.overrides;
+    let replaced_own_work = shared_overrides.is_some()
+        && app
+            .overrides
+            .with_untracked(|o| !o.items.is_empty() || !o.credits.is_empty());
     let differs = app.selection.with_untracked(|s| *s != known)
         || shared_overrides.is_some()
         || !incoming_customs.is_empty();
@@ -217,6 +235,9 @@ fn apply_url_state(app: App) {
             }
             unhide_selected(sel, ovs);
         });
+        if replaced_own_work {
+            app.toast_undo("This link brought its own times and credits, and they replaced yours");
+        }
     } else {
         app.sync_url();
     }

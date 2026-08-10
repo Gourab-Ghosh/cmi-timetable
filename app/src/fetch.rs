@@ -263,8 +263,9 @@ pub fn adopt(app: &App, new_snapshot: Snapshot, announce: bool, from: Adoption) 
         storage::SnapshotSave::DroppedRaw => {
             app.set_banner(
                 BannerKind::Warn,
-                "Your browser wouldn't let the app save everything, so the raw page \
-                 copies were skipped. Your courses and changes are safe.",
+                "Your browser is short on space, so the app saved less than usual — \
+                 your courses and changes are safe, and the next sync will fill the \
+                 gap.",
             );
         }
         storage::SnapshotSave::Failed => {
@@ -295,14 +296,14 @@ pub fn adopt(app: &App, new_snapshot: Snapshot, announce: bool, from: Adoption) 
         for lapsed in &merge.lapsed {
             app.toast(if lapsed.is_removal() {
                 format!(
-                    "CMI no longer lists the {} class you had removed, so that change \
-                     has lapsed.",
+                    "CMI dropped the {} class you had removed, so there's nothing \
+                     left to remove.",
                     lapsed.course
                 )
             } else {
                 format!(
-                    "CMI no longer lists the {} class you had moved — the time you \
-                     gave it is now one of your own.",
+                    "CMI dropped the {} class you had moved. The time you picked is \
+                     still on your timetable — it's just yours now, not theirs.",
                     lapsed.course
                 )
             });
@@ -515,9 +516,9 @@ pub async fn run_update(app: App, manual: bool) {
     let online = domx::window().navigator().on_line();
 
     let text = if gate_failed_any && no_data {
-        "CMI's website answered, but its pages don't look like a timetable this app \
-         knows how to read. Nothing could be loaded. If this keeps happening, the app \
-         itself needs an update."
+        "CMI's website answered, but its pages aren't in the shape this app reads, so \
+         nothing could be loaded. Try again in a while — if it keeps happening, the app \
+         needs updating, and CMI's timetable page still works in a browser."
             .to_string()
     } else if gate_failed_any {
         format!(
@@ -527,12 +528,12 @@ pub async fn run_update(app: App, manual: bool) {
         )
     } else if no_data && !online {
         "You appear to be offline. The timetable only needs to be fetched once — \
-         connect to the internet and press Sync now."
+         connect to the internet and try again."
             .to_string()
     } else if no_data {
         format!(
             "The timetable couldn't be fetched right now (tried {routes_tried} routes). \
-             Check your connection and press Sync now to try again."
+             Check your connection and try again."
         )
     } else if !online {
         format!(
@@ -610,7 +611,8 @@ pub fn reparse_stored(app: App, manual: bool) {
                 None => {
                     if manual {
                         app.toast(
-                            "Re-parse failed the validation gate — the cached timetable was kept.",
+                            "The stored pages couldn't be read in the new format, so the \
+                             saved timetable was kept.",
                         );
                     }
                 }

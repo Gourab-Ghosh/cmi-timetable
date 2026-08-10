@@ -595,7 +595,7 @@ regenerates the .ics golden.
   selected course with no time is part of the timetable, not a footnote.
 - "Your changes" groups are headed by `.cg-head` (colour rail + small caps
   + count), coloured by `OwnChange::tone()`. See §4.
-- Tests: 100 native + 62/62 e2e green. Meeting removals: `MeetingOverride.to`
+- Tests: 100 native + 65/65 e2e green. Meeting removals: `MeetingOverride.to`
   is `Option<Meeting>` (None = removed; legacy JSON/share payloads still
   load — present meeting ⇒ Some). Out-of-grid times: **all three tables grow
   synthetic `.extra` columns**, each from its own source, all built by the
@@ -1699,6 +1699,139 @@ it, a focused box swallows the scroll so the dialog does NOT move, a meeting
 time steps and an export date steps. 100 native + 62/62 e2e; fmt and clippy
 clean.
 
+### R37 — "change Give it a time to Edit this course … check for these things as much as possible … use as many agents as possible"
+
+**The headline fix.** A course CMI lists but has not scheduled offered one
+button, "Give it a time", in all three places it appeared — the No-fixed-slot
+tray, the course card, the details dialog. That button was the ONLY door to
+the course, and it named one of the four things behind it. Worse, it opened
+the form with a meeting row already filled in with Monday and the first slot,
+so a student who came to change the credits and pressed Save scheduled a
+class nobody asked to schedule. Hence the report: "I was confused how to edit
+those courses without giving them a new time."
+
+All three now read **"Edit this course"** — the same words the card and the
+details dialog already used for a scheduled course, so one action has one
+name. `Dialog::EditCourse` lost its `add_meeting` field entirely: there is no
+longer any path that pre-fills a meeting. The editor's own empty state ("No
+meetings yet — the course will wait in 'No fixed slot yet'…") and its
+"＋ Add a weekly meeting" button now carry that job, one click away.
+
+That change made a latent focus bug into the normal path: one of CMI's
+courses with no meetings has no editable field at all — name and code are
+theirs — so the dialog's "field first, then button" focus rule fell through
+to the first button, which is the credits **0** toggle. Space (how people
+scroll a tall dialog) would then have set the course to zero credits. The
+fallback now skips `.seg` toggles and chips.
+
+e2e **t63** pins the whole thing and **t14** was rewritten; both were checked
+to FAIL with the old behaviour reinstated.
+
+**The wheel, generalised.** R36 gave five boxes with a step the wheel; a
+`<select>` is a box with a step too — its steps are named rather than
+numbered — so having the wheel move the start time but not the Time slot
+beside it read as arbitrary. `domx::cycle_on_wheel` is the twin of
+`step_on_wheel`, same focus gate for the same reason, on all six dropdowns
+(a meeting's Day, Time and Hall, the export scope, and the free-hall finder's
+Day and Slot). t62 grew a case for it, verified to fail without the handler.
+
+**A half-written form is no longer thrown away by a stray key.** Escape and a
+click on the dark area both discarded the course editor outright — and the
+editor commits nothing until Save, so that was the one loss in this app Undo
+cannot reach. (Escape is also how a browser dismisses its own autocomplete
+popup.) `App::dialog_dirty` is set by one `on:input`/`on:change` listener on
+the form (both events bubble) plus the few buttons that change something
+without either; `App::dismiss_dialog` asks before closing while it is set.
+Cancel and Save still close outright — those are answers, not slips. e2e
+**t64**, verified to fail without it.
+
+**Enter now does the obvious thing.** The app has no `<form>` anywhere, so
+Enter did nothing at all: in the course editor it now saves (not from a
+`<select>`, where Enter is how a keyboard user closes the option list), in
+Export it downloads, and in the two search boxes it blurs — on a phone the
+Go key used to leave the keyboard covering the results being filtered for.
+
+**Everything else this round came from five parallel audit agents** (forced
+dead-ends, input affordances, wording, visual quality, discoverability).
+What was fixed:
+
+- Credits box: `step`/`inputmode` added, and it no longer blanks itself when
+  you type a lone `-` or an `e` — a number box reads back `""` for anything
+  it cannot parse, and that emptiness was being written straight back.
+- `trap_tab` counted disabled controls as focus stops, so Tab could escape a
+  dialog. `:not([disabled])`.
+- Toasts paused for hover and focus, neither of which a touch screen has;
+  a tap holds them now.
+- Esc on a filter menu dropped focus to `<body>`; it returns to the summary.
+- The facet summary read as "Branch 3" aloud; now "Branch, 3 selected".
+- Export refuses a range over 400 days, with the year named as the likely
+  culprit — an .ics goes into a real calendar, where this app has no undo.
+- "Put it back" then ✕ inside the editor lost the meeting from both lists
+  for the rest of the dialog; it returns to "Meetings you removed".
+- Clearing the cached timetable now confirms (its neighbour always did) and
+  says when unresolved conflicts would go with it.
+- Preferences "Reset" wiped filters and the current tab under a button next
+  to the word "Preferences" — and was the one filter change Ctrl+Z could not
+  reach. It resets theme and density only.
+- A share link that carried overrides replaced every time and credit the
+  user had set, silently; it says so, with Undo.
+- "Use CMI's version instead" deletes one of the user's own courses and was
+  not red. It is now.
+- Wording: "Remove" in Your changes meant four different things — each row
+  now says what pressing it leaves behind ("Put it back", "Back to CMI's
+  time", "Back to CMI's room", "Back to CMI's credits", "Remove"). "Remove
+  all changes" (button), its tooltip and its toast described three different
+  actions; all three now say the one thing it does. Plus the export refusal,
+  the free-hall zero state, the duplicate-code error, the orphan-course
+  dialog, the storage-pressure banner, the gate-failure copy and the
+  lapsed-override toasts — each was a fact with no next step, or a word from
+  inside the pipeline ("raw page copies", "validation gate", "has lapsed").
+- The welcome screen said "⟳ Fetch the timetable" while every failure message
+  told the user to press "Sync now". The header button wears the welcome
+  screen's name until the first fetch lands.
+- Discoverability, in existing strings only: the edit-mode toast now names
+  the M key and the drop-it-back-to-undo gesture, the master-grid legend
+  names the I key and says a drag can add a course as well as move one, the
+  No-fixed-slot tray says a chip can be dragged onto the grid, and removing a
+  course says its times are kept.
+- CSS: `.day-list` had the `.tray` bug (top margin only) and collided with
+  the panel under it on a phone; `.sidebyside` was scoped to table cells and
+  lost its gap in the per-day list; `.chip .code` could be chopped mid-glyph;
+  `--warn` was 4.15:1 on its own wash; the focus ring was `--accent-wash` on
+  `--surface`, i.e. 1.16:1 — present in the markup, invisible on the screen;
+  `.seg` and `.toast` clipped their children's rings; `.chip.neutral` was
+  computed in the markup with no rule anywhere; and the filter-chip ✕, the
+  remove-meeting ✕ and the filter rows were all under 32px on a phone.
+
+**The unknown-code warning was rebuilt** (asked for mid-round: "this warning
+looks very basic"). It was one `<span>` holding a label, inline chips and a
+three-line sentence, which read as "Unknown course code: — it may be…" with
+the codes falling out of the sentence they were the subject of. It is now a
+headline ("One course in that link isn't in CMI's timetable"), the codes set
+as codes — monospace, boxed, in the warning's colour — and the explanation
+under them, ending with "Everything else in the link opened as usual."
+
+**My courses got the filter bar too** (asked for mid-round). The same
+`filter_bar` the catalog and the master grid use, over `selected_courses()`
+rather than the snapshot. Three things were worth deciding rather than
+assuming:
+
+- The filters are the SAME filters (one `Filters` in `Prefs`), not a second
+  set. One control with one state everywhere it appears; t65 checks that
+  what is typed on My courses is still there in the catalog.
+- The credit summary keeps counting the WHOLE selection — it is a fact about
+  the timetable, not about the view — so when a filter hides some, a line
+  under the bar says how many and that the total still counts them. Two
+  numbers that disagree without explanation is how a total loses trust.
+- "None of your courses match these filters" is its own empty state, apart
+  from "No courses selected yet", and its button clears the filters rather
+  than sending anyone to the catalog: the courses are still there.
+
+"Fits my schedule" is a no-op here by construction — `fits_schedule` returns
+true for anything already selected — so no card can vanish behind it.
+
+100 native + 65/65 e2e; fmt and clippy clean.
+
 ## 8. Open bugs — found, confirmed, NOT fixed (do not delete)
 
 Rules for this section: entries stay until the bug is actually fixed and a
@@ -1706,10 +1839,93 @@ test pins it. Do not delete one for being old. Do not shorten one to save
 space. When a fix lands, move the entry into that round's §7 entry and say
 which test now fails without the fix.
 
-**Currently open: none.** The five entries that lived here (8.1–8.5, found
-by the R30 synthetic-site audit) were all fixed in R34; what each one was
-and how it was fixed is in R34's §7 entry, along with the test that fails
-without it. 8.6 below is not a bug and never leaves.
+The five entries that lived here (8.1–8.5, found by the R30 synthetic-site
+audit) were all fixed in R34; what each one was and how it was fixed is in
+R34's §7 entry, along with the test that fails without it. 8.6 below is not a
+bug and never leaves. 8.7–8.12 were found by the R37 audit agents, confirmed
+by reading the source, and deliberately NOT fixed in that round — each is a
+change of behaviour big enough to want its own look, not a line to slip into
+a batch.
+
+### 8.7 The conflicts dialog answers "use CMI's version" for you
+
+`ui.rs` builds the dialog with `RwSignal::new(vec![false; conflicts.len()])`
+— `keep_mine == false` on every row, i.e. CMI's version pre-chosen — and
+Apply zips ALL rows, not the answered ones. `keep_mine == false` deletes the
+user's override outright (`core/src/merge.rs`). So a student who opens the
+dialog to see what changed about one course, then presses Apply, throws away
+their own times for every other course in the list without ever touching it.
+There is no undecided state. Two smaller things ride along: the banner that
+is the dialog's only entrance has no Dismiss, unlike every other banner; and
+"Decide later" is a promise the app cannot keep, because `app.conflicts` is
+memory-only, so a reload deletes the queue and the dialog cannot be reopened.
+Fix shape: `Option<bool>` per row, Apply acts only on answered rows (or is
+disabled until all are answered), and give the banner a Dismiss.
+
+### 8.8 "No courses match" offers to create a duplicate of a filtered-out course
+
+Filters live in `Prefs` and survive reloads. A Branch or Day facet set weeks
+ago hides the row, and the empty state's only offer is "Add "Algebra" as your
+own course" — which creates a phantom duplicate, because the suggested code
+comes from the NAME, so the duplicate-code guard never fires. (Type the code
+instead and the guard fires, telling you to "just add the official course
+from the catalog" — the catalog that is currently saying nothing matches.)
+Fix shape: a third probe beside the existing `mine`/`deleted` ones — a
+snapshot course matching the text that the other facets excluded — offering
+"Clear filters to show it" ahead of the create button.
+
+### 8.9 Editing a course CMI has dropped invents a credits change
+
+`state.rs` compares the edited credits against `snapshot.course_ci(code)`,
+which is `None` for a course that is on the user's timetable but no longer in
+CMI's catalog, so the comparison always differs and Save always writes a
+credits override — for a stub whose credits default to the assumed 4. It then
+appears in Your changes as "Credits you set: ? → 4", a change the student
+never made and now has to remove by hand. Fix shape: send credits only when
+there is an official value to compare against (`official_credits` is already
+`None` in exactly that case).
+
+### 8.10 Saving an edit to a course you are not taking adds it to your timetable
+
+An added row has no origin, so `invented` is true, so `select_now` is true,
+so Save also selects the course — changing the clash picture and the credit
+total. The button says "Save changes" and nothing in the form mentions it.
+(The toast afterwards does say "Added X".) Fix shape: a checkbox in the
+editor's actions row when the course is not selected — "also add {code} to my
+timetable", ticked by default — so the extra step is visible before it
+happens rather than reported after.
+
+### 8.11 "Restore" hands back less than "Delete" took
+
+`delete_course` removes the code from the selection AND hides it;
+`restore_course` only unhides. So the button labelled Restore gives the
+course back to the catalog but not to the timetable, and from the
+catalog's deleted-note the only offered action restores every deleted course
+at once. (Ctrl+Z does the right thing, but only while it is still the top of
+the stack.) Fix shape: record `was_selected` on the hidden entry and re-select
+on restore.
+
+### 8.12 The `.seg` groups are six tab stops and no arrow keys
+
+Credits 0–4/Other, the My-timetable day picker and the Halls day picker are
+each a single choice built from `aria-pressed` buttons: six tab stops, no
+Left/Right, and a screen reader hears six independent toggles rather than one
+choice of six. Fix shape: `role="radiogroup"` + `role="radio"`/`aria-checked`,
+roving `tabindex`, and Left/Right in one `on:keydown`. Left alone this round
+because `aria-pressed` is asserted by several e2e tests and the change wants
+its own round to verify properly.
+
+### 8.13 Hover-only explanations on elements that cannot take focus
+
+Several `title` attributes sit on `<span>`/`<th>` elements — the credits
+badge on a course card ("assumed from its … duration" / "set by you — CMI:
+4"), the "also on CMI now", "Custom" and "Deleted by you" badges, and the
+master grid's extra-column header. A `title` there is invisible on every
+touch screen and unreachable by keyboard, and for the credits badge it is the
+only explanation of that number anywhere on the card. Fix shape: render the
+credits note as visible `.muted.small` text beside the badge (the dialog
+already does exactly that), and make the other badges buttons that open the
+dialog where the same sentence is already visible.
 
 ### 8.6 Deliberate non-bug — do not "fix" this
 

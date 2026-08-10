@@ -23,7 +23,7 @@ Environment knobs: `CHROME_BIN` (default `/usr/bin/chromium`), `DIST_DIR`,
 `PORT`, `CARGO_TARGET_DIR` (for the seed generator; defaults to
 `~/.rust-target-e2e`).
 
-Covered flows (61 tests): Sync-now header + hidden developer mode (URL
+Covered flows (65 tests): Sync-now header + hidden developer mode (URL
 endpoint only), `?c=` selection + clash badges/panel (any casing), unknown-
 code warning, credits defaulting to 4 and per-course credit overwrites,
 master-grid ⚠ would-clash markers and clash toast on add, the ⓘ details
@@ -31,8 +31,11 @@ button, drag & drop gated behind Edit layout, custom times surviving
 deselection and reloads, the unified overwrites list (Your changes panel +
 My data) with per-item and remove-all restore, filter dropdowns closing
 each other / on outside click / on Esc, adding extra weekly meetings to any
-course, undo/redo, "Give it a time" auto-selecting, the free-hall finder
-requiring an explicit day + slot, hall-and-slot drag & drop in the Halls
+course, undo/redo, an unscheduled course opening the same editor as any
+other (and its credits saving without it gaining a time), the shared filter
+bar on My courses, the wheel stepping every box and dropdown that has a
+step, the course editor asking before a stray Escape throws a half-written
+form away, the free-hall finder requiring an explicit day + slot, hall-and-slot drag & drop in the Halls
 view (including the chip relocating in the halls grid itself, surviving
 reload, and drag-back-to-reset), filter menus keeping focus/scroll while
 ticking boxes, the ✓ selected-course marker in the master grid, toasts

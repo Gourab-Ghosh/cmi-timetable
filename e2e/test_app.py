@@ -434,15 +434,29 @@ def t03_url_selection_and_clash(app):
 
 
 def t04_unknown_code_warning(app):
-    """Unknown codes warn without breaking the known selection."""
+    """Unknown codes warn without breaking the known selection: a headline
+    that says what happened, the codes set as codes, and the explanation
+    under them — not one paragraph with the codes buried inside it."""
     app.boot("/?c=TOC,XYZQ")
     banner = app.wait_css(".banner")
-    assert "Unknown course code" in banner.text, banner.text
-    # The code is a chip of its own, not buried in the sentence.
-    assert banner.find_element(By.CSS_SELECTOR, ".chip").text == "XYZQ"
+    title = banner.find_element(By.CSS_SELECTOR, ".banner-title").text
+    assert title == "One course in that link isn't in CMI's timetable", title
+    # The code is set as a code of its own, not as a word in the sentence.
+    codes = [c.text for c in banner.find_elements(By.CSS_SELECTOR, ".unknown-code")]
+    assert codes == ["XYZQ"], codes
+    note = banner.find_element(By.CSS_SELECTOR, ".banner-note").text
+    assert "earlier semester" in note and "opened as usual" in note, note
     app.chip("TOC")  # TOC still selected and rendered
     banner.find_element(By.XPATH, ".//button[normalize-space()='Dismiss']").click()
     app.wait_gone(".banner")
+
+    # Two of them, and the headline counts rather than pluralising blindly.
+    app.boot("/?c=TOC,XYZQ,NOPE1")
+    banner = app.wait_css(".banner")
+    title = banner.find_element(By.CSS_SELECTOR, ".banner-title").text
+    assert title == "2 courses in that link aren't in CMI's timetable", title
+    codes = [c.text for c in banner.find_elements(By.CSS_SELECTOR, ".unknown-code")]
+    assert codes == ["XYZQ", "NOPE1"], codes
 
 
 def t05_credits_default_four(app):
@@ -559,7 +573,7 @@ def t11_my_data_lists_and_removes_overrides(app):
     assert "Tue 09:10–10:25" in dialog.text and "Wed 17:00–18:15" in dialog.text, \
         f"override line should show official → custom: {dialog.text!r}"
     dialog.find_element(
-        By.XPATH, ".//li[contains(.,'TOC')]//button[normalize-space()='Remove']"
+        By.XPATH, ".//li[contains(.,'TOC')]//button[normalize-space()=\"Back to CMI's time\"]"
     ).click()
     WebDriverWait(app.d, 10).until(
         lambda d: "None. Courses you add or delete" in app.css(".dialog").text
@@ -590,15 +604,23 @@ def t13_reload_persists_state(app):
 
 
 def t14_edit_dialog_and_unscheduled(app):
-    """'Give it a time' opens the course editor on a fresh meeting row, and
-    saving selects the course and places it."""
+    """A course CMI hasn't scheduled opens the same editor as any other, and
+    a meeting added there places it."""
     app.boot("/")
     app.open_tab("Catalog")
     app.wait_css("section[aria-label='Catalog']")
     app.chip("SVA").click()  # unscheduled course → details dialog
     dialog = app.wait_css(".dialog")
     assert "hasn't put it on the timetable" in dialog.text
-    dialog.find_element(By.XPATH, ".//button[normalize-space()='Give it a time']").click()
+    dialog.find_element(By.XPATH, ".//button[normalize-space()='Edit this course']").click()
+    form = app.wait_css(".dialog .course-form")
+    # It opens on what the course has: no times, and no row half-filled on
+    # its behalf.
+    assert not app.css_all(".course-form .meeting-draft"), \
+        "the editor must not add a meeting the user did not ask for"
+    assert "No meetings yet" in form.text
+    form.find_element(
+        By.XPATH, ".//button[contains(normalize-space(),'Add a weekly meeting')]").click()
     app.wait_css(".dialog .course-form #ce-day-0")
     app.xpath("//div[@class='dialog']//button[normalize-space()='Save changes']").click()
     app.wait_toast("Added SVA")
@@ -704,7 +726,8 @@ def t17_credit_override(app):
     assert "4 (assumed) → 3" in panel.text, panel.text
     app.xpath("//button[contains(.,'1 change')]")  # toolbar pill
     panel.find_element(
-        By.XPATH, ".//li[contains(.,'TOC')]//button[normalize-space()='Remove']"
+        By.XPATH,
+        ".//li[contains(.,'TOC')]//button[normalize-space()=\"Back to CMI's credits\"]"
     ).click()
     app.wait_toast("TOC back on official credits")
     app.wait_gone("[data-testid='your-changes']")
@@ -714,7 +737,7 @@ def t17_credit_override(app):
 
 def t18_overwrites_panel_and_remove_all(app):
     """Meeting moves and credit changes appear together with provenance;
-    'Remove all changes' restores CMI's data in one step."""
+    'Undo my changes to CMI's courses' restores CMI's data in one step."""
     t09_drag_requires_edit_mode(app)  # TOC moved Tue 09:10 → Wed 17:00
     time.sleep(0.4)
     app.css("button.chip-info[aria-label='Details for TOC']").click()
@@ -736,9 +759,9 @@ def t18_overwrites_panel_and_remove_all(app):
     assert "4 (assumed) → 2" in panel.text, panel.text
     app.xpath("//button[contains(.,'2 changes')]")
     panel.find_element(
-        By.XPATH, ".//button[normalize-space()='Remove all changes']"
+        By.XPATH, ".//button[normalize-space()=\"Undo my changes to CMI's courses\"]"
     ).click()
-    app.wait_toast("All custom changes removed")
+    app.wait_toast("Your changes to CMI's courses are undone")
     app.wait_gone("[data-testid='your-changes']")
     # Back on CMI's data: official Tuesday slot again.
     app.wait_css("td[data-day='1'][data-slot='550'] button.chip[aria-label^='TOC,']")
@@ -752,7 +775,7 @@ def t19_add_extra_meetings(app):
     app.open_tab("My courses")
     app.wait_css("section[aria-label='My courses']")
     card = "//div[contains(@class,'card')][.//strong[contains(.,'Theory of Computation')]]"
-    app.xpath(f"{card}//button[normalize-space()='Edit course']").click()
+    app.xpath(f"{card}//button[normalize-space()='Edit this course']").click()
     app.wait_css(".dialog .course-form")
     assert "Edit TOC" in app.css(".dialog h2").text, app.css(".dialog h2").text
 
@@ -1292,7 +1315,7 @@ def t35_remove_meeting(app):
     dialog_text = app.wait_css(".dialog").text
     assert "meeting you removed" in dialog_text.lower(), dialog_text[:300]
     assert "Tue 09:10" in dialog_text, dialog_text[:300]
-    app.xpath("//div[@class='dialog']//button[normalize-space()='Restore']").click()
+    app.xpath("//div[@class='dialog']//button[normalize-space()='Put it back']").click()
     app.wait_toast("TOC back on CMI's time")
     app.d.find_element(By.CSS_SELECTOR, "body").send_keys(Keys.ESCAPE)
     assert app.chips("TOC", "td[data-day='1'][data-slot='550']"), \
@@ -1345,7 +1368,9 @@ def t36_out_of_grid_meeting_gets_its_own_column(app):
     # Restoring CMI's times makes the synthetic column disappear entirely.
     app.xpath("//button[contains(.,'change')]").click()
     for _ in range(2):
-        app.xpath("//div[@class='dialog']//button[normalize-space()='Remove']").click()
+        app.xpath(
+            "//div[@class='dialog']//button[normalize-space()=\"Back to CMI's time\"]"
+        ).click()
         app.wait_toast("TOC back on CMI's time")
         time.sleep(0.3)
     app.d.find_element(By.CSS_SELECTOR, "body").send_keys(Keys.ESCAPE)
@@ -1615,8 +1640,8 @@ def t41_custom_course_edit_park_share_delete(app):
     assert "1 course at 0 credits" in pills, pills
 
     # Edit the course itself: Wednesday → Friday. The chip follows. (Every
-    # card offers Edit course now, so it has to be GYM's own.)
-    app.xpath(f"{GYM_CARD}//button[normalize-space()='Edit course']").click()
+    # card offers "Edit this course" now, so it has to be GYM's own.)
+    app.xpath(f"{GYM_CARD}//button[normalize-space()='Edit this course']").click()
     form = app.wait_css(".dialog .course-form")
     # Deleting is not offered from inside the edit form — it belongs to the
     # course's own dialog, beside Edit.
@@ -1633,7 +1658,7 @@ def t41_custom_course_edit_park_share_delete(app):
     # version underneath, so editing it rewrites the definition itself and
     # must never leave an override behind.
     app.open_tab("My courses")
-    app.xpath(f"{GYM_CARD}//button[normalize-space()='Edit course']").click()
+    app.xpath(f"{GYM_CARD}//button[normalize-space()='Edit this course']").click()
     app.wait_css(".dialog .course-form")
     app.css("#ce-day-0 option[value='3']").click()   # Friday → Thursday
     app.xpath("//button[normalize-space()='Save changes']").click()
@@ -1655,7 +1680,7 @@ def t41_custom_course_edit_park_share_delete(app):
     app.wait_gone(".dialog")
     # And the form still shows the moved time (one source of truth).
     app.open_tab("My courses")
-    app.xpath(f"{GYM_CARD}//button[normalize-space()='Edit course']").click()
+    app.xpath(f"{GYM_CARD}//button[normalize-space()='Edit this course']").click()
     app.wait_css(".dialog .course-form")
     assert app.css("#ce-day-0").get_attribute("value") == "3", \
         app.css("#ce-day-0").get_attribute("value")
@@ -2237,9 +2262,14 @@ def t51_changes_are_grouped_by_what_they_did(app):
     gone = groups[2].find_element(By.CSS_SELECTOR, "li .was.gone")
     assert "Thu 09:10" in gone.text, gone.text
     assert not groups[2].find_elements(By.CSS_SELECTOR, "li .now")
-    # Restoring is what the removal's button offers; the others remove.
-    assert groups[2].find_element(By.CSS_SELECTOR, "li .btn").text == "Restore"
-    assert groups[0].find_element(By.CSS_SELECTOR, "li .btn").text == "Remove"
+    # Each button names what pressing it leaves behind: a struck-out
+    # meeting comes back, a moved one goes back to CMI's time.
+    assert groups[2].find_element(By.CSS_SELECTOR, "li .btn").text == "Put it back"
+    assert groups[0].find_element(
+        By.CSS_SELECTOR, "li .btn").text == "Back to CMI's time"
+    # A room move says room, not time.
+    assert groups[1].find_element(
+        By.CSS_SELECTOR, "li .btn").text == "Back to CMI's room"
 
 
 def t52_c_param_keeps_plain_commas(app):
@@ -2334,7 +2364,7 @@ def t54_editor_saves_everything_in_one_step(app):
     app.boot("/?c=TOC")  # Tue + Thu 09:10 in the fixture
     app.open_tab("My courses")
     app.wait_css("section[aria-label='My courses']")
-    app.xpath("//button[normalize-space()='Edit course']").click()
+    app.xpath("//button[normalize-space()='Edit this course']").click()
     app.wait_css(".dialog .course-form")
 
     # Move Tuesday to Wednesday 17:00…
@@ -2455,7 +2485,7 @@ def t57_editor_keeps_a_meeting_whose_cmi_original_moved(app):
     app.wait_css("td[data-day='4'][data-slot='1020'] button.chip[aria-label^='TOC,']")
     app.open_tab("My courses")
     app.wait_css("section[aria-label='My courses']")
-    app.xpath("//button[normalize-space()='Edit course']").click()
+    app.xpath("//button[normalize-space()='Edit this course']").click()
     app.wait_css(".dialog .course-form")
     row = _draft_for_day(app, "Friday")
     row.find_element(By.XPATH, ".//button[normalize-space()='Put it back']").click()
@@ -2576,7 +2606,7 @@ def t60_a_conflicting_sync_does_not_steal_the_open_editor(app):
                  raw_snapshot=cached)
         app.open_tab("My courses")
         app.wait_css("section[aria-label='My courses']")
-        app.xpath("//button[normalize-space()='Edit course']").click()
+        app.xpath("//button[normalize-space()='Edit this course']").click()
         app.wait_css(".dialog .course-form")
         Select(app.css("#ce-day-0")).select_by_visible_text("Monday")
 
@@ -2624,7 +2654,7 @@ def t61_adding_a_meeting_where_a_moved_one_used_to_be(app):
     app.boot("/", selection=["TOC"], overrides=TOC_OVR)  # Tue 09:10 -> Wed 17:00
     app.open_tab("My courses")
     app.wait_css("section[aria-label='My courses']")
-    app.xpath("//button[normalize-space()='Edit course']").click()
+    app.xpath("//button[normalize-space()='Edit this course']").click()
     form = app.wait_css(".dialog .course-form")
 
     # Add a row and put it exactly where CMI's Tuesday class used to be.
@@ -2680,7 +2710,7 @@ def t62_the_wheel_steps_the_boxes_that_have_a_step(app):
     app.boot("/", selection=["TOC"], overrides=odd_hour)
     app.open_tab("My courses")
     app.wait_css("section[aria-label='My courses']")
-    app.xpath("//button[normalize-space()='Edit course']").click()
+    app.xpath("//button[normalize-space()='Edit this course']").click()
     app.wait_css(".dialog .course-form")
     app.xpath("//div[@class='seg']//button[normalize-space()='Other…']").click()
     box = app.wait_css("input[type='number'][aria-label='Credits']")
@@ -2733,6 +2763,22 @@ def t62_the_wheel_steps_the_boxes_that_have_a_step(app):
     assert start_time.get_attribute("value") != before, \
         f"the start time must step: {before}"
 
+    # A dropdown is a box with a step too — its steps are named, not
+    # numbered — and the Day control sits right beside the time boxes.
+    day = app.css_all(".course-form .meeting-draft select[aria-label='Day']")[0]
+    picked = Select(day).first_selected_option.text
+    wheel(day, -50)
+    assert Select(day).first_selected_option.text == picked, \
+        "an unfocused dropdown must not change when the dialog scrolls past it"
+    day.click()
+    app.d.execute_script("document.activeElement.blur(); arguments[0].focus();", day)
+    wheel(day, 50)
+    stepped = Select(day).first_selected_option.text
+    assert stepped != picked, f"the Day dropdown must step: {picked}"
+    wheel(day, -50)
+    assert Select(day).first_selected_option.text == picked, \
+        "and step back the other way"
+
     # And an export date by a day.
     app.xpath("//div[@class='dialog']//button[normalize-space()='Cancel']").click()
     app.wait_gone(".dialog")
@@ -2743,6 +2789,113 @@ def t62_the_wheel_steps_the_boxes_that_have_a_step(app):
     before = frm.get_attribute("value")
     wheel(frm, -50)
     assert frm.get_attribute("value") != before, f"the From date must step: {before}"
+
+
+def t63_editing_a_course_with_no_time_never_invents_one(app):
+    """A course CMI hasn't scheduled has the same door as every other course
+    — "Edit this course" — and going through it to change the credits does
+    not quietly give the course a time.
+
+    It used to: the only button read "Give it a time" and opened the form
+    with a row already filled in with Monday and the first slot, so Save
+    scheduled a class nobody had asked to schedule."""
+    app.boot("/", selection=["SVA"])  # CMI lists SVA but gives it no time
+    app.open_tab("My timetable")
+    tray = app.wait_css(".tray")
+    assert "No fixed slot yet" in tray.text, tray.text
+    tray.find_element(
+        By.XPATH, ".//button[normalize-space()='Edit this course']").click()
+    form = app.wait_css(".dialog .course-form")
+    assert not app.css_all(".course-form .meeting-draft"), \
+        "the editor must open on what the course has: no times, no row"
+
+    # Change only the credits, the thing that was unreachable before.
+    form.find_element(
+        By.XPATH, ".//div[@class='seg']//button[normalize-space()='2']").click()
+    app.xpath("//div[@class='dialog']//button[normalize-space()='Save changes']").click()
+    app.wait_gone(".dialog")
+
+    # The credits took, and the course is still waiting for a time — not
+    # sitting on a Monday morning it never asked for.
+    tray = app.wait_css(".tray")
+    assert app.chips("SVA", ".tray"), "SVA must still be waiting for a time"
+    assert not app.chips("SVA", "table.tt"), \
+        "saving credits must not put the course on the grid"
+    # And the credits really took (the summary lives on My courses).
+    app.open_tab("My courses")
+    pills = [p.text for p in app.css_all(".credit-summary .cs-pill")]
+    assert any("2 credits" in p for p in pills), pills
+
+
+def t64_a_half_written_form_is_not_thrown_away_by_a_stray_key(app):
+    """Escape and a click on the dark area are the two accidental ways out of
+    a dialog. The course editor commits nothing until Save, so a slip there
+    is the one loss in this app that Undo cannot reach — it asks first, and
+    only when there is something to lose."""
+    app.boot("/", selection=["TOC"])
+    app.open_tab("My courses")
+    app.wait_css("section[aria-label='My courses']")
+
+    # Nothing typed yet: Escape closes it, as it always did.
+    app.xpath("//button[normalize-space()='Edit this course']").click()
+    app.wait_css(".dialog .course-form")
+    app.d.find_element(By.CSS_SELECTOR, "body").send_keys(Keys.ESCAPE)
+    app.wait_gone(".dialog")
+
+    # Now change something, and say no to the question.
+    app.xpath("//button[normalize-space()='Edit this course']").click()
+    app.wait_css(".dialog .course-form")
+    app.xpath("//div[@class='seg']//button[normalize-space()='2']").click()
+    app.d.find_element(By.CSS_SELECTOR, "body").send_keys(Keys.ESCAPE)
+    alert = WebDriverWait(app.d, 5).until(EC.alert_is_present())
+    alert.dismiss()
+    app.css(".dialog .course-form")  # still open, still holding the edit
+
+    # A click on the dark area asks the same question.
+    app.d.execute_script(
+        "document.querySelector('.overlay').click();")
+    WebDriverWait(app.d, 5).until(EC.alert_is_present()).accept()
+    app.wait_gone(".dialog")
+
+
+def t65_my_courses_has_the_same_filters(app):
+    """My courses filters the courses you picked, with the same bar the
+    catalog and the master grid use — and says so when the credit total
+    above it counts more than the list below it."""
+    app.boot("/", selection=["TOC", "RDBM", "SVA"])
+    app.open_tab("My courses")
+    section = app.wait_css("section[aria-label='My courses']")
+    assert len(app.css_all("section[aria-label='My courses'] .card")) == 3
+
+    # The bar is the shared one, so the search box narrows the cards.
+    box = section.find_element(By.CSS_SELECTOR, ".filterbar input[type='search']")
+    box.send_keys("TOC")
+    WebDriverWait(app.d, 10).until(
+        lambda d: len(app.css_all("section[aria-label='My courses'] .card")) == 1)
+    assert "1 match" in section.text, section.text
+    # The credit total counts everything, so the difference is stated.
+    assert "hiding 2 of your courses" in section.text, section.text
+
+    # Filtering to nothing says the courses are still on the timetable, and
+    # offers the fix that actually applies.
+    box.send_keys("ZZZZ")
+    WebDriverWait(app.d, 10).until(
+        lambda d: not app.css_all("section[aria-label='My courses'] .card"))
+    assert "None of your courses match these filters" in section.text, section.text
+    section.find_element(
+        By.XPATH, ".//button[normalize-space()='Clear the filters']").click()
+    WebDriverWait(app.d, 10).until(
+        lambda d: len(app.css_all("section[aria-label='My courses'] .card")) == 3)
+
+    # One set of filters, everywhere: what is set here is set in the catalog.
+    box = app.css("section[aria-label='My courses'] .filterbar input[type='search']")
+    box.send_keys("RDBM")
+    WebDriverWait(app.d, 10).until(
+        lambda d: len(app.css_all("section[aria-label='My courses'] .card")) == 1)
+    app.open_tab("Catalog")
+    app.wait_css("section[aria-label='Catalog']")
+    assert app.css("section[aria-label='Catalog'] .filterbar input[type='search']"
+                   ).get_attribute("value") == "RDBM"
 
 
 TESTS = [
@@ -2808,6 +2961,9 @@ TESTS = [
     t60_a_conflicting_sync_does_not_steal_the_open_editor,
     t61_adding_a_meeting_where_a_moved_one_used_to_be,
     t62_the_wheel_steps_the_boxes_that_have_a_step,
+    t63_editing_a_course_with_no_time_never_invents_one,
+    t64_a_half_written_form_is_not_thrown_away_by_a_stray_key,
+    t65_my_courses_has_the_same_filters,
 ]
 
 

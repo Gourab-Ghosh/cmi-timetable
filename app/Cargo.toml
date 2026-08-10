@@ -60,6 +60,7 @@ features = [
   "TouchEvent",
   "Url",
   "UrlSearchParams",
+  "ValidityState",
   "WheelEvent",
   "Window",
 ]

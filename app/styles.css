@@ -35,7 +35,7 @@
   --accent2-wash: #f3ebfb;
   --grad: linear-gradient(120deg, var(--accent), var(--accent2));
   --alarm: #c22f41; /* clashes, and anything that deletes */
-  --warn: #93700a;
+  --warn: #7d5f08;
 
   --chip-sat: 55%;
   --chip-bg-l: 90%;
@@ -462,6 +462,16 @@ button {
   /* iOS: no long-press callout — long-press on a chip means "drag". */
   -webkit-touch-callout: none;
 }
+/* No branch to take a colour from: drain the colour rather than let a
+   course with no branch look like one with a branch. Saturation only — the
+   hue arrives as an inline style (hues.rs already picks a neutral slate for
+   these), and an inline custom property wins over anything written here. */
+.chip.neutral { --chip-sat: 10%; }
+.chip .code {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .chip .hall {
   font-weight: 450;
   opacity: 0.85;
@@ -495,11 +505,25 @@ button {
   .tab,
   .seg button,
   details.facet > summary,
+  label.opt,
   input[type="text"], input[type="search"], input[type="date"],
   input[type="time"], select {
     min-height: 44px;
   }
+  /* Height alone leaves a one-glyph button ~24px wide. */
+  .btn.icon, .filterchip button { min-width: 44px; }
 }
+
+/* A single glyph is not a target. Both of these are how a thing gets
+   removed — a meeting row, a filter — so they are worth a finger. */
+.btn.icon, .filterchip button {
+  min-width: 32px;
+  min-height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+label.opt { min-height: 32px; }
 
 /* Clash: alarm color + icon + (text badge in details). Never color alone. */
 .chip.clash {
@@ -635,6 +659,12 @@ table.tt tr.own-hall th.rowhead .badge { margin-left: 0.4rem; }
    cell in the middle of Thursday always says which room and which day it
    belongs to. */
 table.tt.halls-merged { --hall-gutter: 11rem; --day-gutter: 3.6rem; }
+table.tt th.hallhead {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  max-width: var(--hall-gutter);
+}
+table.tt th.hallhead .hall-name { display: block; line-height: 1.25; }
 table.tt.halls-merged th.hallhead {
   left: 0;
   z-index: 3;
@@ -748,7 +778,7 @@ table.tt td .cellstack {
   flex-direction: column;
   gap: 0.25rem;
 }
-table.tt td .sidebyside { display: flex; flex-wrap: wrap; gap: 0.25rem; }
+.sidebyside { display: flex; flex-wrap: wrap; gap: 0.25rem; min-width: 0; }
 table.tt td.drop-ok {
   background: var(--accent-wash) !important;
   box-shadow: inset 0 0 0 2px var(--accent);
@@ -1062,7 +1092,9 @@ input[type="time"], input[type="number"], select {
 input:focus-visible, select:focus-visible {
   outline: none;
   border-color: var(--accent);
-  box-shadow: 0 0 0 3px var(--accent-wash);
+  /* A wash on a surface is barely over 1:1 — the ring was there in the
+     markup and invisible on the screen. */
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 45%, transparent);
 }
 input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); width: 1rem; height: 1rem; }
 label.opt { display: flex; align-items: center; gap: 0.45rem; padding: 0.18rem 0; }
@@ -1244,7 +1276,21 @@ details.facet .menu .menu-empty { margin: 0.2rem 0 0; }
   margin: 0.8rem 0 0.9rem;
   background: var(--surface);
 }
-.tray .items { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.4rem; }
+.filtered-note { margin: 0 0 0.6rem; }
+.tray-hint { margin: 0.35rem 0 0; }
+.tray .items { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.5rem; }
+/* A course and its way in read as one thing, not as two loose controls —
+   with several courses waiting, an unbroken row of chips and buttons was
+   hard to pair up by eye. */
+.tray .tray-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.25rem 0.3rem;
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: var(--surface);
+}
 
 /* Banner + toasts */
 .banner {
@@ -1261,6 +1307,35 @@ details.facet .menu .menu-empty { margin: 0.2rem 0 0; }
   box-shadow: var(--shadow-sm);
 }
 .banner.warn { border-left-color: var(--warn); }
+
+/* A banner that has more than one sentence to say: a headline, the thing
+   it is about, and the explanation — stacked, so each can be read on its
+   own instead of running together into one long line. */
+.banner-main {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  min-width: 0;
+  flex: 1;
+}
+.banner-title { margin: 0; font-weight: 600; }
+.banner-note { margin: 0; max-width: 62ch; line-height: 1.45; }
+.banner .btn.small { align-self: flex-start; }
+/* The codes are what the message is about, so they are set as codes —
+   monospace, boxed, in the warning's own colour — rather than as words in
+   the middle of a paragraph. */
+.unknown-code {
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  font-weight: 650;
+  letter-spacing: 0.02em;
+  padding: 0.12rem 0.42rem;
+  border-radius: var(--r-sm);
+  border: 1px solid color-mix(in srgb, var(--warn) 40%, transparent);
+  background: var(--warn-wash);
+  color: var(--warn);
+  overflow-wrap: anywhere;
+}
 
 .toasts {
   position: fixed;
@@ -1664,6 +1739,7 @@ pre.devpre {
 }
 
 /* Mobile per-day segmented view for My timetable */
+.seg button:focus-visible, .toast button:focus-visible { outline-offset: -2px; }
 .seg {
   display: inline-flex;
   border: 1px solid var(--line);
@@ -1687,7 +1763,15 @@ pre.devpre {
   color: var(--accent);
   font-weight: 650;
 }
-.day-list { display: flex; flex-direction: column; gap: 0.45rem; }
+/* Bottom margin, not top: vertical rhythm in this column is carried by
+   bottom margins, and a block that sets only the other one collides with
+   whatever follows it. Exactly what .tray was fixed for. */
+.day-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  margin-bottom: 0.9rem;
+}
 .day-list .slotrow {
   display: flex;
   gap: 0.6rem;

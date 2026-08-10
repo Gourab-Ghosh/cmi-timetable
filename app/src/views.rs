@@ -505,6 +505,14 @@ fn my_timetable(app: App) -> impl IntoView {
                                     "No fixed slot yet "
                                     <span class="badge warn">{note}</span>
                                 </h3>
+                                // Dragging one of these onto the grid is how
+                                // a course gets a time in one gesture, and
+                                // nothing said so — the drag was the only
+                                // route and it had no hint at all.
+                                <p class="muted small tray-hint">
+                                    "Drag one onto the grid in ✎ Edit layout, or open it \
+                                     here to set a time — and anything else about it."
+                                </p>
                                 <div class="items">
                                     {items
                                         .into_iter()
@@ -512,7 +520,7 @@ fn my_timetable(app: App) -> impl IntoView {
                                             let code = course.code;
                                             let give_code = code.clone();
                                             view! {
-                                                <span style="display:inline-flex;align-items:center;gap:0.3rem">
+                                                <span class="tray-item">
                                                     {chip(
                                                         app,
                                                         ChipProps {
@@ -526,20 +534,27 @@ fn my_timetable(app: App) -> impl IntoView {
                                                             warn_wont_fit: false,
                                                         },
                                                     )}
+                                                    // Not "Give it a time", which was the only
+                                                    // door to this course and named just one of
+                                                    // the things behind it — the credits of a
+                                                    // course with no time were reachable only by
+                                                    // a button offering to schedule it.
                                                     <button
                                                         class="btn small"
+                                                        title="Give it a time, change its \
+                                                               credits — everything about this \
+                                                               course, in one form"
                                                         on:click=move |_| {
                                                             app.dialog
                                                                 .set(
                                                                     Some(Dialog::EditCourse {
                                                                         code: Some(give_code.clone()),
                                                                         prefill: None,
-                                                                        add_meeting: true,
                                                                     }),
                                                                 );
                                                         }
                                                     >
-                                                        "Give it a time"
+                                                        "Edit this course"
                                                     </button>
                                                 </span>
                                             }
@@ -661,8 +676,9 @@ fn my_timetable(app: App) -> impl IntoView {
                                 </h3>
                                 <p class="muted small">
                                     "Everything you've added, deleted or overwritten in \
-                                     your timetable. Remove one to go back to CMI's \
-                                     version — every change is also undoable (Ctrl+Z)."
+                                     your timetable. Each one can go back to CMI's \
+                                     version on its own — and every change is undoable \
+                                     (Ctrl+Z)."
                                 </p>
                                 {overrides_list(app)}
                             </div>
@@ -873,6 +889,22 @@ fn my_courses(app: App) -> impl IntoView {
         })
     };
 
+    // The same filters the catalog and the master grid use, over the courses
+    // you have actually picked — so "which of mine meet on Thursday" or
+    // "which of mine are in Seminar Hall" is one click here rather than a
+    // read of every card. They are the SAME filters (one set, in Prefs), so
+    // a filter set here is still set when you switch to the catalog: one
+    // control, one state, everywhere it appears.
+    let filtered = Memo::new(move |_| {
+        let f = app.filters();
+        app.selected_courses()
+            .into_iter()
+            .filter(|c| crate::state::course_matches(&app, c, &f))
+            .collect::<Vec<_>>()
+    });
+    let shown = Signal::derive(move || filtered.get().len());
+    let hidden = move || app.selection.with(|s| s.len()).saturating_sub(shown.get());
+
     view! {
         <section aria-label="My courses">
             <div class="toolbar">
@@ -880,9 +912,38 @@ fn my_courses(app: App) -> impl IntoView {
                 <div class="grow"></div>
             </div>
             {credit_summary}
+            // The bar earns its place only once there is something to
+            // filter; an empty timetable gets its empty state, undisturbed.
             {move || {
-                let courses = app.selected_courses();
-                if courses.is_empty() {
+                (!app.selection.with(|s| s.is_empty()))
+                    .then(|| {
+                        view! {
+                            {filter_bar(app, shown)}
+                            // The credit total above counts every course you
+                            // have picked, filtered or not — it is a fact
+                            // about your timetable, not about this view — so
+                            // say when the two numbers disagree.
+                            {move || {
+                                let n = hidden();
+                                (n > 0)
+                                    .then(|| {
+                                        view! {
+                                            <p class="muted small filtered-note">
+                                                {format!(
+                                                    "Filters are hiding {n} of your course{}.                                                      The credit total above still counts {}.",
+                                                    if n == 1 { "" } else { "s" },
+                                                    if n == 1 { "it" } else { "them" },
+                                                )}
+                                            </p>
+                                        }
+                                    })
+                            }}
+                        }
+                    })
+            }}
+            {move || {
+                let courses = filtered.get();
+                if app.selection.with(|s| s.is_empty()) {
                     view! {
                         <div class="empty panel">
                             <p class="big">"No courses selected yet."</p>
@@ -905,12 +966,33 @@ fn my_courses(app: App) -> impl IntoView {
                                                 Some(Dialog::EditCourse {
                                                     code: None,
                                                     prefill: None,
-                                                    add_meeting: false,
                                                 }),
                                             );
                                     }
                                 >
                                     "Add your own course"
+                                </button>
+                            </div>
+                        </div>
+                    }
+                        .into_any()
+                } else if courses.is_empty() {
+                    // Picked courses, none of them matching: the fix is the
+                    // filters, not the catalog, so that is what is offered.
+                    view! {
+                        <div class="empty panel">
+                            <p class="big">"None of your courses match these filters."</p>
+                            <p>"They are all still on your timetable."</p>
+                            <div class="row" style="justify-content:center">
+                                <button
+                                    class="btn primary"
+                                    on:click=move |_| {
+                                        app.act_filters("clear all filters", false, |f| {
+                                            *f = crate::state::Filters::default();
+                                        });
+                                    }
+                                >
+                                    "Clear the filters"
                                 </button>
                             </div>
                         </div>
@@ -938,7 +1020,6 @@ fn my_courses(app: App) -> impl IntoView {
                                             Some(Dialog::EditCourse {
                                                 code: None,
                                                 prefill: None,
-                                                add_meeting: false,
                                             }),
                                         );
                                 }
@@ -1002,12 +1083,11 @@ fn my_courses(app: App) -> impl IntoView {
                                                                 Some(Dialog::EditCourse {
                                                                     code: Some(edit_code.clone()),
                                                                     prefill: None,
-                                                                    add_meeting: false,
                                                                 }),
                                                             );
                                                     }
                                                 >
-                                                    "Edit"
+                                                    "Edit this course"
                                                 </button>
                                             </div>
                                         }
@@ -1134,7 +1214,6 @@ fn course_card(app: App, course: Course) -> impl IntoView {
             <div class="row card-actions">
                 {
                     let edit_code = code;
-                    let no_meetings = !has_meetings;
                     view! {
                         <button
                             class="btn small"
@@ -1146,12 +1225,11 @@ fn course_card(app: App, course: Course) -> impl IntoView {
                                         Some(Dialog::EditCourse {
                                             code: Some(edit_code.clone()),
                                             prefill: None,
-                                            add_meeting: no_meetings,
                                         }),
                                     );
                             }
                         >
-                            {if no_meetings { "Give it a time" } else { "Edit course" }}
+                            "Edit this course"
                         </button>
                     }
                 }
@@ -1277,8 +1355,12 @@ fn master_grid(app: App) -> impl IntoView {
                 </button>
             </div>
             <p class="muted small" style="margin:0 0 0.6rem">
+                // "rearrange" read as reordering what you already have, so
+                // nobody discovered that dragging a course you have NOT
+                // picked adds it and places it in the one gesture.
                 "Click a course to add or remove it · ✓ in your timetable · ⓘ details \
-                 · ⚠ clashes with your timetable · rearrange with ✎ Edit layout"
+                 (or press I) · ⚠ clashes with your timetable · add and place in one \
+                 drag with ✎ Edit layout"
             </p>
             {filter_bar(app, count)}
             {deleted_note(app)}
@@ -1406,7 +1488,6 @@ fn catalog(app: App) -> impl IntoView {
                                 Some(Dialog::EditCourse {
                                     code: None,
                                     prefill: None,
-                                    add_meeting: false,
                                 }),
                             );
                     }
@@ -1516,7 +1597,6 @@ fn catalog(app: App) -> impl IntoView {
                                                             Some(Dialog::EditCourse {
                                                                 code: None,
                                                                 prefill: Some(prefill.clone()),
-                                                                add_meeting: false,
                                                             }),
                                                         );
                                                 }
@@ -2334,6 +2414,8 @@ fn halls_view(app: App) -> impl IntoView {
                 <div class="row" style="display:flex;gap:0.5rem;flex-wrap:wrap;align-items:center">
                     <select
                         aria-label="Day"
+                        title="Pick a day, or scroll here to change it"
+                        on:wheel=crate::domx::cycle_on_wheel
                         on:change=move |ev| {
                             finder_day.set(event_target_value(&ev).parse::<usize>().ok());
                         }
@@ -2359,6 +2441,8 @@ fn halls_view(app: App) -> impl IntoView {
                     </select>
                     <select
                         aria-label="Time slot"
+                        title="Pick a slot, or scroll here to change it"
+                        on:wheel=crate::domx::cycle_on_wheel
                         on:change=move |ev| {
                             finder_start.set(event_target_value(&ev).parse::<u16>().ok());
                         }
@@ -2435,7 +2519,8 @@ fn halls_view(app: App) -> impl IntoView {
                                 .then(|| {
                                     view! {
                                         <p class="muted small finder-note">
-                                            "Every hall CMI publishes is booked at this time."
+                                            "Every hall CMI publishes is booked then — \
+                                             try another slot or day."
                                         </p>
                                     }
                                 })}
