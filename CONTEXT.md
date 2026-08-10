@@ -1628,6 +1628,27 @@ things the builder cannot express (a day line with a date after it, a stray
 separator, a code in the wrong case). Each edit asserts it actually matched,
 so a test whose edit silently missed cannot pass for the wrong reason.
 
+### R35 — "push and deploy"
+
+Shipped R32–R34 together: `3ae79ab` (no copy of CMI's site anywhere),
+`c5daada` (the Your-changes headings and the tray's place) and `d7297c5`
+(the five §8 parser fixes). `./deploy.sh --push`.
+
+The container ran `cargo test --workspace` and reported **100 passed / 0
+failed**, the same count as the host, so the six new §8 tests are not
+dependent on anything local. Published `d7297c5` with no `+dirty`, and the
+live check confirmed the site serves this build.
+
+The check that mattered this round: **the CMI copies are gone from the
+internet.** `data/latest.json`, `data/timetable.php.html`,
+`data/lecturehalls.php.html`, `data/README.md` and `data/` all return 404 —
+they had been served since the first deploy, and only disappear when
+`gh-pages` is replaced wholesale, which is what a deploy does. The app's own
+assets all 200 and the wasm carries the `d7297c5` stamp.
+
+Still true, on the user's instruction: git history retains the removed files
+in older commits.
+
 ## 8. Open bugs — found, confirmed, NOT fixed (do not delete)
 
 Rules for this section: entries stay until the bug is actually fixed and a
