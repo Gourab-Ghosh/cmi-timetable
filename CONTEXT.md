@@ -87,7 +87,7 @@ and no committed mirror (fixtures exist only for tests/e2e seed).
         ui.rs (header/tabs/facets/dialogs/chips), views.rs (5 tabs +
         welcome()), dnd.rs (pointer+keyboard drag), storage.rs, dev.rs,
         domx.rs; styles.css = whole design system (tokens, light+dark).
-/e2e    test_app.py — 65 Selenium tests, self-seeding (see §5); shoot.py —
+/e2e    test_app.py — 66 Selenium tests, self-seeding (see §5); shoot.py —
         design-review screenshots + print PDFs.
 /githooks  pre-push — builds+publishes via deploy.sh when main is pushed
         (activate per clone: `git config core.hooksPath githooks`; skip
@@ -622,7 +622,7 @@ regenerates the .ics golden.
   selected course with no time is part of the timetable, not a footnote.
 - "Your changes" groups are headed by `.cg-head` (colour rail + small caps
   + count), coloured by `OwnChange::tone()`. See §4.
-- Tests: 100 native + 65/65 e2e green. Meeting removals: `MeetingOverride.to`
+- Tests: 100 native + 66/66 e2e green. Meeting removals: `MeetingOverride.to`
   is `Option<Meeting>` (None = removed; legacy JSON/share payloads still
   load — present meeting ⇒ Some). Out-of-grid times: **all three tables grow
   synthetic `.extra` columns**, each from its own source, all built by the
@@ -1929,6 +1929,97 @@ goes looking for a button that isn't there.
 
 No app code touched.
 
+### R40 — "remove the Fits my schedule checkbox under My courses … search for these kind of nonsense things and fix them" (Catalog and Master grid keep theirs)
+
+**The report was exactly right and the reason is provable.** `App::fits_schedule`
+returns `true` immediately for any selected course, and My courses shows only
+selected courses — so on that page the checkbox could not hide a single card.
+It is gone from there and stays on the Catalog and the Master grid, where it
+has something to hide (the user said so explicitly mid-round).
+
+**The class behind it: a control offered where it cannot act.** Everything
+below is that same shape.
+
+`filter_bar` now takes a `FilterScope` — `Everything` (Catalog, Master grid)
+or `MySelection` (My courses) — and every facet's options are derived from the
+courses that bar is actually filtering, through memos. Before, My courses
+offered the whole catalog's ~60 instructors and 75 courses when five of yours
+have a handful between them; every other value could only ever produce "None
+of your courses match these filters". Deleted courses drop out of the Course
+facet on the Catalog for the same reason.
+
+Two regressions the scoping introduced, both caught and fixed here:
+- A value ticked where it WAS in scope (on the catalog) became invisible in
+  its own menu where it is not, while the badge went on counting it and
+  "None" — which acts on the rows — could not clear it. `with_picked` injects
+  any currently-filtered value the scoped list lacks.
+- "Clear all" is counted scope-aware, so it cannot appear over an empty chip
+  line on the strength of a `fits` flag that page does not show.
+
+A facet with no options at all is no longer rendered: a summary, a search box
+and All/None over an empty list is furniture.
+
+The rest of the sweep, each verified by reading the source:
+- The **Halls toolbar advertised the `M` keyboard move**, and
+  `dnd::enter_move_mode` refuses on exactly that tab (its cursor walks days ×
+  times; that table stacks rooms down the side). The copy is tab-aware now.
+- The **typing guard sat AFTER the move-mode key block**, so with move mode on,
+  an arrow key or Enter typed into a form moved a chip instead of the caret.
+- **Move mode outlived a tab change**, leaving the global arrow/Enter handlers
+  live on a page that draws no cursor. `set_tab` clears it.
+- **Flags → "Has custom time" could never match a course of your own**, whose
+  times are entirely custom — the predicate only recognised overrides, which a
+  custom course never has. Matcher and option list both fixed, together.
+- **Export .ics was offered for a course with no times**, two lines under the
+  message saying CMI hasn't scheduled it.
+- **Print was enabled on an empty timetable** while Export beside it was
+  disabled for that exact reason.
+- **Double-clicking a master-grid chip** delivered two clicks first: the course
+  was toggled on and off — two undo entries, two toasts — and then details
+  opened. The handler is gone; ⓘ and the `I` key already do it.
+- **A no-op filter action pushed an undo entry and wiped the redo stack**, so
+  "All" over an already-full menu killed Redo for nothing. `act_filters`
+  compares before and after and returns if nothing changed.
+- **`App::removed_upstream`** was written from four places and read from none —
+  every badge goes through the `is_removed_upstream()` METHOD, which derives
+  from the snapshot. Deleted, with its three `retain` calls.
+- **`Prefs::halls_day`** was written by every Halls day button and read by
+  nothing (`halls_view` is what the app reads). No longer written; the field
+  stays so older stored prefs still deserialize.
+- **The course editor's empty-meetings note** promised the "No fixed slot yet"
+  tray for every course, but the tray only holds courses CMI itself never
+  scheduled — a course whose classes you struck out never appears there. The
+  note now distinguishes the two.
+- **The dropped-course dialog was a dead end**: no way to edit a course that
+  the My-courses card lets you edit, though `course_editor_dialog` has a branch
+  built for exactly it. It has "Edit this course" now.
+- **An unreachable badge** in `details_dialog`: reaching that panel at all
+  means the course IS still listed, so "No longer on CMI's timetable" was
+  provably false every time. (The course that really is gone takes the early
+  return, which carries its own copy.)
+- **Keyboard Enter announced "Dropped X."** for the default press — the cursor
+  starts on the chip's own cell — telling a screen-reader user about a move no
+  sighted user would have seen. `MoveMode` remembers where the cursor started.
+
+**A methodology note worth keeping.** The audit ran as a workflow: five
+finders by different lenses, then two skeptics per finding, each told to
+refute. 31 findings came back. Then the verification stage crashed —
+`parallel()` was handed promises instead of thunks — and returned nothing; the
+findings survived in `journal.jsonl` and the run was resumed from the same run
+id with the script fixed, so the finders replayed from cache. But by then I
+had started fixing, and several skeptics said so plainly ("the code the claim
+quotes no longer exists", "ui.rs was edited while I was reading"). Their
+verdicts are therefore unreliable, and this round leans on source reading and
+the test suite instead. **Do not edit the files an audit is reading.** Let it
+finish, or work on a copy.
+
+e2e **t66** pins the sweep (Print disabled, no Export for a timeless course,
+the custom-time flag matching your own course, an out-of-scope ticked value
+staying visible and ticked), and **t65** grew the removal and the scoped
+menus. Both verified to fail with the fixes reverted.
+
+100 native + 66/66 e2e; fmt and clippy clean.
+
 ## 8. Open bugs — found, confirmed, NOT fixed (do not delete)
 
 Rules for this section: entries stay until the bug is actually fixed and a
@@ -1943,6 +2034,46 @@ bug and never leaves. 8.7–8.12 were found by the R37 audit agents, confirmed
 by reading the source, and deliberately NOT fixed in that round — each is a
 change of behaviour big enough to want its own look, not a line to slip into
 a batch.
+
+### 8.14 Master grid: a filter can count courses the grid cannot draw
+
+The Master grid renders a course only through `cell_chips`, which needs an
+effective meeting to put in a cell. A course with no meetings therefore draws
+nothing — but `filter_bar`'s "N matches" counts it, and Flags → "Unscheduled"
+selects for exactly those courses. So that combination can report matches over
+a visibly empty grid. Found in the R40 audit; not fixed because the honest fix
+is a third scope ("only courses that occupy a cell") whose effect on the count
+wants its own look. The Catalog does not have this problem: it lists rows, not
+cells.
+
+### 8.15 The phone's per-day list is a drop target with no keyboard cursor
+
+The narrow-viewport day list carries `data-day`/`data-slot` and `drop-ok`, so
+a pointer drag lands there, but it never gets `kbd-cursor` the way `grid_cell`
+does. `enter_move_mode` is refused only on the Halls tab, so on My timetable
+in day mode a keyboard move starts with nothing highlighted. Either refuse it
+there too (and say where moving works, as Halls does) or give the day list a
+cursor.
+
+### 8.16 Halls says "✓ marks the courses on your timetable", and one kind of
+chip cannot show it
+
+Chips built for a booking that has no matching meeting are constructed with
+`from_master: false`, and the ✓ mark is drawn only when `from_master` is true.
+So the help line promises a mark that a whole class of chip on that page can
+never display. Building those props with `from_master: true` (keeping
+`draggable: false` — there is no base meeting to move) would make the promise
+true; left alone this round because the Halls chip paths deserve one careful
+pass together, not a one-line poke.
+
+### 8.17 Two small dialogs offer a choice that is not one
+
+The export dialog's "Courses" dropdown lists "All selected (N)" plus one entry
+per selected course; with a single course selected, both produce the same
+file. And `what_changed_dialog` has a "Nothing differs" empty state that
+cannot be reached — the dialog is only opened from a banner that exists only
+when the diff is non-empty. Neither hurts anyone; both are the same species as
+the rest of R40 and should go when that dialog is next touched.
 
 ### 8.7 The conflicts dialog answers "use CMI's version" for you
 

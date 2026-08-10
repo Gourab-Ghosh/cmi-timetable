@@ -114,6 +114,9 @@ pub struct Prefs {
     pub tab: Tab,
     /// Legacy single-day preference. Kept so older stored prefs still load;
     /// `halls_view` is what the app reads now.
+    /// Legacy: written by the Halls day buttons until R40 and read by
+    /// nothing — `halls_view` is what the app reads. Kept, with its Default,
+    /// so stored prefs from older builds still deserialize.
     pub halls_day: Day,
     /// Which day (or all of them) the Halls tab shows. `None` means the user
     /// has never chosen: the tab then opens on today, and only a real click
@@ -259,6 +262,11 @@ pub struct DragSpec {
 pub struct MoveMode {
     pub spec: DragSpec,
     pub cursor: (Day, u16),
+    /// Where the cursor started — the cell the chip already occupies.
+    /// Enter without moving is the default gesture, and announcing
+    /// "Dropped X." for it told a screen-reader user about a move that
+    /// never happened.
+    pub start: (Day, u16),
 }
 
 #[derive(Clone)]
@@ -349,8 +357,6 @@ pub struct App {
     pub banner: RwSignal<Option<Banner>>,
     pub conflicts: RwSignal<Vec<Conflict>>,
     pub what_changed: RwSignal<Option<SnapshotDiff>>,
-    /// Selected codes that vanished upstream ("No longer on CMI's timetable").
-    pub removed_upstream: RwSignal<Vec<String>>,
     /// Unknown codes from a shared URL (dismissible warning chips).
     pub unknown_codes: RwSignal<Vec<String>>,
     pub fetch_log: RwSignal<Vec<FetchLogEntry>>,
@@ -701,7 +707,6 @@ impl App {
         self.act(&format!("remove {code}"), |sel, _| {
             sel.retain(|c| c != &code);
         });
-        self.removed_upstream.update(|r| r.retain(|c| c != &code));
         // Say that the times are kept: the course leaves the timetable but
         // the work done on it does not, and finding that out by accident
         // weeks later (from a "✎ N changes" count that never went down) is
@@ -760,7 +765,6 @@ impl App {
             sel.retain(|c| !c.eq_ignore_ascii_case(&code));
             ovs.hide(&code, now);
         });
-        self.removed_upstream.update(|r| r.retain(|c| c != &code));
         self.toast_undo(format!("Deleted {code} — restore it from Your changes"));
     }
 
@@ -899,7 +903,6 @@ impl App {
             ovs.credits
                 .retain(|c| !c.course.eq_ignore_ascii_case(&code));
         });
-        self.removed_upstream.update(|r| r.retain(|c| c != &code));
         if keep_selected {
             self.toast_undo(format!("{code} now uses CMI's version"));
         } else {
@@ -1661,6 +1664,10 @@ impl App {
     // -- navigation ----------------------------------------------------------
 
     pub fn set_tab(&self, tab: Tab) {
+        // A move in progress belongs to the grid that draws its cursor. It
+        // used to survive a tab change, leaving the global arrow and Enter
+        // handlers live on a page with nothing highlighted.
+        self.move_mode.set(None);
         self.prefs.update(|p| p.tab = tab);
         self.persist_prefs();
     }
@@ -1678,6 +1685,16 @@ impl App {
     /// history entry — the search box makes one entry per burst of typing,
     /// not one per keystroke.
     pub fn act_filters(&self, label: &str, coalesce: bool, f: impl FnOnce(&mut Filters)) {
+        // A change that changes nothing is not an action. "All" over a menu
+        // whose options are all ticked, or "None" over one with none ticked,
+        // used to push an undo entry and wipe the redo stack for it — so the
+        // Redo button went dead because of a click that did nothing at all.
+        let before = self.prefs.with_untracked(|p| p.filters.clone());
+        let mut after = before.clone();
+        f(&mut after);
+        if after == before {
+            return;
+        }
         let amend_top = coalesce
             && self
                 .undo_stack
@@ -1689,7 +1706,7 @@ impl App {
         } else {
             self.push_undo(label);
         }
-        self.prefs.update(|p| f(&mut p.filters));
+        self.prefs.update(|p| p.filters = after);
         self.persist_prefs();
     }
 
@@ -1871,7 +1888,11 @@ pub fn course_matches(app: &App, course: &Course, f: &Filters) -> bool {
         let matches_flag = f.flags.iter().any(|flag| match flag.as_str() {
             "optional" => course.optional_flag,
             "unscheduled" => course.status == ScheduleStatus::UnscheduledListed,
-            "custom" => has_custom,
+            // A course of the user's own IS custom, times and all. It can
+            // never carry an override (its definition is the schedule), so
+            // testing only for overrides hid exactly the courses the flag
+            // most obviously describes.
+            "custom" => has_custom || app.is_custom(&course.code),
             _ => false,
         });
         if !matches_flag {

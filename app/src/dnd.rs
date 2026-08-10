@@ -334,7 +334,11 @@ pub fn enter_move_mode(app: App, spec: DragSpec, from: Option<Meeting>) {
         "Move mode for {}. Use arrow keys to pick a cell, Enter to drop, Escape to cancel.",
         spec.code
     ));
-    app.move_mode.set(Some(MoveMode { spec, cursor }));
+    app.move_mode.set(Some(MoveMode {
+        spec,
+        cursor,
+        start: cursor,
+    }));
 }
 
 /// The columns of the grid the user is actually looking at. Moving by
@@ -422,6 +426,14 @@ fn on_key_down(app: App, ev: &web_sys::KeyboardEvent) {
         return;
     }
 
+    // Typing wins over every shortcut below. This guard used to sit AFTER
+    // the move-mode block, so with move mode on, an arrow key or Enter typed
+    // into a form moved a chip instead of the caret. Escape is handled above
+    // it on purpose: cancelling has to work everywhere.
+    if is_editing_context(&ev.target()) {
+        return;
+    }
+
     // Keyboard move mode navigation.
     if app.move_mode.with_untracked(|m| m.is_some()) {
         match key.as_str() {
@@ -448,8 +460,17 @@ fn on_key_down(app: App, ev: &web_sys::KeyboardEvent) {
             "Enter" => {
                 if let Some(mm) = app.move_mode.get_untracked() {
                     app.move_mode.set(None);
+                    // Enter on the cell the chip already occupies is the
+                    // default: the cursor starts there. Saying "Dropped X."
+                    // for it announced a move to a screen reader that no
+                    // sighted user would have seen happen.
+                    let unmoved = mm.cursor == mm.start;
                     if perform_drop(app, &mm.spec, mm.cursor.0, mm.cursor.1, None) {
-                        app.say(format!("Dropped {}.", mm.spec.code));
+                        if unmoved {
+                            app.say(format!("{} left where it was.", mm.spec.code));
+                        } else {
+                            app.say(format!("Dropped {}.", mm.spec.code));
+                        }
                     } else {
                         app.say("That time slot no longer exists — move cancelled.");
                     }
@@ -459,10 +480,6 @@ fn on_key_down(app: App, ev: &web_sys::KeyboardEvent) {
             }
             _ => {}
         }
-    }
-
-    if is_editing_context(&ev.target()) {
-        return;
     }
 
     // Undo / redo shortcuts.

@@ -53,8 +53,14 @@ to, its credits, every weekly meeting, and clash marks where they apply.
   sentence per credit value ("3 courses at 4 credits"), plus footnotes about
   any credits that were assumed or set by you.
 - The **same filter bar** the catalog uses, narrowed to your own courses — so
-  "which of mine meet on Thursday" is one click. The credit total keeps
-  counting your whole timetable, and says so when the list is showing fewer.
+  "which of mine meet on Thursday" is one click. Its dropdowns list only what
+  *your* courses have: your instructors, your halls, your days. The credit
+  total keeps counting your whole timetable, and says so when the list is
+  showing fewer.
+- **"Fits my schedule" is not here**, because it could not do anything here:
+  it hides whatever overlaps your selection, and every course on this page is
+  your selection. It stays on the Catalog and the Master grid, where it has
+  something to hide.
 - **Your courses, off the timetable**: courses of your own you removed are
   parked here with their definition intact, ready to add back.
 
@@ -82,6 +88,13 @@ Every course this semester, searchable and filterable.
   you already have.
 - Every filter dropdown has its own search box and **All** / **None**
   shortcuts that act on whatever the search is currently showing.
+- **A dropdown only offers values that something in front of you actually
+  has.** No Thursday when nothing meets on Thursday, no instructor who
+  teaches none of these courses, no course you have deleted. An option that
+  could only ever produce an empty list is not offered at all, and a
+  dropdown with nothing left to offer does not appear. A filter you set on
+  one page still shows there — ticked, and removable — even where its value
+  is out of scope, so a short list always explains itself.
 - Filters are **undoable** like everything else, and shown as removable chips
   so you always know why a list is short.
 - Nothing found? The empty state offers to add it as a course of your own,
@@ -422,7 +435,13 @@ Being clear about these is part of the design:
 - **It doesn't exclude CMI's holidays** from calendar exports, and says so.
 - **Keyboard move mode isn't available on the Halls page** — that table is
   organised by room rather than by day, so pressing `M` there explains where
-  moving does work instead of starting a move you cannot see.
+  moving does work instead of starting a move you cannot see. That page's
+  Edit-layout button doesn't mention the key either: the page that refuses a
+  shortcut shouldn't be the page that teaches it.
+- **A control that cannot act isn't shown.** Print is disabled with nothing
+  to print; a course with no times is not offered a calendar export; a filter
+  that could not change this page's list is not on this page. If a button is
+  in front of you, pressing it does something.
 
 ---
 

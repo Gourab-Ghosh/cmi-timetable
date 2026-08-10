@@ -320,7 +320,6 @@ pub fn adopt(app: &App, new_snapshot: Snapshot, announce: bool, from: Adoption) 
         .filter(|code| app.customs.with_untracked(|cs| cs.get(code).is_none()))
         .cloned()
         .collect();
-    app.removed_upstream.set(removed_selected.clone());
     if !quiet {
         for code in &removed_selected {
             app.toast(format!("{code} is no longer on CMI's timetable."));

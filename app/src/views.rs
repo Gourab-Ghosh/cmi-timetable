@@ -6,8 +6,8 @@ use crate::state::{
     App, Density, Dialog, EffMeeting, HallsView, Tab, effective_meetings, same_hall,
 };
 use crate::ui::{
-    ChipClick, ChipProps, branch_chip, chip, custom_changes_pill, edit_toggle, filter_bar,
-    overrides_list,
+    ChipClick, ChipProps, FilterScope, branch_chip, chip, custom_changes_pill, edit_toggle,
+    filter_bar, overrides_list,
 };
 use leptos::prelude::*;
 use ttcore::model::{Course, Day, Meeting, ScheduleStatus, Slot, Snapshot};
@@ -337,9 +337,16 @@ fn my_timetable(app: App) -> impl IntoView {
                 >
                     "Export .ics"
                 </button>
-                <button class="btn" on:click=move |_| {
-                    let _ = crate::domx::window().print();
-                }>
+                // Disabled on an empty timetable, like the Export button beside it:
+                // printing a blank grid is not something anyone asked for, and
+                // the two buttons had different answers to the same question.
+                <button
+                    class="btn"
+                    disabled=move || app.selection.with(|s| s.is_empty())
+                    on:click=move |_| {
+                        let _ = crate::domx::window().print();
+                    }
+                >
                     "Print"
                 </button>
             </div>
@@ -918,7 +925,7 @@ fn my_courses(app: App) -> impl IntoView {
                 (!app.selection.with(|s| s.is_empty()))
                     .then(|| {
                         view! {
-                            {filter_bar(app, shown)}
+                            {filter_bar(app, FilterScope::MySelection, shown)}
                             // The credit total above counts every course you
                             // have picked, filtered or not — it is a fact
                             // about your timetable, not about this view — so
@@ -1362,7 +1369,7 @@ fn master_grid(app: App) -> impl IntoView {
                  (or press I) · ⚠ clashes with your timetable · add and place in one \
                  drag with ✎ Edit layout"
             </p>
-            {filter_bar(app, count)}
+            {filter_bar(app, FilterScope::Everything, count)}
             {deleted_note(app)}
             <div
                 class="grid-scroll"
@@ -1495,7 +1502,7 @@ fn catalog(app: App) -> impl IntoView {
                     "＋ Add your own course"
                 </button>
             </div>
-            {filter_bar(app, count)}
+            {filter_bar(app, FilterScope::Everything, count)}
             {deleted_note(app)}
             // Keyed list: rows persist across filter changes, so the page
             // keeps its scroll position and focus while filtering. The key
@@ -2375,7 +2382,6 @@ fn halls_view(app: App) -> impl IntoView {
                                         on:click=move |_| {
                                             app.prefs
                                                 .update(|p| {
-                                                    p.halls_day = d;
                                                     p.halls_view = Some(HallsView::Day(d));
                                                 });
                                             app.persist_prefs();

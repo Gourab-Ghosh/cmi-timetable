@@ -122,7 +122,11 @@ my custom changes"). When both are present, `s` wins. The query stays
   "which of mine meet on Thursday" is one click. It is one set of filters,
   so what you set on one page is still set on the next; the credit total
   keeps counting your whole timetable, and says so when the list below it
-  is showing fewer.
+  is showing fewer. Every facet's options are drawn from **the courses that
+  bar is actually filtering** (`FilterScope`), so no menu offers a value
+  that could only ever match nothing — and **"Fits my schedule" is not
+  rendered on My courses at all**, because `fits_schedule` returns true for
+  anything already selected, which made it a checkbox that could not act.
 - **One editor per course.** Clicking any course and pressing **Edit this
   course** opens the whole of it in one form — every weekly meeting (day,
   time, hall), its credits, and for a course of your own its name and code —

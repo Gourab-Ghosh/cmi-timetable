@@ -2887,6 +2887,37 @@ def t65_my_courses_has_the_same_filters(app):
     WebDriverWait(app.d, 10).until(
         lambda d: len(app.css_all("section[aria-label='My courses'] .card")) == 3)
 
+    # "Fits my schedule" is NOT offered here: it hides whatever overlaps your
+    # selection, and everything on this page IS your selection, so the box
+    # could never hide a card. It stays where it can act.
+    section = app.css("section[aria-label='My courses']")
+    assert "Fits my schedule" not in section.text, section.text
+    app.open_tab("Catalog")
+    cat = app.wait_css("section[aria-label='Catalog']")
+    assert "Fits my schedule" in cat.text, "the catalog keeps it"
+    app.open_tab("Master grid")
+    grid = app.wait_css("section[aria-label='Master grid']")
+    assert "Fits my schedule" in grid.text, "the master grid keeps it"
+    app.open_tab("My courses")
+    app.wait_css("section[aria-label='My courses'] .filterbar")
+
+    # And no facet offers a value that could only ever match nothing: the
+    # menus here list what YOUR courses have, not the whole catalog's.
+    def opts(name):
+        app.xpath("//section[@aria-label='My courses']//details[contains(@class,'facet')]"
+                  f"/summary[starts-with(normalize-space(),'{name}')]").click()
+        app.wait_css("details.facet[open] .menu")
+        out = [o.text for o in app.css_all("details.facet[open] .menu label.opt")]
+        app.d.find_element(By.CSS_SELECTOR, "body").send_keys(Keys.ESCAPE)
+        time.sleep(0.2)
+        return out
+
+    course_opts = opts("Course")
+    assert len(course_opts) == 3, course_opts
+    assert all(any(c in o for c in ("TOC", "RDBM", "SVA")) for o in course_opts), course_opts
+    instructors = opts("Instructor")
+    assert 0 < len(instructors) <= 6, instructors
+
     # One set of filters, everywhere: what is set here is set in the catalog.
     box = app.css("section[aria-label='My courses'] .filterbar input[type='search']")
     box.send_keys("RDBM")
@@ -2896,6 +2927,76 @@ def t65_my_courses_has_the_same_filters(app):
     app.wait_css("section[aria-label='Catalog']")
     assert app.css("section[aria-label='Catalog'] .filterbar input[type='search']"
                    ).get_attribute("value") == "RDBM"
+
+
+def t66_controls_that_cannot_act_are_not_offered(app):
+    """A control shown where it cannot do anything is worse than no control:
+    it invites a click and answers with nothing. This pins the sweep."""
+    # Print is disabled on an empty timetable, like the Export beside it.
+    app.boot("/")
+    app.open_tab("My timetable")
+    app.wait_css("section[aria-label='My timetable']")
+    printer = app.xpath("//button[normalize-space()='Print']")
+    assert printer.get_attribute("disabled") is not None, \
+        "Print must be disabled with nothing to print, like Export .ics"
+
+    # A course CMI hasn't scheduled has nothing to export, and the dialog
+    # already says so two lines above where the button used to be.
+    app.boot("/", selection=["SVA"])
+    app.open_tab("My timetable")
+    app.chip("SVA", ".tray").click()
+    dialog = app.wait_css(".dialog")
+    assert "hasn't put it on the timetable" in dialog.text
+    assert not dialog.find_elements(By.XPATH, ".//button[normalize-space()='Export .ics']"), \
+        "a course with no times must not offer a calendar export"
+    app.d.find_element(By.CSS_SELECTOR, "body").send_keys(Keys.ESCAPE)
+    app.wait_gone(".dialog")
+
+    # "Has custom time" describes a course of your own — it is custom, times
+    # and all — and used to hide exactly those, because they carry no
+    # override for the flag to find.
+    app.boot("/", selection=["TOC", "GERMAN"], customs=HALL_CUSTOM)
+    app.open_tab("My courses")
+    app.wait_css("section[aria-label='My courses'] .filterbar")
+    assert len(app.css_all("section[aria-label='My courses'] .card")) == 2
+    app.xpath("//section[@aria-label='My courses']//details[contains(@class,'facet')]"
+              "/summary[starts-with(normalize-space(),'Flags')]").click()
+    app.wait_css("details.facet[open] .menu")
+    app.xpath("//details[contains(@class,'facet') and @open]"
+              "//label[contains(.,'Has custom time')]/input").click()
+    time.sleep(0.5)
+    app.d.find_element(By.CSS_SELECTOR, "body").send_keys(Keys.ESCAPE)
+    cards = [c.text for c in app.css_all("section[aria-label='My courses'] .card")]
+    assert any("GERMAN" in c for c in cards), \
+        f"your own course IS a custom time — the flag must match it: {cards}"
+
+    # A value ticked where it was in scope stays visible where it is not:
+    # otherwise its own menu shows no row while its badge counts it, and
+    # "None" cannot clear it.
+    app.boot("/", selection=["TOC"])
+    app.open_tab("Catalog")
+    app.wait_css("section[aria-label='Catalog'] .filterbar")
+    app.xpath("//details[contains(@class,'facet')]/summary"
+              "[starts-with(normalize-space(),'Instructor')]").click()
+    app.wait_css("details.facet[open] .menu")
+    picked = None
+    for row in app.css_all("details.facet[open] .menu label.opt"):
+        if row.text.strip() and "Aiswarya" not in row.text:
+            picked = row.text.strip()
+            row.find_element(By.CSS_SELECTOR, "input").click()
+            break
+    assert picked, "needed an instructor who does not teach TOC"
+    time.sleep(0.4)
+    app.d.find_element(By.CSS_SELECTOR, "body").send_keys(Keys.ESCAPE)
+    app.open_tab("My courses")
+    app.wait_css("section[aria-label='My courses'] .filterbar")
+    app.xpath("//section[@aria-label='My courses']//details[contains(@class,'facet')]"
+              "/summary[starts-with(normalize-space(),'Instructor')]").click()
+    app.wait_css("details.facet[open] .menu")
+    rows = [r.text.strip() for r in app.css_all("details.facet[open] .menu label.opt")]
+    assert picked in rows, f"a ticked value out of scope must still show: {rows}"
+    assert app.css_all("details.facet[open] .menu input:checked"), \
+        "and it must still read as ticked, so it can be taken off"
 
 
 TESTS = [
@@ -2964,6 +3065,7 @@ TESTS = [
     t63_editing_a_course_with_no_time_never_invents_one,
     t64_a_half_written_form_is_not_thrown_away_by_a_stray_key,
     t65_my_courses_has_the_same_filters,
+    t66_controls_that_cannot_act_are_not_offered,
 ]
 
 

@@ -218,7 +218,6 @@ pub fn chip(app: App, p: ChipProps) -> impl IntoView {
     let code_click = p.code.clone();
     let click_kind = p.click;
     let draggable = p.draggable;
-    let code_dbl = p.code.clone();
 
     let sub = if p.show_hall && p.eff.is_some() {
         let mut text = String::new();
@@ -256,11 +255,6 @@ pub fn chip(app: App, p: ChipProps) -> impl IntoView {
                 match click_kind {
                     ChipClick::Details => app.dialog.set(Some(Dialog::Details(code_click.clone()))),
                     ChipClick::Toggle => app.toggle_select(&code_click),
-                }
-            }
-            on:dblclick=move |_| {
-                if click_kind == ChipClick::Toggle {
-                    app.dialog.set(Some(Dialog::Details(code_dbl.clone())));
                 }
             }
             on:keydown=move |ev| {
@@ -336,14 +330,27 @@ pub fn branch_chip_full(app: App, code: &str) -> impl IntoView + use<> {
 /// The edit-mode toggle shown in grid toolbars: drag & drop (pointer and
 /// keyboard move mode) only works while this is on.
 pub fn edit_toggle(app: App) -> impl IntoView {
+    // The Halls tab has no keyboard move (see `dnd::enter_move_mode`), so it
+    // does not get told about one.
+    let keyboard_move = move || app.prefs.with(|p| p.tab) != Tab::Halls;
     view! {
         <button
             class="btn"
             class:primary=move || app.edit_mode.get()
             aria-pressed=move || if app.edit_mode.get() { "true" } else { "false" }
-            title="While editing, drag chips between slots — or press M on a focused chip \
-                   and move it with the arrow keys. Drop one back where CMI put it to undo \
-                   the move."
+            // `enter_move_mode` refuses on the Halls tab — its cursor walks
+            // days x times and that table stacks rooms down the side — so the
+            // page that refuses the key must not be the page that teaches it.
+            title=move || {
+                if keyboard_move() {
+                    "While editing, drag chips between slots — or press M on a focused \
+                     chip and move it with the arrow keys. Drop one back where CMI put \
+                     it to undo the move."
+                } else {
+                    "While editing, drag a chip onto any room and time. Drop it back \
+                     where CMI put it to undo the move."
+                }
+            }
             on:click=move |_| {
                 let on = !app.edit_mode.get_untracked();
                 app.edit_mode.set(on);
@@ -353,11 +360,14 @@ pub fn edit_toggle(app: App) -> impl IntoView {
                     // route gets said out loud — a hover tooltip is no use
                     // to the person who needs it, and none at all on a
                     // touch screen.
-                    app.toast(
-                        "Edit layout is on — drag any chip to a new slot, or focus one and \
-                         press M to move it with the arrow keys. Esc cancels; ✎ Done \
-                         editing when you're finished.",
-                    );
+                    app.toast(if keyboard_move() {
+                        "Edit layout is on — drag any chip to a new slot, or focus one \
+                         and press M to move it with the arrow keys. Esc cancels; ✎ Done \
+                         editing when you're finished."
+                    } else {
+                        "Edit layout is on — drag any chip onto another room and time. \
+                         Esc cancels; ✎ Done editing when you're finished."
+                    });
                 } else {
                     app.move_mode.set(None);
                 }
@@ -938,11 +948,204 @@ fn facet_menu(
     }
 }
 
-pub fn filter_bar(app: App, result_count: Signal<usize>) -> impl IntoView {
-    // Every option list reads the snapshot through `.with`, never `.get`: a
-    // facet only ever wants one field of it, and `.get` would deep-clone the
-    // whole thing — courses, halls, bookings and the gzipped raw pages —
-    // each time a menu is built.
+/// Which set of courses the bar in front of you is filtering.
+///
+/// It decides two things, and both are about not offering a control that
+/// cannot do anything: which options each facet lists, and whether "Fits my
+/// schedule" appears at all.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum FilterScope {
+    /// Catalog and Master grid: every course CMI publishes.
+    Everything,
+    /// My courses: only the courses already on the timetable.
+    MySelection,
+}
+
+/// Add any value this facet is currently filtering by that its own option
+/// list doesn't contain.
+///
+/// One set of filters serves three bars, so a value picked on the catalog is
+/// still picked on My courses — where it may be out of scope, an instructor
+/// who teaches none of your courses. Without this the menu would show no row
+/// for it while its own badge counted it, and "None", which acts on the rows,
+/// could not clear it. The label is the raw value: there is nothing in scope
+/// to give it a nicer one.
+fn with_picked(mut opts: Vec<(String, String)>, picked: Vec<String>) -> Vec<(String, String)> {
+    for key in picked {
+        if !opts.iter().any(|(k, _)| *k == key) {
+            opts.insert(0, (key.clone(), key));
+        }
+    }
+    opts
+}
+
+pub fn filter_bar(app: App, scope: FilterScope, result_count: Signal<usize>) -> impl IntoView {
+    // The courses this bar is actually filtering. Every facet below draws
+    // its options from THIS list, so a menu can never offer a value that
+    // could only ever produce an empty result — a Thursday when nothing of
+    // yours meets on Thursday, an instructor who teaches none of your
+    // courses, a course you deleted.
+    //
+    // Memoized, and so is every option list under it, because a <details>
+    // renders its children whether or not it is open: without that, one
+    // keystroke in the search box would rebuild all eight option lists. A
+    // Memo also absorbs the read of the overrides store that the day, time
+    // and hall lists need — it recomputes, but it only notifies when the
+    // list has actually changed, so a menu can no longer rebuild itself
+    // under the cursor mid-drag (§4).
+    let courses = Memo::new(move |_| match scope {
+        FilterScope::Everything => {
+            let all = app.snapshot.with(|s| s.courses.clone());
+            all.into_iter()
+                .filter(|c| !app.is_hidden(&c.code))
+                .collect::<Vec<_>>()
+        }
+        FilterScope::MySelection => app.selected_courses(),
+    });
+
+    // What those courses actually do in the week, once the user's own moves
+    // are applied — the day, time and hall facets all match on effective
+    // meetings, so their options have to come from the same place.
+    let meetings = Memo::new(move |_| {
+        courses
+            .get()
+            .iter()
+            .flat_map(|c| app.effective_meetings(c))
+            .map(|e| e.meeting)
+            .collect::<Vec<Meeting>>()
+    });
+
+    let branch_opts = Memo::new(move |_| {
+        // The course list is read and released BEFORE the snapshot is, so
+        // the two reads never nest (`courses` reads the snapshot itself).
+        let mut codes: Vec<String> =
+            courses.with(|cs| cs.iter().flat_map(|c| c.branches.clone()).collect());
+        codes.sort();
+        codes.dedup();
+        let titles: Vec<(String, String)> = app.snapshot.with(|s| {
+            s.branches
+                .iter()
+                .map(|b| (b.code.clone(), b.title.clone()))
+                .collect()
+        });
+        let opts = codes
+            .into_iter()
+            .map(|code| {
+                let label = titles
+                    .iter()
+                    .find(|(c, _)| *c == code)
+                    .map(|(_, t)| format!("{code} — {t}"))
+                    .unwrap_or_else(|| code.clone());
+                (code, label)
+            })
+            .collect::<Vec<_>>();
+        with_picked(opts, app.filters().branches)
+    });
+
+    let instructor_opts = Memo::new(move |_| {
+        let mut names: Vec<String> =
+            courses.with(|cs| cs.iter().flat_map(|c| c.instructors.clone()).collect());
+        names.sort();
+        names.dedup();
+        let opts = names
+            .into_iter()
+            .map(|n| (n.clone(), n))
+            .collect::<Vec<_>>();
+        with_picked(opts, app.filters().instructors)
+    });
+
+    let day_opts = Memo::new(move |_| {
+        let ms = meetings.get();
+        let opts = Day::ALL
+            .iter()
+            .filter(|d| ms.iter().any(|m| m.day == **d))
+            .map(|d| (d.index().to_string(), d.full().to_string()))
+            .collect::<Vec<_>>();
+        let picked = app
+            .filters()
+            .days
+            .iter()
+            .map(|d| d.index().to_string())
+            .collect();
+        with_picked(opts, picked)
+    });
+
+    let slot_opts = Memo::new(move |_| {
+        let ms = meetings.get();
+        let mut slots: Vec<Slot> = ms.iter().map(|m| m.slot).collect();
+        slots.sort_by_key(|s| s.start_min);
+        slots.dedup_by_key(|s| s.start_min);
+        let opts = slots
+            .into_iter()
+            .map(|s| (s.start_min.to_string(), s.label()))
+            .collect::<Vec<_>>();
+        let picked = app
+            .filters()
+            .slot_starts
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        with_picked(opts, picked)
+    });
+
+    let hall_opts = Memo::new(move |_| {
+        let ms = meetings.get();
+        let mut halls: Vec<String> = ms.iter().filter_map(|m| m.hall.clone()).collect();
+        halls.sort();
+        halls.dedup();
+        let opts = halls
+            .into_iter()
+            .map(|h| (h.clone(), h))
+            .collect::<Vec<_>>();
+        with_picked(opts, app.filters().halls)
+    });
+
+    let credit_opts = Memo::new(move |_| {
+        let cs = courses.get();
+        let mut values: Vec<u8> = cs.iter().map(|c| app.course_credits(c)).collect();
+        values.sort_unstable();
+        values.dedup();
+        let opts = values
+            .into_iter()
+            .map(|n| {
+                let label = format!("{n} credit{}", if n == 1 { "" } else { "s" });
+                (n.to_string(), label)
+            })
+            .collect::<Vec<_>>();
+        with_picked(opts, app.filters().credits)
+    });
+
+    let course_opts = Memo::new(move |_| {
+        let opts = courses.with(|cs| {
+            cs.iter()
+                .map(|c| (c.code.clone(), format!("{} — {}", c.code, c.name)))
+                .collect::<Vec<_>>()
+        });
+        with_picked(opts, app.filters().courses)
+    });
+
+    // The same three flags as before, but only the ones something in scope
+    // actually carries. Each test mirrors `state::course_matches` exactly.
+    let flag_opts = Memo::new(move |_| {
+        let cs = courses.get();
+        let mut out: Vec<(String, String)> = Vec::new();
+        if cs.iter().any(|c| c.optional_flag) {
+            out.push(("optional".to_string(), "Optional (+)".to_string()));
+        }
+        if cs
+            .iter()
+            .any(|c| c.status == ScheduleStatus::UnscheduledListed)
+        {
+            out.push(("unscheduled".to_string(), "Unscheduled".to_string()));
+        }
+        if cs.iter().any(|c| {
+            let eff = app.effective_meetings(c);
+            (!eff.is_empty() && eff.iter().any(|e| e.overridden)) || app.is_custom(&c.code)
+        }) {
+            out.push(("custom".to_string(), "Has custom time".to_string()));
+        }
+        with_picked(out, app.filters().flags)
+    });
 
     view! {
         <div class="filterbar" role="group" aria-label="Filters">
@@ -958,166 +1161,169 @@ pub fn filter_bar(app: App, result_count: Signal<usize>) -> impl IntoView {
                 }
                 on:keydown=domx::blur_on_enter
             />
-            {facet_menu(
-                app,
-                "Branch",
-                move || app.filters().branches.len(),
-                std::sync::Arc::new(move || {
-                    app.snapshot.with(|s| {
-                        s.branches
-                            .iter()
-                            .map(|b| (b.code.clone(), format!("{} — {}", b.code, b.title)))
-                            .collect()
+            // A facet with nothing to offer is not rendered at all: on My
+            // courses a facet can legitimately have no values in scope, and a
+            // summary, a search box and All/None over an empty list is
+            // furniture. Anything currently ticked is injected into the list
+            // by `with_picked` above, so a facet that still filters something
+            // can never vanish while it is doing so.
+            {move || {
+                (!branch_opts.with(Vec::is_empty))
+                    .then(|| {
+                        facet_menu(
+                            app,
+                            "Branch",
+                            move || app.filters().branches.len(),
+                            std::sync::Arc::new(move || branch_opts.get()),
+                            |f, k| f.branches.iter().any(|x| x == k),
+                            |f, k, on| toggle_vec(&mut f.branches, k.to_string(), on),
+                        )
                     })
-                }),
-                |f, k| f.branches.iter().any(|x| x == k),
-                |f, k, on| toggle_vec(&mut f.branches, k.to_string(), on),
-            )}
-            {facet_menu(
-                app,
-                "Instructor",
-                move || app.filters().instructors.len(),
-                std::sync::Arc::new(move || {
-                    let mut names: Vec<String> = app.snapshot.with(|s| {
-                        s.courses.iter().flat_map(|c| c.instructors.clone()).collect()
-                    });
-                    names.sort();
-                    names.dedup();
-                    names.into_iter().map(|n| (n.clone(), n)).collect()
-                }),
-                |f, k| f.instructors.iter().any(|x| x == k),
-                |f, k, on| toggle_vec(&mut f.instructors, k.to_string(), on),
-            )}
-            {facet_menu(
-                app,
-                "Day",
-                move || app.filters().days.len(),
-                std::sync::Arc::new(move || {
-                    app.grid_days()
-                        .into_iter()
-                        .map(|d| (d.index().to_string(), d.full().to_string()))
-                        .collect()
-                }),
-                |f, k| f.days.iter().any(|d| d.index().to_string() == k),
-                |f, k, on| {
-                    if let Some(day) = k.parse::<usize>().ok().and_then(|i| Day::ALL.get(i)) {
-                        toggle_vec(&mut f.days, *day, on);
-                    }
-                },
-            )}
-            {facet_menu(
-                app,
-                "Time slot",
-                move || app.filters().slot_starts.len(),
-                std::sync::Arc::new(move || {
-                    // The grid's own columns, CMI's plus the out-of-hours
-                    // ones the user has moved something to — matching runs
-                    // against EFFECTIVE meetings, so a 19:00 class would
-                    // match perfectly well if only it were offered here.
-                    // Untracked for the same reason as the Hall facet.
-                    untrack(|| app.master_slot_grid())
-                        .into_iter()
-                        .map(|(s, _)| (s.start_min.to_string(), s.label()))
-                        .collect()
-                }),
-                |f, k| f.slot_starts.iter().any(|s| s.to_string() == k),
-                |f, k, on| {
-                    if let Ok(start) = k.parse::<u16>() {
-                        toggle_vec(&mut f.slot_starts, start, on);
-                    }
-                },
-            )}
-            {facet_menu(
-                app,
-                "Hall",
-                move || app.filters().halls.len(),
-                std::sync::Arc::new(move || {
-                    // CMI's halls plus any place the user typed themselves —
-                    // the filter matches on effective meetings, so a course
-                    // you moved into "1002" is findable by that too. The
-                    // own-hall read is UNTRACKED: an option list that
-                    // subscribed to the overrides would rebuild itself under
-                    // the cursor on every drag or undo (see §4).
-                    app.snapshot
-                        .with(|s| s.halls.clone())
-                        .into_iter()
-                        .chain(untrack(|| app.user_halls()))
-                        .map(|h| (h.clone(), h))
-                        .collect()
-                }),
-                |f, k| f.halls.iter().any(|x| x == k),
-                |f, k, on| toggle_vec(&mut f.halls, k.to_string(), on),
-            )}
-            {facet_menu(
-                app,
-                "Credits",
-                move || app.filters().credits.len(),
-                std::sync::Arc::new(move || {
-                    let mut values: Vec<u8> = app
-                        .snapshot
-                        .with(|s| s.courses.iter().map(|c| app.course_credits(c)).collect());
-                    values.sort_unstable();
-                    values.dedup();
-                    values
-                        .into_iter()
-                        .map(|n| {
-                            let label =
-                                format!("{n} credit{}", if n == 1 { "" } else { "s" });
-                            (n.to_string(), label)
-                        })
-                        .collect()
-                }),
-                |f, k| f.credits.iter().any(|x| x == k),
-                |f, k, on| toggle_vec(&mut f.credits, k.to_string(), on),
-            )}
-            {facet_menu(
-                app,
-                "Course",
-                move || app.filters().courses.len(),
-                std::sync::Arc::new(move || {
-                    app.snapshot.with(|s| {
-                        s.courses
-                            .iter()
-                            .map(|c| (c.code.clone(), format!("{} — {}", c.code, c.name)))
-                            .collect()
+            }}
+            {move || {
+                (!instructor_opts.with(Vec::is_empty))
+                    .then(|| {
+                        facet_menu(
+                            app,
+                            "Instructor",
+                            move || app.filters().instructors.len(),
+                            std::sync::Arc::new(move || instructor_opts.get()),
+                            |f, k| f.instructors.iter().any(|x| x == k),
+                            |f, k, on| toggle_vec(&mut f.instructors, k.to_string(), on),
+                        )
                     })
-                }),
-                |f, k| f.courses.iter().any(|x| x == k),
-                |f, k, on| toggle_vec(&mut f.courses, k.to_string(), on),
-            )}
-            {facet_menu(
-                app,
-                "Flags",
-                move || app.filters().flags.len(),
-                std::sync::Arc::new(|| {
-                    vec![
-                        ("optional".to_string(), "Optional (+)".to_string()),
-                        ("unscheduled".to_string(), "Unscheduled".to_string()),
-                        ("custom".to_string(), "Has custom time".to_string()),
-                    ]
-                }),
-                |f, k| f.flags.iter().any(|x| x == k),
-                |f, k, on| toggle_vec(&mut f.flags, k.to_string(), on),
-            )}
-            <label class="opt" title="Hide anything overlapping your current selection">
-                <input
-                    type="checkbox"
-                    prop:checked=move || app.filters().fits
-                    on:change=move |ev| {
-                        let on = event_target_checked(&ev);
-                        app.act_filters("the “fits my schedule” filter", false, move |f| {
-                            f.fits = on;
-                        });
+            }}
+            {move || {
+                (!day_opts.with(Vec::is_empty))
+                    .then(|| {
+                        facet_menu(
+                            app,
+                            "Day",
+                            move || app.filters().days.len(),
+                            std::sync::Arc::new(move || day_opts.get()),
+                            |f, k| f.days.iter().any(|d| d.index().to_string() == k),
+                            |f, k, on| {
+                                if let Some(day) = k.parse::<usize>().ok().and_then(|i| Day::ALL.get(i))
+                                {
+                                    toggle_vec(&mut f.days, *day, on);
+                                }
+                            },
+                        )
+                    })
+            }}
+            {move || {
+                (!slot_opts.with(Vec::is_empty))
+                    .then(|| {
+                        facet_menu(
+                            app,
+                            "Time slot",
+                            move || app.filters().slot_starts.len(),
+                            std::sync::Arc::new(move || slot_opts.get()),
+                            |f, k| f.slot_starts.iter().any(|s| s.to_string() == k),
+                            |f, k, on| {
+                                if let Ok(start) = k.parse::<u16>() {
+                                    toggle_vec(&mut f.slot_starts, start, on);
+                                }
+                            },
+                        )
+                    })
+            }}
+            {move || {
+                (!hall_opts.with(Vec::is_empty))
+                    .then(|| {
+                        facet_menu(
+                            app,
+                            "Hall",
+                            move || app.filters().halls.len(),
+                            std::sync::Arc::new(move || hall_opts.get()),
+                            |f, k| f.halls.iter().any(|x| x == k),
+                            |f, k, on| toggle_vec(&mut f.halls, k.to_string(), on),
+                        )
+                    })
+            }}
+            {move || {
+                (!credit_opts.with(Vec::is_empty))
+                    .then(|| {
+                        facet_menu(
+                            app,
+                            "Credits",
+                            move || app.filters().credits.len(),
+                            std::sync::Arc::new(move || credit_opts.get()),
+                            |f, k| f.credits.iter().any(|x| x == k),
+                            |f, k, on| toggle_vec(&mut f.credits, k.to_string(), on),
+                        )
+                    })
+            }}
+            {move || {
+                (!course_opts.with(Vec::is_empty))
+                    .then(|| {
+                        facet_menu(
+                            app,
+                            "Course",
+                            move || app.filters().courses.len(),
+                            std::sync::Arc::new(move || course_opts.get()),
+                            |f, k| f.courses.iter().any(|x| x == k),
+                            |f, k, on| toggle_vec(&mut f.courses, k.to_string(), on),
+                        )
+                    })
+            }}
+            {move || {
+                (!flag_opts.with(Vec::is_empty))
+                    .then(|| {
+                        facet_menu(
+                            app,
+                            "Flags",
+                            move || app.filters().flags.len(),
+                            std::sync::Arc::new(move || flag_opts.get()),
+                            |f, k| f.flags.iter().any(|x| x == k),
+                            |f, k, on| toggle_vec(&mut f.flags, k.to_string(), on),
+                        )
+                    })
+            }}
+            // Not on My courses: it hides whatever overlaps your selection,
+            // and every course on that page IS your selection —
+            // `App::fits_schedule` returns true for anything selected, so
+            // the box could never hide a single card. A control that cannot
+            // act does not belong on the page.
+            {(scope == FilterScope::Everything)
+                .then(|| {
+                    view! {
+                        <label
+                            class="opt"
+                            title="Hide anything overlapping your current selection"
+                        >
+                            <input
+                                type="checkbox"
+                                prop:checked=move || app.filters().fits
+                                on:change=move |ev| {
+                                    let on = event_target_checked(&ev);
+                                    app.act_filters(
+                                        "the “fits my schedule” filter",
+                                        false,
+                                        move |f| {
+                                            f.fits = on;
+                                        },
+                                    );
+                                }
+                            />
+                            <span>"Fits my schedule"</span>
+                        </label>
                     }
-                />
-                <span>"Fits my schedule"</span>
-            </label>
+                })}
             <span class="muted small" aria-live="polite">
                 {move || format!("{} match", result_count.get())}
                 {move || if result_count.get() == 1 { "" } else { "es" }}
             </span>
             {move || {
-                (!app.filters().is_empty())
+                // Counted the way this bar behaves: "Fits my schedule" is not
+                // shown here and cannot act here, so it must not be the reason
+                // a Clear-all button appears over an empty chip line.
+                let f = app.filters();
+                let active = match scope {
+                    FilterScope::Everything => f.active_count(),
+                    FilterScope::MySelection => f.active_count() - usize::from(f.fits),
+                };
+                (active > 0)
                     .then(|| {
                         view! {
                             <button
@@ -1135,7 +1341,7 @@ pub fn filter_bar(app: App, result_count: Signal<usize>) -> impl IntoView {
             }}
         </div>
         <div class="chipline noprint">
-            {move || active_filter_chips(app)}
+            {move || active_filter_chips(app, scope)}
         </div>
     }
 }
@@ -1144,7 +1350,7 @@ pub fn filter_bar(app: App, result_count: Signal<usize>) -> impl IntoView {
 /// filter back off.
 type FilterChip = (String, Box<dyn Fn(&mut Filters) + Send + Sync>);
 
-fn active_filter_chips(app: App) -> impl IntoView {
+fn active_filter_chips(app: App, scope: FilterScope) -> impl IntoView {
     // `f` is this component's own copy of the filters, so each list is MOVED
     // out of it field by field — the labels are the same strings, not copies
     // of them, and only the value each remover closure has to keep is cloned.
@@ -1189,7 +1395,9 @@ fn active_filter_chips(app: App) -> impl IntoView {
     if !f.text.trim().is_empty() {
         chips.push((format!("“{}”", f.text.trim()), Box::new(|f| f.text.clear())));
     }
-    if f.fits {
+    // Only where it can act. On My courses the filter is inert, so listing
+    // it as a reason the list is short would be a lie.
+    if f.fits && scope == FilterScope::Everything {
         chips.push(("Fits my schedule".to_string(), Box::new(|f| f.fits = false)));
     }
 
@@ -1576,6 +1784,7 @@ fn details_dialog(app: App, code: String) -> impl IntoView {
     else {
         let selected = app.is_selected(&code);
         let remove_code = code.clone();
+        let edit_code = code.clone();
         return view! {
             <div>
                 <h2 class="mono">{code}</h2>
@@ -1592,6 +1801,33 @@ fn details_dialog(app: App, code: String) -> impl IntoView {
                         }
                     })}
                 <div class="actions">
+                    // The same door every other course has. Its meetings are
+                    // yours now and as editable as any — `course_editor_dialog`
+                    // has a branch for exactly this course — but this dialog
+                    // was a dead end, while the card on My courses offered
+                    // Edit for the very same course.
+                    {selected
+                        .then(|| {
+                            let edit_code = edit_code.clone();
+                            view! {
+                                <button
+                                    class="btn"
+                                    title="Change its times, hall and credits — the course \
+                                           is gone from CMI's pages, your copy is not"
+                                    on:click=move |_| {
+                                        app.dialog
+                                            .set(
+                                                Some(Dialog::EditCourse {
+                                                    code: Some(edit_code.clone()),
+                                                    prefill: None,
+                                                }),
+                                            );
+                                    }
+                                >
+                                    "Edit this course"
+                                </button>
+                            }
+                        })}
                     {selected
                         .then(|| {
                             view! {
@@ -1643,7 +1879,6 @@ fn details_dialog(app: App, code: String) -> impl IntoView {
             None => clash_groups.push((other, vec![when])),
         }
     }
-    let removed = app.is_removed_upstream(&code);
     let deleted = app.is_hidden(&code);
 
     let toggle_code = course.code.clone();
@@ -1721,8 +1956,11 @@ fn details_dialog(app: App, code: String) -> impl IntoView {
                 {(!is_custom).then(|| status_badges(&course))}
                 {(is_custom && course.meetings.is_empty())
                     .then(|| view! { <span class="badge">"no time set yet"</span> })}
-                {removed
-                    .then(|| view! { <span class="badge warn">"No longer on CMI's timetable"</span> })}
+                // No "No longer on CMI's timetable" badge here: reaching this
+                // panel at all means the course IS still listed (or is one of
+                // the user's own), so the flag was provably false every time.
+                // The course that really is gone takes the early return above,
+                // which carries its own copy of the badge.
                 {deleted
                     .then(|| {
                         view! {
@@ -1895,7 +2133,10 @@ fn details_dialog(app: App, code: String) -> impl IntoView {
                         </button>
                     }
                 }
-                {selected
+                // Not for a course with no times: the export refuses it, and
+                // this dialog is already saying two lines above that CMI
+                // hasn't scheduled it.
+                {(selected && !eff.is_empty())
                     .then(|| {
                         let export_code = export_code.clone();
                         view! {
@@ -2835,6 +3076,10 @@ fn course_editor_dialog(app: App, code: Option<String>, prefill: Option<String>)
         .as_ref()
         .map(|c| c.meetings.clone())
         .unwrap_or_default();
+    // Whether CMI scheduled this course AT ALL decides what an empty form
+    // means: a course they never scheduled waits in the tray, a course whose
+    // classes you struck out does not appear at all.
+    let cmi_scheduled_it = !official_at_open.is_empty();
     // The code being edited, whoever owns it…
     let editing_code = (!creating).then(|| subject.code.clone());
     // …and the one the SAVE path needs: `save_custom_course` takes the code
@@ -3629,9 +3874,21 @@ fn course_editor_dialog(app: App, code: Option<String>, prefill: Option<String>)
                     .then(|| {
                         view! {
                             <p class="muted small">
-                                "No meetings yet — the course will wait in \
-                                 “No fixed slot yet” on My timetable until you give it \
-                                 a time."
+                                {if is_cmi && cmi_scheduled_it {
+                                    // The tray only holds courses CMI itself
+                                    // never scheduled, so it cannot hold one
+                                    // whose classes you struck out. Saying it
+                                    // would send the user looking for a chip
+                                    // that is not there.
+                                    "No meetings left — this course will not appear on \
+                                     your week. Every class you removed is listed under \
+                                     Your changes, and can be put back from there or \
+                                     from here."
+                                } else {
+                                    "No meetings yet — the course will wait in \
+                                     “No fixed slot yet” on My timetable until you give \
+                                     it a time."
+                                }}
                             </p>
                         }
                     })
