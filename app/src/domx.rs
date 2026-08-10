@@ -17,6 +17,63 @@ pub fn now_ms() -> f64 {
     js_sys::Date::now()
 }
 
+/// One step up or down, done by the browser. `stepUp()` / `stepDown()` are
+/// not bound in this web-sys version, so the DOM methods are called by name.
+/// Doing the arithmetic here instead would mean teaching this file what one
+/// step means for a number, a time and a date — three different units, plus
+/// each box's own `min`/`max`/`step`, all of which the box already knows.
+/// Returns whether anything moved.
+fn step_input(input: &web_sys::HtmlInputElement, up: bool) -> bool {
+    let this: &wasm_bindgen::JsValue = input.as_ref();
+    js_sys::Reflect::get(
+        this,
+        &wasm_bindgen::JsValue::from_str(if up { "stepUp" } else { "stepDown" }),
+    )
+    .ok()
+    .and_then(|f| f.dyn_into::<js_sys::Function>().ok())
+    .is_some_and(|f| f.call0(this).is_ok())
+}
+
+/// Turn the wheel over a box that has a step — credits, a meeting's start or
+/// end time, an export date — and it moves by one step.
+///
+/// **Only while the box has focus.** Every one of these sits inside a dialog
+/// that scrolls, and a value that changes because someone scrolled past it
+/// is a change they never asked for and might not notice. Focus is the
+/// signal that the box is what the wheel is aimed at: click or tab into it
+/// and the wheel adjusts it; leave it alone and the wheel scrolls, as it
+/// always did. (The credits box takes focus by itself when "Other…" opens
+/// it, so in the common flow there is no extra click.)
+pub fn step_on_wheel(ev: web_sys::WheelEvent) {
+    let Some(input) = ev
+        .target()
+        .and_then(|t| t.dyn_into::<web_sys::HtmlInputElement>().ok())
+    else {
+        return;
+    };
+    if !input.matches(":focus").unwrap_or(false) {
+        return;
+    }
+    // A horizontal-only gesture (a trackpad swipe) is not aimed at a value.
+    if ev.delta_y() == 0.0 {
+        return;
+    }
+    // A box with nothing to step from — an empty time, a value the browser
+    // will not parse — is left alone, and so is the page: swallowing the
+    // scroll without moving anything would just feel broken.
+    if !step_input(&input, ev.delta_y() < 0.0) {
+        return;
+    }
+    ev.prevent_default();
+    // Say the same thing typing says, so every `on:input` in the app hears
+    // it without knowing the wheel exists.
+    let init = web_sys::EventInit::new();
+    init.set_bubbles(true);
+    if let Ok(event) = web_sys::Event::new_with_event_init_dict("input", &init) {
+        let _ = input.dispatch_event(&event);
+    }
+}
+
 /// Close every open filter-facet dropdown, except (optionally) one — the
 /// facets are native `<details>` elements, which never close on their own.
 pub fn close_open_facets(except: Option<&web_sys::Element>) {

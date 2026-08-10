@@ -2725,6 +2725,17 @@ fn course_editor_dialog(
     let credits = RwSignal::new(start_credits);
     let credits_other = RwSignal::new(start_credits > 4);
     let credits_text = RwSignal::new(start_credits.to_string());
+    // The "Other…" box takes focus the moment it appears. It is where the
+    // typing was going to happen anyway, and it is also what makes the wheel
+    // work without a second click — `step_on_wheel` acts only on a focused
+    // box, deliberately (domx.rs). The `autofocus` attribute cannot do this:
+    // it applies at page load, and this box is inserted long after.
+    let credits_box = NodeRef::<leptos::html::Input>::new();
+    Effect::new(move |_| {
+        if let Some(input) = credits_box.get() {
+            let _ = input.focus();
+        }
+    });
     let official_credits = cmi_course.as_ref().map(|c| c.effective_credits());
     let official_credits_note = cmi_course.as_ref().map(|c| {
         if c.credits_assumed() {
@@ -3130,11 +3141,14 @@ fn course_editor_dialog(
                                     min="0"
                                     max="20"
                                     aria-label="Credits"
+                                    title="Type a number, or scroll here to change it"
                                     style="width:5rem"
+                                    node_ref=credits_box
                                     // Reactive, so "Use CMI's value" is seen
                                     // as well as saved.
                                     prop:value=move || credits_text.get()
                                     on:input=move |ev| credits_text.set(event_target_value(&ev))
+                                    on:wheel=domx::step_on_wheel
                                 />
                             }
                         })
@@ -3345,19 +3359,23 @@ fn course_editor_dialog(
                                                     <input
                                                         type="time"
                                                         aria-label="Start time"
+                                                        title="Scroll here to change it"
                                                         prop:value=row.start.get_untracked()
                                                         on:input=move |ev| {
                                                             row.start.set(event_target_value(&ev))
                                                         }
+                                                        on:wheel=domx::step_on_wheel
                                                     />
                                                     <span aria-hidden="true">"–"</span>
                                                     <input
                                                         type="time"
                                                         aria-label="End time"
+                                                        title="Scroll here to change it"
                                                         prop:value=row.end.get_untracked()
                                                         on:input=move |ev| {
                                                             row.end.set(event_target_value(&ev))
                                                         }
+                                                        on:wheel=domx::step_on_wheel
                                                     />
                                                 </span>
                                             }
@@ -3745,15 +3763,19 @@ fn export_dialog(app: App, scope: Option<String>) -> impl IntoView {
                 <input
                     id="ex-from"
                     type="date"
+                    title="Scroll here to change it"
                     prop:value=from.get_untracked()
                     on:input=move |ev| from.set(event_target_value(&ev))
+                    on:wheel=domx::step_on_wheel
                 />
                 <label for="ex-to">"To"</label>
                 <input
                     id="ex-to"
                     type="date"
+                    title="Scroll here to change it"
                     prop:value=to.get_untracked()
                     on:input=move |ev| to.set(event_target_value(&ev))
+                    on:wheel=domx::step_on_wheel
                 />
             </div>
             <label class="opt">

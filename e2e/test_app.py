@@ -43,6 +43,7 @@ import traceback
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.action_chains import ActionChains
+from selenium.webdriver.common.actions.wheel_input import ScrollOrigin
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support import expected_conditions as EC
@@ -2654,6 +2655,96 @@ def t61_adding_a_meeting_where_a_moved_one_used_to_be(app):
     assert app.chips("TOC", "td[data-day='2'][data-slot='1020']")
 
 
+def t62_the_wheel_steps_the_boxes_that_have_a_step(app):
+    """Scroll over credits, a meeting time or an export date and it moves one
+    step — but ONLY while that box has focus. All three live in dialogs that
+    scroll, and a value that changed because someone scrolled past it is a
+    change they never asked for."""
+    def wheel(el, dy):
+        ActionChains(app.d).scroll_from_origin(
+            ScrollOrigin.from_element(el), 0, dy).perform()
+        time.sleep(0.25)
+
+    # An out-of-grid time, so the editor offers the time boxes at all.
+    odd_hour = {
+        "next_id": 1,
+        "items": [{
+            "id": 0, "course": "TOC",
+            "base": {"day": "Tue", "slot": {"start_min": 550, "end_min": 625},
+                     "hall": "Lecture Hall 803", "temp_booking": False},
+            "to": {"day": "Wed", "slot": {"start_min": 1230, "end_min": 1305},
+                   "hall": "Lecture Hall 803", "temp_booking": False},
+            "created_at": 1754000000000.0}],
+        "credits": [],
+    }
+    app.boot("/", selection=["TOC"], overrides=odd_hour)
+    app.open_tab("My courses")
+    app.wait_css("section[aria-label='My courses']")
+    app.xpath("//button[normalize-space()='Edit course']").click()
+    app.wait_css(".dialog .course-form")
+    app.xpath("//div[@class='seg']//button[normalize-space()='Other…']").click()
+    box = app.wait_css("input[type='number'][aria-label='Credits']")
+
+    # It takes focus by itself, so the wheel works without a second click.
+    assert app.d.execute_script(
+        "return document.activeElement === arguments[0];", box), \
+        "the Other… box must take focus when it appears"
+
+    start = int(box.get_attribute("value"))
+    wheel(box, -50)
+    assert int(box.get_attribute("value")) == start + 1, box.get_attribute("value")
+    wheel(box, 50)
+    assert int(box.get_attribute("value")) == start, box.get_attribute("value")
+
+    # The app hears it, exactly as if it had been typed: "Use CMI's value"
+    # only shows when the value differs from CMI's.
+    wheel(box, -50)
+    app.xpath("//button[normalize-space()=\"Use CMI's value\"]")
+
+    # The box's own min/max do the clamping, not us.
+    for _ in range(25):
+        wheel(box, -50)
+    assert box.get_attribute("value") == "20", box.get_attribute("value")
+    for _ in range(25):
+        wheel(box, 50)
+    assert box.get_attribute("value") == "0", box.get_attribute("value")
+
+    # Unfocused, the wheel leaves it alone and scrolls the dialog instead.
+    dialog = app.css(".dialog")
+    app.d.execute_script("document.activeElement.blur();")
+    before = box.get_attribute("value")
+    wheel(box, 200)
+    assert box.get_attribute("value") == before, \
+        "an unfocused box must not change when the dialog scrolls past it"
+
+    # Focused, the dialog stays put — the scroll belongs to the box.
+    box.click()
+    app.d.execute_script("arguments[0].scrollTop = 0;", dialog)
+    wheel(box, 200)
+    assert app.d.execute_script("return arguments[0].scrollTop;", dialog) == 0, \
+        "a focused box must swallow the scroll, not scroll the dialog too"
+
+    # A meeting time steps by a minute.
+    app.d.execute_script("arguments[0].scrollTop = 0;", dialog)
+    start_time = app.css("input[type='time'][aria-label='Start time']")
+    start_time.click()
+    before = start_time.get_attribute("value")
+    wheel(start_time, -50)
+    assert start_time.get_attribute("value") != before, \
+        f"the start time must step: {before}"
+
+    # And an export date by a day.
+    app.xpath("//div[@class='dialog']//button[normalize-space()='Cancel']").click()
+    app.wait_gone(".dialog")
+    app.open_tab("My timetable")
+    app.xpath("//button[contains(.,'Export .ics')]").click()
+    frm = app.wait_css("#ex-from")
+    frm.click()
+    before = frm.get_attribute("value")
+    wheel(frm, -50)
+    assert frm.get_attribute("value") != before, f"the From date must step: {before}"
+
+
 TESTS = [
     t01_header_sync_button_and_hidden_dev,
     t02_developer_endpoint_only,
@@ -2716,6 +2807,7 @@ TESTS = [
     t59_a_booking_inside_a_slot_still_occupies_the_room,
     t60_a_conflicting_sync_does_not_steal_the_open_editor,
     t61_adding_a_meeting_where_a_moved_one_used_to_be,
+    t62_the_wheel_steps_the_boxes_that_have_a_step,
 ]
 
 

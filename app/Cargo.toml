@@ -36,6 +36,7 @@ features = [
   "DomRect",
   "Element",
   "Event",
+  "EventInit",
   "EventTarget",
   "File",
   "FileList",
@@ -59,6 +60,7 @@ features = [
   "TouchEvent",
   "Url",
   "UrlSearchParams",
+  "WheelEvent",
   "Window",
 ]
 

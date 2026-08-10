@@ -132,6 +132,11 @@ my custom changes"). When both are present, `s` wins. The query stays
   toolbars whenever custom data is in play, counting exactly the rows in
   that list, and overridden meeting rows say inline which CMI time they
   overwrite.
+- **The wheel adjusts a box that has a step.** Click into the credits box
+  (the one behind "Other…", which focuses itself), a meeting's start or end
+  time, or an export date, and scrolling moves it one step. It only does
+  this while the box has focus — these all sit inside dialogs that scroll,
+  and a value should never change because you scrolled past it.
 - **Any course can gain extra time slots**: "＋ Add a weekly meeting" in the
   editor appends another one; a course CMI hasn't scheduled opens the same
   form through "Give it a time".

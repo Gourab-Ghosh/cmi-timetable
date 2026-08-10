@@ -74,7 +74,7 @@ and no committed mirror (fixtures exist only for tests/e2e seed).
         ui.rs (header/tabs/facets/dialogs/chips), views.rs (5 tabs +
         welcome()), dnd.rs (pointer+keyboard drag), storage.rs, dev.rs,
         domx.rs; styles.css = whole design system (tokens, light+dark).
-/e2e    test_app.py — 61 Selenium tests, self-seeding (see §5); shoot.py —
+/e2e    test_app.py — 62 Selenium tests, self-seeding (see §5); shoot.py —
         design-review screenshots + print PDFs.
 /githooks  pre-push — builds+publishes via deploy.sh when main is pushed
         (activate per clone: `git config core.hooksPath githooks`; skip
@@ -494,6 +494,16 @@ and no committed mirror (fixtures exist only for tests/e2e seed).
   bare `now_ms()` from render code, that freezes the label until an
   unrelated re-render. Header mounts once (outside the route switch), so
   the forgotten handles are page-lifetime, not leaks-per-mount.
+- **Wheel-to-step is focus-gated, on purpose** (`domx::step_on_wheel`,
+  R36). It acts only when the box `matches(":focus")`, then calls the DOM's
+  own `stepUp`/`stepDown` (not bound in this web-sys version — reached via
+  `Reflect`) and dispatches a BUBBLING `input` event so every existing
+  `on:input` hears it without knowing the wheel exists. Do not make it work
+  on hover: credits, meeting times and export dates all sit in dialogs that
+  scroll, and a hover version changes values when someone scrolls past. The
+  credits box gets a `NodeRef` + `Effect` focus on mount — `autofocus` does
+  nothing for a node inserted after page load, which is why the first
+  attempt silently did nothing (e2e t62).
 - **`Day::from_label` is strict on purpose and must stay strict.** It reads
   rows that CARRY CLASSES, so "Mon-Fri" or "Mon, Wed" has to be refused
   rather than claimed for one day. The loose reader is
@@ -585,7 +595,7 @@ regenerates the .ics golden.
   selected course with no time is part of the timetable, not a footnote.
 - "Your changes" groups are headed by `.cg-head` (colour rail + small caps
   + count), coloured by `OwnChange::tone()`. See §4.
-- Tests: 100 native + 61/61 e2e green. Meeting removals: `MeetingOverride.to`
+- Tests: 100 native + 62/62 e2e green. Meeting removals: `MeetingOverride.to`
   is `Option<Meeting>` (None = removed; legacy JSON/share payloads still
   load — present meeting ⇒ Some). Out-of-grid times: **all three tables grow
   synthetic `.extra` columns**, each from its own source, all built by the
@@ -1648,6 +1658,46 @@ assets all 200 and the wasm carries the `d7297c5` stamp.
 
 Still true, on the user's instruction: git history retains the removed files
 in older commits.
+
+### R36 — "scroll the mouse wheel to change the credit … for all such boxes"
+
+Five boxes in the app have a step, so all five got it: the credits box
+behind "Other…", a meeting's start and end time, and the export range's From
+and To dates. One helper, `domx::step_on_wheel`, attached to each.
+
+**It acts only while the box has focus, and that is a deliberate narrowing
+of the request.** All five sit inside dialogs that scroll. A hover version
+changes a value whenever someone scrolls the dialog with the pointer over
+it — a change they never asked for and might not notice, which is the one
+thing this app does not do. Focus is the signal that the wheel is aimed at
+the box: click or tab in and it adjusts; leave it and the wheel scrolls.
+Say the word if you want hover instead — it is a two-line change.
+
+To keep that from costing a click, the credits box now focuses itself when
+"Other…" opens it, which is where the typing was going anyway. First attempt
+used the `autofocus` attribute and silently did nothing: it applies at page
+load, and that box is inserted long after. It is a `NodeRef` + `Effect` now,
+the same pattern the filter checkboxes use.
+
+The browser does the arithmetic: `stepUp`/`stepDown` respect each box's own
+`min`, `max` and `step`, so credits stay in 0–20, times move a minute and
+dates move a day, with no unit knowledge here to drift out of date. They are
+not bound in this web-sys version, so they are called by name through
+`Reflect`. Afterwards the helper dispatches a BUBBLING `input` event, so
+every existing `on:input` hears exactly what typing says and nothing else in
+the app needs to know the wheel exists.
+
+Checked before it was believed: the wheel did nothing over these boxes
+BEFORE this change, focused or not — worth knowing, because Chrome used to
+step focused number inputs natively and the feature might have been a
+browser regression rather than a gap.
+
+e2e **t62** covers all of it: the box focuses itself, up increments, down
+decrements, the app sees the change (the "Use CMI's value" button appears),
+min/max clamp, an unfocused box is left alone while the dialog scrolls past
+it, a focused box swallows the scroll so the dialog does NOT move, a meeting
+time steps and an export date steps. 100 native + 62/62 e2e; fmt and clippy
+clean.
 
 ## 8. Open bugs — found, confirmed, NOT fixed (do not delete)
 
