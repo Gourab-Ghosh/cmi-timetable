@@ -23,7 +23,7 @@ Environment knobs: `CHROME_BIN` (default `/usr/bin/chromium`), `DIST_DIR`,
 `PORT`, `CARGO_TARGET_DIR` (for the seed generator; defaults to
 `~/.rust-target-e2e`).
 
-Covered flows (71 tests): Sync-now header + hidden developer mode (URL
+Covered flows (73 tests): Sync-now header + hidden developer mode (URL
 endpoint only), `?c=` selection + clash badges/panel (any casing), unknown-
 code warning, credits defaulting to 4 and per-course credit overwrites,
 master-grid ⚠ would-clash markers and clash toast on add, the ⓘ details
@@ -96,7 +96,12 @@ cursor, and the day strip following it across days), the ✓ Halls promises
 appearing on a booking with no meeting behind it, and the export dialog
 asking which courses to put in the file when only one course is on the
 timetable — plus the invariant that keeps the "what changed" dialog from
-ever opening with nothing to say.
+ever opening with nothing to say; and the order of the source chain, which
+exists for a reason a browser enforces: on CMI's own network cmi.ac.in is a
+LOCAL address, so a direct fetch makes the browser ask whether the page may
+reach devices on the local network. The relays are public hosts, go first,
+and while one answers nothing touches cmi.ac.in itself; when they are all
+dead the direct route runs last and says what it is about to do.
 
 `design-check-url.txt` holds the link to open when checking how the app
 LOOKS rather than what it does: eleven courses, several customised, so the

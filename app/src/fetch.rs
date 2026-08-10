@@ -1,6 +1,18 @@
-//! The tiered source chain (§2.3): direct → CORS proxies. Every route ends
+//! The tiered source chain: CORS proxies → direct. Every route ends
 //! at cmi.ac.in itself — this app keeps no copy of CMI's pages and serves
 //! none, so what a student sees is always what CMI is publishing right now.
+//!
+//! Why the relays go first, when they are the less trustworthy route: most
+//! of the people using this app are sitting on CMI's own network, where
+//! `www.cmi.ac.in` resolves to a private address. A page served from
+//! github.io asking for a private address is precisely what the browser's
+//! local-network permission prompt exists to catch, so a student pressing
+//! Sync was being asked whether this site may "access devices on your local
+//! network" — a question that reads like an attack, about a fetch that is
+//! the entire point of the app. A public relay is a public host and can
+//! never raise it. Direct is kept, because it is CMI's own bytes and the
+//! only route that can be trusted absolutely, but it is now the fallback:
+//! nothing asks for a local address until every public route has failed.
 //! The app ships no timetable data either: before the first successful sync
 //! it shows a "sync to start" prompt instead. A fetched snapshot replaces
 //! the CACHED SNAPSHOT only after the validation gate passes; any failure
@@ -19,6 +31,10 @@ use ttcore::validate::{ParseOutcome, SnapshotMeta, parse_and_validate};
 pub const CMI_TIMETABLE_URL: &str = "https://www.cmi.ac.in/practical/timetable.php";
 pub const CMI_HALLS_URL: &str = "https://www.cmi.ac.in/practical/lecturehalls.php";
 
+// The relays are the normal route now, so they get the patient budget: a
+// slow-but-working relay that gets cut off short would hand the sync to the
+// direct route, which is the one thing this order exists to avoid. Direct
+// stays cheap — by the time it runs, everything public has already failed.
 const DIRECT_TIMEOUT_MS: u32 = 4_000;
 const PROXY_TIMEOUT_MS: u32 = 12_000;
 const AUTO_UPDATE_INTERVAL_MS: f64 = 12.0 * 3600.0 * 1000.0;
@@ -57,6 +73,19 @@ pub const PROXIES: &[ProxyDef] = &[
         },
     },
 ];
+
+/// The CMI URL a relay is asked to fetch, with a cache-buster on it.
+///
+/// The relays decide how fresh a relayed page is, and they are the first
+/// route now rather than the last — so their caching would quietly decide
+/// how old a student's timetable is, while the app went on saying "synced
+/// just now" over it. CMI's pages ignore query parameters they don't know.
+/// The direct route never gets one: those are CMI's own bytes under CMI's
+/// own cache rules, and there is nothing in between to defeat.
+fn uncached(url: &str) -> String {
+    let sep = if url.contains('?') { '&' } else { '?' };
+    format!("{url}{sep}cb={}", domx::now_ms() as u64)
+}
 
 struct FetchOk {
     text: String,
@@ -433,48 +462,27 @@ pub async fn run_update(app: App, manual: bool) {
 
     let force = app.force_tier.get_untracked();
     let mut routes_tried = 0usize;
-    // Gate failure on DIRECT content is terminal (no proxy will see anything
-    // different from CMI itself); gate failure on a PROXY response only means
-    // that relay may have mangled the page — the chain continues to the next
-    // proxy.
-    let mut gate_failed_direct = false;
+    // Gate failure on a PROXY response only means that relay may have mangled
+    // the page — the chain carries on, and CMI itself gets the last word.
+    // Gate failure on DIRECT content is terminal: those are CMI's own bytes,
+    // so nothing else could see anything different (§8.6). Direct being last
+    // makes that true by construction — there is no route after it.
     let mut gate_failed_any = false;
     let mut adopted = false;
+    let mut direct_tried = false;
 
-    // Tier 1 — direct (both pages in parallel; kept cheap in case CMI ever
-    // enables CORS — a CORS rejection fails within one round trip).
-    if force.is_none() || force.as_deref() == Some("direct") {
-        progress(&app, "Syncing directly from cmi.ac.in…");
-        routes_tried += 1;
-        match fetch_pages_tier(
-            app,
-            "direct".to_string(),
-            CMI_TIMETABLE_URL.to_string(),
-            CMI_HALLS_URL.to_string(),
-            DIRECT_TIMEOUT_MS,
-            SourceTier::Direct,
-        )
-        .await
-        {
-            TierResult::Snapshot(snapshot) => {
-                adopt(&app, *snapshot, true, Adoption::Fetched);
-                adopted = true;
-            }
-            // Direct content is authoritative: a gate failure here means the
-            // page format changed, and no proxy will see anything different.
-            TierResult::GateFailed => {
-                gate_failed_direct = true;
-                gate_failed_any = true;
-            }
-            TierResult::Unreachable => {}
-        }
-    }
-
-    // Tier 2 — public CORS relays, raced in parallel (each response
+    // Tier 1 — public CORS relays, raced in parallel (each response
     // sanity-checked and gate-validated); the first valid one wins and the
     // rest are dropped.
-    if !adopted && !gate_failed_direct && (force.is_none() || force.as_deref() == Some("proxy")) {
-        progress(&app, &format!("Trying {} proxies at once…", PROXIES.len()));
+    //
+    // First, because every one of these is a public host: this route cannot
+    // raise the browser's local-network prompt no matter whose network the
+    // student is on. See the module docs.
+    if force.is_none() || force.as_deref() == Some("proxy") {
+        progress(
+            &app,
+            &format!("Fetching CMI's pages through {} relays…", PROXIES.len()),
+        );
         routes_tried += PROXIES.len();
         let mut pending: Vec<futures::future::LocalBoxFuture<'static, TierResult>> = PROXIES
             .iter()
@@ -482,8 +490,8 @@ pub async fn run_update(app: App, manual: bool) {
                 let fut = fetch_pages_tier(
                     app,
                     format!("proxy:{}", proxy.name),
-                    (proxy.build)(CMI_TIMETABLE_URL),
-                    (proxy.build)(CMI_HALLS_URL),
+                    (proxy.build)(&uncached(CMI_TIMETABLE_URL)),
+                    (proxy.build)(&uncached(CMI_HALLS_URL)),
                     PROXY_TIMEOUT_MS,
                     SourceTier::Proxy(proxy.name.to_string()),
                 );
@@ -505,6 +513,40 @@ pub async fn run_update(app: App, manual: bool) {
         }
     }
 
+    // Tier 2 — CMI itself (both pages in parallel; kept cheap, and it also
+    // covers the day CORS opens up). Only once every public route has failed,
+    // because this is the request that can make the browser ask about the
+    // local network — and a question like that deserves to be explained
+    // BEFORE it appears, by the app that caused it, rather than looked up
+    // afterwards by a worried student.
+    if !adopted && (force.is_none() || force.as_deref() == Some("direct")) {
+        direct_tried = true;
+        progress(&app, "No relay answered — asking cmi.ac.in directly…");
+        app.toast(
+            "The relays didn't answer, so the app is asking cmi.ac.in itself. On CMI's \
+             own network your browser may ask whether this page may reach it — that \
+             prompt is this fetch, and it is safe to allow.",
+        );
+        routes_tried += 1;
+        match fetch_pages_tier(
+            app,
+            "direct".to_string(),
+            CMI_TIMETABLE_URL.to_string(),
+            CMI_HALLS_URL.to_string(),
+            DIRECT_TIMEOUT_MS,
+            SourceTier::Direct,
+        )
+        .await
+        {
+            TierResult::Snapshot(snapshot) => {
+                adopt(&app, *snapshot, true, Adoption::Fetched);
+                adopted = true;
+            }
+            TierResult::GateFailed => gate_failed_any = true,
+            TierResult::Unreachable => {}
+        }
+    }
+
     app.sync.update(|s| {
         s.updating = false;
         s.progress = String::new();
@@ -518,6 +560,19 @@ pub async fn run_update(app: App, manual: bool) {
     let saved_date = domx::fmt_local_date(app.snapshot.with_untracked(|s| s.fetched_at));
     let no_data = !app.snapshot.with_untracked(|s| s.has_data());
     let online = domx::window().navigator().on_line();
+    // Only where it can be the explanation: the direct route actually ran, so
+    // the browser may have asked about the local network, and a student who
+    // said no to a prompt they didn't understand should not be left guessing
+    // at which of the two events caused the other.
+    let lan_note = if direct_tried && online {
+        " One more thing worth knowing: if your browser asked whether this page may \
+         reach devices on your local network, that was this app asking cmi.ac.in for \
+         the timetable — on CMI's own network, cmi.ac.in is a local address. Saying yes \
+         lets that last route work. Saying no changes nothing else, and the app will \
+         keep reaching CMI the public way."
+    } else {
+        ""
+    };
 
     let text = if gate_failed_any && no_data {
         "CMI's website answered, but its pages aren't in the shape this app reads, so \
@@ -537,7 +592,7 @@ pub async fn run_update(app: App, manual: bool) {
     } else if no_data {
         format!(
             "The timetable couldn't be fetched right now (tried {routes_tried} routes). \
-             Check your connection and try again."
+             Check your connection and try again.{lan_note}"
         )
     } else if !online {
         format!(
@@ -547,7 +602,8 @@ pub async fn run_update(app: App, manual: bool) {
     } else {
         format!(
             "CMI's website couldn't be reached right now (tried {routes_tried} routes). \
-             You're still seeing your saved timetable from {saved_date}. Try syncing again later."
+             You're still seeing your saved timetable from {saved_date}. Try syncing \
+             again later.{lan_note}"
         )
     };
     app.set_banner(BannerKind::Warn, text);

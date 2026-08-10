@@ -75,9 +75,9 @@ fn simulators(app: App) -> impl IntoView {
                         app.force_tier.set((!v.is_empty()).then_some(v));
                     }
                 >
-                    <option value="">"(all tiers, normal order)"</option>
-                    <option value="direct">"direct only"</option>
-                    <option value="proxy">"proxy only"</option>
+                    <option value="">"(all tiers: relays, then CMI itself)"</option>
+                    <option value="proxy">"relays only"</option>
+                    <option value="direct">"CMI itself only (may prompt for local network)"</option>
                 </select>
                 <button class="btn small" on:click=move |_| {
                     leptos::task::spawn_local(async move {

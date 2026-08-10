@@ -83,7 +83,7 @@ and no committed mirror (fixtures exist only for tests/e2e seed).
         PARSER_VERSION=4 in core/src/model.rs. Fixtures: core/fixtures/
         — TEST INPUT ONLY, never served, never copied into the build.
 /app    Leptos UI. src/app.rs (boot/routing), state.rs (App handle, undo,
-        filters), fetch.rs (tier chain direct→proxy, adopt/merge),
+        filters), fetch.rs (tier chain proxy→direct, adopt/merge),
         ui.rs (header/tabs/facets/dialogs/chips), views.rs (5 tabs +
         welcome()), dnd.rs (pointer+keyboard drag), storage.rs, dev.rs,
         domx.rs; styles.css = whole design system (tokens, light+dark).
@@ -2082,6 +2082,80 @@ the invariant that made the deleted paragraph unreachable.
 
 100 native + 71/71 e2e; fmt and clippy clean.
 
+### R42 — the relays go first, so the browser stops asking about the local network
+
+Prompt: *"Try to request through the proxies first so that the warning that
+the app is trying to access local network devices don't come. Only when this
+fails, then try connecting directly… My main goal is to avoid that warning as
+much as possible, because user may see that warning as malicious. I am not
+saying to remove any feature, I am saying to keep the feature as fallback only
+when nothing else work."* Then, mid-round: *"I remember that you said that
+since I am connected to the cmi network, the browser thinks that I am trying
+to access local network devices when the app tries to access cmi website."*
+
+**The diagnosis, because it decides everything else.** On CMI's own network
+`www.cmi.ac.in` resolves to a PRIVATE address. A page served from github.io
+requesting a private address is exactly what Chrome's local-network permission
+prompt exists to catch, so the direct tier — first in the chain since the
+beginning — was asking every student on campus whether this site may "access
+devices on your local network". The relays are public hosts: that route cannot
+raise the prompt on any network. So the fix is the order, and nothing else.
+
+Chain is now **relays (raced in parallel) → direct**. `direct` keeps its cheap
+4 s budget; the relays keep the patient 12 s one, because cutting a
+slow-but-working relay short hands the sync to the very route this order
+exists to avoid.
+
+Considered and rejected: **remembering that direct worked** and preferring it
+afterwards. A laptop moves between campus and home, so "direct was fine here"
+is not a property of the browser — and the one signal we could store (a direct
+fetch that succeeded) cannot tell a silent success from one the student
+granted through the prompt. Also considered: `fetch`'s `targetAddressSpace:
+"public"`, which in principle fails instead of prompting and would let direct
+stay first. It is Chromium-only, not exposed by gloo/web-sys, and I cannot
+verify its behaviour from here — betting the user's main goal on it would be
+wrong. If it is ever confirmed, it is the one thing that could restore
+direct-first without the prompt.
+
+Three things came with the reorder:
+
+- **The relays now decide freshness**, so the CMI URL handed to a relay
+  carries a cache-buster (`uncached()`); the direct route never gets one —
+  those are CMI's bytes under CMI's cache rules. Without it a relay's cache
+  could serve a week-old timetable while the pill said "synced just now".
+- **The prompt is explained before it can appear.** When every relay has
+  failed and direct is about to run, the app toasts what is about to happen
+  and why, and the failure banner repeats it (`lan_note`, only when the direct
+  route actually ran and the browser is online). A prompt that arrives with no
+  explanation is what makes it look malicious; one the app predicted a second
+  earlier does not.
+- **Developer mode's force-tier** now reads "relays only" / "CMI itself only
+  (may prompt for local network)", in chain order.
+
+§8.6's invariant (a DIRECT gate failure is terminal) now holds by
+construction, and its entry says so — with the reminder that a PROXY gate
+failure must stay non-terminal, since a relay can mangle a page and CMI has to
+get the last word.
+
+**Honest trade, recorded because it is a real cost:** the normal sync now goes
+through allorigins.win / corsproxy.io, which learn which CMI page was asked
+for (nothing else — no selection, no identity), and their content is less
+trustworthy than CMI's own. The validation gate and the `looks_like_cmi` check
+already existed for exactly that, and this is what the user asked for; it is
+in README and FEATURES.md in plain words rather than buried.
+
+Tests: e2e **t72** (with the relays answering, the fetch log contains nothing
+but `proxy:` rows — the direct route is never touched — and the pill says
+proxy) and **t73** (with the relays dead, they are still tried first, direct
+comes last, and the toast explains the prompt before it can appear). Both
+verified to fail against the old order. The harness grew a relay stand-in:
+`serve_relays()`, the two relay hostnames mapped to the same TLS stand-in as
+CMI, and `_CmiHandler` answering relay-shaped requests by the `url`
+parameter's PATH (the cache-buster means the whole string is never equal).
+Default is off, so every other test still exercises direct-as-fallback.
+
+100 native + 73/73 e2e; fmt and clippy clean.
+
 ## 8. Open bugs — found, confirmed, NOT fixed (do not delete)
 
 Rules for this section: entries stay until the bug is actually fixed and a
@@ -2187,3 +2261,9 @@ It is intentional: direct content is CMI's own bytes, so if the gate rejects
 them, no other route will see anything different, and the honest message is
 "this app needs an update". Making the chain continue would replace that
 message with a stale-but-plausible timetable. Leave it.
+
+R42 reordered the chain (relays first, CMI itself last), which makes this
+invariant hold by construction — there is no route after direct to continue
+to. The rule still matters in the other direction, so do not "simplify" it
+away: a PROXY gate failure must NOT be terminal, because a relay can mangle
+or substitute a page, and CMI itself has to get the last word.

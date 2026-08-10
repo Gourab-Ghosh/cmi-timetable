@@ -55,13 +55,27 @@ developer-mode fetch log. For speed, each tier fetches both pages **in
 parallel**, and the proxy tier **races all relays at once** — the first
 valid response wins:
 
-1. **direct** — a cheap 4 s attempt at the CMI URLs (in case CORS ever opens up)
-2. **proxy** — public CORS relays raced in parallel (see `app/src/fetch.rs`)
+1. **proxy** — public CORS relays raced in parallel (see `app/src/fetch.rs`)
+2. **direct** — a cheap 4 s attempt at the CMI URLs, only if no relay answered
 
 Both routes end at cmi.ac.in. There is deliberately no third tier serving a
 copy of the pages from this site: a fallback like that works by showing you
 something CMI published a while ago, without you knowing how long ago, and a
 timetable you can't date is worse than an honest "couldn't reach CMI".
+
+**Why the relays go first, though they are the less trustworthy route.** Most
+people using this app are on CMI's own network, where `www.cmi.ac.in`
+resolves to a *private* address. A page served from github.io asking for a
+private address is exactly what the browser's local-network permission prompt
+exists to catch — so pressing Sync asked the student whether this site may
+"access devices on your local network", about the one fetch the whole app is
+for. A relay is a public host and can never raise that prompt. The direct
+route is kept because it is CMI's own bytes and the only route that works
+when every relay is down; it runs last, announces itself, and explains the
+prompt before it can appear. Two consequences worth knowing: the relays see
+which CMI pages are being fetched (nothing else — no selection, no
+identity), and because a relay's cache would otherwise decide how fresh a
+timetable is, the URL handed to a relay carries a cache-buster.
 
 Until the first sync succeeds the app stays on its welcome screen; a failed
 first sync explains itself in a banner and every later page load retries

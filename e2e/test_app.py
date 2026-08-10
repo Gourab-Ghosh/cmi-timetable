@@ -39,6 +39,7 @@ import tempfile
 import threading
 import time
 import traceback
+import urllib.parse
 
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
@@ -173,7 +174,7 @@ CMI_PAGES = {
     "/practical/lecturehalls.php": "lecturehalls.php.html",
 }
 
-_cmi = {"up": False, "bodies": {}}
+_cmi = {"up": False, "proxy": False, "bodies": {}}
 
 
 def _make_cert(directory):
@@ -194,8 +195,26 @@ def _make_cert(directory):
 class _CmiHandler(http.server.BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
+    def _relayed_path(self):
+        """The CMI path a relay was asked to fetch, or None if this request
+        isn't a relayed one. Both public relays take the target as a `url`
+        query parameter (`/raw?url=…` for allorigins, `/?url=…` for
+        corsproxy), and the app hangs a cache-buster on that target — so the
+        path is what identifies the page, never the whole string."""
+        query = self.path.split("?", 1)[1] if "?" in self.path else ""
+        target = urllib.parse.parse_qs(query).get("url", [None])[0]
+        if target is None:
+            return None
+        return urllib.parse.urlsplit(target).path
+
     def do_GET(self):
         path = self.path.split("?", 1)[0]
+        # A relayed request answers with the same page the direct one would,
+        # but only while the relays are switched on: the default is every
+        # public route dead, which is what most tests want.
+        relayed = self._relayed_path()
+        if relayed is not None:
+            path = relayed if _cmi["proxy"] else "/nowhere"
         if not _cmi["up"] or path not in _cmi["bodies"]:
             self.send_response(503)
             self.send_header("Content-Length", "0")
@@ -218,6 +237,13 @@ class _CmiHandler(http.server.BaseHTTPRequestHandler):
         pass
 
 
+def serve_relays():
+    """Make the public CORS relays answer too, for the tests that care which
+    route the app takes. Off by default: with the relays dead, a sync falls
+    through to the direct route, which is what most tests exercise."""
+    _cmi["proxy"] = True
+
+
 def serve_cmi(timetable=None, lecturehalls=None):
     """Make CMI reachable for this test. Serves the fixture pages verbatim
     unless given something else."""
@@ -233,8 +259,10 @@ def serve_cmi(timetable=None, lecturehalls=None):
 
 
 def stop_serving_cmi():
-    """Back to an unreachable CMI — the state every test starts from."""
+    """Back to an unreachable CMI — the state every test starts from, relays
+    included."""
     _cmi["up"] = False
+    _cmi["proxy"] = False
     _cmi["bodies"] = {}
 
 
@@ -273,12 +301,18 @@ def make_driver():
     # entry animations so dialogs are fully visible the moment they mount.
     opts.add_argument("--force-prefers-reduced-motion")
     # Blackhole every non-localhost hostname: no test can touch the real
-    # network, so a sync fails instantly and deterministically. The one
-    # exception is CMI itself, pointed at our own TLS stand-in — which
-    # answers 503 unless a test called serve_cmi(), so the default is still
-    # "CMI is unreachable".
+    # network, so a sync fails instantly and deterministically. The
+    # exceptions are CMI itself and the two public relays the app tries
+    # first, all pointed at our own TLS stand-in — which answers 503 unless a
+    # test called serve_cmi() / serve_relays(), so the default is still
+    # "nothing out there answers". The relays get a mapping rather than a
+    # DNS failure on purpose: they are the first route now, and a test
+    # environment where they fail differently from CMI would be testing the
+    # resolver.
     opts.add_argument(
         f"--host-resolver-rules=MAP www.cmi.ac.in 127.0.0.1:{CMI_PORT}, "
+        f"MAP api.allorigins.win 127.0.0.1:{CMI_PORT}, "
+        f"MAP corsproxy.io 127.0.0.1:{CMI_PORT}, "
         "MAP * ~NOTFOUND, EXCLUDE 127.0.0.1"
     )
     # The stand-in's certificate is self-signed; it is only there because
@@ -965,7 +999,8 @@ def t25_first_run_prompt_when_empty(app):
 def t26_first_sync_populates_from_cmi(app):
     """With CMI reachable, the automatic first sync fills the app straight
     from its pages: welcome disappears, tabs appear, data renders, and the
-    pill says the data came directly from CMI."""
+    pill names the route. The relays are dead here, so the route is the
+    direct one — the fallback doing its job (see t72/t73 for the order)."""
     serve_cmi()
     try:
         app.boot("/", seed=False)
@@ -3183,6 +3218,67 @@ def t71_what_changed_never_opens_with_nothing_to_say(app):
         stop_serving_cmi()
 
 
+def fetch_log_tiers(app):
+    """The tiers this session's fetches used, oldest first. The developer
+    fetch log renders newest-first, so this reverses it back."""
+    app.d.get(f"{BASE}/#/developer")
+    app.wait_css("section[aria-label='Developer mode']")
+    # Scoped to the Fetch log panel: developer mode has more than one
+    # `.devlog` table, and the others have nothing in their second column.
+    rows = app.d.find_elements(
+        By.XPATH,
+        "//div[contains(@class,'panel')][h3[normalize-space()='Fetch log']]"
+        "//table[contains(@class,'devlog')]/tbody/tr")
+    return [r.find_elements(By.TAG_NAME, "td")[1].text for r in reversed(rows)]
+
+
+def t72_a_relay_is_asked_before_cmi_itself(app):
+    """Most people using this app are on CMI's own network, where
+    cmi.ac.in is a LOCAL address — so a direct fetch makes the browser ask
+    whether this page may reach devices on the local network, which reads
+    like an attack. The relays are public hosts and can never raise it, so
+    they go first and the direct route is never touched when one answers."""
+    serve_cmi()
+    serve_relays()
+    try:
+        app.boot("/", seed=False)
+        app.wait_css(".tabs .tab", timeout=30)
+        app.wait_gone(".welcome-card")
+        assert "proxy" in app.css(".sync-pill").text, app.css(".sync-pill").text
+        tiers = fetch_log_tiers(app)
+        assert tiers, "the sync must have been logged"
+        assert all(t.startswith("proxy:") for t in tiers), \
+            f"nothing may reach cmi.ac.in itself while a relay answers: {tiers}"
+    finally:
+        stop_serving_cmi()
+
+
+def t73_cmi_itself_is_the_fallback_and_says_so(app):
+    """The direct route is kept — it is CMI's own bytes, and the only route
+    that works when every relay is down. It runs last, and it explains the
+    prompt it may raise before raising it."""
+    serve_cmi()  # relays stay dead
+    try:
+        app.boot("/", seed=False)
+        app.wait_css(".tabs .tab", timeout=30)
+        assert "direct" in app.css(".sync-pill").text, app.css(".sync-pill").text
+        tiers = fetch_log_tiers(app)
+        assert [t for t in tiers if t.startswith("proxy:")], \
+            f"the relays must be tried before CMI itself: {tiers}"
+        assert tiers[-1] == "direct", f"and CMI itself must be last: {tiers}"
+        first_direct = next(i for i, t in enumerate(tiers) if t == "direct")
+        assert all(t.startswith("proxy:") for t in tiers[:first_direct]), tiers
+
+        # The prompt is explained by the app that causes it, before it
+        # appears — not looked up afterwards by a worried student.
+        app.d.get(f"{BASE}/")
+        app.wait_css(".tabs .tab", timeout=30)
+        app.xpath("//button[normalize-space()='Sync now']").click()
+        app.wait_toast("your browser may ask whether this page may reach it")
+    finally:
+        stop_serving_cmi()
+
+
 TESTS = [
     t01_header_sync_button_and_hidden_dev,
     t02_developer_endpoint_only,
@@ -3255,6 +3351,8 @@ TESTS = [
     t69_halls_marks_your_courses_even_without_a_meeting,
     t70_one_course_is_not_a_choice,
     t71_what_changed_never_opens_with_nothing_to_say,
+    t72_a_relay_is_asked_before_cmi_itself,
+    t73_cmi_itself_is_the_fallback_and_says_so,
 ]
 
 

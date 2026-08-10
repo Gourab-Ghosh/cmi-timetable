@@ -323,8 +323,25 @@ worth much.
 
 Every route ends at **cmi.ac.in** itself:
 
-1. **direct** — a short attempt at CMI's URLs
-2. **proxy** — public CORS relays, all raced at once, first valid answer wins
+1. **relays** — public CORS relays, all raced at once, first valid answer wins
+2. **direct** — a short attempt at CMI's own URLs, only if no relay answered
+
+**Why the relays go first.** On CMI's own network, `cmi.ac.in` is a *local*
+address. A web page asking for a local address is exactly what your browser's
+"this site wants to access devices on your local network" prompt is for — so
+on campus, pressing Sync used to raise a warning that looks like an attack,
+about the one thing this app exists to do. The relays are ordinary public
+websites, so that route can never raise it.
+
+The direct route is still here, because it is CMI's own bytes and the only
+route left when the relays are down. It runs **last**, and it tells you it is
+about to run: if the prompt ever does appear, the app has already said what it
+is, and answering *no* costs you nothing but that one route.
+
+The trade: the relays can see which CMI pages are being fetched — nothing else
+leaves your browser, not your courses, not who you are. And since a relay's
+own cache would otherwise decide how old your timetable is, the app asks it
+for a fresh copy every time.
 
 There is deliberately **no copy of CMI's pages** inside the app or hosted
 beside it. A fallback like that works by showing you something CMI published a
@@ -408,8 +425,10 @@ its own, never as a change CMI made.
 - If a stored value is ever unreadable, it is **backed up rather than
   deleted**, and you are told where the copy is.
 - No accounts, no analytics, no cookies, no tracking. The only network
-  requests it ever makes are for CMI's two timetable pages — directly, or
-  through a public relay when the browser won't allow a direct fetch.
+  requests it ever makes are for CMI's two timetable pages — through a public
+  relay, or straight from cmi.ac.in if no relay answers. A relay learns which
+  CMI page was asked for and nothing else: your courses, your changes and your
+  own courses never leave your browser.
 
 ---
 
