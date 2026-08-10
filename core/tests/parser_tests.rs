@@ -493,7 +493,7 @@ ABC  : Test Course : Some One
 }
 
 /// Test 11 — fail closed: truncated or mangled pages fail the validation
-/// gate and no snapshot is produced (so a cache replacement is refused).
+/// gate and no snapshot is produced (so replacing the stored one is refused).
 #[test]
 fn t11_fail_closed() {
     // Truncated timetable page (first 4 KB — most branch grids gone).

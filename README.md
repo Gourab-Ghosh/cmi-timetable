@@ -69,15 +69,22 @@ CMI redesign surfaces honestly as "the app needs an update", never as fake
 unreachability. (A loose marker check runs only on proxy responses, only
 after a gate failure, to tell proxy error pages apart from real CMI drift.)
 
-A fetched snapshot replaces the cache **only after the validation gate
+A fetched snapshot replaces the stored one **only after the validation gate
 passes** (≥ 10 branch grids, ≥ 40 courses, ≥ 90 % legend resolution, sane
-hall grid and slots, matching semester labels). Any failure leaves the cache
-untouched and is explained in plain language. **Fail closed, always.**
+hall grid and slots, matching semester labels). Any failure leaves the stored
+snapshot untouched and is explained in plain language. **Fail closed,
+always.**
 
 ### Storage
 
 Everything lives in `localStorage` under versioned `cmitt.v1.*` keys
 (snapshot incl. compressed raw HTML, selection, overrides, prefs).
+
+**Only `cmitt.v1.snapshot` is a cache** — it is CMI's data, and a sync can
+fetch it again. Everything beside it (`selection`, `overrides`, `custom`,
+`prefs`) is the user's own work, exists nowhere else, and is never called a
+cache in this codebase: the word decides how carelessly code and copy treat
+a key, and these are the keys nothing can rebuild.
 Corrupt blobs are backed up under `cmitt.corrupt.<ts>` — never deleted.
 On quota pressure the raw HTML copies are dropped first. The snapshot stores
 `parser_version` + the raw pages, so shipping a parser fix re-parses the
@@ -194,7 +201,7 @@ my custom changes"). When both are present, `s` wins. The query stays
 Developer mode is not linked anywhere in the UI. Open it by navigating to
 the **`#/developer`** endpoint directly, e.g.
 `https://<host>/<repo>/#/developer` (or `http://127.0.0.1:8080/#/developer`
-during development). It exposes the fetch log, parse reports, cache
+during development). It exposes the fetch log, parse reports, storage
 inspector, raw-HTML viewer and fail-closed simulators.
 
 ### A note on routing (deliberate deviation)

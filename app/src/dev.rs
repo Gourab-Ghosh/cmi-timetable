@@ -19,7 +19,7 @@ pub fn developer(app: App) -> impl IntoView {
             {simulators(app)}
             {fetch_log(app)}
             {parse_reports(app)}
-            {cache_inspector(app)}
+            {storage_inspector(app)}
             {raw_html_viewer(app)}
         </section>
     }
@@ -92,7 +92,8 @@ fn simulators(app: App) -> impl IntoView {
             </div>
             <p class="muted small">
                 "“Simulate parse failure” runs mangled pages through the full pipeline to \
-                 demonstrate that the validation gate keeps the cached data untouched."
+                 demonstrate that the validation gate keeps the cached snapshot \
+                 untouched."
             </p>
         </div>
     }
@@ -338,13 +339,24 @@ fn pretty_json(raw: &str) -> String {
         .unwrap_or_else(|_| raw.to_string())
 }
 
-fn cache_inspector(app: App) -> impl IntoView {
+/// Every `cmitt.*` key in localStorage, with Copy / Export / Import / Clear.
+///
+/// Called the "cache inspector" until now, which was wrong in the one place
+/// it matters: this panel lists `cmitt.v1.custom`, `…selection`,
+/// `…overrides` and `…prefs` alongside the snapshot, and offers to Clear any
+/// of them. Only the snapshot is a cache — it can be fetched from CMI again.
+/// The rest is the user's own work and exists nowhere else, so a heading
+/// calling the lot "cache" invited exactly the deletion the app spends the
+/// rest of its code preventing.
+fn storage_inspector(app: App) -> impl IntoView {
     let bump = RwSignal::new(0u32);
     view! {
         <div class="panel">
-            <h3>"Cache inspector"</h3>
+            <h3>"Storage inspector"</h3>
             <p class="muted small">
-                "Everything the app keeps in your browser. Import replaces a key and reloads."
+                "Everything the app keeps in your browser. Only cmitt.v1.snapshot is a \
+                 cache — CMI can be asked for it again; the rest is your own work and \
+                 exists nowhere else. Import replaces a key and reloads."
             </p>
             {move || {
                 bump.get();
@@ -510,6 +522,6 @@ pub fn corrupt_data_banner(app: App) {
         BannerKind::Warn,
         "Your saved data couldn't be read, so it was set aside and the app fell \
          back to defaults. Nothing was deleted. The unreadable copy is kept under \
-         a cmitt.corrupt.* key — see the cache inspector in developer mode.",
+         a cmitt.corrupt.* key — see the storage inspector in developer mode.",
     );
 }

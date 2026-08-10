@@ -1297,7 +1297,7 @@ fn unexplained_codes_are_tolerated_then_refused() {
 // ---------------------------------------------------------------------------
 
 /// Two pages naming different terms is the stale-page signal: refuse, and
-/// keep whatever was cached.
+/// keep whatever snapshot was already stored.
 #[test]
 fn pages_from_different_terms_are_refused() {
     let out = january_term()

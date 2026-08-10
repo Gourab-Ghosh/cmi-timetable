@@ -417,7 +417,7 @@ def t02_developer_endpoint_only(app):
     section = app.wait_css("section[aria-label='Developer mode']")
     assert "Developer mode" in section.text
     for panel in ("Build info", "Fetch log", "Parse reports",
-                  "Cache inspector", "Raw HTML viewer", "Simulators"):
+                  "Storage inspector", "Raw HTML viewer", "Simulators"):
         assert panel in section.text, f"missing panel {panel}"
 
 

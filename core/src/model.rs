@@ -393,13 +393,13 @@ pub enum SourceTier {
     Proxy(String),
     /// Legacy: the site used to host a copy of CMI's pages and serve it as a
     /// third tier. It doesn't any more — everything is fetched from cmi.ac.in
-    /// itself. Kept ONLY so a cache written by an older build still
-    /// deserializes; nothing produces it. The data in such a cache is real
+    /// itself. Kept ONLY so a snapshot written by an older build still
+    /// deserializes; nothing produces it. The data in such a snapshot is real
     /// CMI data (it went through the same parser and gate), so unlike
     /// `Bundled` it is kept and simply re-synced on the next update.
     Mirror,
     /// Legacy: snapshots baked into pre-1.x app builds. Kept only so those
-    /// caches still deserialize; the app discards them at load time.
+    /// stored snapshots still deserialize; the app discards them at load time.
     Bundled,
     /// The empty placeholder before the first successful sync.
     None,

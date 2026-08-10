@@ -1,5 +1,6 @@
-//! The validation gate: a freshly fetched snapshot may replace cached data
-//! only if every rule passes. On failure the old cache stays untouched.
+//! The validation gate: a freshly fetched snapshot may replace the stored
+//! one only if every rule passes. On failure the stored snapshot stays
+//! untouched.
 
 use crate::join::{Joined, join_pages};
 use crate::model::{GateCheck, PARSER_VERSION, ParseReport, RawHtml, Snapshot, SourceTier};
@@ -342,7 +343,7 @@ fn run_gate(
 /// halls page, which fails in a quieter way. A transfer cut short still
 /// parses: the day sections simply stop, so every class after the cut keeps
 /// its time and loses its room, while the count floors (≥ 3 days, ≥ 3
-/// halls) stay satisfied and the snapshot replaces the good cached one. A
+/// halls) stay satisfied and the snapshot replaces the good stored one. A
 /// measured 50 % cut of the live page left 60 of 146 classes reading "Hall
 /// TBA" with the gate perfectly happy.
 ///

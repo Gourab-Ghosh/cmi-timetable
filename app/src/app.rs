@@ -44,7 +44,7 @@ fn init_app() -> (App, bool) {
     let mut snapshot: Snapshot =
         load_or(storage::KEY_SNAPSHOT, &mut corrupt, Snapshot::placeholder);
     // Old app versions shipped a snapshot baked in at build time; that data
-    // no longer exists, so a cached copy of it means "never really synced".
+    // no longer exists, so a stored copy of it means "never really synced".
     if snapshot.source == SourceTier::Bundled {
         storage::remove(storage::KEY_SNAPSHOT);
         snapshot = Snapshot::placeholder();

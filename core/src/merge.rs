@@ -123,7 +123,7 @@ pub fn merge_overrides(
         match &ov.base {
             Some(base) => {
                 let (Some(old_m), Some(new_m)) = (old_meetings, new_meetings) else {
-                    // Course removed upstream (or absent from the old cache):
+                    // Course removed upstream (or absent from the old snapshot):
                     // keep the override; the removed-course badge handles UX.
                     continue;
                 };

@@ -84,6 +84,16 @@ and no committed mirror (fixtures exist only for tests/e2e seed).
 
 ## 4. Invariants & hard-won gotchas (violating these re-breaks fixed bugs)
 
+- **"Cache" means `cmitt.v1.snapshot`, and nothing else.** That key holds
+  CMI's data and a sync can fetch it again, so it is a cache and is called
+  one, in code and on screen. `selection`, `overrides`, `custom` and `prefs`
+  share the same localStorage and are NOT a cache — nothing can rebuild
+  them. The word is load-bearing: it tells the next reader (and the next
+  copywriter) how carelessly a key may be treated, and the developer panel
+  that offers to Clear any of them was called the "cache inspector" while
+  listing the user's own courses. It is the **storage inspector** now. Use
+  "storage"/"persistence" for the subsystem, "cached snapshot" for the one
+  thing that is one.
 - **Build isolation:** `trunk serve` (bg task) races other builds via the
   shared target dir. ALL manual builds/tests use
   `CARGO_TARGET_DIR=~/.rust-target-e2e`, app builds to `--dist dist-e2e`.
@@ -387,8 +397,8 @@ and no committed mirror (fixtures exist only for tests/e2e seed).
   danger zone — R29 replaced that rule at the user's request. It is on every
   delete/remove/clear/reset: course, meeting row ✕, card Remove, the
   Add/Remove toggle when it would remove, each row's Remove in Your changes
-  (but NOT Restore), Remove all changes, Clear selection, Clear cache, Reset
-  preferences, Delete all app data. Clash red never looks like it: clashes
+  (but NOT Restore), the Your-changes row buttons, Clear selection, Clear
+  the cached timetable, Reset preferences, Delete all app data. Clash red never looks like it: clashes
   are filled `.badge.alarm`, never buttons.
 - **A column is its START MINUTE.** Everything places a class by
   `slot.start_min`: `column_for`, `hall_col_for_slot`, the `data-slot`
@@ -545,8 +555,8 @@ and no committed mirror (fixtures exist only for tests/e2e seed).
   "unreachable" stays the default. Tests needing a successful sync run the
   app's real DIRECT tier — there is no test-only tier any more.
 - e2e can no longer hand the app a *different* CMI (the stand-in serves the
-  fixtures), so a test that needs upstream to differ from the cache seeds
-  the disagreement into the CACHE instead:
+  fixtures), so a test that needs upstream to differ from the stored
+  snapshot seeds the disagreement into THAT SNAPSHOT instead:
   `cache_from_before_cmi_moved_toc()` puts TOC's first class on Friday, so
   syncing against the real fixtures reads as CMI moving it back to Tuesday.
   Same merge path, opposite direction.
@@ -622,7 +632,7 @@ regenerates the .ics golden.
   at the user's instruction. The only saved pages left are
   `core/fixtures/*.html`, which are test input: no build copies them and no
   code path in the app can reach them. `SourceTier::Mirror` survives as a
-  deserialize-only legacy variant so an older cache still loads.
+  deserialize-only legacy variant so an older stored snapshot still loads.
 - Published: `https://github.com/Gourab-Ghosh/cmi-timetable` (origin, ssh),
   live at `https://gourab-ghosh.github.io/cmi-timetable/`. Deploys are
   LOCAL-FIRST: `./deploy.sh` builds in a temporary Docker container (rust:1;
@@ -1829,6 +1839,40 @@ assuming:
 
 "Fits my schedule" is a no-op here by construction — `fits_schedule` returns
 true for anything already selected — so no card can vanish behind it.
+
+100 native + 65/65 e2e; fmt and clippy clean.
+
+### R38 — "your developer UI/comments call localStorage state a cache; rename these to more accurate names"
+
+Correct, and the ambiguity had a sharp edge. The developer panel that lists
+every `cmitt.*` key — and offers **Clear** on each — was headed "Cache
+inspector", while the keys it lists include `cmitt.v1.custom` (the user's own
+courses), `…overrides`, `…selection` and `…prefs`. Its own subtitle already
+said "Everything the app keeps in your browser", contradicting its heading.
+Calling that lot a cache invites exactly the deletion the rest of this
+codebase is built to prevent: `state.rs` calls the user's own data "the one
+thing in this app that cannot be fetched again", and `fetch.rs` says so to
+the user on every storage failure.
+
+So: **"cache" now means `cmitt.v1.snapshot` and nothing else** — CMI's data,
+re-fetchable by a sync. Everything else is storage.
+
+- `cache_inspector` → `storage_inspector`, heading "Storage inspector", and
+  the subtitle now names which key is the cache and why the rest is not.
+- The corrupt-data banner (user-visible) pointed at "the cache inspector in
+  developer mode" — renamed with it, or it would point at nothing.
+- `storage::all_entries`'s doc says why the module is `storage`: the spread
+  of what it returns is the whole argument.
+- Internal comments that said "cache" where they meant the stored snapshot
+  now say so (`fetch.rs` module doc, `validate.rs` module doc + rule 8,
+  `model.rs` legacy tiers, `merge.rs`, `app.rs`, three test docs).
+- README's Storage section states the rule outright; §4 carries it as an
+  invariant, because this is the kind of thing that drifts back.
+
+Left alone deliberately: the user-facing strings that already say **"cached
+timetable"** — the My data section, its Clear confirm, and the delete-all
+confirm. Those are about the snapshot alone, which is precisely what a cache
+is, and "cached timetable" is the plainer of the two words for a student.
 
 100 native + 65/65 e2e; fmt and clippy clean.
 

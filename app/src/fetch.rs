@@ -3,8 +3,11 @@
 //! none, so what a student sees is always what CMI is publishing right now.
 //! The app ships no timetable data either: before the first successful sync
 //! it shows a "sync to start" prompt instead. A fetched snapshot replaces
-//! the cache only after the validation gate passes; any failure leaves the
-//! cache untouched and is explained in plain language.
+//! the CACHED SNAPSHOT only after the validation gate passes; any failure
+//! leaves it untouched and is explained in plain language. ("Cache" means
+//! that one stored snapshot and nothing else: the user's selection,
+//! overrides, own courses and prefs live in the same localStorage and are
+//! not a cache — nothing can fetch them again. See `storage.rs`.)
 
 use crate::state::{App, BannerKind, FetchLogEntry, StoredReport};
 use crate::{domx, storage};
@@ -627,7 +630,7 @@ pub fn reparse_stored(app: App, manual: bool) {
 }
 
 /// Developer-mode simulator: run mangled pages through the whole pipeline to
-/// demonstrate fail-closed behavior (the cache stays untouched).
+/// demonstrate fail-closed behavior (the stored snapshot stays untouched).
 pub fn simulate_parse_failure(app: App) {
     let snapshot = app.snapshot.get_untracked();
     let (tt, halls) = match &snapshot.raw_html_gz {

@@ -93,8 +93,11 @@ pub fn save_snapshot(snapshot: &Snapshot) -> SnapshotSave {
     }
 }
 
-/// Every `cmitt.*` key with its raw value — for the developer-mode cache
-/// inspector.
+/// Every `cmitt.*` key with its raw value — for the developer-mode storage
+/// inspector. Note the spread: the snapshot (a cache) sits next to the
+/// user's own selection, overrides and courses (not a cache, and not
+/// re-fetchable), which is why this module is `storage` and only the
+/// snapshot is ever called cached.
 pub fn all_entries() -> Vec<(String, String)> {
     let Some(storage) = raw() else {
         return Vec::new();

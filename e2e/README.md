@@ -109,6 +109,7 @@ It answers 503 until a test asks for it, and the runner switches it back off
 after every test, so "CMI is unreachable" stays the default.
 
 Because the fake CMI serves the fixtures, a test that needs CMI to *differ*
-from the cache arranges it from the other side: `cache_from_before_cmi_moved_toc()`
-seeds a cache in which TOC's first class sits on Friday, so syncing against
+from the stored snapshot arranges it from the other side:
+`cache_from_before_cmi_moved_toc()` seeds a snapshot in which TOC's first
+class sits on Friday, so syncing against
 the real fixtures looks exactly like CMI moving it back to Tuesday.
