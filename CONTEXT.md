@@ -43,8 +43,21 @@ and no committed mirror (fixtures exist only for tests/e2e seed).
   rule.
 - **§8 (open bugs) is append-and-fix-only** — never delete an entry to tidy
   the file; it leaves only when the bug is fixed and pinned by a test.
+- **KEEP FEATURES.md CURRENT (R39).** Whenever a feature is added, changed,
+  renamed or removed, edit `FEATURES.md` in the same round — it is the
+  user-facing description of the app, and it is only worth having while it
+  is true. This is not optional and not "later": a feature that ships
+  undocumented there, or a button renamed in the code but not in
+  FEATURES.md, sends a reader looking for something that isn't there.
+  Checklist for a feature round: code → tests → `README.md` (developer
+  facing) → **`FEATURES.md`** (student facing) → `CONTEXT.md` §7. Write it
+  in the same voice as the rest of that file: what the student can do, why
+  it behaves the way it does, and what it deliberately does not do.
 - Keep the dev server running in the background for manual testing.
-- Ultracode is ON for this session (workflows allowed for substantive work).
+- Agents and workflows: use them when the user asks — they often do, by
+  name ("use as many agents as possible"). Otherwise work solo. (This line
+  used to assert a per-session ultracode flag, which went stale the moment
+  the session ended; the session tells you its own setting.)
 - Write copy "in your own words" — plain, honest, student-facing English.
 - **RESTORE DEAD WORK (R19).** Whenever anything fails to finish — a
   subagent/workflow agent killed by a session or rate limit, a background
@@ -74,12 +87,16 @@ and no committed mirror (fixtures exist only for tests/e2e seed).
         ui.rs (header/tabs/facets/dialogs/chips), views.rs (5 tabs +
         welcome()), dnd.rs (pointer+keyboard drag), storage.rs, dev.rs,
         domx.rs; styles.css = whole design system (tokens, light+dark).
-/e2e    test_app.py — 62 Selenium tests, self-seeding (see §5); shoot.py —
+/e2e    test_app.py — 65 Selenium tests, self-seeding (see §5); shoot.py —
         design-review screenshots + print PDFs.
 /githooks  pre-push — builds+publishes via deploy.sh when main is pushed
         (activate per clone: `git config core.hooksPath githooks`; skip
         once: CMITT_SKIP_DEPLOY=1; deploy.sh sets CMITT_IN_DEPLOY=1 so its
         own pushes never recurse).
+FEATURES.md  the user-facing feature list (written R39). README is the
+        developer's door; FEATURES.md is the student's. Keep it true: it
+        describes the app AS IT IS, so a renamed button or a removed feature
+        has to be corrected there too.
 ```
 
 ## 4. Invariants & hard-won gotchas (violating these re-breaks fixed bugs)
@@ -1875,6 +1892,42 @@ confirm. Those are about the snapshot alone, which is precisely what a cache
 is, and "cached timetable" is the plainer of the two words for a student.
 
 100 native + 65/65 e2e; fmt and clippy clean.
+
+### R39 — "read through all the commits, and write all the features in FEATURES.md"
+
+New top-level **FEATURES.md**, written from all 55 commits plus the current
+source — not a changelog. Three decisions worth keeping:
+
+- **It documents the app as it is now, not as it was built.** The history
+  contains features that were later removed or renamed (the bundled snapshot,
+  the same-origin mirror tier, the per-meeting edit dialog, the halls layout
+  toggle, "Give it a time"), and a feature list that mentions any of them
+  would send a reader looking for a button that is not there. Every claim was
+  checked against the current source before it was written down.
+- **Audience first.** The user asked for something everyone can read, so it
+  opens on what a student can do and keeps the architecture to one short "for
+  the curious" section at the end. README stays the developer's door and now
+  points at FEATURES.md for the other audience.
+- **It ends with what the app deliberately does NOT do** — never edits CMI's
+  pages, never blocks on a clash, never ships a copy of the timetable, never
+  guesses quietly, does not exclude holidays from .ics, no keyboard move on
+  the Halls page. Those are design decisions this repo argued for repeatedly;
+  a feature list that omits them reads as marketing.
+
+Facts verified against source rather than trusted to the commit messages:
+undo depth (100), the throttle ("at most twice a day"), the eight filter
+facets plus "Fits my schedule", the exact "Your changes" group labels and
+their plurals, the export dialog's reminder wording, the two share buttons,
+the five tabs, theme/density options, and the developer panel's contents
+(post-rename: storage inspector).
+
+Recorded as a standing rule in §2 at the user's request in the same round:
+**FEATURES.md is edited whenever a feature is added, changed, renamed or
+removed** — same round, not later. A feature list is worth having only while
+it is true, and the failure mode is silent: nothing breaks, a reader just
+goes looking for a button that isn't there.
+
+No app code touched.
 
 ## 8. Open bugs — found, confirmed, NOT fixed (do not delete)
 

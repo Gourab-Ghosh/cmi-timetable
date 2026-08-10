@@ -28,6 +28,10 @@ Data sources (the only two):
 Built with **Rust → WebAssembly** ([Leptos](https://leptos.dev) CSR +
 [Trunk](https://trunkrs.dev)), deployable as a static site on GitHub Pages.
 
+> **[FEATURES.md](FEATURES.md) — everything the app does, in plain English.**
+> Start there if you want to use the planner; this file is about how it is
+> built and how to work on it.
+
 ## Architecture
 
 ```text
