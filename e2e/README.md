@@ -23,7 +23,7 @@ Environment knobs: `CHROME_BIN` (default `/usr/bin/chromium`), `DIST_DIR`,
 `PORT`, `CARGO_TARGET_DIR` (for the seed generator; defaults to
 `~/.rust-target-e2e`).
 
-Covered flows (66 tests): Sync-now header + hidden developer mode (URL
+Covered flows (71 tests): Sync-now header + hidden developer mode (URL
 endpoint only), `?c=` selection + clash badges/panel (any casing), unknown-
 code warning, credits defaulting to 4 and per-course credit overwrites,
 master-grid ⚠ would-clash markers and clash toast on add, the ⓘ details
@@ -87,7 +87,16 @@ take something away: a sync landing with a conflict while the course editor
 is open (there is one dialog slot, and the conflict must wait in its banner
 rather than throw the form away) and a meeting added exactly where a moved
 CMI meeting used to be (two rows want the same official meeting; the added
-one used to vanish on save).
+one used to vanish on save) — and, holding the app to "a control that cannot
+act is not offered" in the four places it still broke it: the master grid
+counting courses it has no cell to draw (it now counts what it draws, says
+where the others are, and stops offering the Unscheduled filter that could
+only ever empty it), a keyboard move on the phone's per-day list (a visible
+cursor, and the day strip following it across days), the ✓ Halls promises
+appearing on a booking with no meeting behind it, and the export dialog
+asking which courses to put in the file when only one course is on the
+timetable — plus the invariant that keeps the "what changed" dialog from
+ever opening with nothing to say.
 
 `design-check-url.txt` holds the link to open when checking how the app
 LOOKS rather than what it does: eleven courses, several customised, so the

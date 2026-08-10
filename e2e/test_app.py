@@ -2999,6 +2999,190 @@ def t66_controls_that_cannot_act_are_not_offered(app):
         "and it must still read as ticked, so it can be taken off"
 
 
+def t67_the_master_grid_counts_what_it_can_draw(app):
+    """The master grid draws courses through cells, so one CMI lists without
+    a time draws nothing at all. Counting it anyway left "1 match" standing
+    over an empty grid — and Flags → Unscheduled asked for exactly those."""
+    app.boot("/")
+    app.open_tab("Master grid")
+    grid = app.wait_css("section[aria-label='Master grid']")
+    box = grid.find_element(By.CSS_SELECTOR, ".filterbar input[type='search']")
+    box.send_keys("SVA")  # listed by CMI, never given a time
+    WebDriverWait(app.d, 10).until(
+        lambda d: "0 matches" in app.css("section[aria-label='Master grid']").text)
+    grid = app.css("section[aria-label='Master grid']")
+    assert not app.chips("SVA", "section[aria-label='Master grid']"), \
+        "the grid has no cell to draw it in"
+    note = grid.find_element(By.CSS_SELECTOR, ".unplaced-note").text
+    assert "1 more course matches" in note, note
+    assert "hasn't given it a time" in note and "catalog lists it" in note, note
+
+    # The catalog counts it, because a list of rows can show it.
+    app.open_tab("Catalog")
+    WebDriverWait(app.d, 10).until(
+        lambda d: "1 match" in app.css("section[aria-label='Catalog']").text)
+
+    # And the flag that selects for exactly those courses is not offered on
+    # the grid that can never draw one — it still is where it can act.
+    def flags(section):
+        facets = app.d.find_elements(
+            By.XPATH, f"//section[@aria-label='{section}']"
+            "//details[contains(@class,'facet')]"
+            "/summary[starts-with(normalize-space(),'Flags')]")
+        if not facets:
+            return []
+        facets[0].click()
+        app.wait_css("details.facet[open] .menu")
+        out = [o.text for o in app.css_all("details.facet[open] .menu label.opt")]
+        app.d.find_element(By.CSS_SELECTOR, "body").send_keys(Keys.ESCAPE)
+        time.sleep(0.2)
+        return out
+
+    app.css("section[aria-label='Catalog'] .filterbar input[type='search']").clear()
+    assert any("Unscheduled" in f for f in flags("Catalog")), "the catalog can show them"
+    app.open_tab("Master grid")
+    app.wait_css("section[aria-label='Master grid'] .filterbar")
+    assert not any("Unscheduled" in f for f in flags("Master grid")), \
+        "a filter that can only ever empty the grid must not be offered on it"
+
+
+def t68_a_keyboard_move_on_a_phone_shows_where_it_is(app):
+    """The per-day list takes drops like the desktop cells, so it has to
+    take the keyboard the same way: with a cursor you can see, on the day
+    you are looking at."""
+    app.d.set_window_size(430, 900)
+    try:
+        app.boot("/", selection=["TOC"])
+        app.open_tab("My timetable")
+        app.wait_css("section[aria-label='My timetable']")
+        app.xpath("//button[contains(.,'Edit layout')]").click()
+        app.xpath("//div[@aria-label='Day view']//button[normalize-space()='Tue']").click()
+        row = app.wait_css(".day-list .slotrow[data-day='1'][data-slot='550']")
+        chip = row.find_element(By.CSS_SELECTOR, "button.chip")
+        app.d.execute_script("arguments[0].focus();", chip)
+        chip.send_keys("m")
+        cursor = app.wait_css(".day-list .slotrow.kbd-cursor")
+        assert cursor.get_attribute("data-day") == "1", "it starts under the chip"
+        assert cursor.get_attribute("data-slot") == "550"
+        assert cursor.is_displayed(), "a cursor nobody can see is no cursor"
+
+        # Arrowing to another day brings that day with it: one day is on
+        # screen, and a cursor on a row nobody is looking at is where Enter
+        # used to drop a course out of sight.
+        body = app.d.find_element(By.TAG_NAME, "body")
+        body.send_keys(Keys.ARROW_DOWN)
+        WebDriverWait(app.d, 10).until(
+            lambda d: d.find_elements(
+                By.CSS_SELECTOR, ".day-list .slotrow.kbd-cursor[data-day='2']"))
+        assert app.xpath("//div[@aria-label='Day view']"
+                         "//button[normalize-space()='Wed']"
+                         ).get_attribute("aria-pressed") == "true", \
+            "the day strip has to say where the cursor went"
+        assert app.css(".day-list .slotrow.kbd-cursor").is_displayed()
+        body.send_keys(Keys.ENTER)
+        app.wait_toast("Moved TOC")
+        assert app.chips("TOC", ".day-list .slotrow[data-day='2'][data-slot='550']"), \
+            "and it lands where the cursor was"
+    finally:
+        app.d.set_window_size(1500, 1000)
+
+
+def snapshot_with_a_room_and_no_class(hall="Lecture Hall 5", day="Mon", start=550,
+                                      code="SVA"):
+    """CMI books a room for a course no branch grid schedules there — the
+    halls page keeps the booking (join.rs warns about it) and draws it as a
+    plain reference, since there is no meeting behind it to move."""
+    snap = json.loads(SEED_SNAPSHOT_JSON)
+    snap["hall_bookings"].append({
+        "hall": hall, "day": day,
+        "slot": {"start_min": start, "end_min": start + 75},
+        "codes": [code], "temp": False,
+    })
+    return json.dumps(snap)
+
+
+def t69_halls_marks_your_courses_even_without_a_meeting(app):
+    """Halls says "✓ marks the courses on your timetable". A booking with no
+    meeting behind it is still a course you may be taking, and it could
+    never show the mark."""
+    app.boot("/", selection=["SVA"], raw_snapshot=snapshot_with_a_room_and_no_class())
+    app.open_tab("Halls")
+    app.wait_css("section[aria-label='Lecture halls']")
+    app.xpath("//div[@aria-label='Day']//button[normalize-space()='Mon']").click()
+    chip = app.wait_css("section[aria-label='Lecture halls'] "
+                        "button.chip[aria-label^='SVA,']")
+    assert chip.find_elements(By.CSS_SELECTOR, ".sel-mark"), \
+        "the ✓ the page promises must appear on a course you are taking"
+    assert "in your timetable" in chip.get_attribute("aria-label")
+
+    # Unselect it and the mark goes, so the mark still means what it says.
+    app.boot("/", raw_snapshot=snapshot_with_a_room_and_no_class())
+    app.open_tab("Halls")
+    app.wait_css("section[aria-label='Lecture halls']")
+    app.xpath("//div[@aria-label='Day']//button[normalize-space()='Mon']").click()
+    chip = app.wait_css("section[aria-label='Lecture halls'] "
+                        "button.chip[aria-label^='SVA,']")
+    assert not chip.find_elements(By.CSS_SELECTOR, ".sel-mark"), \
+        "and only for the courses on your timetable"
+
+
+def t70_one_course_is_not_a_choice(app):
+    """The export dialog asked which courses to put in the file when there
+    was only ever one answer."""
+    app.boot("/", selection=["TOC"])
+    app.open_tab("My timetable")
+    app.xpath("//button[normalize-space()='Export .ics']").click()
+    dialog = app.wait_css(".dialog")
+    assert not dialog.find_elements(By.CSS_SELECTOR, "#ex-scope"), \
+        "'All selected (1)' and that one course are the same file"
+    row = dialog.find_element(By.CSS_SELECTOR, ".fieldrow.ro")
+    assert "Courses" in row.text and "TOC" in row.text, row.text
+    app.d.find_element(By.CSS_SELECTOR, "body").send_keys(Keys.ESCAPE)
+    app.wait_gone(".dialog")
+
+    # Two courses, and the choice is a real one again.
+    app.boot("/", selection=["TOC", "ISS"])
+    app.open_tab("My timetable")
+    app.xpath("//button[normalize-space()='Export .ics']").click()
+    dialog = app.wait_css(".dialog")
+    opts = [o.text for o in Select(dialog.find_element(
+        By.CSS_SELECTOR, "#ex-scope")).options]
+    assert opts == ["All selected (2)", "TOC", "ISS"], opts
+
+
+def t71_what_changed_never_opens_with_nothing_to_say(app):
+    """The dialog exists to describe a difference. Its only way in is the
+    banner, and the banner only exists while there is one — which is why it
+    carried a paragraph for an empty diff that nobody could ever reach."""
+    serve_cmi()
+    try:
+        # A sync that finds the pages exactly as they were cached: no diff,
+        # so no banner, so no way into the dialog.
+        app.boot("/", selection=["TOC"])
+        app.xpath("//button[normalize-space()='Sync now']").click()
+        app.wait_toast("Timetable updated")
+        time.sleep(0.5)
+        body = app.css("body").text
+        assert "CMI updated the timetable since your last sync" not in body, body
+        assert not app.d.find_elements(
+            By.XPATH, "//button[normalize-space()='See what changed']")
+
+        # And when there IS a difference, the dialog says what it is. The
+        # cached snapshot alone, without the override that goes with it:
+        # this is about the diff, and a conflict would put its own dialog
+        # in front of the banner.
+        snap, _overrides, _gone = cache_from_before_cmi_moved_toc()
+        app.boot("/", selection=["TOC"], raw_snapshot=snap)
+        app.xpath("//button[normalize-space()='Sync now']").click()
+        app.wait_toast("Timetable updated")
+        app.xpath("//button[normalize-space()='See what changed']").click()
+        dialog = app.wait_css(".dialog")
+        assert "Nothing differs" not in dialog.text, dialog.text
+        assert "TOC" in dialog.text, dialog.text
+    finally:
+        stop_serving_cmi()
+
+
 TESTS = [
     t01_header_sync_button_and_hidden_dev,
     t02_developer_endpoint_only,
@@ -3066,6 +3250,11 @@ TESTS = [
     t64_a_half_written_form_is_not_thrown_away_by_a_stray_key,
     t65_my_courses_has_the_same_filters,
     t66_controls_that_cannot_act_are_not_offered,
+    t67_the_master_grid_counts_what_it_can_draw,
+    t68_a_keyboard_move_on_a_phone_shows_where_it_is,
+    t69_halls_marks_your_courses_even_without_a_meeting,
+    t70_one_course_is_not_a_choice,
+    t71_what_changed_never_opens_with_nothing_to_say,
 ]
 
 

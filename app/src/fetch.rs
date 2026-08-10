@@ -325,6 +325,8 @@ pub fn adopt(app: &App, new_snapshot: Snapshot, announce: bool, from: Adoption) 
             app.toast(format!("{code} is no longer on CMI's timetable."));
         }
     }
+    // Non-empty only, and the banner is the only way into the "what changed"
+    // dialog: between them that dialog can never open with nothing to say.
     if !first_data && !quiet && !merge.diff.is_empty() {
         app.what_changed.set(Some(merge.diff.clone()));
     }

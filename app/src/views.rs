@@ -200,6 +200,20 @@ fn grid_cell(
 fn my_timetable(app: App) -> impl IntoView {
     let day_mode = RwSignal::new(None::<Day>);
 
+    // Keyboard move mode walks days as well as times, and the per-day list
+    // shows one day at a time: arrowing off Tuesday used to leave the cursor
+    // on a row nobody could see, and Enter then dropped the course somewhere
+    // the user never looked at. Follow the cursor instead — the day strip
+    // updates with it, so the move stays visible in either layout.
+    Effect::new(move |_| {
+        let cursor_day = app.move_mode.with(|m| m.as_ref().map(|m| m.cursor.0));
+        if let Some(day) = cursor_day
+            && day_mode.with_untracked(|shown| shown.is_some_and(|s| s != day))
+        {
+            day_mode.set(Some(day));
+        }
+    });
+
     let selected_effs = move || -> Vec<(Course, Vec<EffMeeting>)> {
         app.selected_courses()
             .into_iter()
@@ -464,6 +478,17 @@ fn my_timetable(app: App) -> impl IntoView {
                                                                                 d.started
                                                                                     && d.over == Some((day, start))
                                                                             })
+                                                                    })
+                                                            }
+                                                            // Same cursor the desktop cells
+                                                            // draw: a keyboard move you can
+                                                            // start here has to be one you
+                                                            // can see yourself making.
+                                                            class:kbd-cursor=move || {
+                                                                app.move_mode
+                                                                    .with(|m| {
+                                                                        m.as_ref()
+                                                                            .is_some_and(|m| m.cursor == (day, start))
                                                                     })
                                                             }
                                                         >
@@ -1258,7 +1283,7 @@ fn course_card(app: App, course: Course) -> impl IntoView {
 // ---------------------------------------------------------------------------
 
 fn master_grid(app: App) -> impl IntoView {
-    let filtered = Memo::new(move |_| {
+    let matched = Memo::new(move |_| {
         // This re-runs on every keystroke in the search box, and `.get`
         // would deep-clone the WHOLE snapshot — halls, bookings and the
         // gzipped raw pages included — to walk its course list. Take the
@@ -1272,7 +1297,20 @@ fn master_grid(app: App) -> impl IntoView {
             .filter(|c| crate::state::course_matches(&app, c, &f))
             .collect::<Vec<_>>()
     });
+    // What this grid can actually put on screen. It draws courses only
+    // through cells, so one with no meeting at all draws nothing — and
+    // counting it as a match left "3 matches" standing over an empty grid.
+    let filtered = Memo::new(move |_| {
+        matched
+            .get()
+            .into_iter()
+            .filter(|c| !app.effective_meetings(c).is_empty())
+            .collect::<Vec<_>>()
+    });
     let count = Signal::derive(move || filtered.get().len());
+    // Dropping those from the count without a word would be its own small
+    // lie — they match what was asked for, they are simply somewhere else.
+    let unplaced = Signal::derive(move || matched.get().len() - filtered.get().len());
 
     let cell_chips = move |day: Day, slot: Slot| -> Vec<AnyView> {
         // The display columns, not CMI's raw grid: a meeting moved to 19:00
@@ -1369,7 +1407,27 @@ fn master_grid(app: App) -> impl IntoView {
                  (or press I) · ⚠ clashes with your timetable · add and place in one \
                  drag with ✎ Edit layout"
             </p>
-            {filter_bar(app, FilterScope::Everything, count)}
+            {filter_bar(app, FilterScope::OnTheGrid, count)}
+            {move || {
+                let n = unplaced.get();
+                (n > 0)
+                    .then(|| {
+                        view! {
+                            <p class="muted small unplaced-note" style="margin:0 0 0.6rem">
+                                {format!(
+                                    "{} more course{} your filters, but CMI hasn't given {} a \
+                                     time — this grid has nowhere to draw {}. The catalog lists \
+                                     {}.",
+                                    n,
+                                    if n == 1 { " matches" } else { "s match" },
+                                    if n == 1 { "it" } else { "them" },
+                                    if n == 1 { "it" } else { "them" },
+                                    if n == 1 { "it" } else { "them" },
+                                )}
+                            </p>
+                        }
+                    })
+            }}
             {deleted_note(app)}
             <div
                 class="grid-scroll"
@@ -1849,7 +1907,22 @@ fn hall_booking_chip(
     hall: &str,
 ) -> Option<AnyView> {
     match hall_booking_state(app, snapshot, columns, code, day, slot, column, temp, hall) {
-        BookingCell::Reference => Some(chip(app, ChipProps::list(code)).into_any()),
+        // The ✓ this page promises, on a chip that had no way to show it:
+        // a booking with no meeting behind it is still a course you may be
+        // taking, and the mark is about your timetable, not about what can
+        // be dragged. `draggable` stays false — there is no base meeting to
+        // move, and inventing one would turn a drag into a weekly meeting
+        // the course never had.
+        BookingCell::Reference => Some(
+            chip(
+                app,
+                ChipProps {
+                    from_master: true,
+                    ..ChipProps::list(code)
+                },
+            )
+            .into_any(),
+        ),
         BookingCell::Here(eff) => Some(hall_eff_chip(app, code, eff, column)),
         BookingCell::Gone => None,
     }

@@ -955,8 +955,15 @@ fn facet_menu(
 /// schedule" appears at all.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum FilterScope {
-    /// Catalog and Master grid: every course CMI publishes.
+    /// Catalog: every course CMI publishes. It draws a row per course, so
+    /// every course it lists can appear.
     Everything,
+    /// Master grid: the courses that grid can actually draw. It renders
+    /// courses through cells, so one with no meeting at all — CMI lists it
+    /// but hasn't timetabled it — puts nothing on screen, and a facet
+    /// selecting for exactly those (Flags → Unscheduled) could only ever
+    /// report matches over an empty grid.
+    OnTheGrid,
     /// My courses: only the courses already on the timetable.
     MySelection,
 }
@@ -994,10 +1001,15 @@ pub fn filter_bar(app: App, scope: FilterScope, result_count: Signal<usize>) -> 
     // list has actually changed, so a menu can no longer rebuild itself
     // under the cursor mid-drag (§4).
     let courses = Memo::new(move |_| match scope {
-        FilterScope::Everything => {
+        FilterScope::Everything | FilterScope::OnTheGrid => {
+            // The snapshot is read and released before `effective_meetings`
+            // goes near the override store (§4).
             let all = app.snapshot.with(|s| s.courses.clone());
             all.into_iter()
                 .filter(|c| !app.is_hidden(&c.code))
+                .filter(|c| {
+                    scope == FilterScope::Everything || !app.effective_meetings(c).is_empty()
+                })
                 .collect::<Vec<_>>()
         }
         FilterScope::MySelection => app.selected_courses(),
@@ -1285,7 +1297,7 @@ pub fn filter_bar(app: App, scope: FilterScope, result_count: Signal<usize>) -> 
             // `App::fits_schedule` returns true for anything selected, so
             // the box could never hide a single card. A control that cannot
             // act does not belong on the page.
-            {(scope == FilterScope::Everything)
+            {(scope != FilterScope::MySelection)
                 .then(|| {
                     view! {
                         <label
@@ -1320,7 +1332,7 @@ pub fn filter_bar(app: App, scope: FilterScope, result_count: Signal<usize>) -> 
                 // a Clear-all button appears over an empty chip line.
                 let f = app.filters();
                 let active = match scope {
-                    FilterScope::Everything => f.active_count(),
+                    FilterScope::Everything | FilterScope::OnTheGrid => f.active_count(),
                     FilterScope::MySelection => f.active_count() - usize::from(f.fits),
                 };
                 (active > 0)
@@ -1397,7 +1409,7 @@ fn active_filter_chips(app: App, scope: FilterScope) -> impl IntoView {
     }
     // Only where it can act. On My courses the filter is inert, so listing
     // it as a reason the list is short would be a lie.
-    if f.fits && scope == FilterScope::Everything {
+    if f.fits && scope != FilterScope::MySelection {
         chips.push(("Fits my schedule".to_string(), Box::new(|f| f.fits = false)));
     }
 
@@ -4222,32 +4234,54 @@ fn export_dialog(app: App, scope: Option<String>) -> impl IntoView {
             }
         }>
             <h2>"Export to calendar (.ics)"</h2>
-            <div class="fieldrow">
-                <label for="ex-scope">"Courses"</label>
-                <select
-                    id="ex-scope"
-                    title="Choose what goes in the file, or scroll here to change it"
-                    on:wheel=domx::cycle_on_wheel
-                    on:change=move |ev| scope_sel.set(event_target_value(&ev))
-                >
-                    <option value="__all__" selected=scope_sel.get_untracked() == "__all__">
-                        {format!("All selected ({})", selection.len())}
-                    </option>
-                    {selection_opts
-                        .iter()
-                        .map(|code| {
-                            view! {
-                                <option
-                                    value=code.clone()
-                                    selected=*code == scope_sel.get_untracked()
-                                >
-                                    {code.clone()}
-                                </option>
-                            }
-                        })
-                        .collect_view()}
-                </select>
-            </div>
+            // With one course on the timetable, "All selected (1)" and that
+            // course are the same file — a dropdown whose two entries do the
+            // same thing is a decision asked for no reason. Say what is going
+            // in the file instead.
+            {if selection.len() > 1 {
+                view! {
+                    <div class="fieldrow">
+                        <label for="ex-scope">"Courses"</label>
+                        <select
+                            id="ex-scope"
+                            title="Choose what goes in the file, or scroll here to change it"
+                            on:wheel=domx::cycle_on_wheel
+                            on:change=move |ev| scope_sel.set(event_target_value(&ev))
+                        >
+                            <option
+                                value="__all__"
+                                selected=scope_sel.get_untracked() == "__all__"
+                            >
+                                {format!("All selected ({})", selection.len())}
+                            </option>
+                            {selection_opts
+                                .iter()
+                                .map(|code| {
+                                    view! {
+                                        <option
+                                            value=code.clone()
+                                            selected=*code == scope_sel.get_untracked()
+                                        >
+                                            {code.clone()}
+                                        </option>
+                                    }
+                                })
+                                .collect_view()}
+                        </select>
+                    </div>
+                }
+                    .into_any()
+            } else {
+                view! {
+                    <div class="fieldrow ro">
+                        <span class="fieldlabel">"Courses"</span>
+                        <span class="ro-value mono">
+                            {selection.first().cloned().unwrap_or_default()}
+                        </span>
+                    </div>
+                }
+                    .into_any()
+            }}
             <div class="fieldrow">
                 <label for="ex-from">"From"</label>
                 <input
@@ -4537,15 +4571,12 @@ fn what_changed_dialog(app: App) -> impl IntoView {
                 }
                     .into_any(),
             )}
-            {diff
-                .is_empty()
-                .then(|| {
-                    view! {
-                        <p class="muted">
-                            "Nothing differs — the timetable already matches CMI's pages."
-                        </p>
-                    }
-                })}
+            // There is no "nothing differs" state to write copy for. One
+            // button opens this dialog, on a banner that exists only while
+            // `what_changed` holds a non-empty diff, and the sync sets it
+            // only when the diff is non-empty (fetch.rs). The paragraph that
+            // used to sit here could not be reached from anywhere in the app
+            // — text nobody would ever read, quietly claiming otherwise.
             <div class="actions">{close_button(app)}</div>
         </div>
     }

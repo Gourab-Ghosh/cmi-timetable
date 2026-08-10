@@ -87,7 +87,7 @@ and no committed mirror (fixtures exist only for tests/e2e seed).
         ui.rs (header/tabs/facets/dialogs/chips), views.rs (5 tabs +
         welcome()), dnd.rs (pointer+keyboard drag), storage.rs, dev.rs,
         domx.rs; styles.css = whole design system (tokens, light+dark).
-/e2e    test_app.py — 66 Selenium tests, self-seeding (see §5); shoot.py —
+/e2e    test_app.py — 71 Selenium tests, self-seeding (see §5); shoot.py —
         design-review screenshots + print PDFs.
 /githooks  pre-push — builds+publishes via deploy.sh when main is pushed
         (activate per clone: `git config core.hooksPath githooks`; skip
@@ -2020,6 +2020,68 @@ menus. Both verified to fail with the fixes reverted.
 
 100 native + 66/66 e2e; fmt and clippy clean.
 
+### R41 — "Fix all these": §8.14–8.17 closed
+
+Two prompts. First *"what are the 4 errors you could not verify?"* — which
+needed a correction before an answer: R40's summary called §8.14–8.17
+unverified, and they are not. All four were confirmed by reading the source
+and left unfixed on purpose, which is a different thing and points somewhere
+else. Then *"Fix all these."* All four are done, each pinned by a test that
+fails without it, and all four entries have left §8.
+
+- **8.14 — the master grid counted courses it cannot draw.** It renders only
+  through `cell_chips`, so a course with no effective meeting puts nothing on
+  screen, yet `filter_bar`'s "N matches" counted it and Flags → *Unscheduled*
+  asked for precisely those. Three changes: `master_grid` now derives
+  `filtered` (what draws) from `matched` (what the filters chose) and counts
+  the former; a third `FilterScope::OnTheGrid` scopes that bar's facet options
+  to the courses the grid can draw, which is what stops *Unscheduled* being
+  offered there (it survives on the Catalog, which lists rows and can show
+  them); and the difference is stated rather than swallowed — a line under the
+  bar saying how many matched, that CMI hasn't given them a time, and that the
+  catalog lists them. Silently dropping them from the count would have been a
+  smaller lie, not none. `FilterScope` now has three arms, so the two
+  `scope == Everything` tests became `scope != MySelection` — the fits box and
+  its chip belong on both catalog-wide bars, not just one.
+- **8.15 — the phone's per-day list took drops but had no keyboard cursor.**
+  `.slotrow` now carries `class:kbd-cursor` on the same predicate `grid_cell`
+  uses, with the matching CSS. That alone would still leave the cursor on an
+  invisible row after one arrow press, since day view shows one day: an
+  `Effect` in `my_timetable` moves `day_mode` to follow `move_mode`'s cursor
+  day, so the day strip and the visible list go where the move goes. Refusing
+  the move there (the Halls answer) was the alternative; it is the wrong one —
+  the list is a real drop target for the pointer, so the keyboard path has to
+  reach it too.
+- **8.16 — Halls promised a ✓ one kind of chip could not show.**
+  `BookingCell::Reference` (a room CMI booked with no meeting behind it) was
+  built with `ChipProps::list`, whose `from_master` is false, and `from_master`
+  gates the mark. Now built with `from_master: true` and `draggable` still
+  false: the mark is about your timetable, dragging is about having a base
+  meeting to move, and those were being decided by one flag.
+- **8.17 — two choices that were not choices.** The export dialog's Courses
+  dropdown is rendered only when more than one course is selected; with one,
+  a read-only `.fieldrow.ro` names it (the `ro` styling moved from
+  `.course-form` to `.dialog`, since it is the same idea in both). And
+  `what_changed_dialog`'s "Nothing differs" paragraph is gone: the only way in
+  is the banner, which exists only while `what_changed` holds a non-empty
+  diff, which `fetch.rs` sets only when the diff is non-empty. Copy nobody
+  could ever read.
+
+Tests: **t67** (grid counts what it draws, the note, and *Unscheduled* offered
+on the Catalog but not the grid), **t68** (cursor visible in the day list, the
+day strip following it, Enter landing there — run at 430×900 and restoring the
+window in a `finally`), **t69** (the ✓ on a reference chip, and absent when
+the course is not selected — seeded via a new
+`snapshot_with_a_room_and_no_class()` helper, because the committed fixtures
+contain no orphan booking), **t70** (no dropdown for one course, a real one
+for two), **t71** (a no-op sync raises no banner; a real diff opens a dialog
+that does not say "Nothing differs"). Each verified to fail with its own fix
+reverted — t67 twice, once for the count and once for the scoping, since it
+asserts both. t71 fails if the `!merge.diff.is_empty()` guard goes, which is
+the invariant that made the deleted paragraph unreachable.
+
+100 native + 71/71 e2e; fmt and clippy clean.
+
 ## 8. Open bugs — found, confirmed, NOT fixed (do not delete)
 
 Rules for this section: entries stay until the bug is actually fixed and a
@@ -2029,51 +2091,13 @@ which test now fails without the fix.
 
 The five entries that lived here (8.1–8.5, found by the R30 synthetic-site
 audit) were all fixed in R34; what each one was and how it was fixed is in
-R34's §7 entry, along with the test that fails without it. 8.6 below is not a
-bug and never leaves. 8.7–8.12 were found by the R37 audit agents, confirmed
-by reading the source, and deliberately NOT fixed in that round — each is a
-change of behaviour big enough to want its own look, not a line to slip into
-a batch.
-
-### 8.14 Master grid: a filter can count courses the grid cannot draw
-
-The Master grid renders a course only through `cell_chips`, which needs an
-effective meeting to put in a cell. A course with no meetings therefore draws
-nothing — but `filter_bar`'s "N matches" counts it, and Flags → "Unscheduled"
-selects for exactly those courses. So that combination can report matches over
-a visibly empty grid. Found in the R40 audit; not fixed because the honest fix
-is a third scope ("only courses that occupy a cell") whose effect on the count
-wants its own look. The Catalog does not have this problem: it lists rows, not
-cells.
-
-### 8.15 The phone's per-day list is a drop target with no keyboard cursor
-
-The narrow-viewport day list carries `data-day`/`data-slot` and `drop-ok`, so
-a pointer drag lands there, but it never gets `kbd-cursor` the way `grid_cell`
-does. `enter_move_mode` is refused only on the Halls tab, so on My timetable
-in day mode a keyboard move starts with nothing highlighted. Either refuse it
-there too (and say where moving works, as Halls does) or give the day list a
-cursor.
-
-### 8.16 Halls says "✓ marks the courses on your timetable", and one kind of
-chip cannot show it
-
-Chips built for a booking that has no matching meeting are constructed with
-`from_master: false`, and the ✓ mark is drawn only when `from_master` is true.
-So the help line promises a mark that a whole class of chip on that page can
-never display. Building those props with `from_master: true` (keeping
-`draggable: false` — there is no base meeting to move) would make the promise
-true; left alone this round because the Halls chip paths deserve one careful
-pass together, not a one-line poke.
-
-### 8.17 Two small dialogs offer a choice that is not one
-
-The export dialog's "Courses" dropdown lists "All selected (N)" plus one entry
-per selected course; with a single course selected, both produce the same
-file. And `what_changed_dialog` has a "Nothing differs" empty state that
-cannot be reached — the dialog is only opened from a banner that exists only
-when the diff is non-empty. Neither hurts anyone; both are the same species as
-the rest of R40 and should go when that dialog is next touched.
+R34's §7 entry, along with the test that fails without it. The four the R40
+audit added (8.14–8.17) were fixed in R41 — same place, same rule: R41's §7
+entry says what each was and which test fails without the fix. 8.6 below is
+not a bug and never leaves. 8.7–8.12 were found by the R37 audit agents,
+confirmed by reading the source, and deliberately NOT fixed in that round —
+each is a change of behaviour big enough to want its own look, not a line to
+slip into a batch.
 
 ### 8.7 The conflicts dialog answers "use CMI's version" for you
 

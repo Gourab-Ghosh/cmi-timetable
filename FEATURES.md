@@ -76,6 +76,12 @@ any hour of the week.
 - Click a course to add or remove it. With *Edit layout* on, you can drag a
   course you haven't picked straight onto a slot — that adds it and places it
   in one gesture.
+- **"N matches" counts what this grid can actually show.** A course CMI lists
+  without a time has no cell to sit in, so it is not counted here — and if
+  your filters match one, a line under the bar says how many, why, and that
+  the catalog lists them. For the same reason the *Unscheduled* filter isn't
+  offered on this page: it can only ever ask for the courses this grid has
+  nowhere to draw.
 
 ### 🔎 Catalog
 
@@ -113,6 +119,11 @@ day, columns are time slots, so a room's entire week reads straight down.
   is marked.
 - **Places of your own** (a room CMI doesn't list, typed by you) get their own
   rows, badged as yours.
+- Courses on your timetable carry the same **✓** here as everywhere else —
+  including a booking CMI published without any class behind it, where the
+  room is allocated but no branch's timetable puts that course in it. Those
+  chips can't be dragged (there is no meeting to move), but they are still
+  your courses and now say so.
 - **Find a free hall**: pick a day *and* a slot — never a silently assumed
   Monday — and get a count and a scannable list of rooms that are free. It
   reads the same booking data the grid does, so the two can never disagree.
@@ -147,7 +158,10 @@ a phone and ordinary clicking stay accident-free.
 - **Mouse or pen**: drag a chip to a new slot.
 - **Touch**: long-press to lift, then drag.
 - **Keyboard**: focus a chip, press **M**, move with the arrow keys, **Enter**
-  to drop, **Esc** to cancel.
+  to drop, **Esc** to cancel. The cell you are standing on is outlined the
+  whole time — in the phone's single-day view too, where arrowing onto another
+  day brings that day on screen with you rather than leaving the cursor
+  somewhere you can't see.
 - **In the Halls view** a drop targets a hall row *and* a time column, so one
   gesture moves a class into a different room and a different hour.
 - **Drop a chip back where CMI put it** to undo the move.
@@ -268,7 +282,8 @@ with an explanation of why that happens and what still worked.
 
 ### Calendar export (`.ics`)
 
-- The whole timetable, or a single course.
+- The whole timetable, or a single course — the choice appears only when you
+  have more than one course, since with one there is only one file to make.
 - A date range, pre-filled from the semester CMI names.
 - An optional **10-minute reminder** on every class.
 - Honours your changes — moved classes, your own courses, your rooms — and
@@ -408,7 +423,7 @@ tested on their own.
 
 **Tested like it matters:** 100 native tests — including a synthetic CMI
 website the tests generate themselves, with other semesters, other time
-formats, renamed halls and ten different kinds of broken page — plus 65
+formats, renamed halls and ten different kinds of broken page — plus 71
 end-to-end browser tests driving the real app in a real browser: drag & drop,
 touch gestures, keyboard-only flows, storage corruption, and a stand-in CMI
 that lets the true sync path be exercised end to end.
