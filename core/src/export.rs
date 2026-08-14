@@ -167,6 +167,11 @@ pub enum ImportError {
     /// A real backup envelope with a whole section missing — a truncated or
     /// hand-edited file, named by the missing part.
     MissingPart(&'static str),
+    /// The `format` field says this IS a planner backup, but the envelope
+    /// around it wouldn't parse (a missing or mistyped `format_version`,
+    /// after hand-editing). Calling that "not a backup" would deny what the
+    /// file itself says — name the real problem instead.
+    BadEnvelope,
 }
 
 impl ImportError {
@@ -202,6 +207,12 @@ impl ImportError {
                      may be damaged or cut short. Nothing was changed."
                 )
             }
+            ImportError::BadEnvelope => {
+                "That file says it's a planner backup, but its version stamp \
+                 is missing or damaged — it may have been edited by hand. \
+                 Nothing was changed."
+                    .to_string()
+            }
         }
     }
 }
@@ -225,6 +236,11 @@ pub fn parse_planner_backup(text: &str, now_ms: f64) -> Result<ParsedBackup, Imp
                 .get("format")
                 .and_then(|f| f.as_str())
                 .unwrap_or_default();
+            // The file's own format field claiming OUR name means the
+            // envelope around it is broken, not that the file is foreign.
+            if found == "cmi-planner-backup" {
+                return Err(ImportError::BadEnvelope);
+            }
             return Err(ImportError::WrongFormat(found.to_string()));
         }
     };

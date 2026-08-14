@@ -182,7 +182,9 @@ reading groups, a class at another institute. You can also create one straight
 from a search that found nothing.
 
 - Name first, with a code suggested from the name; credits 0–20; any number of
-  weekly meetings, on CMI's slots or at times of your own.
+  weekly meetings, on CMI's slots or at times of your own. The code stays
+  within 12 characters and can't contain `,` or `%` — those would break the
+  links that share your timetable, and the form says so.
 - They behave like real courses **everywhere** — clash detection, grids, drag
   & drop, credit totals, `.ics` export, share links.
 - A violet **Added by you** badge marks them.
@@ -450,7 +452,7 @@ its own, never as a change CMI made.
 | **Density** | Comfortable or compact |
 | **On a phone** | The timetable opens on today's classes (the whole week is one tap away), tap targets sized for fingers, a header that packs tight, and long-press to drag |
 | **Motion** | Animations respect "reduce motion" |
-| **The wheel** | Scroll over any box with a step — credits, a meeting's start or end time, an export date, the reminder lead, or any dropdown — and it moves one step. Hovering is enough, no click first; while the wheel is over a box, the box takes the scroll and the page behind it stays put. The reminder lead nudges by single minutes on the wheel while its arrows jump by fives |
+| **The wheel** | Scroll over any box with a step — credits, a meeting's start or end time, an export date, the reminder lead, or any dropdown — and it moves one step. Hovering is enough, no click first; while the wheel is over a box, the box takes the scroll and the page behind it stays put. The reminder lead nudges by single minutes on the wheel while its arrows jump by fives. A trackpad flick counts by full notches — a step or two per gesture, not ten — an empty box is never filled by a passing wheel, and the wheel never moves a value opposite to the way you scrolled |
 | **Enter** | Saves in the editor, downloads in Export, and dismisses the keyboard in a search box |
 | **Escape** | Cancels a drag, then a keyboard move, then an open filter menu, then a dialog — in that order |
 
@@ -500,9 +502,9 @@ GitHub Pages. The parsing, validation, merging, calendar generation and URL
 codecs live in a separate crate with no browser dependencies, so they can be
 tested on their own.
 
-**Tested like it matters:** 100 native tests — including a synthetic CMI
+**Tested like it matters:** 114 native tests — including a synthetic CMI
 website the tests generate themselves, with other semesters, other time
-formats, renamed halls and ten different kinds of broken page — plus 71
+formats, renamed halls and ten different kinds of broken page — plus 81
 end-to-end browser tests driving the real app in a real browser: drag & drop,
 touch gestures, keyboard-only flows, storage corruption, and a stand-in CMI
 that lets the true sync path be exercised end to end.

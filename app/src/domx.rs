@@ -34,6 +34,40 @@ fn step_input(input: &web_sys::HtmlInputElement, up: bool) -> bool {
     .is_some_and(|f| f.call0(this).is_ok())
 }
 
+/// A full wheel "notch" of travel, in pixels. Mouse wheels click in jumps
+/// at least this big (Blink reports ~50–120 per click); trackpads stream
+/// dozens of deltas far smaller than this per gesture.
+const WHEEL_NOTCH_PX: f64 = 50.0;
+
+/// Has this event completed one wheel notch? A mouse click of the wheel is
+/// a notch by itself (a big pixel jump, or any line/page-mode delta), but a
+/// trackpad delivers one gesture as many small pixel events — stepping once
+/// per EVENT would turn a single flick into ten steps. Small deltas
+/// accumulate on the element itself (`data-wheel-acc`) and only ~50px of
+/// travel counts as a notch; a direction flip abandons the remainder.
+fn wheel_notch(ev: &web_sys::WheelEvent, el: &web_sys::Element) -> bool {
+    let dy = ev.delta_y();
+    if ev.delta_mode() != web_sys::WheelEvent::DOM_DELTA_PIXEL || dy.abs() >= WHEEL_NOTCH_PX {
+        return true;
+    }
+    let prior = el
+        .get_attribute("data-wheel-acc")
+        .and_then(|s| s.parse::<f64>().ok())
+        .unwrap_or(0.0);
+    let acc = if prior != 0.0 && (prior < 0.0) != (dy < 0.0) {
+        dy
+    } else {
+        prior + dy
+    };
+    if acc.abs() >= WHEEL_NOTCH_PX {
+        let _ = el.set_attribute("data-wheel-acc", "0");
+        true
+    } else {
+        let _ = el.set_attribute("data-wheel-acc", &acc.to_string());
+        false
+    }
+}
+
 /// Turn the wheel over a box that has a step — credits, a meeting's start or
 /// end time, an export date, the reminder lead — and it moves by one step.
 ///
@@ -58,10 +92,20 @@ pub fn step_on_wheel(ev: web_sys::WheelEvent) {
     if ev.delta_y() == 0.0 {
         return;
     }
-    // A box with nothing to step from — an empty time, a value the browser
-    // will not parse — is left alone, and so is the page: swallowing the
-    // scroll without moving anything would just feel broken.
-    //
+    // A box with nothing to step from — an empty time or date — is left
+    // alone, and so is the page. The browser's own stepUp() would happily
+    // fill an empty box with a value nobody chose (today's date, 00:00);
+    // a wheel passing over a blank box must not write into it.
+    if input.value().trim().is_empty() {
+        return;
+    }
+    // A trackpad gesture only steps once it has travelled a whole notch —
+    // but the box still owns the scroll while the notch accumulates, so the
+    // dialog behind it doesn't creep between steps.
+    if !wheel_notch(&ev, input.as_ref()) {
+        ev.prevent_default();
+        return;
+    }
     // `data-wheel-step` lets a box give the wheel a finer nudge than its
     // arrows: the reminder lead jumps by fives on the spinner but by single
     // minutes on the wheel (R46). Clamped to the box's own min/max.
@@ -84,8 +128,17 @@ pub fn step_on_wheel(ev: web_sys::WheelEvent) {
                 if let Some(max) = attr("max") {
                     next = next.min(max);
                 }
-                input.set_value(&next.to_string());
-                true
+                // The clamp must never overrule the hand on the wheel: from
+                // a typed 2 in a min-5 box, wheeling DOWN would otherwise
+                // "clamp" up to 5 — a scroll down that raises the value.
+                // At the boundary (or facing the wrong way), do nothing and
+                // let the page keep the scroll.
+                if next == current || (next > current) != up {
+                    false
+                } else {
+                    input.set_value(&next.to_string());
+                    true
+                }
             }
             Err(_) => false,
         },
@@ -124,6 +177,12 @@ pub fn cycle_on_wheel(ev: web_sys::WheelEvent) {
     }
     let count = select.length() as i32;
     if count == 0 {
+        return;
+    }
+    // Trackpads gather a whole notch before moving, same as step_on_wheel —
+    // one flick is one or two options, not ten.
+    if !wheel_notch(&ev, select.as_ref()) {
+        ev.prevent_default();
         return;
     }
     let step = if ev.delta_y() < 0.0 { -1 } else { 1 };

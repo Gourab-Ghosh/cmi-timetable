@@ -76,6 +76,12 @@ async function navigate(request) {
   const fallback = new Promise((resolve) =>
     setTimeout(() => resolve(shell), NAV_TIMEOUT_MS)
   );
-  const network = fetch(request).catch(() => shell);
+  // A server ERROR page must not beat a working offline copy: during a
+  // Pages outage github.io answers fast with a 5xx page, which would win
+  // the race and shadow the fully cached app. 4xx still passes through —
+  // the online 404 bounce (404.html) is load-bearing for deep links.
+  const network = fetch(request)
+    .then((response) => (response.status >= 500 ? shell : response))
+    .catch(() => shell);
   return Promise.race([network, fallback]);
 }

@@ -794,7 +794,8 @@ table.tt td {
   min-width: 108px;
   height: 52px;
   transition: background 120ms var(--ease);
-  /* Chips truncate (ellipsis) rather than spill into the next column. */
+  /* Chips clip at the cell edge rather than spill into the next column
+     (no text-overflow: the app never abbreviates with "…"). */
   overflow: hidden;
 }
 table.tt tbody tr:hover td { background: var(--surface-2); }
@@ -1139,7 +1140,9 @@ label.opt.alarm-lead input { width: 5rem; }
   align-items: center;
   margin-bottom: 0.6rem;
 }
-.filterbar input[type="search"] { min-width: 15rem; }
+/* Wide enough that the placeholder ("Search by code, name or instructor")
+   is read whole, never clipped mid-word. */
+.filterbar input[type="search"] { min-width: 17.5rem; }
 details.facet { position: relative; }
 details.facet > summary {
   list-style: none;

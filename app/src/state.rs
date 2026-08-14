@@ -718,6 +718,17 @@ impl App {
         } else {
             "add a file's courses"
         };
+        // Nothing to add means nothing on the undo stack: an act here would
+        // wipe the redo history and hand Ctrl+Z a step that restores an
+        // identical state, while the toast says "nothing changed". (Unhide
+        // can't be the difference — a selected course is never hidden.)
+        if !replace && already == n {
+            self.toast(
+                "Every course in that file was already on your timetable — \
+                 nothing changed.",
+            );
+            return;
+        }
         let codes = codes.to_vec();
         self.act(label, move |sel, ovs| {
             if replace {
@@ -736,11 +747,6 @@ impl App {
                 "Your timetable is now the file's {n} {}.",
                 plural(n)
             ));
-        } else if already == n {
-            self.toast_undo(
-                "Every course in that file was already on your timetable — \
-                 nothing changed.",
-            );
         } else {
             let added = n - already;
             self.toast_undo(format!(

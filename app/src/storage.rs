@@ -79,6 +79,26 @@ pub fn remove(key: &str) {
     }
 }
 
+/// Raw text under a key, exactly as stored — the backup import photographs
+/// every key it is about to overwrite so a mid-import quota failure can put
+/// the browser back the way it was.
+pub fn get_raw(key: &str) -> Option<String> {
+    raw()?.get_item(key).ok().flatten()
+}
+
+/// Put a photographed value back: `Some` rewrites the old text, `None`
+/// removes a key that didn't exist. Returns false if the browser refused —
+/// the old text fit before, so that only happens when storage is truly gone.
+pub fn restore_raw(key: &str, old: &Option<String>) -> bool {
+    let Some(storage) = raw() else {
+        return false;
+    };
+    match old {
+        Some(text) => storage.set_item(key, text).is_ok(),
+        None => storage.remove_item(key).is_ok(),
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum SnapshotSave {
     Full,

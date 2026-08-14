@@ -3501,10 +3501,10 @@ fn course_editor_dialog(app: App, code: Option<String>, prefill: Option<String>)
     let credits = RwSignal::new(start_credits);
     let credits_other = RwSignal::new(start_credits > 4);
     let credits_text = RwSignal::new(start_credits.to_string());
-    // The "Other…" box takes focus the moment it appears. It is where the
-    // typing was going to happen anyway, and it is also what makes the wheel
-    // work without a second click — `step_on_wheel` acts only on a focused
-    // box, deliberately (domx.rs). The `autofocus` attribute cannot do this:
+    // The "Other…" box takes focus the moment it appears: it is where the
+    // typing was going to happen anyway. (The wheel no longer needs the
+    // focus — since R46 hovering is enough, see domx.rs — this is purely a
+    // typing convenience now.) The `autofocus` attribute cannot do this:
     // it applies at page load, and this box is inserted long after.
     let credits_box = NodeRef::<leptos::html::Input>::new();
     Effect::new(move |_| {
@@ -3720,6 +3720,18 @@ fn course_editor_dialog(app: App, code: Option<String>, prefill: Option<String>)
             }
             if code_v.chars().count() > 12 {
                 error.set("Keep the code to 12 characters or fewer.".to_string());
+                return;
+            }
+            // The code travels inside share links, where a comma separates
+            // one code from the next and % starts an escape — a code
+            // carrying either would come back split or altered on reload
+            // and silently drop off the timetable.
+            if code_v.contains(',') || code_v.contains('%') {
+                error.set(
+                    "A code can't contain , or % — they'd break the links \
+                     that share your timetable."
+                        .to_string(),
+                );
                 return;
             }
             let renaming_from = own_editing.as_deref();

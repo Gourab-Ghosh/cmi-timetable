@@ -291,23 +291,57 @@ pub fn import_planner_backup_text(app: App, text: &str) {
     // The pill must say how THIS copy arrived, not how the exporter's did.
     // `fetched_at` stays: importing a file does not make old data young.
     backup.snapshot.source = SourceTier::Imported;
-    // The snapshot goes first and gates the rest: a quota failure here must
-    // not leave the file's selection sitting on top of the old timetable.
-    if crate::storage::save_snapshot(&backup.snapshot) == crate::storage::SnapshotSave::Failed {
-        app.toast(
-            "Your browser wouldn't store the file's timetable (out of \
-             space?), so nothing was changed.",
-        );
+    // All six writes land or none stay. Quota can run out on ANY of them —
+    // not just the big snapshot — and the ordinary save path's sticky
+    // warning (state.rs) would be erased by the reload below, so a partial
+    // import would boot a silent mix of the file's data and the browser's
+    // old data. Photograph every key first; on the first refusal, put it
+    // all back and say so.
+    use crate::storage::{
+        KEY_CONFLICTS, KEY_CUSTOM, KEY_OVERRIDES, KEY_PREFS, KEY_SELECTION, KEY_SNAPSHOT,
+    };
+    const KEYS: [&str; 6] = [
+        KEY_SNAPSHOT,
+        KEY_SELECTION,
+        KEY_OVERRIDES,
+        KEY_CUSTOM,
+        KEY_PREFS,
+        KEY_CONFLICTS,
+    ];
+    let ledger: Vec<(&str, Option<String>)> = KEYS
+        .iter()
+        .map(|k| (*k, crate::storage::get_raw(k)))
+        .collect();
+    // The snapshot goes first: it is by far the largest piece, so if space
+    // is the problem it usually fails before anything else is touched.
+    let wrote = crate::storage::save_snapshot(&backup.snapshot)
+        != crate::storage::SnapshotSave::Failed
+        && crate::storage::save(KEY_SELECTION, &selection).is_ok()
+        && crate::storage::save(KEY_OVERRIDES, &overrides).is_ok()
+        && crate::storage::save(KEY_CUSTOM, &customs).is_ok()
+        && crate::storage::save(KEY_PREFS, &prefs).is_ok()
+        && if conflicts.is_empty() {
+            crate::storage::remove(KEY_CONFLICTS);
+            true
+        } else {
+            crate::storage::save(KEY_CONFLICTS, &conflicts).is_ok()
+        };
+    if !wrote {
+        let mut restored = true;
+        for (key, old) in &ledger {
+            restored &= crate::storage::restore_raw(key, old);
+        }
+        app.toast(if restored {
+            "Your browser wouldn't store everything in that file (out of \
+             space?), so nothing was changed."
+        } else {
+            // The old values fit before, so this is close to unreachable —
+            // but if it happens, pretending nothing changed would be a lie.
+            "Your browser ran out of space during the import, and putting \
+             things back hit the same wall. Open My data and check what \
+             this browser still holds before trusting it."
+        });
         return;
-    }
-    let _ = crate::storage::save(crate::storage::KEY_SELECTION, &selection);
-    let _ = crate::storage::save(crate::storage::KEY_OVERRIDES, &overrides);
-    let _ = crate::storage::save(crate::storage::KEY_CUSTOM, &customs);
-    let _ = crate::storage::save(crate::storage::KEY_PREFS, &prefs);
-    if conflicts.is_empty() {
-        crate::storage::remove(crate::storage::KEY_CONFLICTS);
-    } else {
-        let _ = crate::storage::save(crate::storage::KEY_CONFLICTS, &conflicts);
     }
     // Boot from the imported state through the one code path every start
     // uses — no hand-rebuilt signal state to drift.
@@ -343,11 +377,14 @@ pub fn parse_timetable_export_codes(text: &str) -> Result<Vec<String>, String> {
     };
     let mut codes: Vec<String> = Vec::new();
     for course in courses {
-        if let Some(code) = course.get("code").and_then(|c| c.as_str())
-            && !code.trim().is_empty()
+        // Trim BEFORE the duplicate check: the list stores trimmed codes,
+        // so comparing an untrimmed candidate would let " TOC" slip past a
+        // stored "TOC" and the same code would be reported twice.
+        if let Some(code) = course.get("code").and_then(|c| c.as_str()).map(str::trim)
+            && !code.is_empty()
             && !codes.iter().any(|c| c.eq_ignore_ascii_case(code))
         {
-            codes.push(code.trim().to_string());
+            codes.push(code.to_string());
         }
     }
     if codes.is_empty() {

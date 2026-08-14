@@ -142,8 +142,8 @@ stored HTML on next load without refetching (bump `PARSER_VERSION` in
 
 `?c=TOC,QCOM,MFD` reproduces a selection anywhere (codes are matched
 case-insensitively against the live catalog, so hand-typed `?c=toc` works);
-`&s=<lz-string>` also carries meeting **and credit** overrides ("Copy incl.
-my custom changes"). When both are present, `s` wins. The query stays
+`&s=<lz-string>` also carries meeting **and credit** overrides ("Copy link
+with custom changes"). When both are present, `s` wins. The query stays
 *before* the hash: `…/?c=TOC#/`.
 
 ### Everyday use
@@ -197,14 +197,15 @@ my custom changes"). When both are present, `s` wins. The query stays
   toolbars whenever custom data is in play, counting exactly the rows in
   that list, and overridden meeting rows say inline which CMI time they
   overwrite.
-- **The wheel adjusts a box that has a step.** Click into the credits box
-  (the one behind "Other…", which focuses itself), a meeting's start or end
-  time, or an export date, and scrolling moves it one step. Dropdowns count
-  too — a meeting's Day, Time and Hall, the export scope, the free-hall
-  finder's day and slot — because a list of options is a box with a step as
-  much as a number is. It only does this while the box has focus: these all
-  sit inside dialogs that scroll, and a value should never change because
-  you scrolled past it.
+- **The wheel adjusts a box that has a step.** Scroll over the credits box
+  (the one behind "Other…"), a meeting's start or end time, an export date,
+  or the calendar-reminder lead, and it moves one step — hovering is
+  enough, no click first. Dropdowns count too — a meeting's Day, Time and
+  Hall, the export scope, the free-hall finder's day and slot — because a
+  list of options is a box with a step as much as a number is. While the
+  wheel is over a box, the box takes the scroll and the dialog behind it
+  stays put; the reminder lead nudges by single minutes on the wheel while
+  its arrows jump by fives.
 - **Enter does the obvious thing.** In the course editor it saves, in Export
   it downloads the file, and in a search box it puts the phone keyboard away.
 - **A half-written form isn't thrown away by a stray key.** Nothing in the

@@ -2536,8 +2536,112 @@ catalog; fresh browser asks nothing; sticky-footer click needed
 scrollIntoView); NEW t81 (crafted file with a bogus code: keep-both adds
 only the new course, replace makes the selection exactly the file's,
 "Left out: BOGUS9" named, empty timetable skips the popup). Suite: **114
-native + 81/81 e2e** (expected — verify before commit). FEATURES/README/
-e2e-README rewritten for the new formats.
+native + 81/81 e2e** (verified before the commit, and again in R47's
+pre-deploy audit). FEATURES/README/e2e-README rewritten for the new
+formats.
+
+### R47 — the pre-deploy audit: every gate re-run on the exact tree to ship
+
+User: one more final verification of everything, visual and programmatic,
+before they deploy, so the live site carries no errors.
+
+Every gate re-run from scratch, in order: `cargo fmt --check` clean;
+`cargo clippy --workspace --all-targets -- -D warnings` clean; **114
+native tests** green; the FULL e2e suite green **twice** (81/81 before
+and after this round's two CSS touches); `./deploy.sh --build-only`
+(the deploy script's own rehearsal — same trunk release build, same
+`dist-deploy`, publishes nothing) green twice, artifact verified by hand:
+public URL `/cmi-timetable/`, hashed asset references match the files,
+`sw.js` precache id matches, `404.html` present. The `target-cpu=native`
+in the user-level `~/.cargo/config.toml` leaks LLVM "not a recognized
+feature (ignoring)" warnings into local wasm builds — noise, not a defect
+(LLVM ignores host-CPU flags for wasm); a Docker deploy build never sees
+that config. Visual pass: shoot.py regenerated every view + all three
+print PDFs and the load-bearing ones were reviewed by eye (both themes,
+mobile, dialogs; print-clash still one page, ⚠ on the code line).
+
+Two small fixes came out of the audit, both CSS-only:
+
+- The filterbar search box clipped its own placeholder mid-word ("…name
+  or instru") at `min-width: 15rem` — now 17.5rem so "Search by code,
+  name or instructor" is read whole (no test pinned the width; suite
+  re-run green after).
+- A stale styles.css comment still claimed chips truncate with an
+  ellipsis; the rule is plain `overflow: hidden` and the app never
+  abbreviates — the comment now says so.
+
+Bookkeeping: §8.7's stale rider struck in place — the conflicts queue
+has persisted (`cmitt.v1.conflicts`, saved in `state.rs`, loaded at boot
+in `app.rs`, carried by planner backups, t79) since the backup work, so
+"Decide later" keeps its promise now; the entry's core (rows pre-answered
+"use CMI's", Apply acts on every row, banner has no Dismiss) still stands
+and still ships. The audit's honest bottom line for the deploy decision:
+the seven §8 entries (8.7–8.13) are confirmed, documented, deliberately
+deferred behaviour changes — they will be on the live site until their
+own rounds fix them.
+
+The audit then went adversarial: a 19-agent workflow (raw output kept in
+`.workagents/r47-audit-raw.json`) ran six independent auditors — backup
+atomicity, selection import, wheel stepping, built artifact + offline
+worker, text escaping, docs honesty — and re-attacked every finding with
+a skeptic told to refute it. Thirteen findings survived; all thirteen
+were fixed in this same round, each with a pin:
+
+1. (medium) **Backup import could partially apply.** Only the snapshot
+   write was gated; the five store writes discarded their Results and the
+   page reloaded regardless, so a mid-import quota failure silently
+   booted a mix of the file's data and the browser's old data. Now every
+   key is photographed first (`storage::get_raw`/`restore_raw`), all six
+   writes land or all are restored, the refusal says which way it went,
+   and a failed import never reloads (`app/src/export.rs`).
+2. (medium) **A fast 5xx beat the offline copy.** sw.js's navigation race
+   accepted any RESOLVED response, so GitHub's own outage page (Pages
+   answering 503 quickly) won over the fully cached app. Status ≥ 500 now
+   falls back to the cached shell; 4xx still passes through because the
+   online 404 deep-link bounce is load-bearing (`app/hooks/sw-body.js`).
+   t74 gained an up-but-broken 503 leg. Harness lesson learned there, for
+   any future test that "kills" a local server: **Chrome preconnects** —
+   it opens speculative sockets it may never use, `server_close()` only
+   closes the LISTENER, and a ThreadingHTTPServer handler thread behind an
+   idle accepted socket happily answers ONE request after the server is
+   "dead" (that ghost 503 hid the offline note and took a console-log
+   safari to find). t74's outage server now tracks every accepted socket
+   in `get_request` and teardown severs them all.
+3. (medium) **Trackpads stepped per event.** Sign-only stepping turned
+   one flick (dozens of small pixel deltas) into that many steps. Deltas
+   under a ~50px notch now gather on the element (`data-wheel-acc`) and
+   step once per accumulated notch; a direction flip drops the remainder;
+   mouse-sized jumps and line/page modes step immediately (`domx.rs`).
+4. (low) **The clamp could reverse the wheel.** Typed 2 in the min-5
+   reminder box + wheel DOWN "clamped" the value UP to 5. The manual
+   branch refuses any move against the wheel's direction. (t62)
+5. (low) **A passing wheel filled empty boxes.** stepUp() on an empty
+   time/date input invents 00:00/today; empty boxes are now left alone
+   and the page keeps the scroll. (t62)
+6. (medium) **`,` or `%` in a custom course code broke share links.** The
+   ?c= writer escaped the comma but the reader split it anyway (and
+   percent-decoded twice), so such a course silently dropped off the
+   timetable on every reload. The form now refuses both characters,
+   naming the share-link reason. (t40)
+7. (low) **A no-op import spent an undo step.** Importing a file whose
+   courses were all already selected pushed an act (wiping redo history)
+   while toasting "nothing changed"; nothing changes → nothing pushed.
+   (t81)
+8. (low) **Whitespace-dup codes evaded the import dedup** (" TOC" vs
+   "TOC" → "Left out: X, X"): trim before the duplicate check. (t81)
+9. (low) **A backup with a broken version stamp was called foreign.**
+   format says `cmi-planner-backup` but `format_version` missing/mistyped
+   → new `ImportError::BadEnvelope` names the version stamp instead of
+   denying the file's own format field (core, `export_tests`).
+10–13. (docs) README's wheel paragraph still promised the pre-R46 focus
+   gate; README quoted a share-button label that exists nowhere ("Copy
+   incl. my custom changes"); FEATURES' test counts were stale (100+71 →
+   114+81); a ui.rs comment still claimed `step_on_wheel` needs focus.
+
+Alongside: FEATURES' wheel row and own-course code rule updated, e2e
+README extended, and the audit records live in `.workagents/` per the
+worker-output rule. Suite after the fixes: fmt + clippy clean, **114
+native + 81/81 e2e**, deploy rehearsal green, shots regenerated.
 
 ## 8. Open bugs — found, confirmed, NOT fixed (do not delete)
 
@@ -2564,10 +2668,14 @@ Apply zips ALL rows, not the answered ones. `keep_mine == false` deletes the
 user's override outright (`core/src/merge.rs`). So a student who opens the
 dialog to see what changed about one course, then presses Apply, throws away
 their own times for every other course in the list without ever touching it.
-There is no undecided state. Two smaller things ride along: the banner that
-is the dialog's only entrance has no Dismiss, unlike every other banner; and
-"Decide later" is a promise the app cannot keep, because `app.conflicts` is
-memory-only, so a reload deletes the queue and the dialog cannot be reopened.
+There is no undecided state. One smaller thing rides along: the banner that
+is the dialog's only entrance has no Dismiss, unlike every other banner.
+(A second rider this entry used to carry — "Decide later" losing the queue
+on reload because `app.conflicts` was memory-only — is fixed as of the R47
+pre-deploy audit's re-check: the queue is saved under `cmitt.v1.conflicts`
+whenever it changes (`state.rs`), loaded at boot (`app.rs`), and rides in
+planner backups; t79 pins the backup leg.) The core bug stands at
+`ui.rs` (`vec![false; conflicts.len()]`).
 Fix shape: `Option<bool>` per row, Apply acts only on answered rows (or is
 disabled until all are answered), and give the banner a Dismiss.
 

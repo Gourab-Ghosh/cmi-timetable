@@ -111,6 +111,22 @@ fn backup_refusals() {
         parse_planner_backup(&v.to_string(), NOW).unwrap_err(),
         ImportError::BadSnapshot(_)
     ));
+
+    // A file whose format field says it IS ours, but whose version stamp
+    // was lost in a hand-edit: named honestly, not called a foreign file.
+    let mut v: serde_json::Value = serde_json::from_str(&backup_text()).unwrap();
+    v.as_object_mut().unwrap().remove("format_version");
+    let err = parse_planner_backup(&v.to_string(), NOW).unwrap_err();
+    assert_eq!(err, ImportError::BadEnvelope);
+    assert!(err.message().contains("version stamp"), "{}", err.message());
+
+    // Same when the stamp is mistyped to a non-string.
+    let mut v: serde_json::Value = serde_json::from_str(&backup_text()).unwrap();
+    v["format_version"] = json!(1);
+    assert_eq!(
+        parse_planner_backup(&v.to_string(), NOW).unwrap_err(),
+        ImportError::BadEnvelope
+    );
 }
 
 /// A minor-version bump from a future build still loads (unknown keys are

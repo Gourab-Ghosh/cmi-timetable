@@ -32,6 +32,7 @@ only exists under test.
 import http.server
 import json
 import os
+import socket
 import ssl
 import subprocess
 import sys
@@ -1639,6 +1640,18 @@ def t40_custom_course_create(app):
     # Name first; the code follows until touched.
     app.css("#ce-name").send_keys("German A1")
     assert app.css("#ce-code").get_attribute("value") == "GERMAN"
+
+    # A code that would break share links is refused with the reason: a
+    # comma is the links' separator between codes, % starts an escape.
+    code_box = app.css("#ce-code")
+    code_box.send_keys(Keys.CONTROL, "a")
+    code_box.send_keys("A,B")
+    app.xpath("//button[normalize-space()='Add to my timetable']").click()
+    err = app.css(".course-form .form-error")
+    assert "can't contain , or %" in err.text, err.text
+    code_box.send_keys(Keys.CONTROL, "a")
+    code_box.send_keys("GERMAN")
+
     app.xpath("//div[contains(@class,'seg')]/button[normalize-space()='2']").click()
 
     # Meeting 1: Tuesday, first official slot (09:10) — clashes with TOC.
@@ -2832,6 +2845,17 @@ def t62_the_wheel_steps_the_boxes_that_have_a_step(app):
     assert start_time.get_attribute("value") != before, \
         f"the start time must step: {before}"
 
+    # An EMPTY box is left alone: the browser's own stepUp would fill it
+    # with a time nobody chose (00:00 / today), so a wheel passing over a
+    # blank box must not write into it.
+    app.d.execute_script(
+        "arguments[0].value = '';"
+        "arguments[0].dispatchEvent(new Event('input', {bubbles: true}));",
+        start_time)
+    wheel(start_time, -50)
+    assert start_time.get_attribute("value") == "", \
+        "the wheel must not invent a value for an empty box"
+
     # A dropdown is a box with a step too — its steps are named, not
     # numbered — and the Day control sits right beside the time boxes.
     day = app.css_all(".course-form .meeting-draft select[aria-label='Day']")[0]
@@ -2859,6 +2883,31 @@ def t62_the_wheel_steps_the_boxes_that_have_a_step(app):
     wheel(lead, 50)
     wheel(lead, 50)
     assert lead.get_attribute("value") == "9", lead.get_attribute("value")
+
+    # The clamp never overrules the hand on the wheel: a typed 2 is legal
+    # (export clamps only at download), and scrolling DOWN over it must not
+    # "clamp" the value UP to the min of 5. Scrolling UP from 2 may — the
+    # wheel and the clamp then agree on the direction.
+    app.d.execute_script(
+        "arguments[0].value = '2';"
+        "arguments[0].dispatchEvent(new Event('input', {bubbles: true}));",
+        lead)
+    wheel(lead, 50)
+    assert lead.get_attribute("value") == "2", \
+        f"wheel-down must never raise the value: {lead.get_attribute('value')}"
+    wheel(lead, -50)
+    assert lead.get_attribute("value") == "5", lead.get_attribute("value")
+
+    # A trackpad doesn't step per event: deltas under a notch (~50px)
+    # gather on the box and step once per accumulated notch, so one flick
+    # is a step or two, not ten.
+    for _ in range(3):
+        app.d.execute_script(
+            "arguments[0].dispatchEvent(new WheelEvent('wheel',"
+            " {deltaY: -20, deltaMode: 0, bubbles: true, cancelable: true}));",
+            lead)
+    assert lead.get_attribute("value") == "6", \
+        f"three 20px deltas are ONE notch, one step: {lead.get_attribute('value')}"
 
     # And an export date by a day.
     app.xpath("//div[@class='dialog']//button[normalize-space()='Cancel']").click()
@@ -3334,8 +3383,11 @@ def t74_offline_reload_boots_from_cache(app):
     """The offline copy is real: visit once with the network up so the
     worker installs, kill the server, reload — the app must boot entirely
     from the worker's cache and say, in a toast, that you're offline and
-    everything still works. Runs on its own port/origin so its worker never
-    touches the origin the rest of the suite uses."""
+    everything still works. A server that is UP but BROKEN (answering 503,
+    as GitHub Pages does during an outage) must lose to the cached copy the
+    same way — an error page arriving fast is not "the network working".
+    Runs on its own port/origin so its worker never touches the origin the
+    rest of the suite uses."""
     base = f"http://127.0.0.1:{SW_PORT}"
     server = serve_dist(SW_PORT)
     d = app.d
@@ -3360,9 +3412,62 @@ def t74_offline_reload_boots_from_cache(app):
             message="the worker must claim the page it installed from",
         )
 
-        # The network goes away entirely: nothing listens on the port.
+        # GitHub can be up but broken: during a Pages outage the origin
+        # answers FAST with a 5xx error page. Fast garbage must not beat
+        # the working offline copy — swap the server for one that only
+        # says 503 and reload: the worker must serve the cached app.
         server.shutdown()
         server.server_close()
+
+        class Outage(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                body = b"<h1>503 Service Unavailable</h1>"
+                self.send_response(503)
+                self.send_header("Content-Type", "text/html")
+                self.send_header("Content-Length", str(len(body)))
+                self.send_header("Connection", "close")
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *args):
+                pass
+
+        # Chrome PRECONNECTS: it opens speculative sockets it may never
+        # send a request on. server_close() only closes the listener, so
+        # such a socket would survive "shutdown" with a live handler thread
+        # behind it — and the app's is-my-origin-reachable probe in the
+        # offline phase would ride it and get a 503 ("a response") instead
+        # of a refused connection ("nothing listens"), hiding the offline
+        # note this test asserts. Track every accepted socket so teardown
+        # can really sever them.
+        class OutageServer(http.server.ThreadingHTTPServer):
+            def __init__(self, *a, **kw):
+                super().__init__(*a, **kw)
+                self.accepted = []
+
+            def get_request(self):
+                sock, addr = super().get_request()
+                self.accepted.append(sock)
+                return sock, addr
+
+        server = OutageServer(("127.0.0.1", SW_PORT), Outage)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        d.get(f"{base}/")
+        WebDriverWait(d, 15).until(
+            EC.presence_of_element_located((By.CSS_SELECTOR, ".header h1")),
+            message="a 503 from the server must lose to the cached app",
+        )
+
+        # The network goes away entirely: nothing listens on the port, and
+        # every socket the outage server ever accepted is severed too.
+        server.shutdown()
+        server.server_close()
+        for sock in server.accepted:
+            try:
+                sock.shutdown(socket.SHUT_RDWR)
+                sock.close()
+            except OSError:
+                pass
 
         # Reload. Only the worker's cache can answer now.
         d.get(f"{base}/")
@@ -3644,9 +3749,12 @@ def t81_importing_courses_asks_replace_or_add(app):
     replace); and either answer is one undoable step."""
     crafted = os.path.join(DOWNLOADS, "crafted-import.json")
     with open(crafted, "w", encoding="utf-8") as f:
+        # " BOGUS9" (leading space) after "BOGUS9" pins the parser's dedup:
+        # trim happens BEFORE the duplicate check, so a whitespace variant
+        # can't get the same code named twice in "Left out".
         json.dump({"format": "cmi-timetable-export", "format_version": "1.0.0",
                    "courses": [{"code": "MFD"}, {"code": "TOC"},
-                               {"code": "BOGUS9"}]}, f)
+                               {"code": "BOGUS9"}, {"code": " BOGUS9"}]}, f)
 
     app.boot("/", selection=["TOC", "QCOM"])
     app.xpath("//button[normalize-space()='My data']").click()
@@ -3667,6 +3775,8 @@ def t81_importing_courses_asks_replace_or_add(app):
         in app.css(".dialog").text else None)
     assert "2 courses from this semester" in ask.text, ask.text
     assert "Left out: BOGUS9" in ask.text, ask.text
+    assert ask.text.count("BOGUS9") == 1, \
+        f"a whitespace-variant duplicate must be deduped, not named twice: {ask.text}"
     ask.find_element(
         By.XPATH, ".//button[contains(.,'Keep mine and add')]").click()
     app.wait_toast("Added 1 course from the file")
@@ -3698,6 +3808,24 @@ def t81_importing_courses_asks_replace_or_add(app):
     app.wait_toast("Added 2 courses from the file.")
     assert "Courses from a file" not in app.css(".dialog").text, \
         "an empty selection must not be asked what to replace"
+
+    # Importing the same file AGAIN changes nothing — and must say so
+    # without spending an undo step: Ctrl+Z afterwards undoes the real add
+    # above (the chips leave), not a phantom "nothing" step that would have
+    # eaten the redo history.
+    send_import()
+    ask = WebDriverWait(app.d, 10).until(
+        lambda d: app.css(".dialog") if "Courses from a file"
+        in app.css(".dialog").text else None)
+    ask.find_element(
+        By.XPATH, ".//button[contains(.,'Keep mine and add')]").click()
+    app.wait_toast("nothing changed")
+    app.d.find_element(By.TAG_NAME, "body").send_keys(Keys.ESCAPE)
+    app.wait_gone(".dialog")
+    app.d.find_element(By.CSS_SELECTOR, "body").send_keys(Keys.CONTROL, "z")
+    WebDriverWait(app.d, 10).until(
+        lambda d: not app.css_all("button.chip[aria-label^='MFD,']"),
+        message="Ctrl+Z after a no-op import must undo the real add before it")
 
 
 def t80_a_seminar_is_assumed_zero_credits(app):

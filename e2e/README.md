@@ -111,8 +111,14 @@ selection, the custom move and the full catalog, with the pill saying
 "imported" (R46 reshaped this: the backup file replaced the old
 snapshot-only export, and "Import from JSON" on Course selection asks
 replace-or-add through a dialog, names the codes it must leave out, and
-skips the question when the timetable is empty), and a creditless seminar
-counting 0 with the note saying why; and the order
+skips the question when the timetable is empty; R47's pre-deploy audit
+added pins for the honest edges: an import that adds nothing spends no
+undo step, a whitespace-variant duplicate code is named once, a code with
+a comma or % is refused in the form with the share-link reason, the wheel
+never reverses direction against a clamp, never fills an empty box, and
+gathers trackpad deltas into whole notches, and a server answering 503 —
+GitHub Pages during an outage — loses to the worker's cached copy), and a
+creditless seminar counting 0 with the note saying why; and the order
 of the source chain, which
 exists for a reason a browser enforces: on CMI's own network cmi.ac.in is a
 LOCAL address, so a direct fetch makes the browser ask whether the page may
