@@ -108,7 +108,16 @@ impl Filters {
 pub struct Prefs {
     pub theme: ThemePref,
     pub density: Density,
+    /// The Catalog and the Master grid share this set: both pages ask the
+    /// same question ("what does CMI offer?"), so a filter set on one is
+    /// meant to still be set on the other.
     pub filters: Filters,
+    /// My courses has its OWN set. Filtering your own five courses down to
+    /// Thursday must not quietly empty the catalog you look at next — the
+    /// two bars answer different questions, so they stopped sharing state
+    /// (R43). `#[serde(default)]` on Prefs means stored prefs from before
+    /// the split load with this empty, which is the right start.
+    pub my_filters: Filters,
     /// ms since epoch of the last automatic update attempt (12 h throttle).
     pub last_update_attempt: f64,
     pub tab: Tab,
@@ -140,6 +149,7 @@ impl Default for Prefs {
             theme: ThemePref::default(),
             density: Density::default(),
             filters: Filters::default(),
+            my_filters: Filters::default(),
             last_update_attempt: 0.0,
             tab: Tab::default(),
             halls_day: Day::Mon,
@@ -274,9 +284,11 @@ pub struct UndoEntry {
     pub label: String,
     pub selection: Vec<String>,
     pub overrides: OverridesStore,
-    /// Filter changes are undoable too, so every entry carries the filter
-    /// state alongside selection + overrides.
+    /// Filter changes are undoable too, so every entry carries BOTH filter
+    /// sets alongside selection + overrides — undoing a catalog filter must
+    /// not silently reset My courses' filters, and vice versa.
     pub filters: Filters,
+    pub my_filters: Filters,
     /// The user's own courses ride the history too, so deleting or editing
     /// one is as undoable as any other change.
     pub customs: CustomStore,
@@ -552,6 +564,7 @@ impl App {
             selection: self.selection.get_untracked(),
             overrides: self.overrides.get_untracked(),
             filters: self.prefs.with_untracked(|p| p.filters.clone()),
+            my_filters: self.prefs.with_untracked(|p| p.my_filters.clone()),
             customs: self.customs.get_untracked(),
         };
         self.undo_stack.update(|s| {
@@ -570,6 +583,7 @@ impl App {
             selection: self.selection.get_untracked(),
             overrides: self.overrides.get_untracked(),
             filters: self.prefs.with_untracked(|p| p.filters.clone()),
+            my_filters: self.prefs.with_untracked(|p| p.my_filters.clone()),
             customs: self.customs.get_untracked(),
         }
     }
@@ -578,7 +592,10 @@ impl App {
     fn apply_entry(&self, entry: &UndoEntry) {
         self.selection.set(entry.selection.clone());
         self.overrides.set(entry.overrides.clone());
-        self.prefs.update(|p| p.filters = entry.filters.clone());
+        self.prefs.update(|p| {
+            p.filters = entry.filters.clone();
+            p.my_filters = entry.my_filters.clone();
+        });
         self.customs.set(entry.customs.clone());
         self.persist_selection();
         self.persist_overrides();
@@ -776,7 +793,10 @@ impl App {
         self.act(&format!("restore {code}"), |_, ovs| {
             ovs.unhide(&code);
         });
-        self.toast_undo(format!("{code} is back"));
+        self.toast_undo(format!(
+            "{code} is back in the catalog and the master grid. It isn't on \
+             your timetable — add it when you want it."
+        ));
     }
 
     pub fn restore_all_courses(&self) {
@@ -785,10 +805,16 @@ impl App {
             return;
         }
         self.act("restore deleted courses", |_, ovs| ovs.hidden.clear());
-        self.toast_undo(format!(
-            "{n} deleted course{} back",
-            if n == 1 { "" } else { "s" },
-        ));
+        self.toast_undo(if n == 1 {
+            "1 course you deleted is back in the catalog and grids. It isn't on \
+             your timetable — add it if you want it."
+                .to_string()
+        } else {
+            format!(
+                "{n} courses you deleted are back in the catalog and grids. They \
+                 aren't on your timetable — add the ones you want."
+            )
+        });
     }
 
     // -- custom courses --------------------------------------------------------
@@ -904,7 +930,10 @@ impl App {
                 .retain(|c| !c.course.eq_ignore_ascii_case(&code));
         });
         if keep_selected {
-            self.toast_undo(format!("{code} now uses CMI's version"));
+            self.toast_undo(format!(
+                "{code} now uses CMI's version. Your own version is deleted — Undo \
+             brings it back."
+            ));
         } else {
             self.toast_undo(format!("Deleted {code}"));
         }
@@ -1243,7 +1272,7 @@ impl App {
         self.act(&format!("reset {code} credits"), |_, ovs| {
             ovs.remove_credits(&code);
         });
-        self.toast_undo(format!("{code} back on official credits"));
+        self.toast_undo(format!("Removed your credit change to {code}"));
     }
 
     /// Everything the user's own data adds up to: meetings moved, added or
@@ -1258,6 +1287,19 @@ impl App {
         }) + self.customs.with(|c| c.courses.len())
     }
 
+    /// Replace the queued conflicts AND their stored copy in one move.
+    /// Every writer goes through here: a question the user deferred with
+    /// "Decide later" has to survive a reload, so the signal and
+    /// localStorage must never disagree.
+    pub fn set_conflicts(&self, conflicts: Vec<Conflict>) {
+        if conflicts.is_empty() {
+            crate::storage::remove(crate::storage::KEY_CONFLICTS);
+        } else if let Err(e) = crate::storage::save(crate::storage::KEY_CONFLICTS, &conflicts) {
+            leptos::logging::warn!("cmitt: couldn't store pending conflicts: {e}");
+        }
+        self.conflicts.set(conflicts);
+    }
+
     /// Resolve all queued conflicts in one undoable step.
     /// `choices[i] = (conflict, keep_mine)`.
     pub fn resolve_conflicts(&self, choices: Vec<(Conflict, bool)>) {
@@ -1266,7 +1308,7 @@ impl App {
                 ttcore::merge::resolve_conflict(ovs, conflict, *keep_mine);
             }
         });
-        self.conflicts.set(Vec::new());
+        self.set_conflicts(Vec::new());
         self.toast_undo("Conflicts resolved");
     }
 
@@ -1680,16 +1722,31 @@ impl App {
         domx::set_hash("#/");
     }
 
-    /// Change the filters as one undoable step, like any other action. With
+    /// Change one of the two filter sets as one undoable step, like any
+    /// other action. `mine` picks the set: `true` is My courses' own set,
+    /// `false` the one the Catalog and the Master grid share. With
     /// `coalesce`, a run of consecutive same-label edits shares a single
     /// history entry — the search box makes one entry per burst of typing,
-    /// not one per keystroke.
-    pub fn act_filters(&self, label: &str, coalesce: bool, f: impl FnOnce(&mut Filters)) {
+    /// not one per keystroke. (Labels carry the page name, so a burst of
+    /// typing on My courses can never amend a catalog entry.)
+    pub fn act_filters_in(
+        &self,
+        mine: bool,
+        label: &str,
+        coalesce: bool,
+        f: impl FnOnce(&mut Filters),
+    ) {
         // A change that changes nothing is not an action. "All" over a menu
         // whose options are all ticked, or "None" over one with none ticked,
         // used to push an undo entry and wipe the redo stack for it — so the
         // Redo button went dead because of a click that did nothing at all.
-        let before = self.prefs.with_untracked(|p| p.filters.clone());
+        let before = self.prefs.with_untracked(|p| {
+            if mine {
+                p.my_filters.clone()
+            } else {
+                p.filters.clone()
+            }
+        });
         let mut after = before.clone();
         f(&mut after);
         if after == before {
@@ -1706,12 +1763,36 @@ impl App {
         } else {
             self.push_undo(label);
         }
-        self.prefs.update(|p| p.filters = after);
+        self.prefs.update(|p| {
+            if mine {
+                p.my_filters = after;
+            } else {
+                p.filters = after;
+            }
+        });
         self.persist_prefs();
     }
 
+    /// The shared (Catalog + Master grid) set — see `act_filters_in`.
+    pub fn act_filters(&self, label: &str, coalesce: bool, f: impl FnOnce(&mut Filters)) {
+        self.act_filters_in(false, label, coalesce, f);
+    }
+
+    /// The filter set the Catalog and the Master grid share.
     pub fn filters(&self) -> Filters {
         self.prefs.with(|p| p.filters.clone())
+    }
+
+    /// One of the two filter sets, picked the same way `act_filters_in`
+    /// picks the one it edits.
+    pub fn filters_in(&self, mine: bool) -> Filters {
+        self.prefs.with(|p| {
+            if mine {
+                p.my_filters.clone()
+            } else {
+                p.filters.clone()
+            }
+        })
     }
 
     /// False until the first gate-passed sync: the app ships no timetable

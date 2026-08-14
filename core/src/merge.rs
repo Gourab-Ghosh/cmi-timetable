@@ -6,12 +6,29 @@
 //! | no                   | no               | —              | nothing                    |
 //! | yes                  | no               | —              | apply CMI silently         |
 //! | no                   | yes              | —              | keep override              |
-//! | yes                  | yes              | yes            | drop override silently     |
+//! | yes                  | yes              | yes            | drop override (announced)  |
 //! | yes                  | yes              | no             | queue a conflict           |
 //!
 //! Because official meetings always come straight from the snapshot and
 //! overrides are layered on top, "apply CMI silently" needs no work here —
 //! it only has to show up in the "What changed" digest.
+//!
+//! Two rules deliberately do NOT need the old snapshot, because a share
+//! link can arrive in a browser that has never synced (`old` is an empty
+//! placeholder), and "we have no history" must never be read as "CMI
+//! changed something":
+//!
+//! - **Convergence.** An override whose destination is a meeting CMI now
+//!   runs officially (and whose base, if any, CMI no longer runs) says
+//!   nothing the timetable doesn't already say — worse, layering it on
+//!   would draw the same class twice. It is dropped and announced,
+//!   whether or not there is any history to compare against.
+//! - **"Newly scheduled" requires knowing the course was unscheduled.**
+//!   A user-created meeting raises a conflict only when the OLD snapshot
+//!   knew the course with no meetings and the new one gives it some. A
+//!   course the old snapshot never heard of proves nothing about what CMI
+//!   changed — treating "missing" as "was unscheduled" asked share-link
+//!   recipients to resolve a change that never happened.
 
 use crate::diff::{SnapshotDiff, diff_snapshots};
 use crate::model::{Meeting, MeetingOverride, OverridesStore, Snapshot};
@@ -50,6 +67,28 @@ pub struct MergeResult {
     pub removed_selected: Vec<String>,
     /// Full snapshot diff for the "What changed since last sync" panel.
     pub diff: SnapshotDiff,
+}
+
+/// Hall equality the way people write halls: trimmed and case-insensitive,
+/// with "no hall" only equal to "no hall". Used ONLY by the convergence
+/// check — a destination hall typed as "lecture hall 6" and CMI's
+/// "Lecture Hall 6" are the same room, and missing that match would leave
+/// the same class drawn twice forever. `same_place_time` itself stays
+/// byte-exact: everywhere else both sides come from CMI's own pages.
+fn same_hall_loose(a: Option<&str>, b: Option<&str>) -> bool {
+    match (a, b) {
+        (Some(a), Some(b)) => a.trim().eq_ignore_ascii_case(b.trim()),
+        (None, None) => true,
+        _ => false,
+    }
+}
+
+/// Does `official` realize the user's destination `to`? Day and times must
+/// match exactly; the hall matches the way users type halls.
+fn realizes(official: &Meeting, to: &Meeting) -> bool {
+    official.day == to.day
+        && official.slot == to.slot
+        && same_hall_loose(official.hall.as_deref(), to.hall.as_deref())
 }
 
 /// Find `base`'s counterpart among the new official meetings.
@@ -120,21 +159,48 @@ pub fn merge_overrides(
         let old_meetings = old.course(&ov.course).map(|c| c.meetings.as_slice());
         let new_meetings = new.course(&ov.course).map(|c| c.meetings.as_slice());
 
+        // Convergence, judged against the NEW snapshot alone (see module
+        // docs): the user's destination is now official, and the meeting it
+        // replaced (if any) is gone. The override has nothing left to say —
+        // and keeping it would render the same class twice, once from the
+        // snapshot and once from the override layer.
+        if let (Some(new_m), Some(to)) = (new_meetings, ov.to.as_ref()) {
+            let cmi_runs_mine = new_m.iter().any(|m| realizes(m, to));
+            let base_gone = ov
+                .base
+                .as_ref()
+                .is_none_or(|b| !new_m.iter().any(|m| m.same_place_time(b)));
+            if cmi_runs_mine && base_gone {
+                drop_ids.push(ov.id);
+                result.dropped_matching.push(ov.clone());
+                continue;
+            }
+        }
+
         match &ov.base {
             Some(base) => {
-                let (Some(old_m), Some(new_m)) = (old_meetings, new_meetings) else {
-                    // Course removed upstream (or absent from the old snapshot):
-                    // keep the override; the removed-course badge handles UX.
+                let Some(new_m) = new_meetings else {
+                    // Course removed upstream entirely: keep the override;
+                    // the removed-course badge handles UX.
                     continue;
                 };
+                // A course the OLD snapshot never heard of gets an empty
+                // history, not a free pass: if its base is still official,
+                // `counterpart` returns it unchanged and the override is
+                // kept (the share-link case); if the base is in neither
+                // snapshot, the change lapses NOW, out loud — instead of
+                // surviving one sync as a zombie and lapsing later with
+                // copy that blames a "recent" CMI edit.
+                let old_m = old_meetings.unwrap_or(&[]);
                 match counterpart(base, old_m, new_m) {
                     Ok(Some(cmi_new)) => {
                         if cmi_new.same_place_time(base) {
                             // CMI unchanged → keep override.
-                        } else if ov.to.as_ref().is_some_and(|to| cmi_new.same_place_time(to)) {
-                            // CMI now matches the user's change → drop silently.
-                            drop_ids.push(ov.id);
-                            result.dropped_matching.push(ov.clone());
+                            //
+                            // (The "CMI now matches the user's change" case
+                            // cannot reach this match: a counterpart equal to
+                            // `to` means `to` is official and `base` is not,
+                            // which is exactly the convergence check above.)
                         } else {
                             // CMI moved a meeting the user had moved — or one
                             // they had removed ("keep it removed?" is a real
@@ -191,26 +257,24 @@ pub fn merge_overrides(
                 }
             }
             None => {
-                // User-created meeting for an unscheduled course.
+                // User-created meeting for an unscheduled course. "Newly
+                // scheduled" needs the OLD snapshot to have KNOWN the course
+                // with no meetings — a course the old snapshot never heard
+                // of (an empty first-boot placeholder, a share link opened
+                // in a fresh browser) proves nothing about what CMI changed,
+                // and used to raise a bogus "CMI changed times you
+                // customised" conflict on the very first sync.
+                // (The matching case — CMI now runs the user's meeting — was
+                // handled by the convergence check above.)
                 let newly_scheduled = new_meetings.is_some_and(|m| !m.is_empty())
-                    && old_meetings.is_none_or(|m| m.is_empty());
+                    && old_meetings.is_some_and(|m| m.is_empty());
                 if newly_scheduled {
-                    let new_m = new_meetings.unwrap();
-                    let matches_mine = ov
-                        .to
-                        .as_ref()
-                        .is_some_and(|to| new_m.iter().any(|m| m.same_place_time(to)));
-                    if matches_mine {
-                        drop_ids.push(ov.id);
-                        result.dropped_matching.push(ov.clone());
-                    } else {
-                        result.conflicts.push(Conflict {
-                            override_id: ov.id,
-                            course: ov.course.clone(),
-                            mine: ov.to.clone(),
-                            theirs: new_m.to_vec(),
-                        });
-                    }
+                    result.conflicts.push(Conflict {
+                        override_id: ov.id,
+                        course: ov.course.clone(),
+                        mine: ov.to.clone(),
+                        theirs: new_meetings.unwrap().to_vec(),
+                    });
                 }
             }
         }

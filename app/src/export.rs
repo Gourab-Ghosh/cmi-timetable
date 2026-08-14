@@ -1,0 +1,284 @@
+//! The JSON exports and the snapshot import (formats: `core/src/export.rs`).
+//!
+//! The timetable export is built HERE because /app owns course resolution —
+//! the user's own courses win over CMI's, a selected course CMI dropped
+//! still exports as its stub, and every meeting is the EFFECTIVE one the
+//! student actually attends. Core supplies the envelope, the validation,
+//! the timestamps and the filenames, so the pieces with format contracts
+//! stay natively testable.
+
+use crate::state::App;
+use crate::{domx, fetch};
+use leptos::prelude::*;
+use serde_json::json;
+use ttcore::model::{CreditAssumption, Meeting, SourceTier};
+
+fn time_obj(minutes: u16, label: String) -> serde_json::Value {
+    json!({ "minutes": minutes, "hhmm": label })
+}
+
+fn meeting_common(m: &Meeting) -> Vec<(&'static str, serde_json::Value)> {
+    vec![
+        ("day", json!(m.day.short())),
+        ("iso_weekday", json!(m.day.index() + 1)),
+        ("start", time_obj(m.slot.start_min, m.slot.start_label())),
+        ("end", time_obj(m.slot.end_min, m.slot.end_label())),
+        ("hall", json!(m.hall)),
+    ]
+}
+
+fn meeting_json(m: &Meeting, origin: &str, cmi_original: Option<&Meeting>) -> serde_json::Value {
+    let mut obj = serde_json::Map::new();
+    for (k, v) in meeting_common(m) {
+        obj.insert(k.to_string(), v);
+    }
+    if m.temp_booking {
+        obj.insert("temporary_booking".to_string(), json!(true));
+    }
+    obj.insert("origin".to_string(), json!(origin));
+    if let Some(base) = cmi_original {
+        let mut b = serde_json::Map::new();
+        for (k, v) in meeting_common(base) {
+            b.insert(k.to_string(), v);
+        }
+        obj.insert("cmi_original".to_string(), serde_json::Value::Object(b));
+    }
+    serde_json::Value::Object(obj)
+}
+
+/// The student's week as `cmi-timetable-export` v1 — machine-first: stable
+/// keys, deterministic order, no prose.
+pub fn timetable_export_json(app: &App) -> String {
+    let snapshot = app.snapshot.get_untracked();
+    let mut codes = app.selection.get_untracked();
+    codes.sort_by(|a, b| {
+        a.to_ascii_lowercase()
+            .cmp(&b.to_ascii_lowercase())
+            .then_with(|| a.cmp(b))
+    });
+
+    let courses: Vec<serde_json::Value> = codes
+        .iter()
+        .map(|code| {
+            // Resolved exactly as the grids resolve it: the user's own
+            // course first, then CMI's, then a stub for one CMI dropped.
+            let course = app.selected_course(code);
+            let own = app.is_custom(code);
+            let removed = !own && app.is_removed_upstream(code);
+
+            let credits = {
+                let value = app.course_credits(&course);
+                if own {
+                    json!({ "value": value, "source": "user" })
+                } else if app.credits_custom(code).is_some() {
+                    json!({
+                        "value": value,
+                        "source": "user",
+                        "official_value": course.effective_credits(),
+                    })
+                } else if course.credits_assumed() {
+                    match course.credit_assumption() {
+                        CreditAssumption::Seminar => json!({
+                            "value": value, "source": "assumed", "reason": "seminar",
+                        }),
+                        CreditAssumption::Months(_) => json!({
+                            "value": value, "source": "assumed", "reason": "month-span",
+                            "months": course.duration_note(),
+                        }),
+                        CreditAssumption::Default => json!({
+                            "value": value, "source": "assumed", "reason": "campus-default",
+                        }),
+                    }
+                } else {
+                    json!({ "value": value, "source": "cmi" })
+                }
+            };
+
+            let mut meetings: Vec<(u8, u16, u16, Option<String>, serde_json::Value)> = app
+                .effective_meetings(&course)
+                .into_iter()
+                .map(|e| {
+                    let origin = if own || e.user_created {
+                        "user-added"
+                    } else if e.overridden {
+                        "moved"
+                    } else {
+                        "cmi"
+                    };
+                    let key = (
+                        e.meeting.day.index() as u8,
+                        e.meeting.slot.start_min,
+                        e.meeting.slot.end_min,
+                        e.meeting.hall.clone(),
+                    );
+                    let json = meeting_json(
+                        &e.meeting,
+                        origin,
+                        (origin == "moved").then_some(e.base.as_ref()).flatten(),
+                    );
+                    (key.0, key.1, key.2, key.3, json)
+                })
+                .collect();
+            meetings.sort_by(|a, b| (a.0, a.1, a.2, &a.3).cmp(&(b.0, b.1, b.2, &b.3)));
+
+            let mut obj = serde_json::Map::new();
+            obj.insert("code".to_string(), json!(course.code));
+            obj.insert("name".to_string(), json!(course.name));
+            obj.insert(
+                "origin".to_string(),
+                json!(if own { "user" } else { "cmi" }),
+            );
+            if removed {
+                obj.insert("no_longer_listed".to_string(), json!(true));
+            }
+            obj.insert("instructors".to_string(), json!(course.instructors));
+            obj.insert("branches".to_string(), json!(course.branches));
+            obj.insert("credits".to_string(), credits);
+            obj.insert(
+                "meetings".to_string(),
+                serde_json::Value::Array(meetings.into_iter().map(|m| m.4).collect()),
+            );
+            serde_json::Value::Object(obj)
+        })
+        .collect();
+
+    let source_kind = match &snapshot.source {
+        SourceTier::Direct => "direct",
+        SourceTier::Proxy(_) => "proxy",
+        SourceTier::Imported => "imported",
+        SourceTier::Mirror | SourceTier::Bundled => "legacy-copy",
+        SourceTier::None => "none",
+    };
+    let mut source = serde_json::Map::new();
+    source.insert("kind".to_string(), json!(source_kind));
+    if let SourceTier::Proxy(name) = &snapshot.source {
+        source.insert("proxy".to_string(), json!(name));
+    }
+    source.insert("label".to_string(), json!(snapshot.source.label()));
+    source.insert(
+        "fetched_at".to_string(),
+        json!(ttcore::export::iso_utc(snapshot.fetched_at)),
+    );
+
+    serde_json::to_string_pretty(&json!({
+        "format": "cmi-timetable-export",
+        "format_version": ttcore::export::FORMAT_VERSION,
+        "exported_at": ttcore::export::iso_utc(domx::now_ms()),
+        "app": {
+            "name": "cmi-timetable-planner",
+            "version": crate::state::APP_VERSION,
+            "git_commit": crate::state::GIT_COMMIT,
+        },
+        "semester": {
+            "label": snapshot.semester_label,
+            "display": snapshot.semester_label_display(),
+        },
+        "source": serde_json::Value::Object(source),
+        "courses": courses,
+    }))
+    .unwrap_or_default()
+}
+
+/// Download the timetable export. The filename carries the EXPORT date —
+/// it names the student's state on that day.
+pub fn download_timetable_export(app: &App) {
+    let label = app.snapshot.with_untracked(|s| s.semester_label.clone());
+    let name = ttcore::export::json_filename("timetable", &label, domx::today_local());
+    domx::download_text(&name, "application/json", &timetable_export_json(app));
+    app.toast("Timetable exported as JSON.");
+}
+
+/// Download the snapshot export. The filename carries the FETCH date — two
+/// exports of the same stored snapshot are the same data.
+pub fn download_snapshot_export(app: &App) {
+    let snapshot = app.snapshot.get_untracked();
+    let fetched = ttcore::date::CivilDate::from_days(
+        ((snapshot.fetched_at / 1000.0) as i64).div_euclid(86_400),
+    );
+    let name = ttcore::export::json_filename("snapshot", &snapshot.semester_label, fetched);
+    let json = ttcore::export::snapshot_export_json(
+        &snapshot,
+        crate::state::APP_VERSION,
+        crate::state::GIT_COMMIT,
+        domx::now_ms(),
+    );
+    domx::download_text(&name, "application/json", &json);
+    app.toast("Snapshot exported as JSON.");
+}
+
+/// Load a `cmi-snapshot` file: validate fail-closed, confirm when it would
+/// replace NEWER data with older, then adopt through the same three-way
+/// merge a real sync uses — so custom changes, conflicts and the
+/// What-changed digest all keep their meanings.
+pub fn import_snapshot_text(app: App, text: &str) {
+    let mut snapshot = match ttcore::export::parse_snapshot_export(text, domx::now_ms()) {
+        Ok(s) => s,
+        Err(e) => {
+            app.toast(e.message());
+            return;
+        }
+    };
+    let current_fetched = app.snapshot.with_untracked(|s| s.fetched_at);
+    if app.has_data() && snapshot.fetched_at < current_fetched {
+        let old_date = domx::fmt_local_date(snapshot.fetched_at);
+        let new_date = domx::fmt_local_date(current_fetched);
+        let ok = domx::window()
+            .confirm_with_message(&format!(
+                "This file was fetched on {old_date}; what you have now was fetched \
+                 on {new_date}. Replace your newer copy with the older one?"
+            ))
+            .unwrap_or(false);
+        if !ok {
+            return;
+        }
+    }
+    // The pill must say how THIS copy arrived, not how the exporter's did.
+    // `fetched_at` stays: importing a file does not make old data young.
+    snapshot.source = SourceTier::Imported;
+    fetch::adopt(&app, snapshot, true, fetch::Adoption::Fetched);
+}
+
+/// Open a file picker and run the import. One hidden input, attached to the
+/// document (a detached input can't receive a file — from the browser's
+/// file dialog or from an automated test), replaced on each use.
+pub fn pick_and_import_snapshot(app: App) {
+    use wasm_bindgen::JsCast;
+    use wasm_bindgen::closure::Closure;
+    let document = domx::document();
+    if let Some(stale) = document.get_element_by_id("cmitt-import-input") {
+        stale.remove();
+    }
+    let Ok(input) = document.create_element("input") else {
+        return;
+    };
+    let Ok(input) = input.dyn_into::<web_sys::HtmlInputElement>() else {
+        return;
+    };
+    input.set_id("cmitt-import-input");
+    input.set_type("file");
+    input.set_accept(".json,application/json");
+    let _ = input.set_attribute("style", "display:none");
+    if let Some(body) = document.body() {
+        let _ = body.append_child(&input);
+    }
+    let input_for_change = input.clone();
+    let onchange = Closure::<dyn FnMut()>::new(move || {
+        let Some(file) = input_for_change.files().and_then(|fs| fs.get(0)) else {
+            return;
+        };
+        input_for_change.remove();
+        let reader = web_sys::FileReader::new().unwrap();
+        let reader_for_load = reader.clone();
+        let onload = Closure::<dyn FnMut()>::new(move || {
+            if let Some(text) = reader_for_load.result().ok().and_then(|v| v.as_string()) {
+                import_snapshot_text(app, &text);
+            }
+        });
+        reader.set_onload(Some(onload.as_ref().unchecked_ref()));
+        onload.forget();
+        let _ = reader.read_as_text(&file);
+    });
+    input.set_onchange(Some(onchange.as_ref().unchecked_ref()));
+    onchange.forget();
+    input.click();
+}

@@ -200,7 +200,13 @@ fn removed_course_reported() {
     let selection = vec!["GONE".to_string()];
     let r = merge_overrides(&old, &new, &selection, &store);
     assert_eq!(r.removed_selected, vec!["GONE".to_string()]);
-    assert_eq!(r.diff.removed, vec!["GONE".to_string()]);
+    assert_eq!(r.diff.removed.len(), 1);
+    // The diff keeps what the dropped course WAS — the new snapshot no
+    // longer knows it, and the What-changed dialog has to say more than a
+    // bare code.
+    assert_eq!(r.diff.removed[0].code, "GONE");
+    assert_eq!(r.diff.removed[0].name, "GONE name");
+    assert!(!r.diff.removed[0].meetings.is_empty());
     assert_eq!(
         r.overrides.items.len(),
         1,
@@ -464,4 +470,258 @@ fn an_unanswered_removal_lapses_out_loud() {
     let third = merge_overrides(&after, &after, &selection, &second.overrides);
     assert!(third.lapsed.is_empty());
     assert!(third.conflicts.is_empty());
+}
+
+// ---------------------------------------------------------------------------
+// A fresh browser (empty old snapshot) — the share-link cases. "We have no
+// history" must never be read as "CMI changed something".
+// ---------------------------------------------------------------------------
+
+/// The reported bug (R43): a share link carrying a user-ADDED meeting
+/// (base = None), opened in a browser that has never synced. The old
+/// snapshot knows no courses at all — that proves nothing about what CMI
+/// changed, so the first sync must raise NO conflict and keep the meeting.
+#[test]
+fn fresh_boot_added_meeting_raises_no_conflict() {
+    let mine = mtg(Day::Mon, 710, 785, "NKN AV Hall");
+    let cmi = mtg(Day::Tue, 630, 705, "Lecture Hall 2");
+    let old = snap(vec![]); // never synced: placeholder with no courses
+    let new = snap(vec![course("RFLR", vec![cmi])]);
+    let store = store_with("RFLR", None, mine.clone());
+    let r = merge_overrides(&old, &new, &[], &store);
+    assert!(r.conflicts.is_empty(), "{:#?}", r.conflicts);
+    assert!(r.dropped_matching.is_empty());
+    assert_eq!(r.overrides.items.len(), 1, "the added meeting survives");
+
+    // The SECOND sync has real history (old == new): still no conflict —
+    // CMI changed nothing.
+    let r2 = merge_overrides(&new, &new, &[], &r.overrides);
+    assert!(r2.conflicts.is_empty(), "{:#?}", r2.conflicts);
+    assert_eq!(r2.overrides.items.len(), 1);
+}
+
+/// A moved meeting in the same fresh browser: kept, no conflict, and the
+/// destination still shows in the effective week.
+#[test]
+fn fresh_boot_moved_meeting_raises_no_conflict() {
+    let base = WED_OFFICIAL();
+    let mine = mtg(Day::Thu, 840, 915, "Lecture Hall 6");
+    let old = snap(vec![]);
+    let new = snap(vec![course("MFD", vec![base.clone()])]);
+    let store = store_with("MFD", Some(base.clone()), mine.clone());
+    let r = merge_overrides(&old, &new, &[], &store);
+    assert!(r.conflicts.is_empty(), "{:#?}", r.conflicts);
+    assert_eq!(r.overrides.items.len(), 1);
+    assert_eq!(effective(&r.overrides, "MFD", &[base]), vec![mine]);
+}
+
+// ---------------------------------------------------------------------------
+// Convergence: the user's change and CMI's timetable now say the same thing,
+// so the change is dropped (and announced) — with or without history.
+// Keeping it would draw the same class twice: the official meeting from the
+// snapshot, plus the override's copy layered on top.
+// ---------------------------------------------------------------------------
+
+/// User moved a class; CMI later moved it to exactly the same place. With
+/// history this was already dropped; it must ALSO drop on a fresh browser,
+/// where the override would otherwise duplicate the official meeting.
+#[test]
+fn fresh_boot_converged_move_is_dropped_and_announced() {
+    let base = WED_OFFICIAL();
+    let mine = mtg(Day::Thu, 840, 915, "Lecture Hall 6");
+    let old = snap(vec![]);
+    let new = snap(vec![course("MFD", vec![mine.clone()])]); // CMI agrees now
+    let store = store_with("MFD", Some(base), mine);
+    let r = merge_overrides(&old, &new, &[], &store);
+    assert!(r.conflicts.is_empty());
+    assert_eq!(r.dropped_matching.len(), 1, "announced, not silent");
+    assert!(r.overrides.items.is_empty(), "nothing left to layer on");
+}
+
+/// User added a meeting; CMI now runs that exact meeting officially. The
+/// addition says nothing the timetable doesn't; drop it, announce it.
+#[test]
+fn added_meeting_cmi_now_runs_is_dropped() {
+    let mine = mtg(Day::Mon, 710, 785, "NKN AV Hall");
+    let other = mtg(Day::Tue, 630, 705, "Lecture Hall 2");
+    // With history…
+    let old = snap(vec![course("RFLR", vec![other.clone()])]);
+    let new = snap(vec![course("RFLR", vec![other.clone(), mine.clone()])]);
+    let store = store_with("RFLR", None, mine.clone());
+    let r = merge_overrides(&old, &new, &[], &store);
+    assert!(r.conflicts.is_empty());
+    assert_eq!(r.dropped_matching.len(), 1);
+    assert!(r.overrides.items.is_empty());
+    // …and without.
+    let r2 = merge_overrides(&snap(vec![]), &new, &[], &store_with("RFLR", None, mine));
+    assert!(r2.conflicts.is_empty());
+    assert_eq!(r2.dropped_matching.len(), 1);
+    assert!(r2.overrides.items.is_empty());
+}
+
+/// A move whose base CMI STILL runs does not converge: the override
+/// meaningfully suppresses that meeting. (Both times exist officially; the
+/// user's change picks one of them off the grid.)
+#[test]
+fn move_does_not_converge_while_its_base_still_runs() {
+    let base = WED_OFFICIAL();
+    let mine = mtg(Day::Thu, 840, 915, "Lecture Hall 6");
+    let new = snap(vec![course("MFD", vec![base.clone(), mine.clone()])]);
+    let store = store_with("MFD", Some(base.clone()), mine.clone());
+    let r = merge_overrides(&new, &new, &[], &store);
+    assert!(r.conflicts.is_empty());
+    assert!(r.dropped_matching.is_empty());
+    assert_eq!(r.overrides.items.len(), 1, "still suppressing its base");
+    // The user stacked one class-hour on top of the other on purpose: the
+    // course still meets twice a week, so the week honestly shows two
+    // meetings at that slot — one official, one the user's move.
+    assert_eq!(
+        effective(&r.overrides, "MFD", &[base, mine.clone()]),
+        vec![mine.clone(), mine]
+    );
+}
+
+/// "Unscheduled course got a timetable" still conflicts — but only when the
+/// old snapshot actually KNEW the course as unscheduled.
+#[test]
+fn newly_scheduled_still_conflicts_with_real_history() {
+    let mine = mtg(Day::Mon, 550, 625, "Seminar Hall");
+    let cmi = mtg(Day::Tue, 630, 705, "Lecture Hall 2");
+    let old = snap(vec![course("SVA", vec![])]); // known, unscheduled
+    let new = snap(vec![course("SVA", vec![cmi.clone()])]);
+    let store = store_with("SVA", None, mine.clone());
+    let r = merge_overrides(&old, &new, &[], &store);
+    assert_eq!(r.conflicts.len(), 1);
+    assert_eq!(r.conflicts[0].mine, Some(mine));
+    assert_eq!(r.conflicts[0].theirs, vec![cmi]);
+}
+
+/// Rows 10–19 of the R43 adversarial test matrix — the boundaries around
+/// convergence and the fresh-boot rules that the cases above don't pin.
+#[test]
+fn convergence_boundaries() {
+    let x = WED_OFFICIAL();
+    let y = mtg(Day::Thu, 840, 915, "Lecture Hall 6");
+    let w = mtg(Day::Fri, 550, 625, "Lecture Hall 1");
+    let w2 = mtg(Day::Mon, 630, 705, "Lecture Hall 2");
+
+    // Row 10 — CMI deleted X and added W2 alongside the user's destination
+    // Y: convergence beats positional pairing (which could pair X→W2 and
+    // ask a question with a wrong candidate). Dropped, no conflict.
+    let old = snap(vec![course("MFD", vec![x.clone(), w.clone()])]);
+    let new = snap(vec![course("MFD", vec![w2.clone(), y.clone()])]);
+    let r = merge_overrides(
+        &old,
+        &new,
+        &[],
+        &store_with("MFD", Some(x.clone()), y.clone()),
+    );
+    assert!(r.conflicts.is_empty(), "{:#?}", r.conflicts);
+    assert_eq!(r.dropped_matching.len(), 1);
+
+    // Row 12/14 — fresh boot, base in NEITHER snapshot: the change lapses on
+    // the FIRST sync (announced), instead of surviving one sync as a zombie.
+    let old = snap(vec![]);
+    let new = snap(vec![course("MFD", vec![w.clone()])]);
+    let r = merge_overrides(
+        &old,
+        &new,
+        &[],
+        &store_with("MFD", Some(x.clone()), y.clone()),
+    );
+    assert!(r.conflicts.is_empty());
+    assert_eq!(r.lapsed.len(), 1, "said out loud, first sync");
+    // The move keeps its destination as the user's own time…
+    assert_eq!(r.overrides.items.len(), 1);
+    assert_eq!(r.overrides.items[0].base, None);
+    // …while a removal of that vanished class has nothing left to do.
+    let mut removal = OverridesStore::default();
+    removal.add("MFD", Some(x.clone()), None, 0.0);
+    let r = merge_overrides(&old, &new, &[], &removal);
+    assert_eq!(r.lapsed.len(), 1);
+    assert!(r.overrides.items.is_empty());
+
+    // Row 13 — fresh boot, removal of a class CMI still runs: kept, silent,
+    // still a removal. (A share-link "I removed this lecture" works.)
+    let new = snap(vec![course("MFD", vec![x.clone()])]);
+    let mut removal = OverridesStore::default();
+    removal.add("MFD", Some(x.clone()), None, 0.0);
+    let r = merge_overrides(&old, &new, &[], &removal);
+    assert!(r.conflicts.is_empty() && r.lapsed.is_empty() && r.dropped_matching.is_empty());
+    assert_eq!(r.overrides.items.len(), 1);
+    assert!(r.overrides.items[0].is_removal());
+
+    // Convergence matches halls the way people type them — trimmed, any
+    // case. The same room in different spelling must not leave the class
+    // drawn twice forever.
+    let typed = Meeting {
+        hall: Some("  lecture hall 6 ".to_string()),
+        ..y.clone()
+    };
+    let new = snap(vec![course("MFD", vec![y.clone()])]);
+    let r = merge_overrides(&old, &new, &[], &store_with("MFD", Some(x.clone()), typed));
+    assert_eq!(
+        r.dropped_matching.len(),
+        1,
+        "loose hall match must converge"
+    );
+
+    // Rows 18–19 — keep-mine on a MULTI-candidate conflict leaves
+    // base=None (there is no single meeting to re-base onto). That resolved
+    // shape must not misfire convergence while CMI lacks M — and must
+    // converge, dropping the override, once CMI adopts M.
+    let m = mtg(Day::Tue, 550, 625, "Seminar Hall");
+    let a = mtg(Day::Mon, 550, 625, "Lecture Hall 3");
+    let b = mtg(Day::Wed, 630, 705, "Lecture Hall 4");
+    let unscheduled_then = snap(vec![course("SVA", vec![])]);
+    let scheduled_now = snap(vec![course("SVA", vec![a.clone(), b.clone()])]);
+    let store = store_with("SVA", None, m.clone());
+    let r = merge_overrides(&unscheduled_then, &scheduled_now, &[], &store);
+    assert_eq!(r.conflicts.len(), 1);
+    assert_eq!(r.conflicts[0].theirs.len(), 2);
+    let mut kept = r.overrides.clone();
+    resolve_conflict(&mut kept, &r.conflicts[0], true);
+    assert_eq!(
+        kept.items[0].base, None,
+        "no single candidate to re-base on"
+    );
+    let r2 = merge_overrides(&scheduled_now, &scheduled_now, &[], &kept);
+    assert!(r2.conflicts.is_empty() && r2.dropped_matching.is_empty());
+    let cmi_adopts_m = snap(vec![course("SVA", vec![a, b, m])]);
+    let r3 = merge_overrides(&scheduled_now, &cmi_adopts_m, &[], &r2.overrides);
+    assert_eq!(r3.dropped_matching.len(), 1);
+    assert!(r3.overrides.items.is_empty());
+}
+
+/// The user's exact R43 repro: a share link with BOTH a moved and an added
+/// meeting, opened in a browser that has never synced. The first sync must
+/// ask nothing at all.
+#[test]
+fn fresh_boot_share_link_full_repro() {
+    let rflr_official = mtg(Day::Tue, 550, 625, "Lecture Hall 803");
+    let moved_to = mtg(Day::Wed, 1020, 1095, "Lecture Hall 803");
+    let added = mtg(Day::Mon, 710, 785, "NKN AV Hall");
+
+    let mut store = OverridesStore::default();
+    store.add(
+        "RFLR",
+        Some(rflr_official.clone()),
+        Some(moved_to.clone()),
+        0.0,
+    );
+    store.add("RFLR", None, Some(added.clone()), 0.0);
+
+    let old = snap(vec![]); // incognito: nothing ever synced
+    let new = snap(vec![course("RFLR", vec![rflr_official.clone()])]);
+    let r = merge_overrides(&old, &new, &["RFLR".to_string()], &store);
+
+    assert!(
+        r.conflicts.is_empty(),
+        "first sync must ask nothing: {:#?}",
+        r.conflicts
+    );
+    assert!(r.lapsed.is_empty());
+    assert_eq!(r.overrides.items.len(), 2, "both changes survive");
+    let week = effective(&r.overrides, "RFLR", &[rflr_official]);
+    assert!(week.contains(&moved_to) && week.contains(&added));
 }

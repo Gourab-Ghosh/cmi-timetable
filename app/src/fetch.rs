@@ -282,6 +282,23 @@ pub fn adopt(app: &App, new_snapshot: Snapshot, announce: bool, from: Adoption) 
         app.selection.set(selection.clone());
         app.persist_selection();
     }
+    // Override course codes arrived the same verbatim way. `Snapshot::course`
+    // is case-sensitive while the override store matches case-insensitively,
+    // so a code cased differently from the catalog would sail past the merge
+    // (no old, no new course found) and never converge, lapse or conflict.
+    let mut overrides = overrides;
+    if first_data {
+        for ov in &mut overrides.items {
+            if let Some(course) = new_snapshot.course_ci(&ov.course) {
+                ov.course = course.code.clone();
+            }
+        }
+        for cr in &mut overrides.credits {
+            if let Some(course) = new_snapshot.course_ci(&cr.course) {
+                cr.course = course.code.clone();
+            }
+        }
+    }
 
     let merge = ttcore::merge::merge_overrides(&old, &new_snapshot, &selection, &overrides);
 
@@ -295,9 +312,11 @@ pub fn adopt(app: &App, new_snapshot: Snapshot, announce: bool, from: Adoption) 
         storage::SnapshotSave::DroppedRaw => {
             app.set_banner(
                 BannerKind::Warn,
-                "Your browser is short on space, so the app saved less than usual — \
-                 your courses and changes are safe, and the next sync will fill the \
-                 gap.",
+                "Your browser is short on space, so the app saved your timetable \
+                 but not the spare copy of CMI's pages it keeps alongside it. \
+                 Nothing on screen is missing, and your courses and changes are \
+                 safe. Each sync tries to save that copy again; freeing some \
+                 browser space makes room for it.",
             );
         }
         storage::SnapshotSave::Failed => {
@@ -325,17 +344,20 @@ pub fn adopt(app: &App, new_snapshot: Snapshot, announce: bool, from: Adoption) 
         // pointing at nothing and it can't be re-aimed at a class the user
         // never touched, so it lapses — and they hear about it, because the
         // alternative is their week quietly changing under them.
+        // Recency-neutral on purpose: a lapse can surface on the FIRST sync
+        // of a share link, where "CMI dropped…" would claim an edit this
+        // browser never witnessed and that may be a term old.
         for lapsed in &merge.lapsed {
             app.toast(if lapsed.is_removal() {
                 format!(
-                    "CMI dropped the {} class you had removed, so there's nothing \
-                     left to remove.",
+                    "CMI no longer runs the {} class you had removed, so there's \
+                     nothing left to remove.",
                     lapsed.course
                 )
             } else {
                 format!(
-                    "CMI dropped the {} class you had moved. The time you picked is \
-                     still on your timetable — it's just yours now, not theirs.",
+                    "CMI no longer runs the {} class you had moved. The time you \
+                     picked stays on your timetable — as your own time now.",
                     lapsed.course
                 )
             });
@@ -351,7 +373,11 @@ pub fn adopt(app: &App, new_snapshot: Snapshot, announce: bool, from: Adoption) 
         .collect();
     if !quiet {
         for code in &removed_selected {
-            app.toast(format!("{code} is no longer on CMI's timetable."));
+            app.toast(format!(
+                "CMI dropped {code} from its timetable. It's still in My courses, \
+                 marked \"No longer on CMI's timetable\" — remove it there when \
+                 you're sure."
+            ));
         }
     }
     // Non-empty only, and the banner is the only way into the "what changed"
@@ -365,8 +391,14 @@ pub fn adopt(app: &App, new_snapshot: Snapshot, announce: bool, from: Adoption) 
     // arbitrate, and asking them to choose would be asking about our own
     // parser under CMI's name.
     let has_conflicts = !merge.conflicts.is_empty() && !quiet;
-    app.conflicts
-        .set(if quiet { Vec::new() } else { merge.conflicts });
+    // A quiet adoption (re-parse of the SAME cached pages by a newer parser)
+    // must leave the conflict queue alone entirely: it can't raise real
+    // conflicts (no CMI edit happened), and clearing would silently discard
+    // questions the user deferred with "Decide later" — the startup re-parse
+    // would wipe them moments after boot restored them.
+    if !quiet {
+        app.set_conflicts(merge.conflicts);
+    }
     // Only when nothing else is open. A sync can land while the user is
     // halfway through the course editor, and there is ONE dialog slot — so
     // taking it would throw away the name they were typing, the meeting rows
@@ -479,10 +511,7 @@ pub async fn run_update(app: App, manual: bool) {
     // raise the browser's local-network prompt no matter whose network the
     // student is on. See the module docs.
     if force.is_none() || force.as_deref() == Some("proxy") {
-        progress(
-            &app,
-            &format!("Fetching CMI's pages through {} relays…", PROXIES.len()),
-        );
+        progress(&app, "Fetching CMI's timetable…");
         routes_tried += PROXIES.len();
         let mut pending: Vec<futures::future::LocalBoxFuture<'static, TierResult>> = PROXIES
             .iter()
@@ -521,11 +550,13 @@ pub async fn run_update(app: App, manual: bool) {
     // afterwards by a worried student.
     if !adopted && (force.is_none() || force.as_deref() == Some("direct")) {
         direct_tried = true;
-        progress(&app, "No relay answered — asking cmi.ac.in directly…");
+        progress(&app, "That didn't work — asking cmi.ac.in directly…");
         app.toast(
-            "The relays didn't answer, so the app is asking cmi.ac.in itself. On CMI's \
-             own network your browser may ask whether this page may reach it — that \
-             prompt is this fetch, and it is safe to allow.",
+            "The app couldn't fetch the timetable the usual way, so it's asking CMI's \
+             own website directly. Your browser may now ask whether this page can \
+             reach devices on your local network — that question is about this fetch, \
+             and it's safe to allow. If you say no, only this one route won't work; \
+             nothing else changes.",
         );
         routes_tried += 1;
         match fetch_pages_tier(
@@ -565,19 +596,20 @@ pub async fn run_update(app: App, manual: bool) {
     // said no to a prompt they didn't understand should not be left guessing
     // at which of the two events caused the other.
     let lan_note = if direct_tried && online {
-        " One more thing worth knowing: if your browser asked whether this page may \
-         reach devices on your local network, that was this app asking cmi.ac.in for \
-         the timetable — on CMI's own network, cmi.ac.in is a local address. Saying yes \
-         lets that last route work. Saying no changes nothing else, and the app will \
-         keep reaching CMI the public way."
+        " If your browser asked whether this page may reach devices on your local \
+         network, that was this app fetching the timetable from cmi.ac.in — on CMI's \
+         own network, cmi.ac.in counts as a local address. Allowing it lets the app \
+         fetch straight from CMI when nothing else works. Blocking it only means that \
+         one route won't work; the app still tries its usual routes first."
     } else {
         ""
     };
 
     let text = if gate_failed_any && no_data {
-        "CMI's website answered, but its pages aren't in the shape this app reads, so \
-         nothing could be loaded. Try again in a while — if it keeps happening, the app \
-         needs updating, and CMI's timetable page still works in a browser."
+        "CMI's website answered, but its pages don't look the way this app \
+         expects, so nothing could be loaded. Try again in a while. If it keeps \
+         happening, the app needs a fix from whoever maintains it — CMI's own \
+         timetable page still works in a browser: www.cmi.ac.in/practical/timetable.php"
             .to_string()
     } else if gate_failed_any {
         format!(
@@ -586,8 +618,10 @@ pub async fn run_update(app: App, manual: bool) {
              app needs an update."
         )
     } else if no_data && !online {
-        "You appear to be offline. The timetable only needs to be fetched once — \
-         connect to the internet and try again."
+        "Your browser says you're offline, so nothing was fetched and the planner \
+         is still empty. Connect to the internet and press ⟳ Fetch the \
+         timetable. After that the app keeps everything in this browser, so \
+         you'll only need the internet to sync."
             .to_string()
     } else if no_data {
         format!(

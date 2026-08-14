@@ -23,7 +23,7 @@ Environment knobs: `CHROME_BIN` (default `/usr/bin/chromium`), `DIST_DIR`,
 `PORT`, `CARGO_TARGET_DIR` (for the seed generator; defaults to
 `~/.rust-target-e2e`).
 
-Covered flows (73 tests): Sync-now header + hidden developer mode (URL
+Covered flows (80 tests): Sync-now header + hidden developer mode (URL
 endpoint only), `?c=` selection + clash badges/panel (any casing), unknown-
 code warning, credits defaulting to 4 and per-course credit overwrites,
 master-grid ⚠ would-clash markers and clash toast on add, the ⓘ details
@@ -32,9 +32,9 @@ deselection and reloads, the unified overwrites list (Your changes panel +
 My data) with per-item and remove-all restore, filter dropdowns closing
 each other / on outside click / on Esc, adding extra weekly meetings to any
 course, undo/redo, an unscheduled course opening the same editor as any
-other (and its credits saving without it gaining a time), the shared filter
-bar on My courses (whose menus offer only what your own courses have, and
-which does not carry the "Fits my schedule" box it could not act on), the
+other (and its credits saving without it gaining a time), the filter
+bar on My courses (its own state since R43; menus offer only what your own
+courses have, and no "Fits my schedule" box it could not act on), the
 wheel stepping every box and dropdown that has a step, the course editor asking before a stray Escape throws a half-written
 form away, the free-hall finder requiring an explicit day + slot, hall-and-slot drag & drop in the Halls
 view (including the chip relocating in the halls grid itself, surviving
@@ -96,7 +96,19 @@ cursor, and the day strip following it across days), the ✓ Halls promises
 appearing on a booking with no meeting behind it, and the export dialog
 asking which courses to put in the file when only one course is on the
 timetable — plus the invariant that keeps the "what changed" dialog from
-ever opening with nothing to say; and the order of the source chain, which
+ever opening with nothing to say; the R43 round — the app booting entirely
+from its service worker's cache with the server dead (offline note included,
+on its own port so its worker can't leak into the suite), My courses' filter
+state being separate from the Catalog+Master grid's shared state (neither
+leaks into the other; undo restores the right set), a share link opened in a
+never-synced browser raising ZERO conflicts on its first sync while a real
+conflict deferred with "Decide later" survives a reload, the What-changed
+digest carrying what a dropped course WAS (and that course haunting nothing
+else), seventy active-filter chips collapsing behind "+N more" with every
+chip still removable when expanded, the two JSON exports parsing and the
+snapshot file round-tripping through a wiped browser (pill says "imported"),
+and a creditless seminar counting 0 with the note saying why; and the order
+of the source chain, which
 exists for a reason a browser enforces: on CMI's own network cmi.ac.in is a
 LOCAL address, so a direct fetch makes the browser ask whether the page may
 reach devices on the local network. The relays are public hosts, go first,

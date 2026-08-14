@@ -5,6 +5,7 @@
 
 pub mod date;
 pub mod diff;
+pub mod export;
 #[cfg(feature = "html")]
 pub mod extract;
 pub mod ics;

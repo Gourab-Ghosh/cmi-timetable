@@ -77,7 +77,8 @@ fn welcome(app: App) -> impl IntoView {
                                 s.progress
                             }
                         } else {
-                            "Takes a few seconds — after that everything works offline."
+                            "This takes a few seconds. After that the app keeps everything in this \
+                                 browser, so it works offline — you only need the internet to sync."
                                 .to_string()
                         }
                     }}
@@ -88,6 +89,17 @@ fn welcome(app: App) -> impl IntoView {
                      through the semester, so sync every few days to stay up to date — \
                      the app re-checks on its own too, at most twice a day, and always \
                      tells you what changed."
+                </p>
+                <p class="welcome-note muted small">
+                    "Got a snapshot file from another student? "
+                    <button
+                        class="linklike"
+                        on:click=move |_| crate::export::pick_and_import_snapshot(app)
+                    >
+                        "Import it"
+                    </button>
+                    " — it loads the timetable exactly as CMI published it when the \
+                     file was made, and needs no connection at all."
                 </p>
             </div>
         </section>
@@ -862,11 +874,24 @@ fn my_courses(app: App) -> impl IntoView {
             .iter()
             .filter(|c| app.credits_custom(&c.code).is_some())
             .count();
-        let assumed_vals: Vec<u8> = courses
+        // The courses whose credit value is the APP's guess, grouped by the
+        // rule that guessed it — the note below explains each rule that
+        // actually fired, in its own sentence.
+        use ttcore::model::CreditAssumption;
+        let mut n_seminar = 0usize;
+        let mut n_months = 0usize;
+        let mut n_default = 0usize;
+        for c in courses
             .iter()
             .filter(|c| c.credits_assumed() && app.credits_custom(&c.code).is_none())
-            .map(|c| c.assumed_credits())
-            .collect();
+        {
+            match c.credit_assumption() {
+                CreditAssumption::Seminar => n_seminar += 1,
+                CreditAssumption::Months(_) => n_months += 1,
+                CreditAssumption::Default => n_default += 1,
+            }
+        }
+        let guessed = n_seminar + n_months + n_default;
 
         let pills = by_credit
             .iter()
@@ -883,27 +908,88 @@ fn my_courses(app: App) -> impl IntoView {
             })
             .collect_view();
 
+        // One plain sentence per thing worth knowing, each on its own line —
+        // a wall of joined clauses is exactly the "hard to understand" note
+        // this replaced (R43). Every guessing note says all three things the
+        // old one didn't: part of the total is a guess, the APP guessed, and
+        // the student can put the real number in.
         let mut notes: Vec<String> = Vec::new();
-        match assumed_vals.as_slice() {
-            [] => {}
-            [only] if assumed_vals.len() == 1 => notes.push(format!(
-                "CMI doesn't list credits for 1 course — counted as {only} here."
-            )),
-            [first, rest @ ..] if rest.iter().all(|v| v == first) => notes.push(format!(
-                "CMI doesn't list credits for {} courses — counted as {first} each here.",
-                assumed_vals.len(),
-            )),
-            _ => notes.push(format!(
-                "CMI doesn't list credits for {} courses — each is counted from \
-                 its duration, or the usual 4.",
-                assumed_vals.len(),
-            )),
+        let reasons =
+            usize::from(n_seminar > 0) + usize::from(n_months > 0) + usize::from(n_default > 0);
+        if reasons == 1 {
+            if n_default > 0 {
+                notes.push(if n_default == 1 {
+                    "CMI doesn't list credits for one of your courses, so the app \
+                     counts it as 4, the usual figure — that part of the total \
+                     above is a guess."
+                        .to_string()
+                } else {
+                    format!(
+                        "CMI doesn't list credits for {n_default} of your courses, \
+                         so the app counts each as 4, the usual figure — that part \
+                         of the total above is a guess."
+                    )
+                });
+            } else if n_months > 0 {
+                notes.push(if n_months == 1 {
+                    "CMI doesn't list credits for one of your courses. It runs \
+                     only part of the semester, so the app counts one credit per \
+                     month — that part of the total above is a guess."
+                        .to_string()
+                } else {
+                    format!(
+                        "CMI doesn't list credits for {n_months} of your courses. \
+                         They run only part of the semester, so the app counts one \
+                         credit per month — that part of the total above is a guess."
+                    )
+                });
+            } else {
+                notes.push(if n_seminar == 1 {
+                    "CMI doesn't list credits for your seminar, so the app counts \
+                     it as 0 — seminars don't usually carry credit."
+                        .to_string()
+                } else {
+                    format!(
+                        "CMI doesn't list credits for your {n_seminar} seminars, \
+                         so the app counts them as 0 — seminars don't usually \
+                         carry credit."
+                    )
+                });
+            }
+        } else if reasons > 1 {
+            notes.push(format!(
+                "CMI doesn't list credits for {guessed} of your courses, so the \
+                 app filled the numbers in — that part of the total above is a \
+                 guess."
+            ));
+            if n_seminar > 0 {
+                notes.push("Seminars count as 0 — they don't usually carry credit.".to_string());
+            }
+            if n_months > 0 {
+                notes.push(
+                    "A course that runs only part of the semester counts one \
+                     credit per month."
+                        .to_string(),
+                );
+            }
+            if n_default > 0 {
+                notes.push("Anything else counts as 4, the usual figure.".to_string());
+            }
+        }
+        if guessed > 0 {
+            notes.push("If you know the real number, set it with Edit this course.".to_string());
         }
         if custom > 0 {
-            notes.push(format!(
-                "{custom} credit value{} set by you.",
-                if custom == 1 { "" } else { "s" },
-            ));
+            notes.push(if custom == 1 {
+                "You set the credits on one course yourself. The total above uses \
+                 your number, not CMI's."
+                    .to_string()
+            } else {
+                format!(
+                    "You set the credits on {custom} courses yourself. The total \
+                     above uses your numbers, not CMI's."
+                )
+            });
         }
 
         Some(view! {
@@ -916,19 +1002,29 @@ fn my_courses(app: App) -> impl IntoView {
                 </div>
                 <div class="cs-pills">{pills}</div>
                 {(!notes.is_empty())
-                    .then(|| view! { <p class="cs-note">{notes.join(" ")}</p> })}
+                    .then(|| {
+                        view! {
+                            <ul class="cs-note">
+                                {notes
+                                    .into_iter()
+                                    .map(|n| view! { <li>{n}</li> })
+                                    .collect_view()}
+                            </ul>
+                        }
+                    })}
             </div>
         })
     };
 
-    // The same filters the catalog and the master grid use, over the courses
-    // you have actually picked — so "which of mine meet on Thursday" or
-    // "which of mine are in Seminar Hall" is one click here rather than a
-    // read of every card. They are the SAME filters (one set, in Prefs), so
-    // a filter set here is still set when you switch to the catalog: one
-    // control, one state, everywhere it appears.
+    // The same filter BAR the catalog and the master grid use, over the
+    // courses you have actually picked — so "which of mine meet on Thursday"
+    // or "which of mine are in Seminar Hall" is one click here rather than a
+    // read of every card. Its STATE is this page's own (Prefs.my_filters,
+    // R43): narrowing your own five courses must not quietly empty the
+    // catalog you look at next, and a catalog filter must not hide your own
+    // courses here.
     let filtered = Memo::new(move |_| {
-        let f = app.filters();
+        let f = app.filters_in(true);
         app.selected_courses()
             .into_iter()
             .filter(|c| crate::state::course_matches(&app, c, &f))
@@ -1019,9 +1115,14 @@ fn my_courses(app: App) -> impl IntoView {
                                 <button
                                     class="btn primary"
                                     on:click=move |_| {
-                                        app.act_filters("clear all filters", false, |f| {
-                                            *f = crate::state::Filters::default();
-                                        });
+                                        // This page's own set — clearing here
+                                        // must not touch the catalog's filters.
+                                        app.act_filters_in(
+                                            true,
+                                            "clear all filters on My courses",
+                                            false,
+                                            |f| *f = crate::state::Filters::default(),
+                                        );
                                     }
                                 >
                                     "Clear the filters"
@@ -1147,6 +1248,8 @@ fn course_card(app: App, course: Course) -> impl IntoView {
     let cr_code_title = code.clone();
     let cr_official = course.effective_credits();
     let cr_assumed = course.credits_assumed();
+    let cr_seminar =
+        cr_assumed && course.credit_assumption() == ttcore::model::CreditAssumption::Seminar;
     let cr_duration = course.duration_note().map(str::to_string);
     let notes = {
         let mut notes: Vec<String> = Vec::new();
@@ -1185,20 +1288,50 @@ fn course_card(app: App, course: Course) -> impl IntoView {
                     class:accent=move || app.credits_custom(&cr_code).is_some()
                     title=move || {
                         if app.credits_custom(&cr_code_title).is_some() {
-                            format!(
-                                "set by you — CMI: {cr_official}{}",
-                                if cr_assumed { " (assumed)" } else { "" },
-                            )
+                            if cr_assumed {
+                                format!(
+                                    "You set this course's credits yourself. CMI doesn't \
+                                     list credits for it — without your number the app \
+                                     would count {cr_official}."
+                                )
+                            } else {
+                                format!(
+                                    "You set this course's credits yourself. CMI lists \
+                                     {cr_official}."
+                                )
+                            }
                         } else if let Some(span) = &cr_duration {
-                            format!("assumed from its {span} duration — CMI doesn't state credits")
+                            format!(
+                                "CMI doesn't list credits for this course. It runs \
+                                 {span}, so the app counts one credit per month. Set \
+                                 your own number with Edit this course."
+                            )
+                        } else if cr_seminar {
+                            "CMI doesn't list credits for this seminar, so the app \
+                             counts 0. Set your own number with Edit this course."
+                                .to_string()
                         } else if cr_assumed {
-                            "assumed — CMI doesn't state it".to_string()
+                            "CMI doesn't list credits for this course, so the app \
+                             counts the usual 4. Set your own number with Edit this \
+                             course."
+                                .to_string()
                         } else {
                             String::new()
                         }
                     }
                 >
-                    {move || format!("{} cr", app.course_credits(&cr_course))}
+                    // The same marks the printed sheet uses and explains:
+                    // * = the app's guess, ✎ = the student's own number.
+                    {move || {
+                        let n = app.course_credits(&cr_course);
+                        if app.credits_custom(&cr_course.code).is_some() {
+                            format!("{n} cr ✎")
+                        } else if cr_assumed {
+                            format!("{n} cr*")
+                        } else {
+                            format!("{n} cr")
+                        }
+                    }}
                 </span>
             </div>
             <div class="row" style="margin-top:0.3rem">
@@ -1399,14 +1532,25 @@ fn master_grid(app: App) -> impl IntoView {
                     }}
                 </button>
             </div>
-            <p class="muted small" style="margin:0 0 0.6rem">
-                // "rearrange" read as reordering what you already have, so
-                // nobody discovered that dragging a course you have NOT
-                // picked adds it and places it in the one gesture.
-                "Click a course to add or remove it · ✓ in your timetable · ⓘ details \
-                 (or press I) · ⚠ clashes with your timetable · add and place in one \
-                 drag with ✎ Edit layout"
-            </p>
+            // A legend, not a sentence strung on middots: one symbol, one
+            // plain line. ("Rearrange" read as reordering what you already
+            // have, so nobody discovered that dragging a course you have NOT
+            // picked adds it and places it in the one gesture — that line is
+            // last but whole.)
+            <ul class="grid-legend muted small">
+                <li>"Click a course to add it to your timetable; click it again to remove it."</li>
+                <li><span class="legend-mark">"✓"</span>" already on your timetable"</li>
+                <li><span class="legend-mark">"⚠"</span>" clashes with something you have"</li>
+                <li>
+                    <span class="legend-mark">"ⓘ"</span>
+                    " full details (or press I on a focused course)"
+                </li>
+                <li>
+                    <span class="legend-mark">"✎"</span>
+                    " Edit layout lets you drag a course straight into the slot you \
+                     want — that adds it too"
+                </li>
+            </ul>
             {filter_bar(app, FilterScope::OnTheGrid, count)}
             {move || {
                 let n = unplaced.get();

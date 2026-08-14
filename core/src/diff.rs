@@ -63,10 +63,25 @@ pub struct CourseChange {
     pub summary: Vec<ChangeLine>,
 }
 
+/// What a course that left CMI's pages WAS — kept inside the diff, because
+/// the new snapshot no longer knows it and the "What changed" dialog would
+/// otherwise have nothing to show but a bare code. The diff lives only in
+/// memory (it is never persisted), so this data goes away with the dialog:
+/// nothing about a dropped course is stored anywhere or shown anywhere else.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RemovedCourse {
+    pub code: String,
+    pub name: String,
+    pub instructors: Vec<String>,
+    /// The meetings it used to have, so "which class was that?" is
+    /// answerable from the dialog itself.
+    pub meetings: Vec<Meeting>,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct SnapshotDiff {
     pub added: Vec<String>,
-    pub removed: Vec<String>,
+    pub removed: Vec<RemovedCourse>,
     pub changed: Vec<CourseChange>,
 }
 
@@ -203,7 +218,12 @@ pub fn diff_snapshots(old: &Snapshot, new: &Snapshot) -> SnapshotDiff {
     }
     for course in &old.courses {
         if new.course(&course.code).is_none() {
-            diff.removed.push(course.code.clone());
+            diff.removed.push(RemovedCourse {
+                code: course.code.clone(),
+                name: course.name.clone(),
+                instructors: course.instructors.clone(),
+                meetings: course.meetings.clone(),
+            });
         }
     }
 

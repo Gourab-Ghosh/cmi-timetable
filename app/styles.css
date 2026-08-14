@@ -467,20 +467,26 @@ button {
    hue arrives as an inline style (hues.rs already picks a neutral slate for
    these), and an inline custom property wins over anything written here. */
 .chip.neutral { --chip-sat: 10%; }
+/* Long names WRAP inside the chip; the row grows to fit. Truncating with
+   "…" was tried (R37) and read as unreadable: a hall called "Lecture Ha…"
+   helps nobody, and a table's job is to be read. Nothing may ellipsize in
+   a grid cell — text breaks to the next line instead. The chip itself
+   wraps too, so in a narrow cell the hall drops BELOW the code rather than
+   squeezing beside it and breaking the code letter by letter. */
+.chip {
+  flex-wrap: wrap;
+}
 .chip .code {
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  overflow-wrap: anywhere;
 }
 .chip .hall {
   font-weight: 450;
   opacity: 0.85;
   font-size: 0.72rem;
-  white-space: nowrap;
-  /* Never paint across a grid cell's border: truncate instead. */
+  white-space: normal;
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  overflow-wrap: anywhere;
 }
 /* Selected in a shared grid (master grid / halls): unmistakable — accent
    ring + bolder border + a ✓ mark (never color alone). */
@@ -963,6 +969,8 @@ ul.meetings .replaces { grid-column: 1 / -1; }
    beside it is provenance. Deliberately NOT a flex row — the parts are
    separated by real spaces so the line copies as one sentence. */
 .cr-line .cr-value { font-weight: 650; font-variant-numeric: tabular-nums; }
+/* The "why this number" sentence under an assumed credit value. */
+.cr-line .cr-why { display: block; margin-top: 0.15rem; }
 
 /* Courses missing from the catalog because you deleted them. A shorter
    catalog than CMI's has to explain itself where the absence is felt. */
@@ -1186,7 +1194,52 @@ details.facet .menu .menu-search {
 }
 details.facet .menu .menu-empty { margin: 0.2rem 0 0; }
 .facet-count { color: var(--accent); font-weight: 650; }
-.chipline { display: flex; flex-wrap: wrap; gap: 0.3rem; align-items: center; }
+/* The active-filters line. Only rendered when at least one filter is on
+   (ui.rs), and set clearly apart from the result list below — chips sitting
+   flush against the first course card read as part of it. */
+.chipline {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  align-items: center;
+  margin: 0.45rem 0 0.9rem;
+}
+/* The "+N more" / "Show fewer" control: quiet UI, deliberately NOT another
+   chip — it changes what is shown, it doesn't filter anything. */
+.chipline-more {
+  border: 1px dashed var(--line);
+  border-radius: 999px;
+  padding: 0.14rem 0.6rem;
+  font-size: 0.78rem;
+  color: var(--muted);
+  background: transparent;
+  cursor: pointer;
+  transition: color 120ms var(--ease), border-color 120ms var(--ease);
+}
+.chipline-more:hover { color: var(--text); border-color: var(--muted); }
+
+/* The master grid's legend: one symbol, one plain line. */
+.grid-legend {
+  margin: 0 0 0.6rem;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.1rem 1.4rem;
+  line-height: 1.5;
+}
+.grid-legend .legend-mark { font-weight: 700; color: var(--text); }
+
+/* A button that reads as a link, for actions living inside a sentence. */
+.linklike {
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  color: var(--accent);
+  text-decoration: underline;
+  cursor: pointer;
+}
 .filterchip {
   display: inline-flex;
   align-items: center;
@@ -1422,7 +1475,12 @@ details.facet .menu .menu-empty { margin: 0.2rem 0 0; }
      to (focus, scrollIntoView) must stop clear of it — otherwise the last
      control lands underneath and can't be tapped. */
   scroll-padding-bottom: 5.5rem;
-  padding: 1.15rem 1.3rem;
+  /* No bottom padding: the actions footer carries it. Chromium pins a
+     bottom-sticky element at the scrollport bottom MINUS the scroller's own
+     bottom padding, so any padding here is a strip the bar cannot cover —
+     scrolled content showed through under the Close button. With it at 0,
+     the pin line IS the dialog's visible bottom edge. */
+  padding: 1.15rem 1.3rem 0;
   animation: dialog-in 160ms var(--ease);
 }
 @keyframes dialog-in {
@@ -1437,14 +1495,22 @@ details.facet .menu .menu-empty { margin: 0.2rem 0 0; }
   margin-top: 1rem;
   padding-top: 0.85rem;
   border-top: 1px solid var(--line);
-  /* Long forms scroll; the buttons don't leave. The shadow makes content
-     read as sliding UNDER the bar instead of colliding with it. */
+  flex-wrap: wrap;
+}
+/* The bottom bar — always the last thing in a dialog body — is a true
+   full-width footer: it bleeds over the dialog's side padding and owns the
+   bottom padding the dialog no longer has. Long forms scroll; the buttons
+   don't leave; nothing can paint beside or beneath them. The shadow makes
+   content read as sliding UNDER the bar instead of colliding with it. */
+.dialog .actions:last-child {
   position: sticky;
   bottom: 0;
+  z-index: 1;
+  margin-left: -1.3rem;
+  margin-right: -1.3rem;
+  padding: 0.85rem 1.3rem 1.15rem;
   background: var(--surface);
-  padding-bottom: 0.15rem;
   box-shadow: 0 -10px 14px -10px rgb(0 0 0 / 0.18);
-  flex-wrap: wrap;
 }
 .dialog .fieldrow { display: flex; gap: 0.6rem; flex-wrap: wrap; margin: 0.5rem 0; align-items: center; }
 /* `.fieldlabel` is the same thing as a `label` for a row whose control
@@ -1611,6 +1677,9 @@ details.facet .menu .menu-empty { margin: 0.2rem 0 0; }
 }
 .diff-item + .diff-item { border-top: 1px dashed var(--line); }
 .diff-item .name { font-weight: 550; }
+/* What a dropped course was — its own quiet line under the code + name. */
+.diff-removed-detail { flex-basis: 100%; margin: 0.1rem 0 0; }
+.diff-removed-detail:empty { display: none; }
 .diff-lines { flex-basis: 100%; margin: 0.1rem 0 0; padding: 0; list-style: none; }
 .diff-lines li {
   font-family: var(--font-mono);
@@ -2079,17 +2148,20 @@ pre.devpre {
     vertical-align: middle;
   }
   table.tt thead th.corner { background: #232a3a !important; }
-  /* Cells stay generous — the sheet should read pinned to a wall. */
-  table.tt td { height: 54px; min-width: 0; vertical-align: middle; overflow: hidden; }
+  /* Cells stay generous — the sheet should read pinned to a wall. The
+     height is a MINIMUM: a cell holding several clashing chips grows, and
+     its row grows with it, because a poster whose classes are chopped off
+     at a border cannot be read. Nothing is clipped in print, ever. */
+  table.tt td { height: 54px; min-width: 0; vertical-align: middle; }
   table.tt tbody tr { break-inside: avoid; }
   table.tt tbody tr:hover td { background: #fff !important; }
 
   /* Chips fill the whole cell: code large and centered, hall beneath.
      Several chips in one cell (clashes) share it: two sit side by side,
-     three or more wrap onto extra lines — chips may shrink (the hall
-     ellipsizes) but text is never chopped by the cell border. */
+     three or more wrap onto extra lines, and the CELL grows to hold them
+     — text is never chopped by the cell border or shortened with "…". */
   table.tt td .cellstack, table.tt td .sidebyside {
-    height: 100%;
+    min-height: 100%;
     gap: 2px;
     flex-wrap: wrap;
     align-content: stretch;
@@ -2121,6 +2193,9 @@ pre.devpre {
     font-weight: 500;
     opacity: 0.85;
     max-width: 100%;
+    /* Wraps like on screen — a printed hall name must be whole. */
+    white-space: normal;
+    overflow-wrap: anywhere;
   }
   /* Clash: alarm red — the one thing red is reserved for — plus the ⚠
      glyph pinned to the corner so grayscale printers keep the meaning. */

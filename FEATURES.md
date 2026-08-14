@@ -21,7 +21,7 @@ server to trust, and nothing to install.
 | **Nothing is lost** | Every change is listed in one place, every change is undoable, and nothing is committed until you say so |
 | **Clashes are shown, never blocked** | You are told immediately and clearly; you decide |
 | **Take it with you** | Share links, `.ics` calendar export, and a print sheet that fits one page |
-| **Works offline** | After the first sync, everything works with no connection |
+| **Works offline** | The app itself opens with no connection after one normal visit, and your timetable is already in the browser — only syncing with CMI needs the internet |
 | **Private by construction** | 100% client-side, no accounts, no analytics, no cookies, nothing sent anywhere |
 
 ---
@@ -52,11 +52,13 @@ to, its credits, every weekly meeting, and clash marks where they apply.
 - A **credit summary** at the top: the total in large type, then one plain
   sentence per credit value ("3 courses at 4 credits"), plus footnotes about
   any credits that were assumed or set by you.
-- The **same filter bar** the catalog uses, narrowed to your own courses — so
-  "which of mine meet on Thursday" is one click. Its dropdowns list only what
-  *your* courses have: your instructors, your halls, your days. The credit
-  total keeps counting your whole timetable, and says so when the list is
-  showing fewer.
+- The **same filter bar** the catalog uses, with **its own separate state** —
+  so "which of mine meet on Thursday" is one click, and narrowing your own
+  courses never quietly narrows the catalog you look at next (or the other
+  way round; the Catalog and Master grid still share one state, because they
+  ask the same question). Its dropdowns list only what *your* courses have:
+  your instructors, your halls, your days. The credit total keeps counting
+  your whole timetable, and says so when the list is showing fewer.
 - **"Fits my schedule" is not here**, because it could not do anything here:
   it hides whatever overlaps your selection, and every course on this page is
   your selection. It stays on the Catalog and the Master grid, where it has
@@ -212,9 +214,14 @@ assuming:
 | Situation | What it counts | How you know |
 |---|---|---|
 | CMI states the credits | Exactly that | Never second-guessed |
-| No credits stated | **4**, the campus default | Marked "assumed" |
-| No credits, but a shorter month span is noted | **One credit per month** — "(Oct–Nov)" ⇒ 2, "(Sep)" ⇒ 1 | Marked "assumed", tooltip explains |
-| You disagree | Whatever you set, 0–20 | Listed under *Your changes*, with "Use CMI's value" to go back |
+| No credits stated | **4**, the campus default | Marked with a `*` |
+| No credits, and the name says **seminar** | **0** — seminars are attended, not credited | Marked with a `*`, the note says why |
+| No credits, but a shorter month span is noted | **One credit per month** — "(Oct–Nov)" ⇒ 2, "(Sep)" ⇒ 1 | Marked with a `*`, the note says why |
+| You disagree | Whatever you set, 0–20 | Marked with a `✎`, listed under *Your changes* |
+
+The credit summary on My courses spells each assumption out in a full
+sentence — which part of the total is a guess, why the app guessed what it
+did, and that **Edit this course** takes the real number if you know it.
 
 Totals, the per-value breakdown, the credit filter and the catalog all follow
 whatever is true after your changes.
@@ -292,6 +299,27 @@ with an explanation of why that happens and what still worked.
 - It says plainly that CMI's holidays are **not** excluded, rather than
   pretending otherwise.
 
+### JSON, for your own tools
+
+- **Export as JSON** (My data → Course selection) writes your week as a
+  machine-readable file: every selected course with its credits — and where
+  each number came from: CMI, the app's guess and why, or you — plus the
+  meetings you actually attend, each marked as CMI's own, moved by you, or
+  added by you (moved ones carry the CMI original alongside). Stable keys and
+  deterministic order, so scripts can merge two timetables or analyse one
+  without scraping anything.
+- **Export snapshot** (My data → Cached timetable) writes everything CMI was
+  offering at the moment of the last sync — the whole catalog, halls and
+  slots — as a single file. **Import snapshot** loads such a file back, on
+  the welcome screen or in My data: the timetable appears exactly as CMI
+  published it when the file was made, even years later, even if CMI's site
+  has changed or gone. The app is honest about provenance: the sync pill says
+  "imported", and the data keeps its original fetch date (old data does not
+  become young by travelling in a file). Importing runs through the same
+  merge as a real sync, so your changes and any conflicts keep their
+  meanings — and a damaged or wrong-kind file is refused with a plain
+  explanation, leaving what you had untouched.
+
 ### Print
 
 A proper poster sheet, not a screenshot of a web page:
@@ -366,7 +394,18 @@ timetable.
 - **What changed** — a readable digest: new courses, courses no longer listed,
   and per-course lines like *renamed: X → Y* or *credits: 2 → 4*.
 - **Conflicts** — when CMI moves a class you had moved yourself, you are asked
-  which version to keep, per course, and told what each choice means.
+  which version to keep, per course, and told what each choice means. Answer
+  **Decide later** and the question stays — through reloads too — until you
+  answer it. And if CMI's change and yours turn out to say the same thing
+  (same day, time and room), there is nothing to ask: your change is retired
+  with a note, and CMI's own listing takes over.
+- **Opening a share link in a fresh browser never invents a conflict.** A
+  browser that has never synced has no history to compare, so the first sync
+  asks nothing — the link's changes simply apply.
+- **What changed keeps what a dropped course was** — name, teacher, and when
+  it met — so the digest can tell you what you lost, even though the fresh
+  timetable no longer knows it. That detail lives only in the digest; close
+  it and it is gone.
 - **Courses CMI drops** stay visible with a badge, and anything you had placed
   for them stays on your week.
 - **Changes that no longer apply** are announced rather than silently
@@ -424,6 +463,11 @@ its own, never as a change CMI made.
   on space drops the re-parseable page copies first.
 - If a stored value is ever unreadable, it is **backed up rather than
   deleted**, and you are told where the copy is.
+- **The app opens offline.** After one normal visit, a copy of the app
+  itself is kept by your browser (a service worker), so with no connection
+  the planner still opens and everything in it works — and a quiet note says
+  you're offline. Only syncing with CMI's pages needs the internet. A new
+  version of the app replaces the copy on your next online reload.
 - No accounts, no analytics, no cookies, no tracking. The only network
   requests it ever makes are for CMI's two timetable pages — through a public
   relay, or straight from cmi.ac.in if no relay answers. A relay learns which
@@ -482,3 +526,11 @@ Being clear about these is part of the design:
 *This file is part of the app, not a brochure: it is updated in the same
 change that adds, renames or removes a feature, so what it describes is what
 you will find. If you spot a difference, the app is right and this is a bug.*
+- **Two tabs of the same browser share one timetable.** That is how browser
+  storage works: every tab reads and writes the same saved data, so a change
+  in one tab shows in the other after a refresh. A durable "separate
+  timetable per tab" doesn't exist in the web platform — the only per-tab
+  storage a browser offers is wiped when the tab closes, which would break
+  the promise that your data stays until you delete it. To compare two
+  plans side by side, use a second browser profile, a private window, or
+  export a snapshot and a share link.

@@ -1738,7 +1738,7 @@ fn a_new_term_meets_a_full_planner() {
 
     // And the digest says what actually changed.
     assert!(result.diff.added.contains(&"DSCI".to_string()));
-    assert!(result.diff.removed.contains(&"TOPO".to_string()));
+    assert!(result.diff.removed.iter().any(|r| r.code == "TOPO"));
     assert!(
         result.diff.changed.iter().any(|c| c.code == "CAL1"),
         "changed: {:?}",

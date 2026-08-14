@@ -10,5 +10,13 @@
 target = "index.html"
 public_url = "/"
 
+# Offline support: after the build lands in the staging dir, write sw.js —
+# a service worker precaching this exact build. Debug builds get a stub
+# that caches nothing (see app/hooks/gen-sw.sh).
+[[hooks]]
+stage = "post_build"
+command = "bash"
+command_arguments = ["hooks/gen-sw.sh"]
+
 [serve]
 open = false

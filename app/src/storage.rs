@@ -14,6 +14,10 @@ pub const KEY_SELECTION: &str = "cmitt.v1.selection";
 pub const KEY_OVERRIDES: &str = "cmitt.v1.overrides";
 pub const KEY_PREFS: &str = "cmitt.v1.prefs";
 pub const KEY_CUSTOM: &str = "cmitt.v1.custom";
+/// Conflicts the user chose to decide later. A question the app asked and
+/// the user deferred must survive a reload — losing it on refresh silently
+/// answered "use CMI's version" for them (R43).
+pub const KEY_CONFLICTS: &str = "cmitt.v1.conflicts";
 
 fn raw() -> Option<web_sys::Storage> {
     web_sys::window()?.local_storage().ok().flatten()

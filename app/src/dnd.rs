@@ -313,8 +313,10 @@ pub fn enter_move_mode(app: App, spec: DragSpec, from: Option<Meeting>) {
     // an invisible move whose Enter lands somewhere the user never saw.
     if app.prefs.with_untracked(|p| p.tab) == crate::state::Tab::Halls {
         app.say(
-            "Keyboard moving is available on My timetable. On this page, drag a \
-             course with the pointer, or open it and edit the meeting.",
+            "Keyboard moving doesn't work here — this table is laid out by hall, \
+             and the arrow keys only move through days and times. On this page, \
+             drag a course with the pointer, or open it and edit its meeting. \
+             Keyboard moving works on My timetable and the Master grid.",
         );
         return;
     }
@@ -467,7 +469,7 @@ fn on_key_down(app: App, ev: &web_sys::KeyboardEvent) {
                     let unmoved = mm.cursor == mm.start;
                     if perform_drop(app, &mm.spec, mm.cursor.0, mm.cursor.1, None) {
                         if unmoved {
-                            app.say(format!("{} left where it was.", mm.spec.code));
+                            app.say(format!("{} stays where it was.", mm.spec.code));
                         } else {
                             app.say(format!("Dropped {}.", mm.spec.code));
                         }

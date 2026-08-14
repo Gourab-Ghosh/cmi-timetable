@@ -29,6 +29,23 @@ and no committed mirror (fixtures exist only for tests/e2e seed).
   touch GitHub Pages, unless the user explicitly says to in that prompt.**
   Deploys happen through the user's own `git push` (pre-push hook) or their
   explicit ask. Committing must never trigger a deploy.
+  **Strengthened in R43 (permanent): never ASK or OFFER to push/deploy
+  either.** No "say the word and I'll push", no "ready to deploy?" — the
+  user always initiates a deploy themselves, in their own prompt. End every
+  round at the local commit.
+- **SAVE WORKER OUTPUT FOR RECOVERY (R43, permanent).** Every
+  subagent/workflow result worth having must be written to `.workagents/`
+  at the repo root (gitignored) with `manifest.md` naming each file, its
+  task and its state (done / needs-apply / superseded) — so that if workers
+  die (session/rate limits, crashes) a future session told to "continue"
+  can recover the finished work from disk instead of redoing it. Workflow
+  journals under the session dir help, but session dirs change; the repo
+  dir is the durable copy.
+- **CONTEXT.md IS FOR A READER WITH NO CONTEXT (R43, permanent).** This
+  file is read by an LLM in a fresh session that knows nothing about the
+  project. Every section must stand alone: name things fully on first
+  mention, keep §1–§6 self-contained and current, never write an entry
+  that only makes sense to someone who watched the conversation.
 - "Don't access anything outside this folder" (temp files live outside the
   repo and must never be committed).
 - Package installs: pacman first, `cargo install` only on failure.
@@ -77,7 +94,9 @@ and no committed mirror (fixtures exist only for tests/e2e seed).
 
 ```text
 /core   parsers, model, validate (gate), merge (3-way), diff, ics, share,
-        date; feature `html` = native scraper path (tests + e2e seed).
+        date, export (JSON file formats: cmi-timetable-export /
+        cmi-snapshot envelope + import validation, iso_utc, filenames);
+        feature `html` = native scraper path (tests + e2e seed).
         core/examples/snapshot_json.rs → fixtures → snapshot JSON (e2e
         seed; test tooling only, nothing ships it).
         PARSER_VERSION=4 in core/src/model.rs. Fixtures: core/fixtures/
@@ -86,8 +105,13 @@ and no committed mirror (fixtures exist only for tests/e2e seed).
         filters), fetch.rs (tier chain proxy→direct, adopt/merge),
         ui.rs (header/tabs/facets/dialogs/chips), views.rs (5 tabs +
         welcome()), dnd.rs (pointer+keyboard drag), storage.rs, dev.rs,
-        domx.rs; styles.css = whole design system (tokens, light+dark).
-/e2e    test_app.py — 71 Selenium tests, self-seeding (see §5); shoot.py —
+        domx.rs, export.rs (JSON exports + snapshot import);
+        styles.css = whole design system (tokens, light+dark);
+        hooks/gen-sw.sh + hooks/sw-body.js + hooks/sw-debug.js — the Trunk
+        post_build hook writing the offline service worker into every build
+        (debug builds get a self-cleaning no-cache stub);
+        index.html registers ./sw.js on window load.
+/e2e    test_app.py — 80 Selenium tests, self-seeding (see §5); shoot.py —
         design-review screenshots + print PDFs.
 /githooks  pre-push — builds+publishes via deploy.sh when main is pushed
         (activate per clone: `git config core.hooksPath githooks`; skip
@@ -2155,6 +2179,131 @@ parameter's PATH (the cache-buster means the whole string is never equal).
 Default is off, so every other test still exercises direct-as-fallback.
 
 100 native + 73/73 e2e; fmt and clippy clean.
+
+### R43 — the everything round: separate filters, honest merges, working offline, and copy a student can read
+
+One prompt carrying ~14 asks (dictated by text-to-speech; wording interpreted
+charitably). Everything below landed in one round. Worker outputs are saved
+in `.workagents/` (see the manifest there) per the new §2 rule.
+
+**1. Filter split.** `Prefs` now holds TWO `Filters` sets: `filters` (shared
+by Catalog + Master grid — they ask the same question) and `my_filters` (My
+courses' own). `App::filters_in(mine)` / `act_filters_in(mine, …)` pick the
+set; `FilterScope::mine()` maps the bar to it; undo entries carry both sets;
+undo labels carry the page name so coalescing can't bridge pages. Old stored
+prefs load with an empty My-courses set (`#[serde(default)]`). e2e **t75**;
+t65's "one set everywhere" assertion inverted; t66's out-of-scope-ticked-value
+scenario moved INSIDE the shared pair (Catalog↔Master grid, M K Srivas's
+unscheduled-only SVA).
+
+**2. The false-conflict bug (share link in a fresh browser).** Reported with
+an LLM diagnosis, which was correct: `merge_overrides` treated "course missing
+from the OLD snapshot" as "course was unscheduled", so a user-ADDED meeting
+(base=None) raised "CMI changed times you customised" on the very FIRST sync.
+Fixed in `core/src/merge.rs`, plus what the adversarial review (see
+`.workagents/merge-adversary.md`) added:
+- `newly_scheduled` now requires the old course to EXIST with zero meetings.
+- A history-free CONVERGENCE rule: an override whose destination is now
+  official (and whose base, if any, no longer is) is dropped + announced —
+  the user asked for exactly this ("if both point to the same time and hall,
+  keep CMI's"). Confirmed to also fix real, permanent DOUBLE-CHIP rendering
+  (`effective_meetings` draws the official meeting AND the override copy).
+  Halls in the convergence check match loosely (trim, case) — typed halls.
+- Missing-old is treated as empty history for based overrides, so a stale
+  change lapses (announced) on the FIRST sync instead of zombie-ing.
+- Override course codes are canonicalized to catalog casing on first data
+  (`Snapshot::course` is case-sensitive; the override store isn't).
+- Lapse toasts are recency-neutral ("CMI no longer runs…" — a fresh browser
+  never witnessed the drop).
+Tests: `core/tests/merge_tests.rs` +8 (fresh-boot x shapes, convergence
+boundaries incl. loose halls, resolve interactions, the full RFLR repro);
+3 proven to fail on the old code. e2e **t76** (first sync of seeded overrides
+with no snapshot asks NOTHING).
+
+**3. "Decide later" now survives reload.** Conflicts persist under
+`cmitt.v1.conflicts` (new storage key; R38 naming note: it is NOT a cache).
+Every writer goes through `App::set_conflicts` (signal + storage in one
+move); the quiet re-parse path no longer touches the queue at all (it used
+to wipe it — including moments after boot restored it). e2e **t76** part 2.
+
+**4. What-changed digest.** `SnapshotDiff.removed` is now `Vec<RemovedCourse>`
+(code, name, instructors, meetings) — the fresh snapshot can't describe a
+course it no longer has, so the diff carries what it WAS. Shown in the dialog
+(`.diff-removed-detail`), nowhere else; the diff lives only in memory, so the
+data dies with the dialog (the user's cache-size concern). Dialog footer: the
+sticky `.actions` bar is now a true full-width footer — the dialog's bottom
+padding moved INTO the bar (`.dialog .actions:last-child`), because Chromium
+pins bottom-sticky at scrollport minus the scroller's own bottom padding, so
+content used to show through under Close (measured fix, see
+`.workagents/dialog-chips-ux.md`). e2e **t77**.
+
+**5. Chips + spacing.** Active-filter chips collapse past 8 behind a quiet
+dashed "+N more" pill ("Show fewer" to collapse; every chip individually
+removable when expanded — the user likes the crosses). The chip line renders
+ONLY when chips exist and carries real margins — it used to sit flush against
+the course list. e2e **t78**.
+
+**6. The ellipsis regression.** R37's `text-overflow: ellipsis` on
+`.chip .code` / `.chip .hall` made long names unreadable in every grid. Now
+text WRAPS inside the chip and rows grow; print's fixed-height cells and
+`overflow: hidden` are gone too — a printed cell with many clashing chips
+grows instead of chopping them. Nothing may ellipsize in a grid cell.
+
+**7. Copy.** The dead copy-audit's 125 findings (recovered from its journal)
+were deduped + re-verified into `.workagents/copy-worklist.md`. Applied: the
+whole credit cluster (summary notes are now one full sentence per reason on
+its own line — guess/who-guessed/how-to-fix; badges use the print sheet's
+`*`/`✎` marks; tooltips, details popover, editor note + "Use CMI's {n}" vs
+"Back to the app's {n}" button, reset toast), the local-network fetch
+toast/banner in plain words, and the whole "confusing" tier (~19 items:
+restore toasts say catalog-not-timetable, "Delete my version and use CMI's",
+conflicts lede admits CMI's time is preselected, the two "removed" radio
+values distinguished, unknown-code titles say "so it was left out", corrupt/
+offline/parse/quota banners rewritten, master-grid help line is a legend
+list, per-kind reset toasts, SR copy fixes). The "clumsy" and
+"fine-but-better" tiers REMAIN OPEN in the worklist for a future round.
+
+**8. Seminar credits.** `Course::is_seminar()` (whole word, any case) +
+`CreditAssumption` enum (Seminar → 0, Months(n) → n, Default → 4);
+`credit_assumption()` names the reason so every piece of copy can say why.
+Fixture seminars CSEM/DSEM/PSEM now count 0. Native `t08b2` + e2e **t80**.
+
+**9. JSON exports + snapshot import.** Formats spec'd in
+`.workagents/json-schemas.md`, implemented as designed: `core/src/export.rs`
+(envelope, validation, iso_utc, filenames — natively testable) +
+`app/src/export.rs` (timetable JSON from the app's own course resolution;
+file-picker import). `cmi-timetable-export` v1.0.0 (write-only; effective
+meetings with origins cmi/moved/user-added + cmi_original; credit provenance
+cmi/assumed+reason/user). `cmi-snapshot` v1.0.0 (envelope around the internal
+serde Snapshot, raw_html_gz stripped; import validates fail-closed, confirms
+before replacing newer data with older, sets the new `SourceTier::Imported`
+— pill "imported" — and keeps the ORIGINAL fetched_at; adoption goes through
+the normal three-way merge). Buttons: My data (both exports + import) and
+the welcome screen ("Import it" linklike). e2e **t79**.
+
+**10. Offline.** A Trunk post_build hook (`app/hooks/gen-sw.sh`) writes a
+service worker precaching each release build (cache = hash of names+bytes);
+navigations network-first→cached shell, assets cache-first, CROSS-ORIGIN
+NEVER INTERCEPTED (sync identical with/without; R32 unbroken — no CMI page
+enters the SW cache). Debug builds get a self-cleaning no-op stub, so `trunk
+serve` never serves stale wasm. `offline_note` in app.rs toasts "you're
+offline — everything still works" only when the page was served BY our
+worker AND a same-origin probe fails. e2e boot() now unregisters SWs +
+clears caches; **t74** proves a dead-server reload boots from cache, on its
+own port. Design + rationale: `.workagents/sw-design.md`.
+
+**11. Tab isolation — deliberately NOT done** (the user allowed skipping).
+Durable per-tab storage does not exist in the web platform: sessionStorage
+is per-tab but the browser deletes it when the tab closes, violating the
+user's own durability requirement; localStorage/IndexedDB are origin-wide by
+design. Documented honestly in FEATURES.md ("Things this app deliberately
+does not do") with workarounds (second profile / private window / snapshot
+export).
+
+Suites: **109 native + 80/80 e2e** (t74–t80 new; t04/t17/t30/t35/t38/t42/
+t62/t65/t66/t73 updated for the new copy and the split — each updated
+assertion pins NEW behaviour, none was weakened). fmt + clippy clean.
+Committed locally; NOT pushed (per §2 — and per §2 no offer to push either).
 
 ## 8. Open bugs — found, confirmed, NOT fixed (do not delete)
 

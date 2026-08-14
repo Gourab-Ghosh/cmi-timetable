@@ -165,7 +165,7 @@ pub fn chip(app: App, p: ChipProps) -> impl IntoView {
                 base.describe()
             ));
         } else {
-            aria_pre.push_str(", overridden");
+            aria_pre.push_str(", your custom time");
         }
     }
     let aria = {
@@ -691,11 +691,11 @@ pub fn BannerView() -> impl IntoView {
                             <div class="banner-main">
                                 <p class="banner-title">
                                     {if one {
-                                        "One course in that link isn't in CMI's timetable"
+                                        "One course in that link isn't in CMI's timetable, so it was left out"
                                             .to_string()
                                     } else {
                                         format!(
-                                            "{} courses in that link aren't in CMI's timetable",
+                                            "{} courses in that link aren't in CMI's timetable, so they were left out",
                                             unknown.len(),
                                         )
                                     }}
@@ -784,21 +784,22 @@ type FacetOptions = std::sync::Arc<dyn Fn() -> Vec<(String, String)> + Send + Sy
 /// (the "page scrolls away while filtering" bug).
 fn facet_checkbox(
     app: App,
+    scope: FilterScope,
     key: String,
     label: String,
     is_checked: fn(&Filters, &str) -> bool,
     toggle: fn(&mut Filters, &str, bool),
 ) -> impl IntoView {
     let node = NodeRef::<leptos::html::Input>::new();
-    let initial = untrack(|| is_checked(&app.filters(), &key));
+    let initial = untrack(|| is_checked(&app.filters_in(scope.mine()), &key));
     let key_eff = key.clone();
     Effect::new(move |_| {
-        let f = app.filters();
+        let f = app.filters_in(scope.mine());
         if let Some(input) = node.get() {
             input.set_checked(is_checked(&f, &key_eff));
         }
     });
-    let undo_label = format!("the {label} filter");
+    let undo_label = format!("the {label} filter{}", scope.undo_suffix());
     view! {
         <label class="opt">
             <input
@@ -807,7 +808,12 @@ fn facet_checkbox(
                 prop:checked=initial
                 on:change=move |ev| {
                     let on = event_target_checked(&ev);
-                    app.act_filters(&undo_label, false, |f| toggle(f, &key, on));
+                    app.act_filters_in(
+                        scope.mine(),
+                        &undo_label,
+                        false,
+                        |f| toggle(f, &key, on),
+                    );
                 }
             />
             <span>{label}</span>
@@ -832,6 +838,7 @@ fn toggle_vec<T: PartialEq>(v: &mut Vec<T>, item: T, on: bool) {
 /// keeps focus and scroll stable while ticking boxes.
 fn facet_menu(
     app: App,
+    scope: FilterScope,
     name: &'static str,
     count: impl Fn() -> usize + Send + Sync + 'static,
     options: FacetOptions,
@@ -904,11 +911,16 @@ fn facet_menu(
                                 .into_iter()
                                 .map(|(k, _)| k)
                                 .collect();
-                            app.act_filters(&format!("select all in {name}"), false, |f| {
-                                for k in &picks {
-                                    toggle(f, k, true);
-                                }
-                            });
+                            app.act_filters_in(
+                                scope.mine(),
+                                &format!("select all in {name}{}", scope.undo_suffix()),
+                                false,
+                                |f| {
+                                    for k in &picks {
+                                        toggle(f, k, true);
+                                    }
+                                },
+                            );
                         }
                     >
                         "All"
@@ -921,11 +933,16 @@ fn facet_menu(
                                 .into_iter()
                                 .map(|(k, _)| k)
                                 .collect();
-                            app.act_filters(&format!("clear all in {name}"), false, |f| {
-                                for k in &picks {
-                                    toggle(f, k, false);
-                                }
-                            });
+                            app.act_filters_in(
+                                scope.mine(),
+                                &format!("clear all in {name}{}", scope.undo_suffix()),
+                                false,
+                                |f| {
+                                    for k in &picks {
+                                        toggle(f, k, false);
+                                    }
+                                },
+                            );
                         }
                     >
                         "None"
@@ -938,7 +955,9 @@ fn facet_menu(
                             .into_any()
                     } else {
                         rows.into_iter()
-                            .map(|(key, label)| facet_checkbox(app, key, label, is_checked, toggle))
+                            .map(|(key, label)| {
+                                facet_checkbox(app, scope, key, label, is_checked, toggle)
+                            })
                             .collect_view()
                             .into_any()
                     }
@@ -968,6 +987,24 @@ pub enum FilterScope {
     MySelection,
 }
 
+impl FilterScope {
+    /// Which of the two stored filter SETS this bar edits: My courses has
+    /// its own; the Catalog and the Master grid share one (they ask the
+    /// same question — "what does CMI offer?" — so a filter set on one is
+    /// meant to still be set on the other, while narrowing your own five
+    /// courses must not quietly empty the catalog).
+    pub fn mine(self) -> bool {
+        self == FilterScope::MySelection
+    }
+
+    /// Suffix for undo labels, so history entries name the page they acted
+    /// on and a burst of typing on one page can never coalesce into an
+    /// entry from the other.
+    fn undo_suffix(self) -> &'static str {
+        if self.mine() { " on My courses" } else { "" }
+    }
+}
+
 /// Add any value this facet is currently filtering by that its own option
 /// list doesn't contain.
 ///
@@ -987,6 +1024,11 @@ fn with_picked(mut opts: Vec<(String, String)>, picked: Vec<String>) -> Vec<(Str
 }
 
 pub fn filter_bar(app: App, scope: FilterScope, result_count: Signal<usize>) -> impl IntoView {
+    // Whether the active-filter chip line is showing everything or the
+    // first line's worth. Per bar, not persisted: expanding is a moment's
+    // curiosity, not a preference.
+    let chips_expanded = RwSignal::new(false);
+
     // The courses this bar is actually filtering. Every facet below draws
     // its options from THIS list, so a menu can never offer a value that
     // could only ever produce an empty result — a Thursday when nothing of
@@ -1051,7 +1093,7 @@ pub fn filter_bar(app: App, scope: FilterScope, result_count: Signal<usize>) -> 
                 (code, label)
             })
             .collect::<Vec<_>>();
-        with_picked(opts, app.filters().branches)
+        with_picked(opts, app.filters_in(scope.mine()).branches)
     });
 
     let instructor_opts = Memo::new(move |_| {
@@ -1063,7 +1105,7 @@ pub fn filter_bar(app: App, scope: FilterScope, result_count: Signal<usize>) -> 
             .into_iter()
             .map(|n| (n.clone(), n))
             .collect::<Vec<_>>();
-        with_picked(opts, app.filters().instructors)
+        with_picked(opts, app.filters_in(scope.mine()).instructors)
     });
 
     let day_opts = Memo::new(move |_| {
@@ -1109,7 +1151,7 @@ pub fn filter_bar(app: App, scope: FilterScope, result_count: Signal<usize>) -> 
             .into_iter()
             .map(|h| (h.clone(), h))
             .collect::<Vec<_>>();
-        with_picked(opts, app.filters().halls)
+        with_picked(opts, app.filters_in(scope.mine()).halls)
     });
 
     let credit_opts = Memo::new(move |_| {
@@ -1124,7 +1166,7 @@ pub fn filter_bar(app: App, scope: FilterScope, result_count: Signal<usize>) -> 
                 (n.to_string(), label)
             })
             .collect::<Vec<_>>();
-        with_picked(opts, app.filters().credits)
+        with_picked(opts, app.filters_in(scope.mine()).credits)
     });
 
     let course_opts = Memo::new(move |_| {
@@ -1133,7 +1175,7 @@ pub fn filter_bar(app: App, scope: FilterScope, result_count: Signal<usize>) -> 
                 .map(|c| (c.code.clone(), format!("{} — {}", c.code, c.name)))
                 .collect::<Vec<_>>()
         });
-        with_picked(opts, app.filters().courses)
+        with_picked(opts, app.filters_in(scope.mine()).courses)
     });
 
     // The same three flags as before, but only the ones something in scope
@@ -1156,7 +1198,7 @@ pub fn filter_bar(app: App, scope: FilterScope, result_count: Signal<usize>) -> 
         }) {
             out.push(("custom".to_string(), "Has custom time".to_string()));
         }
-        with_picked(out, app.filters().flags)
+        with_picked(out, app.filters_in(scope.mine()).flags)
     });
 
     view! {
@@ -1165,11 +1207,16 @@ pub fn filter_bar(app: App, scope: FilterScope, result_count: Signal<usize>) -> 
                 type="search"
                 placeholder="Search code, name, instructor"
                 aria-label="Search courses"
-                prop:value=move || app.filters().text
+                prop:value=move || app.filters_in(scope.mine()).text
                 on:input=move |ev| {
                     let text = event_target_value(&ev);
                     // Coalesced: one undo step per burst of typing.
-                    app.act_filters("the search text", true, move |f| f.text = text);
+                    app.act_filters_in(
+                        scope.mine(),
+                        &format!("the search text{}", scope.undo_suffix()),
+                        true,
+                        move |f| f.text = text,
+                    );
                 }
                 on:keydown=domx::blur_on_enter
             />
@@ -1184,8 +1231,9 @@ pub fn filter_bar(app: App, scope: FilterScope, result_count: Signal<usize>) -> 
                     .then(|| {
                         facet_menu(
                             app,
+                            scope,
                             "Branch",
-                            move || app.filters().branches.len(),
+                            move || app.filters_in(scope.mine()).branches.len(),
                             std::sync::Arc::new(move || branch_opts.get()),
                             |f, k| f.branches.iter().any(|x| x == k),
                             |f, k, on| toggle_vec(&mut f.branches, k.to_string(), on),
@@ -1197,8 +1245,9 @@ pub fn filter_bar(app: App, scope: FilterScope, result_count: Signal<usize>) -> 
                     .then(|| {
                         facet_menu(
                             app,
+                            scope,
                             "Instructor",
-                            move || app.filters().instructors.len(),
+                            move || app.filters_in(scope.mine()).instructors.len(),
                             std::sync::Arc::new(move || instructor_opts.get()),
                             |f, k| f.instructors.iter().any(|x| x == k),
                             |f, k, on| toggle_vec(&mut f.instructors, k.to_string(), on),
@@ -1210,8 +1259,9 @@ pub fn filter_bar(app: App, scope: FilterScope, result_count: Signal<usize>) -> 
                     .then(|| {
                         facet_menu(
                             app,
+                            scope,
                             "Day",
-                            move || app.filters().days.len(),
+                            move || app.filters_in(scope.mine()).days.len(),
                             std::sync::Arc::new(move || day_opts.get()),
                             |f, k| f.days.iter().any(|d| d.index().to_string() == k),
                             |f, k, on| {
@@ -1228,8 +1278,9 @@ pub fn filter_bar(app: App, scope: FilterScope, result_count: Signal<usize>) -> 
                     .then(|| {
                         facet_menu(
                             app,
+                            scope,
                             "Time slot",
-                            move || app.filters().slot_starts.len(),
+                            move || app.filters_in(scope.mine()).slot_starts.len(),
                             std::sync::Arc::new(move || slot_opts.get()),
                             |f, k| f.slot_starts.iter().any(|s| s.to_string() == k),
                             |f, k, on| {
@@ -1245,8 +1296,9 @@ pub fn filter_bar(app: App, scope: FilterScope, result_count: Signal<usize>) -> 
                     .then(|| {
                         facet_menu(
                             app,
+                            scope,
                             "Hall",
-                            move || app.filters().halls.len(),
+                            move || app.filters_in(scope.mine()).halls.len(),
                             std::sync::Arc::new(move || hall_opts.get()),
                             |f, k| f.halls.iter().any(|x| x == k),
                             |f, k, on| toggle_vec(&mut f.halls, k.to_string(), on),
@@ -1258,8 +1310,9 @@ pub fn filter_bar(app: App, scope: FilterScope, result_count: Signal<usize>) -> 
                     .then(|| {
                         facet_menu(
                             app,
+                            scope,
                             "Credits",
-                            move || app.filters().credits.len(),
+                            move || app.filters_in(scope.mine()).credits.len(),
                             std::sync::Arc::new(move || credit_opts.get()),
                             |f, k| f.credits.iter().any(|x| x == k),
                             |f, k, on| toggle_vec(&mut f.credits, k.to_string(), on),
@@ -1271,8 +1324,9 @@ pub fn filter_bar(app: App, scope: FilterScope, result_count: Signal<usize>) -> 
                     .then(|| {
                         facet_menu(
                             app,
+                            scope,
                             "Course",
-                            move || app.filters().courses.len(),
+                            move || app.filters_in(scope.mine()).courses.len(),
                             std::sync::Arc::new(move || course_opts.get()),
                             |f, k| f.courses.iter().any(|x| x == k),
                             |f, k, on| toggle_vec(&mut f.courses, k.to_string(), on),
@@ -1284,8 +1338,9 @@ pub fn filter_bar(app: App, scope: FilterScope, result_count: Signal<usize>) -> 
                     .then(|| {
                         facet_menu(
                             app,
+                            scope,
                             "Flags",
-                            move || app.filters().flags.len(),
+                            move || app.filters_in(scope.mine()).flags.len(),
                             std::sync::Arc::new(move || flag_opts.get()),
                             |f, k| f.flags.iter().any(|x| x == k),
                             |f, k, on| toggle_vec(&mut f.flags, k.to_string(), on),
@@ -1306,7 +1361,7 @@ pub fn filter_bar(app: App, scope: FilterScope, result_count: Signal<usize>) -> 
                         >
                             <input
                                 type="checkbox"
-                                prop:checked=move || app.filters().fits
+                                prop:checked=move || app.filters_in(scope.mine()).fits
                                 on:change=move |ev| {
                                     let on = event_target_checked(&ev);
                                     app.act_filters(
@@ -1330,7 +1385,7 @@ pub fn filter_bar(app: App, scope: FilterScope, result_count: Signal<usize>) -> 
                 // Counted the way this bar behaves: "Fits my schedule" is not
                 // shown here and cannot act here, so it must not be the reason
                 // a Clear-all button appears over an empty chip line.
-                let f = app.filters();
+                let f = app.filters_in(scope.mine());
                 let active = match scope {
                     FilterScope::Everything | FilterScope::OnTheGrid => f.active_count(),
                     FilterScope::MySelection => f.active_count() - usize::from(f.fits),
@@ -1341,9 +1396,12 @@ pub fn filter_bar(app: App, scope: FilterScope, result_count: Signal<usize>) -> 
                             <button
                                 class="btn small"
                                 on:click=move |_| {
-                                    app.act_filters("clear all filters", false, |f| {
-                                        *f = Filters::default();
-                                    });
+                                    app.act_filters_in(
+                                        scope.mine(),
+                                        &format!("clear all filters{}", scope.undo_suffix()),
+                                        false,
+                                        |f| *f = Filters::default(),
+                                    );
                                 }
                             >
                                 "Clear all"
@@ -1352,21 +1410,78 @@ pub fn filter_bar(app: App, scope: FilterScope, result_count: Signal<usize>) -> 
                     })
             }}
         </div>
-        <div class="chipline noprint">
-            {move || active_filter_chips(app, scope)}
-        </div>
+        // The active filters, each removable on its own. Rendered only when
+        // at least one exists — an empty div would still sit between the bar
+        // and the list, eating the gap. Past a line's worth they collapse
+        // behind "+N more": selecting every course in the catalog is a valid
+        // thing to do, and seventy chips drowning the page is not the UI for
+        // it — but every one of them stays individually removable once
+        // expanded.
+        {move || {
+            let chips = active_filter_chip_list(app, scope);
+            (!chips.is_empty()).then(|| {
+                const COLLAPSED_MAX: usize = 8;
+                let total = chips.len();
+                let expanded = chips_expanded.get();
+                let shown = if expanded || total <= COLLAPSED_MAX {
+                    total
+                } else {
+                    COLLAPSED_MAX
+                };
+                let hidden = total - shown;
+                let rendered: Vec<AnyView> = chips
+                    .into_iter()
+                    .take(shown)
+                    .map(|(label, remove)| filter_chip(app, scope, label, remove))
+                    .collect();
+                view! {
+                    <div class="chipline noprint">
+                        {rendered}
+                        {(hidden > 0)
+                            .then(|| {
+                                view! {
+                                    <button
+                                        class="chipline-more"
+                                        aria-expanded="false"
+                                        on:click=move |_| chips_expanded.set(true)
+                                    >
+                                        {format!("+{hidden} more")}
+                                    </button>
+                                }
+                            })}
+                        {(expanded && total > COLLAPSED_MAX)
+                            .then(|| {
+                                view! {
+                                    <button
+                                        class="chipline-more"
+                                        aria-expanded="true"
+                                        on:click=move |_| chips_expanded.set(false)
+                                    >
+                                        "Show fewer"
+                                    </button>
+                                }
+                            })}
+                    </div>
+                }
+            })
+        }}
     }
 }
 
 /// A chip in the "active filters" line: its label, and how to take that one
 /// filter back off.
-type FilterChip = (String, Box<dyn Fn(&mut Filters) + Send + Sync>);
+type FilterChipRemove = Box<dyn Fn(&mut Filters) + Send + Sync>;
+type FilterChip = (String, FilterChipRemove);
 
-fn active_filter_chips(app: App, scope: FilterScope) -> impl IntoView {
+/// The active filters as removable-chip data — label plus the closure that
+/// takes that one filter off. The RENDERING (with the +N-more collapse)
+/// happens in `filter_bar`, which also decides whether to draw the line at
+/// all.
+fn active_filter_chip_list(app: App, scope: FilterScope) -> Vec<FilterChip> {
     // `f` is this component's own copy of the filters, so each list is MOVED
     // out of it field by field — the labels are the same strings, not copies
     // of them, and only the value each remover closure has to keep is cloned.
-    let f = app.filters();
+    let f = app.filters_in(scope.mine());
     let mut chips: Vec<FilterChip> = Vec::new();
     for b in f.branches {
         let b2 = b.clone();
@@ -1412,27 +1527,27 @@ fn active_filter_chips(app: App, scope: FilterScope) -> impl IntoView {
     if f.fits && scope != FilterScope::MySelection {
         chips.push(("Fits my schedule".to_string(), Box::new(|f| f.fits = false)));
     }
-
     chips
-        .into_iter()
-        .map(|(label, remove)| {
-            let undo_label = format!("remove the {label} filter");
-            let aria = format!("Remove filter {label}");
-            view! {
-                <span class="filterchip">
-                    {label}
-                    <button
-                        aria-label=aria
-                        on:click=move |_| {
-                            app.act_filters(&undo_label, false, |f| remove(f));
-                        }
-                    >
-                        "✕"
-                    </button>
-                </span>
-            }
-        })
-        .collect_view()
+}
+
+/// One removable chip in the active-filters line.
+fn filter_chip(app: App, scope: FilterScope, label: String, remove: FilterChipRemove) -> AnyView {
+    let undo_label = format!("remove the {label} filter{}", scope.undo_suffix());
+    let aria = format!("Remove filter {label}");
+    view! {
+        <span class="filterchip">
+            {label}
+            <button
+                aria-label=aria
+                on:click=move |_| {
+                    app.act_filters_in(scope.mine(), &undo_label, false, |f| remove(f));
+                }
+            >
+                "✕"
+            </button>
+        </span>
+    }
+    .into_any()
 }
 
 // ---------------------------------------------------------------------------
@@ -1735,16 +1850,23 @@ fn credits_display(app: App, course: &Course) -> impl IntoView + use<> {
     let official = course.effective_credits();
     let official_assumed = course.credits_assumed();
     let official_label = if let Some(span) = course.duration_note() {
-        format!("(assumed from its {span} duration — CMI doesn't state it)")
+        format!(
+            "CMI doesn't list credits for this course. It runs {span}, so the \
+             app counts one credit per month."
+        )
+    } else if official_assumed
+        && course.credit_assumption() == ttcore::model::CreditAssumption::Seminar
+    {
+        "CMI doesn't list credits for this seminar, so the app counts 0.".to_string()
     } else if official_assumed {
-        "(assumed — CMI doesn't state it)".to_string()
+        "CMI doesn't list credits for this course, so the app counts the usual 4.".to_string()
     } else {
         String::new()
     };
     let official_short = if official_assumed {
-        format!("{official} assumed")
+        format!("CMI doesn't list credits for this one; the app counted {official}.")
     } else {
-        official.to_string()
+        format!("CMI lists {official}.")
     };
     view! {
         {move || {
@@ -1764,7 +1886,7 @@ fn credits_display(app: App, course: &Course) -> impl IntoView + use<> {
                         " "
                         {change_tag("set by you", true)}
                         " "
-                        <span class="muted small">{format!("CMI: {official_short}")}</span>
+                        <span class="muted small">{official_short}</span>
                     }
                         .into_any()
                 }
@@ -1774,8 +1896,9 @@ fn credits_display(app: App, course: &Course) -> impl IntoView + use<> {
                         {(!own && !official_label.is_empty())
                             .then(|| {
                                 view! {
-                                    " "
-                                    <span class="muted small">{official_label}</span>
+                                    // A whole sentence gets its own line —
+                                    // not a parenthetical trailing the number.
+                                    <span class="muted small cr-why">{official_label}</span>
                                 }
                             })}
                     }
@@ -2006,7 +2129,7 @@ fn details_dialog(app: App, code: String) -> impl IntoView {
                                     app.dialog.set(None);
                                 }
                             >
-                                "Use CMI's version instead"
+                                "Delete my version and use CMI's"
                             </button>
                         </div>
                     }
@@ -2294,8 +2417,10 @@ pub fn overrides_list(app: App) -> impl IntoView {
                     .credits
                     .iter()
                     .map(|c| match s.course(&c.course) {
+                        // Short enough to sit left of the arrow, honest
+                        // about whose number it was: "4 (the app's guess) → 3".
                         Some(cr) if cr.credits_assumed() => {
-                            format!("{} (assumed)", cr.effective_credits())
+                            format!("{} (the app's guess)", cr.effective_credits())
                         }
                         Some(cr) => cr.effective_credits().to_string(),
                         None => "?".to_string(),
@@ -2444,6 +2569,19 @@ pub fn overrides_list(app: App) -> impl IntoView {
                     OwnChange::Time | OwnChange::TimeAndRoom => "Back to CMI's time",
                     _ => "Remove",
                 };
+                // The toast answers the button that was pressed — "Back to
+                // CMI's room" must not reply about time, and a meeting the
+                // user invented has no CMI time to be back on.
+                let reset_toast = match kind {
+                    OwnChange::Removed if o.base.is_some() => {
+                        format!("{course}'s meeting is back")
+                    }
+                    OwnChange::Room => format!("{course} back in CMI's room"),
+                    OwnChange::Time | OwnChange::TimeAndRoom => {
+                        format!("{course} back on CMI's time")
+                    }
+                    _ => format!("{course}'s meeting removed"),
+                };
                 rows.push((
                     kind,
                     view! {
@@ -2464,10 +2602,7 @@ pub fn overrides_list(app: App) -> impl IntoView {
                                 class="btn small"
                                 class:danger=!removal
                                 on:click=move |_| {
-                                    app.reset_override(
-                                        id,
-                                        Some(format!("{course} back on CMI's time")),
-                                    );
+                                    app.reset_override(id, Some(reset_toast.clone()));
                                 }
                             >
                                 {action_label}
@@ -2617,8 +2752,10 @@ fn my_data_dialog(app: App) -> impl IntoView {
         });
         app.snapshot.set(Snapshot::placeholder());
         app.what_changed.set(None);
-        app.conflicts.set(Vec::new());
-        app.toast("Cached timetable cleared — fetch it again whenever you like.");
+        // The questions those conflicts asked were about a snapshot that no
+        // longer exists — clear their stored copy too.
+        app.set_conflicts(Vec::new());
+        app.toast("Saved timetable cleared — fetch it again whenever you like.");
     };
 
     let delete_everything = move |_| {
@@ -2662,6 +2799,17 @@ fn my_data_dialog(app: App) -> impl IntoView {
                         (!app.selection.with(|s| s.is_empty()))
                             .then(|| {
                                 view! {
+                                    <button
+                                        class="btn small"
+                                        title="Your timetable as a JSON file — every course \
+                                               and meeting as you actually attend them, for \
+                                               scripts and tools to read"
+                                        on:click=move |_| crate::export::download_timetable_export(
+                                            &app,
+                                        )
+                                    >
+                                        "Export as JSON"
+                                    </button>
                                     <button
                                         class="btn small danger"
                                         on:click=move |_| {
@@ -2713,12 +2861,31 @@ fn my_data_dialog(app: App) -> impl IntoView {
                         app.has_data()
                             .then(|| {
                                 view! {
+                                    <button
+                                        class="btn small"
+                                        title="Everything CMI is offering right now, as a \
+                                               JSON file — load it back later (or in another \
+                                               browser), even if CMI's site has changed"
+                                        on:click=move |_| crate::export::download_snapshot_export(
+                                            &app,
+                                        )
+                                    >
+                                        "Export snapshot"
+                                    </button>
                                     <button class="btn small danger" on:click=clear_snapshot>
                                         "Clear"
                                     </button>
                                 }
                             })
                     }}
+                    <button
+                        class="btn small"
+                        title="Load a snapshot file exported earlier — the timetable \
+                               appears exactly as CMI published it when the file was made"
+                        on:click=move |_| crate::export::pick_and_import_snapshot(app)
+                    >
+                        "Import snapshot…"
+                    </button>
                 </header>
                 <p class="small">
                     {move || {
@@ -3137,11 +3304,18 @@ fn course_editor_dialog(app: App, code: Option<String>, prefill: Option<String>)
         }
     });
     let official_credits = cmi_course.as_ref().map(|c| c.effective_credits());
+    let official_credits_assumed = cmi_course.as_ref().is_some_and(|c| c.credits_assumed());
     let official_credits_note = cmi_course.as_ref().map(|c| {
-        if c.credits_assumed() {
-            format!("CMI: {} (assumed)", c.effective_credits())
+        if !c.credits_assumed() {
+            format!("CMI lists {}.", c.effective_credits())
+        } else if c.credit_assumption() == ttcore::model::CreditAssumption::Seminar {
+            "CMI doesn't list credits for this course. The app counts 0 — it's a seminar."
+                .to_string()
         } else {
-            format!("CMI: {}", c.effective_credits())
+            format!(
+                "CMI doesn't list credits for this course. The app counts {}.",
+                c.effective_credits()
+            )
         }
     });
 
@@ -3445,7 +3619,7 @@ fn course_editor_dialog(app: App, code: Option<String>, prefill: Option<String>)
                                             app.dialog.set(None);
                                         }
                                     >
-                                        "Use CMI's version instead"
+                                        "Delete my version and use CMI's"
                                     </button>
                                 </div>
                             }
@@ -3624,7 +3798,11 @@ fn course_editor_dialog(app: App, code: Option<String>, prefill: Option<String>)
                                                     credits_text.set(official.to_string());
                                                 }
                                             >
-                                                "Use CMI's value"
+                                                {if official_credits_assumed {
+                                                    format!("Back to the app's {official}")
+                                                } else {
+                                                    format!("Use CMI's {official}")
+                                                }}
                                             </button>
                                         }
                                     })
@@ -4030,7 +4208,9 @@ fn conflicts_dialog(app: App) -> impl IntoView {
         <div>
             <h2>"CMI changed times you customised"</h2>
             <p class="muted">
-                "Pick what to keep for each course. Nothing changes until you apply."
+                "Pick what to keep for each one. CMI's new time is selected to start \
+                 with, so switch the ones where you'd rather keep yours. Nothing \
+                 changes until you press Apply."
             </p>
             <div class="actions" style="justify-content:flex-start">
                 <button
@@ -4055,10 +4235,10 @@ fn conflicts_dialog(app: App) -> impl IntoView {
                     // choice is between two values, not two sentences.
                     let mine_value = match &c.mine {
                         Some(m) => m.describe(),
-                        None => "removed — no meeting at all".to_string(),
+                        None => "no meeting — you removed it".to_string(),
                     };
                     let theirs_value = match c.theirs.len() {
-                        0 => "removed — no meeting at all".to_string(),
+                        0 => "no meeting — CMI no longer lists one".to_string(),
                         _ => c
                             .theirs
                             .iter()
@@ -4450,7 +4630,7 @@ fn what_changed_dialog(app: App) -> impl IntoView {
     let mut added = diff.added.clone();
     added.sort_by_key(|c| (!mine(c), c.clone()));
     let mut removed = diff.removed.clone();
-    removed.sort_by_key(|c| (!mine(c), c.clone()));
+    removed.sort_by_key(|c| (!mine(&c.code), c.code.clone()));
     let mut changed = diff.changed.clone();
     changed.sort_by_key(|c| (!mine(&c.code), c.code.clone()));
 
@@ -4512,20 +4692,45 @@ fn what_changed_dialog(app: App) -> impl IntoView {
                 view! {
                     {removed
                         .iter()
-                        .map(|code| {
-                            let is_mine = mine(code);
+                        .map(|r| {
+                            let is_mine = mine(&r.code);
+                            // Everything the dialog knows about a dropped
+                            // course lives in the diff itself — the fresh
+                            // snapshot has never heard of it. Shown HERE and
+                            // nowhere else; when the diff goes, this data
+                            // goes with it (it is never stored).
+                            let who = (!r.instructors.is_empty())
+                                .then(|| r.instructors.join(", "));
+                            let when = (!r.meetings.is_empty())
+                                .then(|| {
+                                    r.meetings
+                                        .iter()
+                                        .map(|m| m.describe())
+                                        .collect::<Vec<_>>()
+                                        .join(" · ")
+                                });
                             view! {
                                 <div class="diff-item">
-                                    <span class="chip mono" style="--hue:215">{code.clone()}</span>
-                                    <span class="muted small">
-                                        "dropped from CMI's pages"
+                                    <span class="chip mono" style="--hue:215">
+                                        {r.code.clone()}
                                     </span>
+                                    <span class="name">{r.name.clone()}</span>
                                     {is_mine
                                         .then(|| {
                                             view! {
                                                 <span class="badge warn">"was in your timetable"</span>
                                             }
                                         })}
+                                    <p class="diff-removed-detail muted small">
+                                        {match (who, when) {
+                                            (Some(who), Some(when)) => {
+                                                format!("Was taught by {who} — met {when}.")
+                                            }
+                                            (Some(who), None) => format!("Was taught by {who}."),
+                                            (None, Some(when)) => format!("Met {when}."),
+                                            (None, None) => String::new(),
+                                        }}
+                                    </p>
                                 </div>
                             }
                         })

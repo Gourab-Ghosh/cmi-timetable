@@ -9,3 +9,6 @@ __pycache__/
 *.pyc
 e2e/.venv/
 e2e/shots/
+
+# Worker-output recovery dir (see CONTEXT.md §2)
+/.workagents/

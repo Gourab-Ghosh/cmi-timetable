@@ -77,6 +77,30 @@ which CMI pages are being fetched (nothing else — no selection, no
 identity), and because a relay's cache would otherwise decide how fresh a
 timetable is, the URL handed to a relay carries a cache-buster.
 
+### Offline (service worker)
+
+A Trunk `post_build` hook (`app/hooks/gen-sw.sh`) writes `sw.js` into every
+release build: a service worker that precaches that exact build (cache name =
+hash of every file's name and bytes), so the app opens with no connection
+after one normal visit. Navigations are network-first with a cached-shell
+fallback; hashed assets are cache-first; **cross-origin requests (cmi.ac.in,
+the relays) are never intercepted**, so the sync path is byte-identical with
+or without the worker, and no copy of CMI's pages ever enters the worker's
+cache (R32 holds). Debug builds (`trunk serve`) get a self-cleaning stub that
+caches nothing. A new deploy replaces the cache on the next online reload; no
+prompts, no reload loops.
+
+### JSON exports and snapshot import
+
+`core/src/export.rs` owns the file formats (versioned, semver'd, natively
+tested); `app/src/export.rs` builds the timetable export from the app's own
+course resolution. `cmi-timetable-export` is write-only (stable keys,
+effective meetings, credit provenance). `cmi-snapshot` wraps the internal
+`Snapshot` serde JSON in an envelope and can be imported back — validated
+fail-closed, labelled `SourceTier::Imported` in the pill, keeping the
+ORIGINAL fetch date, and adopted through the same three-way merge as a real
+sync.
+
 Until the first sync succeeds the app stays on its welcome screen; a failed
 first sync explains itself in a banner and every later page load retries
 (the usual 12 h background throttle only applies once data exists).

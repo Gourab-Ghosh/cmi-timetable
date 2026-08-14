@@ -41,6 +41,10 @@ fn init_app() -> (App, bool) {
         OverridesStore::default,
     );
     let customs: CustomStore = load_or(storage::KEY_CUSTOM, &mut corrupt, CustomStore::default);
+    // Questions the user deferred with "Decide later": they survive reloads
+    // until answered — a refresh must not answer them silently.
+    let conflicts: Vec<ttcore::merge::Conflict> =
+        load_or(storage::KEY_CONFLICTS, &mut corrupt, Vec::new);
     let mut snapshot: Snapshot =
         load_or(storage::KEY_SNAPSHOT, &mut corrupt, Snapshot::placeholder);
     // Old app versions shipped a snapshot baked in at build time; that data
@@ -66,7 +70,7 @@ fn init_app() -> (App, bool) {
         toasts: RwSignal::new(Vec::new()),
         toast_seq: RwSignal::new(0),
         banner: RwSignal::new(None),
-        conflicts: RwSignal::new(Vec::new()),
+        conflicts: RwSignal::new(conflicts),
         what_changed: RwSignal::new(None),
         unknown_codes: RwSignal::new(Vec::new()),
         fetch_log: RwSignal::new(Vec::new()),
@@ -82,6 +86,41 @@ fn init_app() -> (App, bool) {
     };
     provide_context(app);
     (app, corrupt)
+}
+
+/// The offline note. Fires only when this page was served by our service
+/// worker (an offline copy exists and answered) AND the app's own origin is
+/// unreachable right now. `navigator.onLine == false` is trusted as a fast
+/// "definitely offline"; `true` proves nothing, so the origin is probed
+/// with one tiny same-origin request the worker deliberately never answers
+/// from cache (unique query string; non-navigation matches are exact-URL).
+fn offline_note(app: App) {
+    let Some(win) = web_sys::window() else { return };
+    let nav = win.navigator();
+    if nav.service_worker().controller().is_none() {
+        return; // first visit, dev loop, or a browser without workers
+    }
+    leptos::task::spawn_local(async move {
+        let offline = if !nav.on_line() {
+            true
+        } else {
+            let url = format!("?nw-probe={}", domx::now_ms() as u64);
+            let request = gloo_net::http::Request::get(&url).send();
+            let timeout = gloo_timers::future::TimeoutFuture::new(3_000);
+            match futures::future::select(Box::pin(request), Box::pin(timeout)).await {
+                futures::future::Either::Left((result, _)) => result.is_err(),
+                // A slow network is still a network: stay quiet.
+                futures::future::Either::Right(_) => false,
+            }
+        };
+        if offline {
+            app.toast(
+                "You're offline — everything here still works. Your timetable \
+                 and changes live in this browser; only syncing with CMI needs \
+                 a connection.",
+            );
+        }
+    });
 }
 
 /// A custom course's definition IS its schedule — it never carries
@@ -315,6 +354,7 @@ pub fn Root() -> impl IntoView {
     fetch::reparse_stored_if_newer(app);
     apply_url_state(app);
     fetch::maybe_background_update(app);
+    offline_note(app);
 
     view! {
         // Before the first sync there is no tab rail, so the desktop grid

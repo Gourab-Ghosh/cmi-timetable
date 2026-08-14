@@ -56,6 +56,10 @@ DIST = os.environ.get("DIST_DIR", os.path.join(HERE, "..", "app", "dist"))
 PORT = int(os.environ.get("PORT", "8977"))
 # Where the stand-in for www.cmi.ac.in listens (see serve_cmi below).
 CMI_PORT = int(os.environ.get("CMI_PORT", "8978"))
+# Where the offline test serves its own copy of dist (see t74): a separate
+# port means a separate origin, so its worker registration and caches can
+# never leak into the rest of the suite.
+SW_PORT = int(os.environ.get("SW_PORT", "8979"))
 BASE = f"http://127.0.0.1:{PORT}"
 CHROME_BIN = os.environ.get("CHROME_BIN", "/usr/bin/chromium")
 FIXTURES = os.path.join(REPO, "core", "fixtures")
@@ -277,13 +281,13 @@ def serve_fake_cmi():
     return server
 
 
-def serve_dist():
+def serve_dist(port=PORT):
     class Quiet(http.server.SimpleHTTPRequestHandler):
         def log_message(self, *args):
             pass
 
     server = http.server.ThreadingHTTPServer(
-        ("127.0.0.1", PORT),
+        ("127.0.0.1", port),
         lambda *a, **kw: Quiet(*a, directory=DIST, **kw),
     )
     threading.Thread(target=server.serve_forever, daemon=True).start()
@@ -342,6 +346,22 @@ class App:
         corrupt) blob in the snapshot slot."""
         if fresh:
             self.d.get(f"{BASE}/e2e-blank")  # same-origin 404 page
+            # Service workers cache whole builds; no test may ever be served
+            # yesterday's dist or start controlled. Every fresh boot begins
+            # with no registrations and no caches on this origin.
+            self.d.execute_async_script("""
+                const done = arguments[arguments.length - 1];
+                (async () => {
+                    if ('serviceWorker' in navigator) {
+                        const regs = await navigator.serviceWorker.getRegistrations();
+                        await Promise.all(regs.map((r) => r.unregister()));
+                    }
+                    if (window.caches) {
+                        const names = await caches.keys();
+                        await Promise.all(names.map((n) => caches.delete(n)));
+                    }
+                })().then(() => done(null), (e) => done(String(e)));
+            """)
             if seed:
                 script = (
                     "localStorage.clear();"
@@ -474,7 +494,7 @@ def t04_unknown_code_warning(app):
     app.boot("/?c=TOC,XYZQ")
     banner = app.wait_css(".banner")
     title = banner.find_element(By.CSS_SELECTOR, ".banner-title").text
-    assert title == "One course in that link isn't in CMI's timetable", title
+    assert title == "One course in that link isn't in CMI's timetable, so it was left out", title
     # The code is set as a code of its own, not as a word in the sentence.
     codes = [c.text for c in banner.find_elements(By.CSS_SELECTOR, ".unknown-code")]
     assert codes == ["XYZQ"], codes
@@ -488,7 +508,7 @@ def t04_unknown_code_warning(app):
     app.boot("/?c=TOC,XYZQ,NOPE1")
     banner = app.wait_css(".banner")
     title = banner.find_element(By.CSS_SELECTOR, ".banner-title").text
-    assert title == "2 courses in that link aren't in CMI's timetable", title
+    assert title == "2 courses in that link aren't in CMI's timetable, so they were left out", title
     codes = [c.text for c in banner.find_elements(By.CSS_SELECTOR, ".unknown-code")]
     assert codes == ["XYZQ", "NOPE1"], codes
 
@@ -501,12 +521,15 @@ def t05_credits_default_four(app):
     total = app.css("section[aria-label='My courses'] .credit-summary .cs-num").text
     assert total == "6", total  # 4 (assumed) + 2
     assert "credits in total" in section.text, section.text
-    assert "CMI doesn't list credits for 1 course" in section.text, section.text
-    assert "counted as 4 here" in section.text, section.text
-    # Details dialog marks the assumption.
+    assert "CMI doesn't list credits for one of your courses" in section.text, section.text
+    assert "counts it as 4, the usual figure" in section.text, section.text
+    assert "that part of the total above is a guess" in section.text, section.text
+    assert "set it with Edit this course" in section.text, section.text
+    # Details dialog explains the assumption in a full sentence.
     app.chip("TOC").click()
     dialog = app.wait_css(".dialog")
-    assert "4 (assumed" in dialog.text, dialog.text
+    assert "CMI doesn't list credits for this course, so the app counts the usual 4" \
+        in dialog.text, dialog.text
     app.xpath("//div[@class='dialog']//button[normalize-space()='Close']").click()
 
 
@@ -744,12 +767,13 @@ def t17_credit_override(app):
     # Re-opening says whose number it is and exactly what it replaced.
     app.chip("TOC", "section[aria-label='My courses']").click()
     dialog = app.wait_css(".dialog")
-    assert "set by you" in dialog.text and "CMI: 4 assumed" in dialog.text, dialog.text
+    assert "set by you" in dialog.text, dialog.text
+    assert "the app counted 4" in dialog.text, dialog.text
     app.xpath("//div[@class='dialog']//button[normalize-space()='Close']").click()
     app.wait_gone(".dialog")
     section = app.css("section[aria-label='My courses']")
     assert app.css("section[aria-label='My courses'] .credit-summary .cs-num").text == "5", section.text
-    assert "1 credit value set by you." in section.text, section.text
+    assert "You set the credits on one course yourself" in section.text, section.text
     # The 'Your changes' panel shows official → yours; removing it restores.
     app.open_tab("My timetable")
     panel = app.wait_css("[data-testid='your-changes']")
@@ -757,13 +781,13 @@ def t17_credit_override(app):
     # .text returns painted text. The wording is the assertion, not the
     # styling.
     assert "credits you set" in panel.text.lower(), panel.text
-    assert "4 (assumed) → 3" in panel.text, panel.text
+    assert "4 (the app's guess) → 3" in panel.text, panel.text
     app.xpath("//button[contains(.,'1 change')]")  # toolbar pill
     panel.find_element(
         By.XPATH,
         ".//li[contains(.,'TOC')]//button[normalize-space()=\"Back to CMI's credits\"]"
     ).click()
-    app.wait_toast("TOC back on official credits")
+    app.wait_toast("Removed your credit change to TOC")
     app.wait_gone("[data-testid='your-changes']")
     app.open_tab("My courses")
     assert app.css("section[aria-label='My courses'] .credit-summary .cs-num").text == "6"
@@ -790,7 +814,7 @@ def t18_overwrites_panel_and_remove_all(app):
     app.open_tab("My timetable")
     panel = app.wait_css("[data-testid='your-changes']")
     assert "→ Wed 17:00–18:15" in panel.text, panel.text
-    assert "4 (assumed) → 2" in panel.text, panel.text
+    assert "4 (the app's guess) → 2" in panel.text, panel.text
     app.xpath("//button[contains(.,'2 changes')]")
     panel.find_element(
         By.XPATH, ".//button[normalize-space()=\"Undo my changes to CMI's courses\"]"
@@ -1126,7 +1150,7 @@ def t30_sync_merge_conflict_flow(app):
         dialog.find_element(By.XPATH, ".//button[normalize-space()='Apply']").click()
         app.wait_toast("Conflicts resolved")
         app.wait_css("td[data-day='2'][data-slot='1020'] button.chip[aria-label^='TOC,']")
-        app.wait_toast(f"{gone} is no longer on CMI's timetable")
+        app.wait_toast(f"CMI dropped {gone} from its timetable")
         banner = app.xpath("//div[contains(@class,'banner')][contains(.,'CMI updated')]")
         banner.find_element(
             By.XPATH, ".//button[normalize-space()='See what changed']"
@@ -1351,7 +1375,7 @@ def t35_remove_meeting(app):
     assert "meeting you removed" in dialog_text.lower(), dialog_text[:300]
     assert "Tue 09:10" in dialog_text, dialog_text[:300]
     app.xpath("//div[@class='dialog']//button[normalize-space()='Put it back']").click()
-    app.wait_toast("TOC back on CMI's time")
+    app.wait_toast("TOC's meeting is back")
     app.d.find_element(By.CSS_SELECTOR, "body").send_keys(Keys.ESCAPE)
     assert app.chips("TOC", "td[data-day='1'][data-slot='550']"), \
         "Restore must bring the meeting back"
@@ -1522,7 +1546,11 @@ def t38_duration_based_credits(app):
     pills = [p.text for p in app.css_all("section[aria-label='My courses'] .credit-summary .cs-pill")]
     assert pills == ["1 course at 4 credits", "2 courses at 2 credits"], pills
     # Two courses carry assumptions (at different values), one is stated.
-    assert "CMI doesn't list credits for 2 courses" in section.text, section.text
+    assert "CMI doesn't list credits for 2 of your courses" in section.text, section.text
+    assert "so the app filled the numbers in" in section.text, section.text
+    # One sentence per reason that actually fired.
+    assert "one credit per month" in section.text, section.text
+    assert "Anything else counts as 4" in section.text, section.text
 
     # The MATH card's credits badge says 2 and explains why.
     badge = app.xpath(
@@ -1530,16 +1558,18 @@ def t38_duration_based_credits(app):
         "[.//button[starts-with(@aria-label,'MATH,')]]"
         "//span[contains(@class,'badge')][contains(normalize-space(),'cr')]"
     )
-    assert badge.text.strip() == "2 cr", badge.text
-    assert "Oct-Nov duration" in badge.get_attribute("title"), \
-        badge.get_attribute("title")
+    # The * is the same mark the printed sheet uses for the app's guesses.
+    assert badge.text.strip() == "2 cr*", badge.text
+    assert "It runs Oct-Nov, so the app counts one credit per month" \
+        in badge.get_attribute("title"), badge.get_attribute("title")
 
     # The details dialog spells the same assumption out.
     chip = app.chip("MATH", "section[aria-label='My courses']")
     app.d.execute_script("arguments[0].scrollIntoView({block:'center'});", chip)
     chip.click()
     dialog = app.wait_css(".dialog")
-    assert "assumed from its Oct-Nov duration" in dialog.text, dialog.text[:400]
+    assert "It runs Oct-Nov, so the app counts one credit per month" in dialog.text, \
+        dialog.text[:400]
     app.d.find_element(By.CSS_SELECTOR, "body").send_keys(Keys.ESCAPE)
 
 
@@ -1803,7 +1833,7 @@ def t42_custom_course_shadowed_by_cmi(app):
     dialog = app.wait_css(".dialog")
     assert "You're seeing your own version" in dialog.text, dialog.text[:400]
     dialog.find_element(
-        By.XPATH, ".//button[normalize-space()=\"Use CMI's version instead\"]"
+        By.XPATH, ".//button[normalize-space()=\"Delete my version and use CMI's\"]"
     ).click()
     app.wait_gone(".dialog")
     app.wait_toast("TOC now uses CMI's version")
@@ -2764,7 +2794,7 @@ def t62_the_wheel_steps_the_boxes_that_have_a_step(app):
     # The app hears it, exactly as if it had been typed: "Use CMI's value"
     # only shows when the value differs from CMI's.
     wheel(box, -50)
-    app.xpath("//button[normalize-space()=\"Use CMI's value\"]")
+    app.xpath("//button[starts-with(normalize-space(),\"Back to the app's\") or starts-with(normalize-space(),\"Use CMI's\")]")
 
     # The box's own min/max do the clamping, not us.
     for _ in range(25):
@@ -2953,7 +2983,8 @@ def t65_my_courses_has_the_same_filters(app):
     instructors = opts("Instructor")
     assert 0 < len(instructors) <= 6, instructors
 
-    # One set of filters, everywhere: what is set here is set in the catalog.
+    # SEPARATE state (R43): filtering your own courses must not quietly
+    # narrow the catalog you look at next — and vice versa.
     box = app.css("section[aria-label='My courses'] .filterbar input[type='search']")
     box.send_keys("RDBM")
     WebDriverWait(app.d, 10).until(
@@ -2961,7 +2992,8 @@ def t65_my_courses_has_the_same_filters(app):
     app.open_tab("Catalog")
     app.wait_css("section[aria-label='Catalog']")
     assert app.css("section[aria-label='Catalog'] .filterbar input[type='search']"
-                   ).get_attribute("value") == "RDBM"
+                   ).get_attribute("value") == "", \
+        "a My-courses filter must not leak into the catalog"
 
 
 def t66_controls_that_cannot_act_are_not_offered(app):
@@ -3005,27 +3037,27 @@ def t66_controls_that_cannot_act_are_not_offered(app):
     assert any("GERMAN" in c for c in cards), \
         f"your own course IS a custom time — the flag must match it: {cards}"
 
-    # A value ticked where it was in scope stays visible where it is not:
-    # otherwise its own menu shows no row while its badge counts it, and
-    # "None" cannot clear it.
-    app.boot("/", selection=["TOC"])
+    # A value ticked where it was in scope stays visible where it is not —
+    # WITHIN the pair of bars that share state (Catalog + Master grid; since
+    # R43 My courses has its own set, so nothing leaks there at all).
+    # M K Srivas teaches only SVA, which CMI hasn't timetabled: tickable on
+    # the Catalog (it lists rows), out of scope on the Master grid (it draws
+    # cells). Without with_picked the grid's menu would show no row while
+    # its badge counted one, and "None" could not clear it.
+    app.boot("/")
     app.open_tab("Catalog")
     app.wait_css("section[aria-label='Catalog'] .filterbar")
     app.xpath("//details[contains(@class,'facet')]/summary"
               "[starts-with(normalize-space(),'Instructor')]").click()
     app.wait_css("details.facet[open] .menu")
-    picked = None
-    for row in app.css_all("details.facet[open] .menu label.opt"):
-        if row.text.strip() and "Aiswarya" not in row.text:
-            picked = row.text.strip()
-            row.find_element(By.CSS_SELECTOR, "input").click()
-            break
-    assert picked, "needed an instructor who does not teach TOC"
+    picked = "M K Srivas"
+    app.xpath("//details[contains(@class,'facet') and @open]"
+              f"//label[contains(normalize-space(),'{picked}')]/input").click()
     time.sleep(0.4)
     app.d.find_element(By.CSS_SELECTOR, "body").send_keys(Keys.ESCAPE)
-    app.open_tab("My courses")
-    app.wait_css("section[aria-label='My courses'] .filterbar")
-    app.xpath("//section[@aria-label='My courses']//details[contains(@class,'facet')]"
+    app.open_tab("Master grid")
+    app.wait_css("section[aria-label='Master grid'] .filterbar")
+    app.xpath("//section[@aria-label='Master grid']//details[contains(@class,'facet')]"
               "/summary[starts-with(normalize-space(),'Instructor')]").click()
     app.wait_css("details.facet[open] .menu")
     rows = [r.text.strip() for r in app.css_all("details.facet[open] .menu label.opt")]
@@ -3274,9 +3306,320 @@ def t73_cmi_itself_is_the_fallback_and_says_so(app):
         app.d.get(f"{BASE}/")
         app.wait_css(".tabs .tab", timeout=30)
         app.xpath("//button[normalize-space()='Sync now']").click()
-        app.wait_toast("your browser may ask whether this page may reach it")
+        app.wait_toast("Your browser may now ask whether this page can reach devices")
     finally:
         stop_serving_cmi()
+
+
+def t74_offline_reload_boots_from_cache(app):
+    """The offline copy is real: visit once with the network up so the
+    worker installs, kill the server, reload — the app must boot entirely
+    from the worker's cache and say, in a toast, that you're offline and
+    everything still works. Runs on its own port/origin so its worker never
+    touches the origin the rest of the suite uses."""
+    base = f"http://127.0.0.1:{SW_PORT}"
+    server = serve_dist(SW_PORT)
+    d = app.d
+    try:
+        # First visit, network up: the app boots and the worker installs.
+        d.get(f"{base}/")
+        WebDriverWait(d, 15).until(
+            EC.presence_of_element_located((By.CSS_SELECTOR, ".header h1"))
+        )
+        # ready = a worker finished installing — and install waits on the
+        # whole precache (cache.addAll runs inside waitUntil), so ready
+        # means every file is cached. controller = it claimed this page.
+        assert d.execute_async_script("""
+            const done = arguments[arguments.length - 1];
+            navigator.serviceWorker.ready.then(() => done(true), () => done(false));
+        """), "the service worker must install on a normal online visit"
+        WebDriverWait(d, 20).until(
+            lambda d: d.execute_script(
+                "return !!(navigator.serviceWorker"
+                " && navigator.serviceWorker.controller);"
+            ),
+            message="the worker must claim the page it installed from",
+        )
+
+        # The network goes away entirely: nothing listens on the port.
+        server.shutdown()
+        server.server_close()
+
+        # Reload. Only the worker's cache can answer now.
+        d.get(f"{base}/")
+        WebDriverWait(d, 15).until(
+            EC.presence_of_element_located((By.CSS_SELECTOR, ".header h1")),
+            message="the app must boot from the worker's cache with no server",
+        )
+        # The note says so, in the app's own toast rail.
+        WebDriverWait(d, 15).until(
+            lambda d: "offline" in app.toasts_text().lower(),
+            message=f"expected the offline note; toasts: {app.toasts_text()!r}",
+        )
+        # Not a dead shell: nothing was seeded on this origin, so the app
+        # must be alive enough to show its first-run screen.
+        assert app.css_all(".welcome-card"), \
+            "the app must render its UI, not a blank page"
+    finally:
+        try:
+            server.shutdown()
+            server.server_close()
+        except Exception:
+            pass
+
+
+def t75_my_courses_filters_are_its_own(app):
+    """The Catalog and the Master grid share one filter state (they ask the
+    same question); My courses has its own. Neither may overwrite the
+    other, and undo restores the right one."""
+    app.boot("/", selection=["TOC", "RDBM", "SVA"])
+    # Set a catalog filter…
+    app.open_tab("Catalog")
+    cat = app.wait_css("section[aria-label='Catalog']")
+    box = cat.find_element(By.CSS_SELECTOR, ".filterbar input[type='search']")
+    box.send_keys("Theory")
+    time.sleep(0.4)
+    # …it shows on the master grid (shared)…
+    app.open_tab("Master grid")
+    assert app.css("section[aria-label='Master grid'] .filterbar input[type='search']"
+                   ).get_attribute("value") == "Theory", "catalog and grid share state"
+    # …but NOT on My courses, whose three cards are untouched.
+    app.open_tab("My courses")
+    assert app.css("section[aria-label='My courses'] .filterbar input[type='search']"
+                   ).get_attribute("value") == ""
+    assert len(app.css_all("section[aria-label='My courses'] .card")) == 3, \
+        "a catalog filter must not hide the user's own courses"
+    # A My-courses filter stays here…
+    my_box = app.css("section[aria-label='My courses'] .filterbar input[type='search']")
+    my_box.send_keys("TOC")
+    WebDriverWait(app.d, 10).until(
+        lambda d: len(app.css_all("section[aria-label='My courses'] .card")) == 1)
+    app.open_tab("Catalog")
+    assert app.css("section[aria-label='Catalog'] .filterbar input[type='search']"
+                   ).get_attribute("value") == "Theory", "the catalog keeps its own"
+    # …and undoing (one step) takes back the My-courses edit, not the
+    # catalog's: history entries carry both sets.
+    app.d.find_element(By.CSS_SELECTOR, "body").send_keys(Keys.CONTROL, "z")
+    time.sleep(0.4)
+    assert app.css("section[aria-label='Catalog'] .filterbar input[type='search']"
+                   ).get_attribute("value") == "Theory"
+    app.open_tab("My courses")
+    assert app.css("section[aria-label='My courses'] .filterbar input[type='search']"
+                   ).get_attribute("value") == ""
+
+
+def t76_no_false_conflict_and_decide_later_survives_reload(app):
+    """Two halves of the same trust story. (1) A share link with moved AND
+    added meetings, opened in a browser that has never synced: the first
+    sync must raise NO conflict — there is no history to compare, so
+    nothing 'changed'. (2) A REAL conflict deferred with 'Decide later'
+    must survive a reload: a question the app asked cannot evaporate
+    because the page was refreshed."""
+    # Closest honest repro of the report: overrides present (as a share
+    # link leaves them) with NO snapshot, then the first sync runs against
+    # the fake CMI.
+    serve_cmi()
+    try:
+        app.d.get(f"{BASE}/e2e-blank")
+        app.d.execute_script("""
+            localStorage.clear();
+            localStorage.setItem('cmitt.v1.selection', arguments[0]);
+            localStorage.setItem('cmitt.v1.overrides', arguments[1]);
+        """, json.dumps(["TOC", "RFLR"]), json.dumps({
+            "next_id": 2,
+            "items": [
+                {"id": 0, "course": "TOC",
+                 "base": {"day": "Tue", "slot": {"start_min": 550, "end_min": 625},
+                          "hall": "Lecture Hall 803", "temp_booking": False},
+                 "to": {"day": "Wed", "slot": {"start_min": 1020, "end_min": 1095},
+                        "hall": "Lecture Hall 803", "temp_booking": False},
+                 "created_at": 1754000000000.0},
+                {"id": 1, "course": "RFLR", "base": None,
+                 "to": {"day": "Mon", "slot": {"start_min": 710, "end_min": 785},
+                        "hall": "NKN AV Hall", "temp_booking": False},
+                 "created_at": 1754000000000.0},
+            ],
+            "credits": [],
+        }))
+        app.d.get(f"{BASE}/")
+        app.wait_css(".tabs .tab", timeout=30)
+        time.sleep(1.0)
+        assert not app.css_all(".dialog"), \
+            "a first sync has no history and must not claim CMI changed anything"
+        assert "conflict" not in app.css("body").text.lower(), app.toasts_text()
+        # Both changes are alive on the timetable.
+        app.open_tab("My timetable")
+        app.wait_css("td[data-day='2'][data-slot='1020'] button.chip[aria-label^='TOC,']")
+
+        # (2) Now a REAL conflict: the cache remembers a different TOC than
+        # the live pages show. Defer it, reload, and it must still be there.
+        snap, overrides, _gone = cache_from_before_cmi_moved_toc()
+        app.boot("/", selection=["TOC"], raw_snapshot=snap, overrides=overrides)
+        app.xpath("//button[normalize-space()='Sync now']").click()
+        dialog = app.wait_css(".dialog")
+        assert "conflict" in dialog.text.lower() or "CMI changed" in dialog.text, dialog.text
+        dialog.find_element(By.XPATH, ".//button[normalize-space()='Decide later']").click()
+        app.wait_gone(".dialog")
+        banner = app.wait_css(".banner.warn")
+        assert "Review" in banner.text
+        app.d.refresh()
+        app.wait_css(".tabs .tab", timeout=30)
+        banner = app.wait_css(".banner.warn", timeout=10)
+        assert "Review" in banner.text, \
+            "a deferred question must survive a reload — refreshing is not an answer"
+        # And Review still opens a working dialog after the reload.
+        banner.find_element(By.XPATH, ".//button[normalize-space()='Review']").click()
+        dialog = app.wait_css(".dialog")
+        assert "TOC" in dialog.text
+    finally:
+        stop_serving_cmi()
+
+
+def t77_what_changed_shows_what_a_dropped_course_was(app):
+    """A dropped course is exactly the one the fresh snapshot can't
+    describe — so the digest itself must carry what it WAS: name, teacher,
+    and when it met. Shown in the dialog, and nowhere else in the app."""
+    serve_cmi()
+    try:
+        snap, _overrides, gone = cache_from_before_cmi_moved_toc()
+        app.boot("/", selection=["TOC"], raw_snapshot=snap)
+        app.xpath("//button[normalize-space()='Sync now']").click()
+        app.wait_toast("Timetable updated")
+        app.xpath("//button[normalize-space()='See what changed']").click()
+        dialog = app.wait_css(".dialog")
+        assert gone in dialog.text, dialog.text
+        detail = dialog.find_element(By.CSS_SELECTOR, ".diff-removed-detail").text
+        assert "Was taught by" in detail or "Met " in detail, \
+            f"the dropped course must say what it was: {detail!r}"
+        # …and nowhere else: closing the dialog, the code appears in no grid
+        # or list (the fresh snapshot never heard of it).
+        app.d.find_element(By.CSS_SELECTOR, "body").send_keys(Keys.ESCAPE)
+        app.wait_gone(".dialog")
+        app.open_tab("Catalog")
+        cat = app.wait_css("section[aria-label='Catalog']")
+        assert gone not in cat.text, "a dropped course must not haunt the catalog"
+    finally:
+        stop_serving_cmi()
+
+
+def t78_many_filter_chips_collapse_behind_more(app):
+    """Selecting every course in the catalog is legitimate; seventy chips
+    drowning the page is not the UI for it. Past a line's worth the chips
+    collapse behind '+N more' — and every one stays removable once
+    expanded."""
+    app.boot("/")
+    app.open_tab("Catalog")
+    app.wait_css("section[aria-label='Catalog'] .filterbar")
+    app.xpath("//section[@aria-label='Catalog']//details[contains(@class,'facet')]"
+              "/summary[starts-with(normalize-space(),'Course')]").click()
+    app.wait_css("details.facet[open] .menu")
+    app.xpath("//details[contains(@class,'facet') and @open]"
+              "//button[normalize-space()='All']").click()
+    time.sleep(0.6)
+    app.d.find_element(By.CSS_SELECTOR, "body").send_keys(Keys.ESCAPE)
+    chips = app.css_all("section[aria-label='Catalog'] .chipline .filterchip")
+    assert len(chips) == 8, f"collapsed to one line's worth, got {len(chips)}"
+    more = app.css("section[aria-label='Catalog'] .chipline-more")
+    n_hidden = int(more.text.strip().lstrip("+").split()[0])
+    assert n_hidden > 20, more.text
+    more.click()
+    time.sleep(0.3)
+    chips = app.css_all("section[aria-label='Catalog'] .chipline .filterchip")
+    assert len(chips) == 8 + n_hidden, "expanded shows every chip"
+    assert "Show fewer" in app.css("section[aria-label='Catalog'] .chipline-more").text
+    # Removing one specific chip still works while expanded.
+    chips[10].find_element(By.TAG_NAME, "button").click()
+    time.sleep(0.3)
+    assert len(app.css_all("section[aria-label='Catalog'] .chipline .filterchip")) \
+        == 7 + n_hidden
+
+
+def t79_json_exports_parse_and_the_snapshot_round_trips(app):
+    """Export the timetable as JSON (machine-first: stable keys, effective
+    meetings, credit provenance), export the whole snapshot, wipe the
+    browser, import the snapshot back — the same catalog appears, and the
+    pill honestly says 'imported' with the ORIGINAL fetch date's age."""
+    app.boot("/", selection=["TOC", "RDBM"], overrides=TOC_OVR)
+    app.xpath("//button[normalize-space()='My data']").click()
+    dialog = app.wait_css(".dialog")
+    dialog.find_element(By.XPATH, ".//button[normalize-space()='Export as JSON']").click()
+    time.sleep(1.0)
+    tt_files = [f for f in os.listdir(DOWNLOADS) if f.startswith("cmi-timetable-")
+                and f.endswith(".json")]
+    assert tt_files, os.listdir(DOWNLOADS)
+    with open(os.path.join(DOWNLOADS, sorted(tt_files)[-1]), encoding="utf-8") as f:
+        tt = json.load(f)
+    assert tt["format"] == "cmi-timetable-export"
+    assert tt["format_version"].startswith("1.")
+    codes = [c["code"] for c in tt["courses"]]
+    assert codes == sorted(codes, key=str.lower) and set(codes) == {"TOC", "RDBM"}
+    toc = next(c for c in tt["courses"] if c["code"] == "TOC")
+    moved = [m for m in toc["meetings"] if m["origin"] == "moved"]
+    assert moved and moved[0]["cmi_original"]["day"] == "Tue", moved
+    assert moved[0]["day"] == "Wed" and moved[0]["start"]["hhmm"] == "17:00"
+    assert toc["credits"]["source"] in ("assumed", "user", "cmi")
+
+    dialog.find_element(By.XPATH, ".//button[normalize-space()='Export snapshot']").click()
+    time.sleep(1.0)
+    snap_files = [f for f in os.listdir(DOWNLOADS) if f.startswith("cmi-snapshot-")]
+    assert snap_files, os.listdir(DOWNLOADS)
+    snap_path = os.path.join(DOWNLOADS, sorted(snap_files)[-1])
+    with open(snap_path, encoding="utf-8") as f:
+        envelope = json.load(f)
+    assert envelope["format"] == "cmi-snapshot"
+    assert envelope["snapshot"]["courses"], "the whole catalog rides in the file"
+    assert "raw_html_gz" not in envelope["snapshot"] \
+        or envelope["snapshot"]["raw_html_gz"] is None
+
+    # Wipe everything, import the file, and the catalog is back — labelled
+    # honestly as imported, at the DATA's age.
+    app.boot("/", seed=False)
+    app.wait_css(".welcome-card")
+    # The first-run auto-sync fails against the stopped CMI and toasts about
+    # it; the toast rail floats over the welcome note and would intercept
+    # the click. Toasts auto-dismiss — wait them out.
+    WebDriverWait(app.d, 20).until(
+        lambda d: not app.css_all(".toasts .toast"),
+        message="toasts must clear before the note is clickable")
+    # The button appends a hidden file input; give the handler a beat and
+    # retry the click once — a first-run background sync can be repainting
+    # the welcome card at the same moment.
+    app.xpath("//button[normalize-space()='Import it']").click()
+    try:
+        file_input = WebDriverWait(app.d, 5).until(
+            lambda d: d.find_element(By.CSS_SELECTOR, "#cmitt-import-input"))
+    except Exception:
+        app.xpath("//button[normalize-space()='Import it']").click()
+        file_input = WebDriverWait(app.d, 10).until(
+            lambda d: d.find_element(By.CSS_SELECTOR, "#cmitt-import-input"))
+    file_input.send_keys(snap_path)
+    app.wait_css(".tabs .tab", timeout=20)
+    # The pill updates a beat after adoption — wait, don't snapshot-assert.
+    WebDriverWait(app.d, 10).until(
+        lambda d: "imported" in app.css(".sync-pill").text,
+        message=f"pill: {app.css('.sync-pill').text!r}")
+    app.open_tab("Catalog")
+    app.wait_css("section[aria-label='Catalog']")
+    app.chip("TOC")  # the imported catalog renders
+
+
+def t80_a_seminar_is_assumed_zero_credits(app):
+    """CMI lists seminars without credits; assuming the campus default of 4
+    for them inflated every total. A seminar with no stated credits counts
+    0, the note says why in plain words, and a stated value always wins."""
+    app.boot("/", selection=["CSEM"])  # "CS Seminar", creditless in the fixture
+    app.open_tab("My courses")
+    section = app.wait_css("section[aria-label='My courses']")
+    assert app.css("section[aria-label='My courses'] .credit-summary .cs-num").text == "0"
+    assert "so the app counts it as 0" in section.text, section.text
+    assert "seminars don't usually carry credit" in section.text, section.text
+    badge = app.xpath(
+        "//section[@aria-label='My courses']//div[contains(@class,'card')]"
+        "[.//button[starts-with(@aria-label,'CSEM,')]]"
+        "//span[contains(@class,'badge')][contains(normalize-space(),'cr')]"
+    )
+    assert badge.text.strip() == "0 cr*", badge.text
+    assert "seminar" in badge.get_attribute("title"), badge.get_attribute("title")
 
 
 TESTS = [
@@ -3353,6 +3696,13 @@ TESTS = [
     t71_what_changed_never_opens_with_nothing_to_say,
     t72_a_relay_is_asked_before_cmi_itself,
     t73_cmi_itself_is_the_fallback_and_says_so,
+    t74_offline_reload_boots_from_cache,
+    t75_my_courses_filters_are_its_own,
+    t76_no_false_conflict_and_decide_later_survives_reload,
+    t77_what_changed_shows_what_a_dropped_course_was,
+    t78_many_filter_chips_collapse_behind_more,
+    t79_json_exports_parse_and_the_snapshot_round_trips,
+    t80_a_seminar_is_assumed_zero_credits,
 ]
 
 

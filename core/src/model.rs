@@ -323,18 +323,45 @@ impl Course {
         }
     }
 
-    /// The credit value assumed when CMI states none: a course annotated
-    /// with a month span shorter than a full semester counts one credit per
-    /// month ("(Oct-Nov)" → 2, "(Sep)" → 1) — CMI's credits track contact
-    /// time; a longer or absent span gets the campus default of 4.
+    /// Does CMI's name for this course say it is a seminar? Seminars at CMI
+    /// are attended, not credited, so when CMI states no credits the honest
+    /// guess for one is 0 — not the campus default of 4. Matched on the
+    /// word anywhere in the name ("Number Theory Seminar", "Seminar on X"),
+    /// case-insensitively; a stated credit value always wins over this.
+    pub fn is_seminar(&self) -> bool {
+        self.name
+            .to_ascii_lowercase()
+            .split(|c: char| !c.is_ascii_alphabetic())
+            .any(|w| w == "seminar" || w == "seminars")
+    }
+
+    /// The credit value assumed when CMI states none, and why:
+    /// - a seminar counts 0 — seminars are attended, not credited;
+    /// - a course annotated with a month span shorter than a full semester
+    ///   counts one credit per month ("(Oct-Nov)" → 2, "(Sep)" → 1) —
+    ///   CMI's credits track contact time;
+    /// - anything else gets the campus default of 4.
     pub fn assumed_credits(&self) -> u8 {
-        match self.months_span() {
-            Some(n) if n < Self::DEFAULT_CREDITS => n.max(1),
-            _ => Self::DEFAULT_CREDITS,
+        match self.credit_assumption() {
+            CreditAssumption::Seminar => 0,
+            CreditAssumption::Months(n) => n.max(1),
+            CreditAssumption::Default => Self::DEFAULT_CREDITS,
         }
     }
 
-    /// The stated credits, or the duration-aware assumption above.
+    /// Which rule `assumed_credits` used — so the UI can say WHY the number
+    /// isn't simply 4, in words ("it's a seminar", "it runs Oct–Nov only").
+    pub fn credit_assumption(&self) -> CreditAssumption {
+        if self.is_seminar() {
+            return CreditAssumption::Seminar;
+        }
+        match self.months_span() {
+            Some(n) if n < Self::DEFAULT_CREDITS => CreditAssumption::Months(n),
+            _ => CreditAssumption::Default,
+        }
+    }
+
+    /// The stated credits, or the assumption above.
     pub fn effective_credits(&self) -> u8 {
         self.credits.unwrap_or_else(|| self.assumed_credits())
     }
@@ -347,12 +374,9 @@ impl Course {
     /// The month-span note ("Oct-Nov") when it is what determined the
     /// assumed credits — for UI copy explaining WHY the assumption isn't 4.
     pub fn duration_note(&self) -> Option<&str> {
-        (self.credits.is_none()
-            && self
-                .months_span()
-                .is_some_and(|n| n < Self::DEFAULT_CREDITS))
-        .then_some(self.part_of_semester.as_deref())
-        .flatten()
+        (self.credits.is_none() && matches!(self.credit_assumption(), CreditAssumption::Months(_)))
+            .then_some(self.part_of_semester.as_deref())
+            .flatten()
     }
 
     /// Build a user-created course. Meetings get the same ordering parsed
@@ -386,6 +410,18 @@ impl Course {
     }
 }
 
+/// Which rule filled in a credit value CMI didn't state — so copy can say
+/// why, not just how many. See [`Course::assumed_credits`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CreditAssumption {
+    /// The name says seminar: attended, not credited → 0.
+    Seminar,
+    /// A month-span note shorter than the semester → one credit per month.
+    Months(u8),
+    /// Nothing to go on → the campus default of 4.
+    Default,
+}
+
 /// Where a snapshot's data came from.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SourceTier {
@@ -401,6 +437,12 @@ pub enum SourceTier {
     /// Legacy: snapshots baked into pre-1.x app builds. Kept only so those
     /// stored snapshots still deserialize; the app discards them at load time.
     Bundled,
+    /// A snapshot loaded from a file another student (or you) exported. The
+    /// data inside is CMI's, parsed by this app's own parser when it was
+    /// fetched — but THIS browser did not fetch it, and the pill says so.
+    /// `fetched_at` stays the ORIGINAL fetch time: importing a file does
+    /// not make old data young, and the staleness tint measures the data.
+    Imported,
     /// The empty placeholder before the first successful sync.
     None,
 }
@@ -412,6 +454,7 @@ impl SourceTier {
             SourceTier::Proxy(name) => format!("via proxy ({name})"),
             SourceTier::Mirror => "from this site's old copy".to_string(),
             SourceTier::Bundled => "bundled with the app".to_string(),
+            SourceTier::Imported => "imported from a file".to_string(),
             SourceTier::None => "nothing synced yet".to_string(),
         }
     }
@@ -422,6 +465,7 @@ impl SourceTier {
             SourceTier::Proxy(_) => "proxy".to_string(),
             SourceTier::Mirror => "old copy".to_string(),
             SourceTier::Bundled => "built-in copy".to_string(),
+            SourceTier::Imported => "imported".to_string(),
             SourceTier::None => "not synced".to_string(),
         }
     }

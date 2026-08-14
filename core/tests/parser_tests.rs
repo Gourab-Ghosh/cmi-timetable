@@ -212,6 +212,66 @@ fn t08b_duration_assumed_credits() {
     assert_eq!((cm1.months_span(), cm1.effective_credits()), (None, 4));
 }
 
+/// Test 8b2 — seminars are attended, not credited: an unstated credit value
+/// on a course whose NAME says seminar is assumed 0, not the campus default
+/// of 4. Proven through the real fixture parse, plus the boundaries: a
+/// stated value always wins, and "seminar" must be a whole word.
+#[test]
+fn t08b2_seminar_assumed_zero_credits() {
+    use cmi_timetable_core::model::CreditAssumption;
+
+    // Real fixture seminars: creditless, so assumed 0 for the seminar reason.
+    for code in ["CSEM", "DSEM", "PSEM"] {
+        let c = SNAPSHOT.course(code).unwrap();
+        assert!(c.is_seminar(), "{code}: {}", c.name);
+        assert!(c.credits_assumed(), "{code}");
+        assert_eq!(c.effective_credits(), 0, "{code}");
+        assert_eq!(c.credit_assumption(), CreditAssumption::Seminar, "{code}");
+    }
+
+    let mk =
+        |name: &str, credits: Option<u8>, part: Option<&str>| cmi_timetable_core::model::Course {
+            code: "X".into(),
+            name: name.into(),
+            instructors: vec![],
+            branches: vec![],
+            credits,
+            starts: None,
+            part_of_semester: part.map(str::to_string),
+            optional_flag: false,
+            status: cmi_timetable_core::model::ScheduleStatus::Scheduled,
+            meetings: vec![],
+        };
+    // Word position and case don't matter…
+    assert_eq!(
+        mk("Number Theory Seminar", None, None).effective_credits(),
+        0
+    );
+    assert_eq!(mk("SEMINAR ON GRAPHS", None, None).effective_credits(), 0);
+    assert_eq!(mk("Topology (seminar)", None, None).effective_credits(), 0);
+    // …a stated value always wins…
+    assert_eq!(
+        mk("Number Theory Seminar", Some(2), None).effective_credits(),
+        2
+    );
+    assert!(!mk("Number Theory Seminar", Some(2), None).credits_assumed());
+    // …the seminar reason beats the duration reason (0, not months)…
+    assert_eq!(
+        mk("Algebra Seminar", None, Some("Oct-Nov")).effective_credits(),
+        0
+    );
+    assert_eq!(
+        mk("Algebra Seminar", None, Some("Oct-Nov")).duration_note(),
+        None
+    );
+    // …and only the whole word counts.
+    assert_eq!(mk("Seminarology", None, None).effective_credits(), 4);
+    assert_eq!(
+        mk("Seminarology", None, None).credit_assumption(),
+        CreditAssumption::Default
+    );
+}
+
 /// Test 8c — month-span notes in every plausible hand-edited form, and the
 /// words that must never count as months.
 #[test]

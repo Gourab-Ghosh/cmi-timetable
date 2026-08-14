@@ -23,6 +23,22 @@
       document.documentElement.dataset.theme = theme;
     })();
   </script>
+  <script>
+    // Offline copy: a service worker (written by app/hooks/gen-sw.sh at
+    // build time) precaches this exact build, so the app opens with no
+    // connection after one normal visit. Registered on window load so it
+    // never competes with the wasm download. The relative URL keeps this
+    // working at "/" (local, e2e, user/org Pages) and "/cmi-timetable/"
+    // (project Pages) alike — the scope defaults to the app's own directory.
+    if ("serviceWorker" in navigator) {
+      window.addEventListener("load", function () {
+        navigator.serviceWorker.register("./sw.js").catch(function () {
+          // Private windows / old browsers: no offline copy. The app itself
+          // is unaffected.
+        });
+      });
+    }
+  </script>
   <link data-trunk rel="css" href="styles.css" />
   <link data-trunk rel="copy-file" href="public/404.html" />
   <!-- The --enable-* flags match the wasm features rustc emits by default
