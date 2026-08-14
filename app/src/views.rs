@@ -84,11 +84,10 @@ fn welcome(app: App) -> impl IntoView {
                     }}
                 </p>
                 <p class="welcome-note muted small">
-                    "The app never ships a copy of the timetable; it shows CMI's real \
-                     pages, fetched straight from cmi.ac.in. CMI keeps editing them \
-                     through the semester, so sync every few days to stay up to date — \
-                     the app re-checks on its own too, at most twice a day, and always \
-                     tells you what changed."
+                    "Nothing is shipped with the app: it fetches CMI's own pages \
+                     from cmi.ac.in. CMI keeps editing them through the semester, so \
+                     sync every few days. The app also re-checks on its own, at most \
+                     twice a day, and tells you what changed."
                 </p>
                 <p class="welcome-note muted small">
                     "Got a snapshot file from another student? "
@@ -359,9 +358,14 @@ fn my_timetable(app: App) -> impl IntoView {
                 <button
                     class="btn"
                     disabled=move || app.selection.with(|s| s.is_empty())
+                    title=move || {
+                        app.selection
+                            .with(|s| s.is_empty())
+                            .then_some("Add a course first — there is nothing to export yet.")
+                    }
                     on:click=move |_| app.dialog.set(Some(Dialog::Export { scope: None }))
                 >
-                    "Export .ics"
+                    "Export to calendar"
                 </button>
                 // Disabled on an empty timetable, like the Export button beside it:
                 // printing a blank grid is not something anyone asked for, and
@@ -369,6 +373,11 @@ fn my_timetable(app: App) -> impl IntoView {
                 <button
                     class="btn"
                     disabled=move || app.selection.with(|s| s.is_empty())
+                    title=move || {
+                        app.selection
+                            .with(|s| s.is_empty())
+                            .then_some("Add a course first — there is nothing to print yet.")
+                    }
                     on:click=move |_| {
                         let _ = crate::domx::window().print();
                     }
@@ -383,8 +392,9 @@ fn my_timetable(app: App) -> impl IntoView {
                         <div class="empty panel">
                             <p class="big">"Your week is a blank grid."</p>
                             <p>
-                                "Add courses from the catalog — clashes are flagged the moment \
-                                 they appear, and every time slot stays yours to fine-tune."
+                                "Add courses from the catalog. The app marks a clash as soon \
+                                 as two of your courses overlap, and you can move any meeting \
+                                 to a time that suits you better."
                             </p>
                             <button class="btn primary" on:click=move |_| app.set_tab(Tab::Catalog)>
                                 "Open the catalog"
@@ -539,7 +549,7 @@ fn my_timetable(app: App) -> impl IntoView {
                         } else if mine == 0 {
                             "CMI lists these courses but hasn't put them on the timetable"
                         } else {
-                            "waiting for a time"
+                            "some are CMI's, some are your own — none has a time yet"
                         };
                         view! {
                             <div class="tray noprint">
@@ -554,8 +564,9 @@ fn my_timetable(app: App) -> impl IntoView {
                                 // nothing said so — the drag was the only
                                 // route and it had no hint at all.
                                 <p class="muted small tray-hint">
-                                    "Drag one onto the grid in ✎ Edit layout, or open it \
-                                     here to set a time — and anything else about it."
+                                    "Turn on ✎ Edit layout and drag one onto the grid, or \
+                                     press Edit this course to set its time — and its hall, \
+                                     credits or name while you're there."
                                 </p>
                                 <div class="items">
                                     {items
@@ -1058,7 +1069,7 @@ fn my_courses(app: App) -> impl IntoView {
                                         view! {
                                             <p class="muted small filtered-note">
                                                 {format!(
-                                                    "Filters are hiding {n} of your course{}.                                                      The credit total above still counts {}.",
+                                                    "Filters are hiding {n} of your course{}. The credit total above still counts {}.",
                                                     if n == 1 { "" } else { "s" },
                                                     if n == 1 { "it" } else { "them" },
                                                 )}
@@ -1077,7 +1088,7 @@ fn my_courses(app: App) -> impl IntoView {
                             <p class="big">"No courses selected yet."</p>
                             <p>
                                 "Courses you add appear here with their instructors, credits, \
-                                 meeting times and your customisations."
+                                 meeting times and any changes you make."
                             </p>
                             <div class="row" style="justify-content:center;gap:0.5rem">
                                 <button
@@ -1174,10 +1185,12 @@ fn my_courses(app: App) -> impl IntoView {
                 (!parked.is_empty())
                     .then(|| {
                         view! {
-                            <div class="parked" role="group" aria-label="Your courses, off the timetable">
-                                <h3>"Your courses, off the timetable"</h3>
+                            <div class="parked" role="group" aria-label="Courses you made, off your timetable">
+                                <h3>"Courses you made, off your timetable"</h3>
                                 <p class="muted small">
-                                    "Removed but kept — add one back whenever you need it."
+                                    "These are courses you made yourself and then took off \
+                                     your timetable. The app keeps them here, so you can add \
+                                     one back whenever you want."
                                 </p>
                                 {parked
                                     .into_iter()
@@ -1196,7 +1209,7 @@ fn my_courses(app: App) -> impl IntoView {
                                                 <strong>{c.name}</strong>
                                                 <span class="muted small">
                                                     {if when.is_empty() {
-                                                        "no fixed time".to_string()
+                                                        "no times set yet".to_string()
                                                     } else {
                                                         when
                                                     }}
@@ -1338,8 +1351,11 @@ fn course_card(app: App, course: Course) -> impl IntoView {
                 {is_custom
                     .then(|| {
                         view! {
-                            <span class="badge custom" title="Added by you — not on CMI's pages">
-                                "Custom"
+                            <span
+                                class="badge custom"
+                                title="You created this course. It isn't on CMI's pages."
+                            >
+                                "Added by you"
                             </span>
                         }
                     })}
@@ -1348,21 +1364,53 @@ fn course_card(app: App, course: Course) -> impl IntoView {
                         view! {
                             <span
                                 class="badge warn"
-                                title="CMI's timetable now lists this code too — open the \
-                                       course to compare or switch to CMI's version"
+                                title="You made this course, and CMI's timetable now \
+                                       lists the same code. You're seeing your version. \
+                                       Click the code chip to compare them or switch \
+                                       to CMI's."
                             >
-                                "also on CMI now"
+                                "CMI now lists this code too"
                             </span>
                         }
                     })}
                 {branch_chips}
                 {course
                     .optional_flag
-                    .then(|| view! { <span class="badge">"+ optional"</span> })}
+                    .then(|| {
+                        view! {
+                            <span
+                                class="badge"
+                                title="CMI's grid marks this course with a + — \
+                                       optional for the branch it's listed under."
+                            >
+                                "optional"
+                            </span>
+                        }
+                    })}
                 {(!removed && course.status == ScheduleStatus::UnscheduledListed)
-                    .then(|| view! { <span class="badge warn">"unscheduled"</span> })}
+                    .then(|| {
+                        view! {
+                            <span
+                                class="badge warn"
+                                title="CMI lists this course but hasn't put it on \
+                                       the timetable."
+                            >
+                                "no time from CMI"
+                            </span>
+                        }
+                    })}
                 {(course.status == ScheduleStatus::ScheduledNoBranch)
-                    .then(|| view! { <span class="badge warn">"no branch"</span> })}
+                    .then(|| {
+                        view! {
+                            <span
+                                class="badge warn"
+                                title="CMI's hall grid schedules this course, but \
+                                       no branch page lists it."
+                            >
+                                "not listed under a branch"
+                            </span>
+                        }
+                    })}
                 {(!notes.is_empty())
                     .then(|| view! { <span class="badge">{notes.join(" · ")}</span> })}
                 {clash.then(|| view! { <span class="badge alarm">"⚠ clash"</span> })}
@@ -1515,6 +1563,7 @@ fn master_grid(app: App) -> impl IntoView {
                 {edit_toggle(app)}
                 <button
                     class="btn small"
+                    title="Switch between roomy and tight rows"
                     on:click=move |_| {
                         app.prefs
                             .update(|p| {
@@ -1560,14 +1609,19 @@ fn master_grid(app: App) -> impl IntoView {
                             <p class="muted small unplaced-note" style="margin:0 0 0.6rem">
                                 {format!(
                                     "{} more course{} your filters, but CMI hasn't given {} a \
-                                     time — this grid has nowhere to draw {}. The catalog lists \
-                                     {}.",
+                                     time yet, so this grid has no slot to put {} in.",
                                     n,
                                     if n == 1 { " matches" } else { "s match" },
                                     if n == 1 { "it" } else { "them" },
                                     if n == 1 { "it" } else { "them" },
-                                    if n == 1 { "it" } else { "them" },
                                 )}
+                                {" "}
+                                <button
+                                    class="linklike"
+                                    on:click=move |_| app.set_tab(Tab::Catalog)
+                                >
+                                    "Open the catalog"
+                                </button>
                             </p>
                         }
                     })
@@ -1752,7 +1806,27 @@ fn catalog(app: App) -> impl IntoView {
                         view! {
                             <div class="empty panel">
                                 <p class="big">"No courses match."</p>
-                                <p>"Loosen a filter or clear the search to see more."</p>
+                                <p>
+                                    "Take a filter off above, or clear the search box, to \
+                                     see more."
+                                </p>
+                                <div class="row" style="justify-content:center">
+                                    <button
+                                        class="btn primary"
+                                        on:click=move |_| {
+                                            // The set the Catalog and the Master grid
+                                            // share — My courses' own filters stay put.
+                                            app.act_filters_in(
+                                                false,
+                                                "clear all filters",
+                                                false,
+                                                |f| *f = crate::state::Filters::default(),
+                                            );
+                                        }
+                                    >
+                                        "Clear the filters"
+                                    </button>
+                                </div>
                                 // It IS one of CMI's — you deleted it. Say so
                                 // and offer the way back, instead of offering
                                 // to create it and then refusing the code.
@@ -1886,13 +1960,56 @@ fn catalog_row(app: App, course: Course) -> impl IntoView {
                     </div>
                 </div>
                 {branch_chips}
-                {course.optional_flag.then(|| view! { <span class="badge">"+"</span> })}
+                {course
+                    .optional_flag
+                    .then(|| {
+                        view! {
+                            <span
+                                class="badge"
+                                title="CMI's grid marks this course with a + — \
+                                       optional for the branch it's listed under."
+                            >
+                                "optional"
+                            </span>
+                        }
+                    })}
                 {(course.status == ScheduleStatus::UnscheduledListed)
-                    .then(|| view! { <span class="badge warn">"unscheduled"</span> })}
+                    .then(|| {
+                        view! {
+                            <span
+                                class="badge warn"
+                                title="CMI lists this course but hasn't put it on \
+                                       the timetable."
+                            >
+                                "no time from CMI"
+                            </span>
+                        }
+                    })}
                 {(course.status == ScheduleStatus::ScheduledNoBranch)
-                    .then(|| view! { <span class="badge warn">"no branch"</span> })}
+                    .then(|| {
+                        view! {
+                            <span
+                                class="badge warn"
+                                title="CMI's hall grid schedules this course, but \
+                                       no branch page lists it."
+                            >
+                                "not listed under a branch"
+                            </span>
+                        }
+                    })}
                 {move || {
-                    temp().then(|| view! { <span class="badge warn">"temporary booking"</span> })
+                    temp()
+                        .then(|| {
+                            view! {
+                                <span
+                                    class="badge warn"
+                                    title="CMI's hall list marks this room booking as \
+                                           temporary, so the hall may change."
+                                >
+                                    "hall booked temporarily"
+                                </span>
+                            }
+                        })
                 }}
                 // One button, two jobs, and it wears the colour of whichever
                 // it is about to do: quiet accent to add, red to take away.
@@ -2382,7 +2499,14 @@ fn hall_row(
                                             {badge
                                                 .then(|| {
                                                     view! {
-                                                        <span class="badge warn">"temporary booking"</span>
+                                                        <span
+                                                            class="badge warn"
+                                                            title="CMI's hall list marks this room \
+                                                                   booking as temporary, so the hall \
+                                                                   may change."
+                                                        >
+                                                            "hall booked temporarily"
+                                                        </span>
                                                     }
                                                 })}
                                         }
@@ -2616,9 +2740,9 @@ fn halls_view(app: App) -> impl IntoView {
                 {edit_toggle(app)}
             </div>
             <p class="muted small" style="margin:0 0 0.6rem">
-                "Room allocation as CMI publishes it, with your own changes shown \
-                 where you moved them. Turn on ✎ Edit layout to drag a course to \
-                 another room or time; ✓ marks the courses on your timetable."
+                "This is CMI's room allocation. Anything you moved appears in the \
+                 room you moved it to. ✓ marks the courses on your timetable. Turn \
+                 on ✎ Edit layout to drag a course to another room or time."
             </p>
 
             {move || match view_mode() {

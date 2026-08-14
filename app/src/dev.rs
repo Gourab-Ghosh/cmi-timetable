@@ -517,11 +517,14 @@ fn raw_html_viewer(app: App) -> impl IntoView {
 /// Surfacing storage problems found at startup (called from init).
 pub fn corrupt_data_banner(app: App) {
     // Sticky: must survive the background update that runs right after
-    // startup. First two sentences are the exact §2.4 copy.
+    // startup. The backup key is in the console log, not here — a student
+    // can't act on a storage key, but "check your courses" they can do.
     app.set_banner_sticky(
         BannerKind::Warn,
-        "Your saved data couldn't be read, so it was set aside and the app fell \
-         back to defaults. Nothing was deleted. The unreadable copy is kept under \
-         a cmitt.corrupt.* key — see the storage inspector in developer mode.",
+        "Some of what the app had saved in your browser couldn't be read, so \
+         those parts were reset to defaults. Nothing was deleted — the unreadable \
+         copy is still in your browser, but the app can't restore anything from \
+         it. Check your courses and settings, and set up anything that's missing \
+         again.",
     );
 }

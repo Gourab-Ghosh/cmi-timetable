@@ -490,7 +490,7 @@ impl App {
         if self.dialog_dirty.get_untracked()
             && !crate::domx::window()
                 .confirm_with_message(
-                    "Close this form? What you have changed here hasn't been saved.",
+                    "Close this form and lose your changes? Nothing here has been saved yet.",
                 )
                 .unwrap_or(true)
         {
@@ -688,7 +688,8 @@ impl App {
             self.toast_undo(format!("Added {code}"));
         } else {
             self.toast_undo(format!(
-                "Added {code} — ⚠ clashes with {}",
+                "Added {code}. ⚠ It clashes with {}. It's on your timetable \
+                 either way.",
                 clashing.join(", ")
             ));
         }
@@ -729,7 +730,8 @@ impl App {
         // weeks later (from a "✎ N changes" count that never went down) is
         // worse than three extra words here.
         self.toast_undo(format!(
-            "Removed {code} — any times you set for it are kept"
+            "Removed {code} from your timetable. Any times you set for it are \
+             kept, so adding it back brings them with it."
         ));
     }
 
@@ -1023,7 +1025,7 @@ impl App {
     ) {
         if self.is_custom(course) {
             let code = course.to_string();
-            self.act_customs(&format!("add & move {code}"), |customs, sel, _| {
+            self.act_customs(&format!("add and move {code}"), |customs, sel, _| {
                 if let Some(c) = customs
                     .courses
                     .iter_mut()
@@ -1049,7 +1051,7 @@ impl App {
         }
         let course = course.to_string();
         let now = domx::now_ms();
-        self.act(&format!("add & move {course}"), |sel, ovs| {
+        self.act(&format!("add and move {course}"), |sel, ovs| {
             if !sel.iter().any(|c| c.eq_ignore_ascii_case(&course)) {
                 sel.push(course.clone());
                 ovs.unhide(&course);
@@ -1309,7 +1311,7 @@ impl App {
             }
         });
         self.set_conflicts(Vec::new());
-        self.toast_undo("Conflicts resolved");
+        self.toast_undo("Your timetable now uses the times you picked.");
     }
 
     // -- derived data --------------------------------------------------------

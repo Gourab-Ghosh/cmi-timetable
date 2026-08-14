@@ -54,6 +54,9 @@ pub fn load<T: DeserializeOwned>(key: &str) -> Loaded<T> {
             // "Nothing was deleted" must stay true even under quota errors.
             if storage.set_item(&backup_key, &text).is_ok() {
                 let _ = storage.remove_item(key);
+                // The banner tells the student what happened in their words;
+                // the raw key lives here for whoever debugs it.
+                leptos::logging::warn!("unreadable data under {key} was backed up as {backup_key}");
                 Loaded::Corrupt(backup_key)
             } else {
                 Loaded::Corrupt(format!("(backup failed — original kept in {key})"))

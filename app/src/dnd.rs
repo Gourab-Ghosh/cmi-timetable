@@ -333,7 +333,7 @@ pub fn enter_move_mode(app: App, spec: DragSpec, from: Option<Meeting>) {
             (m.day, m.slot.start_min)
         });
     app.say(format!(
-        "Move mode for {}. Use arrow keys to pick a cell, Enter to drop, Escape to cancel.",
+        "Moving {}. Use the arrow keys to pick a cell, Enter to drop it there, Escape to cancel.",
         spec.code
     ));
     app.move_mode.set(Some(MoveMode {
@@ -474,7 +474,10 @@ fn on_key_down(app: App, ev: &web_sys::KeyboardEvent) {
                             app.say(format!("Dropped {}.", mm.spec.code));
                         }
                     } else {
-                        app.say("That time slot no longer exists — move cancelled.");
+                        app.say(format!(
+                            "That time is no longer on the grid. Move cancelled, so {} has not moved.",
+                            mm.spec.code
+                        ));
                     }
                 }
                 ev.prevent_default();

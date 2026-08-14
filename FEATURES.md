@@ -78,10 +78,10 @@ any hour of the week.
 - Click a course to add or remove it. With *Edit layout* on, you can drag a
   course you haven't picked straight onto a slot — that adds it and places it
   in one gesture.
-- **"N matches" counts what this grid can actually show.** A course CMI lists
-  without a time has no cell to sit in, so it is not counted here — and if
-  your filters match one, a line under the bar says how many, why, and that
-  the catalog lists them. For the same reason the *Unscheduled* filter isn't
+- **"N courses match" counts what this grid can actually show.** A course CMI
+  lists without a time has no cell to sit in, so it is not counted here — and
+  if your filters match one, a line under the bar says how many, why, and
+  offers an "Open the catalog" button. For the same reason the *Unscheduled* filter isn't
   offered on this page: it can only ever ask for the courses this grid has
   nowhere to draw.
 
@@ -185,7 +185,7 @@ from a search that found nothing.
   weekly meetings, on CMI's slots or at times of your own.
 - They behave like real courses **everywhere** — clash detection, grids, drag
   & drop, credit totals, `.ics` export, share links.
-- A violet **Custom** badge marks them.
+- A violet **Added by you** badge marks them.
 - **Remove** parks one with its definition intact; only **Delete** destroys —
   and both are undoable.
 - If a later CMI sync introduces the same code, **your version keeps winning**,

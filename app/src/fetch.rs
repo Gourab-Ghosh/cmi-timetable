@@ -322,8 +322,10 @@ pub fn adopt(app: &App, new_snapshot: Snapshot, announce: bool, from: Adoption) 
         storage::SnapshotSave::Failed => {
             app.set_banner(
                 BannerKind::Warn,
-                "Your browser wouldn't let the app save the updated timetable, so it \
-                 will be fetched again next time. Your courses and changes are safe.",
+                "Your browser wouldn't let the app save the updated timetable. \
+                 What's on screen now is correct, but if you reopen the app you'll \
+                 see the older saved copy until a sync gets through. Your courses \
+                 and changes are safe. Freeing some browser space usually fixes it.",
             );
         }
     }
@@ -336,7 +338,8 @@ pub fn adopt(app: &App, new_snapshot: Snapshot, announce: bool, from: Adoption) 
     if !quiet {
         for dropped in &merge.dropped_matching {
             app.toast(format!(
-                "CMI now matches your change to {} — using the official time.",
+                "CMI has moved {} to the time you'd picked, so your change isn't \
+                 needed any more. The app removed it and is showing CMI's time.",
                 dropped.course
             ));
         }
@@ -357,7 +360,9 @@ pub fn adopt(app: &App, new_snapshot: Snapshot, announce: bool, from: Adoption) 
             } else {
                 format!(
                     "CMI no longer runs the {} class you had moved. The time you \
-                     picked stays on your timetable — as your own time now.",
+                     picked is still on your timetable, but it's now an entry of \
+                     your own rather than CMI's. Remove it from Your changes if \
+                     you don't want it.",
                     lapsed.course
                 )
             });
@@ -493,7 +498,6 @@ pub async fn run_update(app: App, manual: bool) {
     app.persist_prefs();
 
     let force = app.force_tier.get_untracked();
-    let mut routes_tried = 0usize;
     // Gate failure on a PROXY response only means that relay may have mangled
     // the page — the chain carries on, and CMI itself gets the last word.
     // Gate failure on DIRECT content is terminal: those are CMI's own bytes,
@@ -512,7 +516,6 @@ pub async fn run_update(app: App, manual: bool) {
     // student is on. See the module docs.
     if force.is_none() || force.as_deref() == Some("proxy") {
         progress(&app, "Fetching CMI's timetable…");
-        routes_tried += PROXIES.len();
         let mut pending: Vec<futures::future::LocalBoxFuture<'static, TierResult>> = PROXIES
             .iter()
             .map(|proxy| {
@@ -558,7 +561,6 @@ pub async fn run_update(app: App, manual: bool) {
              and it's safe to allow. If you say no, only this one route won't work; \
              nothing else changes.",
         );
-        routes_tried += 1;
         match fetch_pages_tier(
             app,
             "direct".to_string(),
@@ -625,8 +627,9 @@ pub async fn run_update(app: App, manual: bool) {
             .to_string()
     } else if no_data {
         format!(
-            "The timetable couldn't be fetched right now (tried {routes_tried} routes). \
-             Check your connection and try again.{lan_note}"
+            "The timetable couldn't be fetched just now, so the planner is still \
+             empty. Check your connection and press ⟳ Fetch the timetable \
+             again.{lan_note}"
         )
     } else if !online {
         format!(
@@ -635,14 +638,14 @@ pub async fn run_update(app: App, manual: bool) {
         )
     } else {
         format!(
-            "CMI's website couldn't be reached right now (tried {routes_tried} routes). \
-             You're still seeing your saved timetable from {saved_date}. Try syncing \
-             again later.{lan_note}"
+            "CMI's website couldn't be reached right now. You're still seeing \
+             your saved timetable from {saved_date}. Try syncing again \
+             later.{lan_note}"
         )
     };
     app.set_banner(BannerKind::Warn, text);
     if manual {
-        app.toast("Sync didn't go through — details are in the banner.");
+        app.toast("Sync failed. The message at the top of the page says what happened.");
     }
 }
 

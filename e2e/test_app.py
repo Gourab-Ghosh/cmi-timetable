@@ -633,7 +633,7 @@ def t11_my_data_lists_and_removes_overrides(app):
         By.XPATH, ".//li[contains(.,'TOC')]//button[normalize-space()=\"Back to CMI's time\"]"
     ).click()
     WebDriverWait(app.d, 10).until(
-        lambda d: "None. Courses you add or delete" in app.css(".dialog").text
+        lambda d: "Nothing yet. Add or delete a course" in app.css(".dialog").text
     )
     app.xpath("//div[@class='dialog']//button[normalize-space()='Close']").click()
     # Back on CMI's official Tuesday slot.
@@ -819,7 +819,7 @@ def t18_overwrites_panel_and_remove_all(app):
     panel.find_element(
         By.XPATH, ".//button[normalize-space()=\"Undo my changes to CMI's courses\"]"
     ).click()
-    app.wait_toast("Your changes to CMI's courses are undone")
+    app.wait_toast("Your changes to CMI's courses are removed")
     app.wait_gone("[data-testid='your-changes']")
     # Back on CMI's data: official Tuesday slot again.
     app.wait_css("td[data-day='1'][data-slot='550'] button.chip[aria-label^='TOC,']")
@@ -855,7 +855,7 @@ def t19_add_extra_meetings(app):
     section = app.css("section[aria-label='My courses']")
     assert "Wed 17:00–18:15" in section.text and "Fri 17:00–18:15" in section.text, \
         "both added meetings must exist — the second must not overwrite the first"
-    assert "not on CMI's timetable — created by you" in section.text
+    assert "You added this meeting. It isn't on CMI's timetable." in section.text
     # Official meetings untouched, both extras on the grid.
     app.open_tab("My timetable")
     assert app.chips("TOC", "td[data-day='1'][data-slot='550']"), "official Tue stays"
@@ -1023,14 +1023,19 @@ def t25_first_run_prompt_when_empty(app):
 def t26_first_sync_populates_from_cmi(app):
     """With CMI reachable, the automatic first sync fills the app straight
     from its pages: welcome disappears, tabs appear, data renders, and the
-    pill names the route. The relays are dead here, so the route is the
-    direct one — the fallback doing its job (see t72/t73 for the order)."""
+    pill's tooltip names the route (the pill text itself stays quiet about
+    live routes — "proxy"/"direct" is plumbing, not news). The relays are
+    dead here, so the route is the direct one — the fallback doing its job
+    (see t72/t73 for the order)."""
     serve_cmi()
     try:
         app.boot("/", seed=False)
         app.wait_css(".tabs .tab", timeout=30)
         app.wait_gone(".welcome-card")
-        assert "direct" in app.css(".sync-pill").text, app.css(".sync-pill").text
+        title = app.css(".sync-pill").get_attribute("title")
+        assert "directly from cmi.ac.in" in title, title
+        assert "direct" not in app.css(".sync-pill").text, \
+            "a live route word must not clutter the pill itself"
         app.open_tab("Master grid")
         app.wait_css("section[aria-label='Master grid'] table.tt")
         app.chip("TOC")
@@ -1097,7 +1102,7 @@ def t28_facet_menu_search_and_select_all(app):
     )
     # The catalog now shows exactly those courses.
     matches = app.css("section[aria-label='Catalog'] .filterbar .muted").text
-    assert matches.startswith(f"{visible} match"), matches
+    assert matches.startswith(f"{visible} course"), matches
     # "None" clears them again (menu search still narrowing).
     app.xpath(
         "//details[contains(@class,'facet') and @open]//button[normalize-space()='None']"
@@ -1148,7 +1153,7 @@ def t30_sync_merge_conflict_flow(app):
             By.XPATH, ".//button[normalize-space()='Keep mine for all']"
         ).click()
         dialog.find_element(By.XPATH, ".//button[normalize-space()='Apply']").click()
-        app.wait_toast("Conflicts resolved")
+        app.wait_toast("Your timetable now uses the times you picked.")
         app.wait_css("td[data-day='2'][data-slot='1020'] button.chip[aria-label^='TOC,']")
         app.wait_toast(f"CMI dropped {gone} from its timetable")
         banner = app.xpath("//div[contains(@class,'banner')][contains(.,'CMI updated')]")
@@ -1212,12 +1217,12 @@ def t32_corrupt_storage_recovery(app):
 
 
 def t33_export_ics_honors_overrides(app):
-    """Export .ics downloads a calendar whose events reflect the moved
+    """Export to calendar downloads a calendar whose events reflect the moved
     meeting, not the overridden official one."""
     for f in os.listdir(DOWNLOADS):
         os.remove(os.path.join(DOWNLOADS, f))
     app.boot("/", selection=["TOC"], overrides=TOC_OVR)
-    app.xpath("//button[normalize-space()='Export .ics']").click()
+    app.xpath("//button[normalize-space()='Export to calendar']").click()
     dialog = app.wait_css(".dialog")
     dialog.find_element(By.XPATH, ".//button[normalize-space()='Download .ics']").click()
     path = None
@@ -1518,7 +1523,7 @@ def t37_catalog_updates_live(app):
     app.xpath("//button[normalize-space()='My data']").click()
     app.wait_css(".dialog")
     app.xpath("//div[@class='dialog']//button[normalize-space()='Clear selection']").click()
-    app.wait_toast("Selection cleared")
+    app.wait_toast("Your timetable is empty now")
     app.d.find_element(By.CSS_SELECTOR, "body").send_keys(Keys.ESCAPE)
     for code in ("TOC", "ISS"):
         WebDriverWait(app.d, 5).until(
@@ -1663,7 +1668,7 @@ def t40_custom_course_create(app):
     # Card: violet badge, clash flag, credit summary counts 2 credits.
     section = app.wait_css("section[aria-label='My courses']")
     badge = app.css("section[aria-label='My courses'] .badge.custom")
-    assert badge.text == "Custom", badge.text
+    assert badge.text == "Added by you", badge.text
     assert "⚠ clash" in section.text, section.text
     pills = [p.text for p in app.css_all(".credit-summary .cs-pill")]
     assert "1 course at 2 credits" in pills, pills
@@ -1816,7 +1821,7 @@ def t42_custom_course_shadowed_by_cmi(app):
     section = app.wait_css("section[aria-label='My courses']")
     # The user's own definition wins over CMI's course of the same code.
     assert "My own TOC notes" in section.text, section.text
-    assert "also on CMI now" in section.text, section.text
+    assert "CMI now lists this code too" in section.text, section.text
     pills = [p.text for p in app.css_all(".credit-summary .cs-pill")]
     assert pills == ["1 course at 1 credit"], pills
 
@@ -2848,7 +2853,7 @@ def t62_the_wheel_steps_the_boxes_that_have_a_step(app):
     app.xpath("//div[@class='dialog']//button[normalize-space()='Cancel']").click()
     app.wait_gone(".dialog")
     app.open_tab("My timetable")
-    app.xpath("//button[contains(.,'Export .ics')]").click()
+    app.xpath("//button[contains(.,'Export to calendar')]").click()
     frm = app.wait_css("#ex-from")
     frm.click()
     before = frm.get_attribute("value")
@@ -2937,7 +2942,7 @@ def t65_my_courses_has_the_same_filters(app):
     box.send_keys("TOC")
     WebDriverWait(app.d, 10).until(
         lambda d: len(app.css_all("section[aria-label='My courses'] .card")) == 1)
-    assert "1 match" in section.text, section.text
+    assert "1 course matches" in section.text, section.text
     # The credit total counts everything, so the difference is stated.
     assert "hiding 2 of your courses" in section.text, section.text
 
@@ -3005,7 +3010,7 @@ def t66_controls_that_cannot_act_are_not_offered(app):
     app.wait_css("section[aria-label='My timetable']")
     printer = app.xpath("//button[normalize-space()='Print']")
     assert printer.get_attribute("disabled") is not None, \
-        "Print must be disabled with nothing to print, like Export .ics"
+        "Print must be disabled with nothing to print, like Export to calendar"
 
     # A course CMI hasn't scheduled has nothing to export, and the dialog
     # already says so two lines above where the button used to be.
@@ -3014,7 +3019,7 @@ def t66_controls_that_cannot_act_are_not_offered(app):
     app.chip("SVA", ".tray").click()
     dialog = app.wait_css(".dialog")
     assert "hasn't put it on the timetable" in dialog.text
-    assert not dialog.find_elements(By.XPATH, ".//button[normalize-space()='Export .ics']"), \
+    assert not dialog.find_elements(By.XPATH, ".//button[normalize-space()='Export to calendar']"), \
         "a course with no times must not offer a calendar export"
     app.d.find_element(By.CSS_SELECTOR, "body").send_keys(Keys.ESCAPE)
     app.wait_gone(".dialog")
@@ -3027,7 +3032,7 @@ def t66_controls_that_cannot_act_are_not_offered(app):
     app.wait_css("section[aria-label='My courses'] .filterbar")
     assert len(app.css_all("section[aria-label='My courses'] .card")) == 2
     app.xpath("//section[@aria-label='My courses']//details[contains(@class,'facet')]"
-              "/summary[starts-with(normalize-space(),'Flags')]").click()
+              "/summary[starts-with(normalize-space(),'Status')]").click()
     app.wait_css("details.facet[open] .menu")
     app.xpath("//details[contains(@class,'facet') and @open]"
               "//label[contains(.,'Has custom time')]/input").click()
@@ -3069,25 +3074,26 @@ def t66_controls_that_cannot_act_are_not_offered(app):
 def t67_the_master_grid_counts_what_it_can_draw(app):
     """The master grid draws courses through cells, so one CMI lists without
     a time draws nothing at all. Counting it anyway left "1 match" standing
-    over an empty grid — and Flags → Unscheduled asked for exactly those."""
+    over an empty grid — and Status → Unscheduled asked for exactly those."""
     app.boot("/")
     app.open_tab("Master grid")
     grid = app.wait_css("section[aria-label='Master grid']")
     box = grid.find_element(By.CSS_SELECTOR, ".filterbar input[type='search']")
     box.send_keys("SVA")  # listed by CMI, never given a time
     WebDriverWait(app.d, 10).until(
-        lambda d: "0 matches" in app.css("section[aria-label='Master grid']").text)
+        lambda d: "0 courses match" in app.css("section[aria-label='Master grid']").text)
     grid = app.css("section[aria-label='Master grid']")
     assert not app.chips("SVA", "section[aria-label='Master grid']"), \
         "the grid has no cell to draw it in"
     note = grid.find_element(By.CSS_SELECTOR, ".unplaced-note").text
     assert "1 more course matches" in note, note
-    assert "hasn't given it a time" in note and "catalog lists it" in note, note
+    assert "hasn't given it a time" in note and "no slot to put" in note, note
+    assert "Open the catalog" in note, "the note must offer to go there: " + note
 
     # The catalog counts it, because a list of rows can show it.
     app.open_tab("Catalog")
     WebDriverWait(app.d, 10).until(
-        lambda d: "1 match" in app.css("section[aria-label='Catalog']").text)
+        lambda d: "1 course matches" in app.css("section[aria-label='Catalog']").text)
 
     # And the flag that selects for exactly those courses is not offered on
     # the grid that can never draw one — it still is where it can act.
@@ -3095,7 +3101,7 @@ def t67_the_master_grid_counts_what_it_can_draw(app):
         facets = app.d.find_elements(
             By.XPATH, f"//section[@aria-label='{section}']"
             "//details[contains(@class,'facet')]"
-            "/summary[starts-with(normalize-space(),'Flags')]")
+            "/summary[starts-with(normalize-space(),'Status')]")
         if not facets:
             return []
         facets[0].click()
@@ -3198,7 +3204,7 @@ def t70_one_course_is_not_a_choice(app):
     was only ever one answer."""
     app.boot("/", selection=["TOC"])
     app.open_tab("My timetable")
-    app.xpath("//button[normalize-space()='Export .ics']").click()
+    app.xpath("//button[normalize-space()='Export to calendar']").click()
     dialog = app.wait_css(".dialog")
     assert not dialog.find_elements(By.CSS_SELECTOR, "#ex-scope"), \
         "'All selected (1)' and that one course are the same file"
@@ -3210,7 +3216,7 @@ def t70_one_course_is_not_a_choice(app):
     # Two courses, and the choice is a real one again.
     app.boot("/", selection=["TOC", "ISS"])
     app.open_tab("My timetable")
-    app.xpath("//button[normalize-space()='Export .ics']").click()
+    app.xpath("//button[normalize-space()='Export to calendar']").click()
     dialog = app.wait_css(".dialog")
     opts = [o.text for o in Select(dialog.find_element(
         By.CSS_SELECTOR, "#ex-scope")).options]
@@ -3276,7 +3282,8 @@ def t72_a_relay_is_asked_before_cmi_itself(app):
         app.boot("/", seed=False)
         app.wait_css(".tabs .tab", timeout=30)
         app.wait_gone(".welcome-card")
-        assert "proxy" in app.css(".sync-pill").text, app.css(".sync-pill").text
+        title = app.css(".sync-pill").get_attribute("title")
+        assert "via proxy" in title, title
         tiers = fetch_log_tiers(app)
         assert tiers, "the sync must have been logged"
         assert all(t.startswith("proxy:") for t in tiers), \
@@ -3293,7 +3300,8 @@ def t73_cmi_itself_is_the_fallback_and_says_so(app):
     try:
         app.boot("/", seed=False)
         app.wait_css(".tabs .tab", timeout=30)
-        assert "direct" in app.css(".sync-pill").text, app.css(".sync-pill").text
+        title = app.css(".sync-pill").get_attribute("title")
+        assert "directly from cmi.ac.in" in title, title
         tiers = fetch_log_tiers(app)
         assert [t for t in tiers if t.startswith("proxy:")], \
             f"the relays must be tried before CMI itself: {tiers}"

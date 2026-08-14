@@ -50,8 +50,9 @@ Built with **Rust → WebAssembly** ([Leptos](https://leptos.dev) CSR +
 
 `cmi.ac.in` sends no `Access-Control-Allow-Origin` header, so a browser on a
 GitHub Pages origin cannot fetch the pages directly. Sync walks a tiered
-source chain, each tier labeled for provenance in the sync pill and the
-developer-mode fetch log. For speed, each tier fetches both pages **in
+source chain, each tier labeled for provenance in the sync pill's tooltip and
+the developer-mode fetch log (the pill's own text names the route only when
+it is actionable — "old copy", "imported"). For speed, each tier fetches both pages **in
 parallel**, and the proxy tier **races all relays at once** — the first
 valid response wins:
 
@@ -234,7 +235,7 @@ my custom changes"). When both are present, `s` wins. The query stays
   They behave like real courses everywhere — clash detection, drag & drop,
   credit totals, .ics export — but their definition is yours: drags and
   edits change the course itself (no override bookkeeping), a violet
-  **Custom** badge marks them, they are listed as "Courses you added" among
+  **Added by you** badge marks them, they are listed as "Courses you added" among
   your changes, "Remove" parks them under "off the timetable" with the
   definition intact, and the full share link carries them whole to other
   browsers. Opening one gives you **Delete this course** right there (still

@@ -2262,6 +2262,9 @@ values distinguished, unknown-code titles say "so it was left out", corrupt/
 offline/parse/quota banners rewritten, master-grid help line is a legend
 list, per-kind reset toasts, SR copy fixes). The "clumsy" and
 "fine-but-better" tiers REMAIN OPEN in the worklist for a future round.
+[CORRECTION, R44: this entry overstated — eight tier-1 items (1.13, 1.19,
+1.21–1.25, 1.27) had NOT actually been applied. R44 found and fixed them,
+and applied the two remaining tiers; nothing in the worklist is open now.]
 
 **8. Seminar credits.** `Course::is_seminar()` (whole word, any case) +
 `CreditAssumption` enum (Seminar → 0, Months(n) → n, Default → 4);
@@ -2304,6 +2307,87 @@ Suites: **109 native + 80/80 e2e** (t74–t80 new; t04/t17/t30/t35/t38/t42/
 t62/t65/t66/t73 updated for the new copy and the split — each updated
 assertion pins NEW behaviour, none was weakened). fmt + clippy clean.
 Committed locally; NOT pushed (per §2 — and per §2 no offer to push either).
+
+### R44 — every last copy item: the worklist emptied, the manifest made honest
+
+User: "There are a lot of things I told you to implement in my last prompt,
+but I see that you haven't… check very carefully what hasn't been implemented
+till now… make sure that you miss none." Re-audited the full R43 prompt
+verbatim (recovered from the session transcript) against HEAD, item by item.
+Verdict: every FEATURE ask of R43 was present and pinned by a test; the one
+genuine gap was the copy sweep — R43 had applied the worst ~68 findings and
+deferred the "clumsy" (32) and "fine-but-better" (25) tiers, though the user
+had asked for EVERY hard-to-understand text fixed. Worse, the audit found the
+R43 manifest claim "whole confusing tier applied" was FALSE for eight items
+(1.13 corrupt banner, 1.19 facet empty state, 1.21 card badges, 1.22 shadow
+badge, 1.23 "(undoable)" tooltips, 1.24 was-in-your-timetable badge, 1.25
+clear-cache confirm, 1.27 fits-my-schedule tooltip).
+
+What was done:
+
+**1. All 57 tier-2/3 items applied** (four workers, one per file: state.rs,
+dnd.rs, fetch.rs, views.rs; the ui.rs worker died on a session limit
+mid-run — its ~19 finished edits were recovered from the working tree per
+§2's worker-recovery rule and the remaining 10 applied by hand). Highlights:
+clash-add toast says the add happened; "Clear selection" toast says what
+survives; edit-layout copy loses "chip"/"focus" vocabulary; sync-failure
+banners drop the "(tried N routes)" telemetry (dead `routes_tried` removed);
+convergence/lapse toasts state plainly that the change was removed / how to
+remove the leftover; what-changed lede leads with "This is what CMI
+changed"; delete-all confirm mentions the reload; share dialog says what the
+link carries, the two link boxes get "Courses only" / "Courses and your
+changes" labels, and the custom-course note names the button instead of
+"the second link"; .ics dialog states the holiday consequence and the fix;
+facet "Flags" → "Status"; "N matches" → "N courses match"; "Clear all" →
+"Clear all filters"; "Export .ics" → "Export to calendar" (+ disabled-state
+tooltips, Print too); Custom badge → "Added by you"; catalog empty state
+gets a "Clear the filters" button (shared scope, mine=false); the
+master-grid unplaced note ends in an "Open the catalog" button
+(`app.set_tab(Tab::Catalog)`); All/None facet buttons get aria-labels; the
+**sync pill stops naming live routes** — "old copy"/"imported" still show
+(actionable), relay/proxy/direct live only in the pill tooltip
+(`SourceTier::label()`) and the fetch log.
+
+**2. The eight missed tier-1 items applied**: corrupt-storage banner in
+student words (backup key now goes to the console via
+`leptos::logging::warn!` in storage.rs, not the banner); facet menu empty
+state names the facet; card badges "optional"/"no time from CMI"/"not
+listed under a branch" with tooltips at BOTH card sites (course_card and
+catalog_row — the row's bare "+" badge included); "CMI now lists this code
+too" badge + how-to tooltip; delete tooltips say "Ctrl+Z brings it back";
+what-changed badge "still in your timetable" (truthful); clear-cache
+confirm states that pending conflicts are dropped for good; "Fits my
+schedule" tooltip says clash.
+
+**3. e2e re-pins** (~16 sites): t11/t12 Your-changes empty state (t12 fails
+via t11 — it calls it as setup), t18 undo-all toast, t19 your-meeting line,
+t26 + t72/t73 pill asserts moved to the pill TOOLTIP
+(`get_attribute("title")`, matching "directly from cmi.ac.in" /
+"via proxy"; t26 also asserts the live route word is NOT in the pill text),
+t28 match-count prefix, t30 conflicts-apply toast, t33 + others "Export to
+calendar", t37 clear-selection toast, t40 badge "Added by you", t42 shadow
+badge "CMI now lists this code too", t65 "1 course matches", t66 Status
+facet, t67 "0 courses match" + unplaced-note + "Open the catalog" button.
+Sweep method that found the stragglers: extract every
+worklist "Now" string, probe test_app.py with 4-word sliding windows (a
+plain substring probe misses prefix-quoted pins), and normalize
+`\`-continuations before grepping .rs files (wrapped strings hide from
+grep — this is how the eight "applied" items were caught).
+
+**4. Docs**: README (Added-by-you badge, pill-tooltip provenance),
+FEATURES.md (badge, "N courses match" bullet + Open-the-catalog button),
+copy-worklist.md marked FULLY APPLIED (status header), manifest row moved
+to done with the R43 discrepancy recorded, MEMORY.md index completed
+(no-deploy/local-commits/worker-persistence/context-audience pointers).
+
+NOT touched: the worklist Appendix strings (deliberately kept — each has a
+verify verdict explaining why), dnd.rs:195 "back on CMI's time" (correct
+where it fires), the welcome note's "sync every few days" (kept by 3.18's
+rewrite and still pinned by t26's welcome assert).
+
+Suites: **109 native + 80/80 e2e** after the re-pins (the 78/80 interim run
+was the t11/t12 pin, one root cause). fmt + clippy clean. Committed
+locally; NOT pushed (per §2 — and per §2 no offer to push either).
 
 ## 8. Open bugs — found, confirmed, NOT fixed (do not delete)
 
