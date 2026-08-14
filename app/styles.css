@@ -430,6 +430,25 @@ button {
   .tab { padding: 0.5rem 0.55rem; font-size: 0.8rem; min-height: 44px; }
 }
 
+@media (max-width: 640px) {
+  /* A phone shows content, not chrome. The reminder sentence rests (the
+     pill still says how fresh the data is), Undo/Redo shrink to their
+     arrows (aria-label and tooltip keep the word), and every header
+     control drops a size — the header fits in two short rows. */
+  .sync-hint { display: none; }
+  .header .btn { padding: 0.34rem 0.6rem; font-size: 0.83rem; }
+  .btn-word { display: none; }
+  /* Five tabs must fit the bottom bar whole — a navigation bar that
+     scrolls sideways hides pages. */
+  .tab { padding: 0.5rem 0.3rem; font-size: 0.76rem; }
+  /* The week grid squeezes politely: slimmer day gutter, smaller time
+     headings, tighter cells. (The day buttons above it are the real phone
+     view — the grid opens on today there.) */
+  .week-grid table.tt th.rowhead { width: 3.2rem; min-width: 3.2rem; }
+  table.tt th, table.tt td { padding: 0.3rem 0.32rem; }
+  table.tt thead th { font-size: 0.66rem; }
+}
+
 /* ==========================================================================
    Chips — the signature element
    ========================================================================== */
@@ -2198,12 +2217,14 @@ pre.devpre {
     overflow-wrap: anywhere;
   }
   /* Clash: alarm red — the one thing red is reserved for — plus the ⚠
-     glyph pinned to the corner so grayscale printers keep the meaning. */
+     glyph so grayscale printers keep the meaning. It sits on the code's
+     own line ("⚠ TOC"), not pinned to the chip corner (where it landed on
+     the hall name in narrow side-by-side chips) and not on a line of its
+     own (which grew the grid until the sheet spilled to two pages). */
   .chip.clash { border: 1.6px solid #c22f41 !important; }
-  .chip.clash::before {
-    position: absolute;
-    top: 1px;
-    left: 4px;
+  .chip.clash::before { content: none; }
+  .chip.clash .code::before {
+    content: "⚠ ";
     font-size: 8px;
     color: #c22f41;
   }

@@ -272,6 +272,39 @@ fn t08b2_seminar_assumed_zero_credits() {
     );
 }
 
+/// Test 8b3 — displays drop the "(N credits)" note from a course name: the
+/// parser already reads it into `credits`, so a card showing credits beside
+/// the name would state the number twice. Everything informative stays.
+#[test]
+fn t08b3_display_name_drops_the_credits_note() {
+    let strip = cmi_timetable_core::join::strip_credits_note;
+    // The real fixture shapes, spaced and unspaced.
+    assert_eq!(strip("Visualization(2 credits)"), "Visualization");
+    assert_eq!(strip("RDBMS and SQL(2 credits)"), "RDBMS and SQL");
+    assert_eq!(strip("Statistics (1 credit)"), "Statistics");
+    assert_eq!(strip("Odd ( 3  Credits )"), "Odd");
+    // A mid-name note leaves no double space behind.
+    assert_eq!(strip("Logic (2 credits) II"), "Logic II");
+    // Month and starts notes carry dates — they stay.
+    assert_eq!(strip("Algebra (Oct-Nov)"), "Algebra (Oct-Nov)");
+    assert_eq!(
+        strip("Analysis (starts 12 Aug)"),
+        "Analysis (starts 12 Aug)"
+    );
+    // Words other than the exact credit note stay too.
+    assert_eq!(strip("Extra (3 credits extra)"), "Extra (3 credits extra)");
+    assert_eq!(strip("No note at all"), "No note at all");
+
+    // And the real parsed course agrees with itself: stated 2, clean name.
+    let rdbm = SNAPSHOT.course("RDBM").unwrap();
+    assert_eq!(rdbm.effective_credits(), 2);
+    assert!(!rdbm.display_name().to_lowercase().contains("credit"));
+    assert!(
+        rdbm.name.contains("credits"),
+        "the data itself stays verbatim"
+    );
+}
+
 /// Test 8c — month-span notes in every plausible hand-edited form, and the
 /// words that must never count as months.
 #[test]

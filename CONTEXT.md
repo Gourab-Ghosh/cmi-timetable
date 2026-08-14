@@ -150,7 +150,12 @@ FEATURES.md  the user-facing feature list (written R39). README is the
   menu rebuilds each filter tick → focus/scroll loss. Pattern: NodeRef +
   isolated `Effect::new` poking the DOM node, `untrack` for the initial
   value, plain `prop:checked=initial`. Facet option lists must NEVER read
-  the filters signal.
+  the filters signal. Same trap, other direction: a view-body fn (e.g.
+  `my_timetable`) runs inside the tab dispatcher's reactive closure, so a
+  signal read during CONSTRUCTION (like `grid_days()` seeding the phone's
+  day view) must be `untrack`-ed — tracked, it remounts the whole view on
+  every write to that signal (R45: the keyboard drop snapped the day strip
+  back to today; t68 catches it).
 - Planner tab is memoized (`Memo<Tab>`); catalog `<For>` is keyed. Keep it —
   BUT keyed `<For>` children run once per key in a non-tracked scope, so any
   selection/override-derived value inside a catalog row must be a
@@ -2388,6 +2393,63 @@ rewrite and still pinned by t26's welcome assert).
 Suites: **109 native + 80/80 e2e** after the re-pins (the 78/80 interim run
 was the t11/t12 pin, one root cause). fmt + clippy clean. Committed
 locally; NOT pushed (per §2 — and per §2 no offer to push either).
+
+### R45 — the beauty round: a phone that opens on today, a one-page print, names said once
+
+User: check everything again, then "make the website look as beautiful as
+possible… check every page… for example, in small screens, the table in the
+my timetable section does not look beautiful"; mid-round: "Make the pdf
+print look better as well." Method: regenerate ALL of `e2e/shoot.py`'s
+shots (48 pngs + 3 print PDFs) from the current build and review every one
+by eye at desktop/mobile, light/dark; fix; re-shoot; verify by eye again.
+(Correctness re-check: every R43/R44 ask is pinned by a test and both
+suites ran green on this HEAD — the visual layer was the unverified part.)
+
+What the review found and what changed:
+
+**1. Phone (≤640px) — the user's named complaint.** The header spent
+~210px in five stacked rows before any content: the sync-hint sentence now
+rests on phones (the pill still says freshness), header buttons drop a
+size, Undo/Redo shrink to their arrows (`.btn-word` span hidden ≤640px;
+aria-label + tooltip keep the word). The bottom tab bar's five tabs now
+fit whole (tighter padding/font) — "Halls" used to be cut off. The week
+grid squeezes politely (3.2rem day gutter, 0.66rem time headings, tighter
+cells) — but the real fix is **the timetable opens on today's day list on
+phones** (`initial_day_view` in views.rs: viewport ≤640px + a weekday in
+`grid_days()` → `Some(today)`, else week view; js_sys::Date::get_day).
+The Week button in the existing day strip is one tap away. GOTCHA, caught
+by t68 failing: the init call MUST be `untrack(..)` — `grid_days()` is a
+signal read and the component body runs inside the tab dispatcher's
+reactive closure, so a tracked read remounts the whole view on every
+override change and snaps the day strip back to today mid-edit. Any
+future signal read during a view body's construction has the same trap.
+
+**2. Print PDFs.** The clash ⚠ was pinned absolutely to the chip corner
+and landed ON the hall name in the narrow side-by-side chips a clash
+produces. First fix (unpinned, own line) grew the grid until the clash
+sheet spilled to two pages — caught by re-shooting, one-page is a
+FEATURES promise. Final: `.chip.clash::before { content: none }` in print
++ `.chip.clash .code::before { "⚠ " }` — the glyph sits on the code's own
+line, zero extra height.
+
+**3. Names said once.** CMI writes credits into some names
+("Visualization(2 credits)"); the parser reads the number, so cards said
+it twice. `join::strip_credits_note` (the SAME `CREDITS_RE` the parser
+uses — display and parsing cannot disagree) + `Course::display_name()`;
+used by the card, catalog row, parked table, details-dialog title, print
+legend and the .ics SUMMARY (via `IcsCourse::from_course`). Data stays
+verbatim: `name` untouched in exports (JSON), the editor's name field,
+the what-changed diff, and search still matches the raw name. Month and
+"starts" notes stay — they carry dates. Test t08b3 pins all boundaries.
+
+**4. Small copy.** My data heading "Cached timetable" → "Downloaded
+timetable" (matches the R44 vocabulary; FEATURES.md updated). shoot.py's
+own XPath still pinned the old "Custom" badge (it broke the shoot) —
+re-pinned to "Added by you"; harnesses count as pinned copy too.
+
+Verified by eye after the fixes: phone opens on today with a 3-row
+header and all five tabs visible; print-clash back to one page with clean
+names and readable ⚠ chips; desktop pages unchanged.
 
 ## 8. Open bugs — found, confirmed, NOT fixed (do not delete)
 

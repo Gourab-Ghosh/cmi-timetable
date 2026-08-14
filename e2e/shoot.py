@@ -370,7 +370,7 @@ d.find_element(By.XPATH, "//button[normalize-space()='Cancel']").click()
 # Edit mode: prefilled rows + the quiet-danger delete in the footer.
 boot("Light", "MyCourses", selection=CUSTOM_SEL, customs=CUSTOMS)
 d.find_element(By.XPATH,
-    "//div[contains(@class,'card')][.//span[normalize-space()='Custom']]"
+    "//div[contains(@class,'card')][.//span[normalize-space()='Added by you']]"
     "//button[normalize-space()='Edit this course']").click()
 time.sleep(0.4)
 shot("22-light-custom-form-edit")

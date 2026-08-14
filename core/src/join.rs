@@ -58,6 +58,16 @@ fn parse_month_span(inner: &str) -> Option<String> {
     }
 }
 
+/// The name without its "(N credits)" note, for display. The parser reads
+/// that note into `credits` (the exact same regex — display and parsing
+/// cannot disagree), so a UI that shows credits next to the name would say
+/// the same number twice. Every other note stays: months and "starts"
+/// notes carry dates nothing else shows.
+pub fn strip_credits_note(name: &str) -> String {
+    let stripped = CREDITS_RE.replace(name, " ");
+    stripped.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
 pub fn extract_name_notes(name: &str) -> NameNotes {
     let mut notes = NameNotes::default();
     if let Some(caps) = STARTS_RE.captures(name)

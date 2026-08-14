@@ -504,7 +504,10 @@ pub fn Header() -> impl IntoView {
                 title="Undo (Ctrl+Z)"
                 on:click=move |_| app.undo()
             >
-                "↶ Undo"
+                // On phones the word hides and the arrow stands alone —
+                // the aria-label and tooltip keep saying it in full.
+                "↶"
+                <span class="btn-word">"Undo"</span>
             </button>
             <button
                 class="btn"
@@ -513,7 +516,8 @@ pub fn Header() -> impl IntoView {
                 title="Redo (Ctrl+Y)"
                 on:click=move |_| app.redo()
             >
-                "↷ Redo"
+                "↷"
+                <span class="btn-word">"Redo"</span>
             </button>
             <button class="btn" on:click=move |_| app.dialog.set(Some(Dialog::Share))>
                 "Share"
@@ -2070,7 +2074,7 @@ fn details_dialog(app: App, code: String) -> impl IntoView {
             // as its usual chip, matching card headers everywhere else.
             <div class="row" style="align-items:center;gap:0.55rem;margin-bottom:0.45rem">
                 {chip(app, ChipProps::list(&course.code))}
-                <h2 style="margin:0">{course.name.clone()}</h2>
+                <h2 style="margin:0">{course.display_name()}</h2>
             </div>
             <dl class="kv">
                 <dt>
@@ -2908,7 +2912,7 @@ fn my_data_dialog(app: App) -> impl IntoView {
 
             <section class="data-section">
                 <header>
-                    <h3>"Cached timetable"</h3>
+                    <h3>"Downloaded timetable"</h3>
                     {move || {
                         app.has_data()
                             .then(|| {

@@ -323,6 +323,15 @@ impl Course {
         }
     }
 
+    /// The name as displays should show it: CMI sometimes writes the credit
+    /// count into the name itself — "Visualization(2 credits)" — and the
+    /// parser reads that number into `credits`, so a card that shows credits
+    /// beside the name would state it twice. Data stays verbatim: exports,
+    /// the editor's name field and the what-changed diff all keep `name`.
+    pub fn display_name(&self) -> String {
+        crate::join::strip_credits_note(&self.name)
+    }
+
     /// Does CMI's name for this course say it is a seminar? Seminars at CMI
     /// are attended, not credited, so when CMI states no credits the honest
     /// guess for one is 0 — not the campus default of 4. Matched on the

@@ -21,7 +21,9 @@ impl IcsCourse {
     pub fn from_course(course: &Course, effective_meetings: Vec<Meeting>) -> IcsCourse {
         IcsCourse {
             code: course.code.clone(),
-            name: course.name.clone(),
+            // The display name: a calendar event repeating "(2 credits)"
+            // every week says nothing a calendar reader can use.
+            name: course.display_name(),
             instructors: course.instructors.clone(),
             branches: course.branches.clone(),
             meetings: effective_meetings,

@@ -223,6 +223,12 @@ The credit summary on My courses spells each assumption out in a full
 sentence — which part of the total is a guess, why the app guessed what it
 did, and that **Edit this course** takes the real number if you know it.
 
+When CMI writes the credit count into a course's name — "Visualization(2
+credits)" — the app reads the number and shows the name without the note,
+so cards never state the credits twice. Month notes like "(Oct–Nov)" stay:
+they carry dates. Exports of raw data and the editor keep CMI's name
+verbatim.
+
 Totals, the per-value breakdown, the credit filter and the catalog all follow
 whatever is true after your changes.
 
@@ -308,7 +314,7 @@ with an explanation of why that happens and what still worked.
   added by you (moved ones carry the CMI original alongside). Stable keys and
   deterministic order, so scripts can merge two timetables or analyse one
   without scraping anything.
-- **Export snapshot** (My data → Cached timetable) writes everything CMI was
+- **Export snapshot** (My data → Downloaded timetable) writes everything CMI was
   offering at the moment of the last sync — the whole catalog, halls and
   slots — as a single file. **Import snapshot** loads such a file back, on
   the welcome screen or in My data: the timetable appears exactly as CMI
@@ -432,7 +438,7 @@ its own, never as a change CMI made.
 |:--|:--|
 | **Theme** | Auto (follows your system), light, or dark |
 | **Density** | Comfortable or compact |
-| **On a phone** | A single-day view, tap targets sized for fingers, a header that packs tight, and long-press to drag |
+| **On a phone** | The timetable opens on today's classes (the whole week is one tap away), tap targets sized for fingers, a header that packs tight, and long-press to drag |
 | **Motion** | Animations respect "reduce motion" |
 | **The wheel** | Scroll over a focused box with a step — credits, a meeting's start or end time, an export date, or any dropdown — and it moves one step. Only while the box has focus, so a value never changes because you scrolled past it |
 | **Enter** | Saves in the editor, downloads in Export, and dismisses the keyboard in a search box |

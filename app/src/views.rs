@@ -208,8 +208,34 @@ fn grid_cell(
 // 1. My timetable
 // ---------------------------------------------------------------------------
 
+/// On a phone-sized screen the week grid asks for sideways scrolling the
+/// moment it draws, so the timetable opens on today's list instead — the
+/// question a student asks their phone is "what do I have today?". Desktop
+/// keeps the whole week, and so do weekends and days CMI doesn't teach.
+/// The Week button in the day strip is one tap away throughout.
+fn initial_day_view(app: App) -> Option<Day> {
+    let width = web_sys::window()?.inner_width().ok()?.as_f64()?;
+    if width > 640.0 {
+        return None;
+    }
+    let today = match js_sys::Date::new_0().get_day() {
+        1 => Day::Mon,
+        2 => Day::Tue,
+        3 => Day::Wed,
+        4 => Day::Thu,
+        5 => Day::Fri,
+        _ => return None,
+    };
+    app.grid_days().contains(&today).then_some(today)
+}
+
 fn my_timetable(app: App) -> impl IntoView {
-    let day_mode = RwSignal::new(None::<Day>);
+    // untrack: `initial_day_view` reads `grid_days()` (a signal read), and
+    // this body runs inside the tab dispatcher's reactive closure — a
+    // tracked read here would remount the whole view on every override
+    // change, snapping the day strip back to today mid-edit (caught by
+    // t68: the keyboard drop itself triggered the remount).
+    let day_mode = RwSignal::new(untrack(|| initial_day_view(app)));
 
     // Keyboard move mode walks days as well as times, and the per-day list
     // shows one day at a time: arrowing off Tuesday used to leave the cursor
@@ -808,7 +834,7 @@ fn my_timetable(app: App) -> impl IntoView {
                                                     <div class="pc-body">
                                                         <div class="pc-top">
                                                             <span class="pc-name">
-                                                                {course.name}
+                                                                {course.display_name()}
                                                             </span>
                                                             {instructor.map(|i| {
                                                                 view! {
@@ -1206,7 +1232,7 @@ fn my_courses(app: App) -> impl IntoView {
                                         view! {
                                             <div class="row parked-row">
                                                 {crate::ui::chip(app, crate::ui::ChipProps::list(&c.code))}
-                                                <strong>{c.name}</strong>
+                                                <strong>{c.display_name()}</strong>
                                                 <span class="muted small">
                                                     {if when.is_empty() {
                                                         "no times set yet".to_string()
@@ -1293,7 +1319,7 @@ fn course_card(app: App, course: Course) -> impl IntoView {
         <div class="card">
             <div class="row">
                 {chip(app, ChipProps::list(&code))}
-                <strong>{course.name.clone()}</strong>
+                <strong>{course.display_name()}</strong>
                 <span class="muted">{course.instructors.join(" / ")}</span>
                 <div class="grow" style="flex:1"></div>
                 <span
@@ -1938,7 +1964,7 @@ fn catalog_row(app: App, course: Course) -> impl IntoView {
                 {chip(app, ChipProps::list(&code))}
                 <div style="flex:1;min-width:12rem">
                     <div>
-                        <strong>{course.name.clone()}</strong>
+                        <strong>{course.display_name()}</strong>
                     </div>
                     <div class="muted small">
                         {course.instructors.join(" / ")}
