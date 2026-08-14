@@ -15,6 +15,40 @@ fn mtg(day: Day, start: u16, end: u16, hall: &str) -> Meeting {
     }
 }
 
+/// The reminder lead is the student's choice, not a constant: whatever
+/// minutes they pick is what TRIGGER carries, and the alarm text counts
+/// in the same number.
+#[test]
+fn alarm_lead_is_configurable() {
+    let course = IcsCourse {
+        code: "TOC".to_string(),
+        name: "Theory of Computation".to_string(),
+        instructors: vec![],
+        branches: vec![],
+        meetings: vec![mtg(Day::Tue, 550, 625, "Lecture Hall 803")],
+        starts: None,
+        part_of_semester: None,
+    };
+    let opts = IcsOptions {
+        range_start: CivilDate::new(2026, 8, 3),
+        range_end: CivilDate::new(2026, 11, 30),
+        alarm_minutes: Some(25),
+        app_url: "https://example.github.io/timetable/?c=TOC".to_string(),
+        dtstamp: "20260805T120000Z".to_string(),
+        calendar_name: "CMI Timetable".to_string(),
+    };
+    let ics = build_ics(std::slice::from_ref(&course), &opts);
+    assert!(ics.contains("TRIGGER:-PT25M"), "{ics}");
+    assert!(ics.contains("TOC starts in 25 minutes"), "{ics}");
+
+    let none = IcsOptions {
+        alarm_minutes: None,
+        ..opts
+    };
+    let ics = build_ics(&[course], &none);
+    assert!(!ics.contains("VALARM"), "{ics}");
+}
+
 #[test]
 fn golden_two_courses() {
     let cm1 = IcsCourse {
@@ -44,7 +78,7 @@ fn golden_two_courses() {
     let opts = IcsOptions {
         range_start: CivilDate::new(2026, 8, 3), // first Monday of Aug 2026
         range_end: CivilDate::new(2026, 11, 30),
-        alarm: true,
+        alarm_minutes: Some(10),
         app_url: "https://example.github.io/timetable/?c=CM1,MFD".to_string(),
         dtstamp: "20260805T120000Z".to_string(),
         calendar_name: "CMI Timetable August\u{2013}November 2026".to_string(),
@@ -77,7 +111,7 @@ fn starts_note_shifts_first_occurrence() {
     let opts = IcsOptions {
         range_start: CivilDate::new(2026, 8, 3),
         range_end: CivilDate::new(2026, 11, 30),
-        alarm: false,
+        alarm_minutes: None,
         app_url: String::new(),
         dtstamp: "20260805T120000Z".to_string(),
         calendar_name: "test".to_string(),
@@ -104,7 +138,7 @@ fn part_of_semester_clamps_range() {
     let opts = IcsOptions {
         range_start: CivilDate::new(2026, 8, 3),
         range_end: CivilDate::new(2026, 11, 30),
-        alarm: false,
+        alarm_minutes: None,
         app_url: String::new(),
         dtstamp: "20260805T120000Z".to_string(),
         calendar_name: "test".to_string(),
@@ -134,7 +168,7 @@ fn single_month_note_clamps_both_ends() {
     let opts = IcsOptions {
         range_start: CivilDate::new(2026, 8, 3),
         range_end: CivilDate::new(2026, 11, 30),
-        alarm: false,
+        alarm_minutes: None,
         app_url: String::new(),
         dtstamp: "20260805T120000Z".to_string(),
         calendar_name: "test".to_string(),
@@ -165,7 +199,7 @@ fn year_crossing_semester_keeps_events() {
     let opts = IcsOptions {
         range_start: CivilDate::new(2027, 12, 1),
         range_end: CivilDate::new(2028, 3, 31),
-        alarm: false,
+        alarm_minutes: None,
         app_url: String::new(),
         dtstamp: "20271201T120000Z".to_string(),
         calendar_name: "test".to_string(),
@@ -199,7 +233,7 @@ fn uids_distinguish_same_start_meetings() {
     let opts = IcsOptions {
         range_start: CivilDate::new(2026, 8, 3),
         range_end: CivilDate::new(2026, 11, 30),
-        alarm: false,
+        alarm_minutes: None,
         app_url: String::new(),
         dtstamp: "20260805T120000Z".to_string(),
         calendar_name: "test".to_string(),
@@ -229,7 +263,7 @@ fn escaping_and_structure() {
     let opts = IcsOptions {
         range_start: CivilDate::new(2026, 8, 3),
         range_end: CivilDate::new(2026, 11, 30),
-        alarm: false,
+        alarm_minutes: None,
         app_url: String::new(),
         dtstamp: "20260805T120000Z".to_string(),
         calendar_name: "test".to_string(),

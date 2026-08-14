@@ -37,8 +37,9 @@ impl IcsCourse {
 pub struct IcsOptions {
     pub range_start: CivilDate,
     pub range_end: CivilDate,
-    /// Add a 10-minute display alarm to every event.
-    pub alarm: bool,
+    /// Add a display alarm to every event, this many minutes before it
+    /// starts. `None` = no alarms.
+    pub alarm_minutes: Option<u16>,
     pub app_url: String,
     /// UTC timestamp for DTSTAMP, e.g. "20260805T120000Z" — passed in so
     /// output is deterministic and js_sys::Date stays at the edges.
@@ -281,17 +282,21 @@ pub fn build_ics(courses: &[IcsCourse], opts: &IcsOptions) -> String {
                     &format!("DESCRIPTION:{}", escape_text(&desc_parts.join("\n"))),
                 );
             }
-            if opts.alarm {
+            if let Some(minutes) = opts.alarm_minutes {
                 push(&mut out, "BEGIN:VALARM");
                 push(&mut out, "ACTION:DISPLAY");
                 push(
                     &mut out,
                     &format!(
                         "DESCRIPTION:{}",
-                        escape_text(&format!("{} starts in 10 minutes", course.code))
+                        escape_text(&format!(
+                            "{} starts in {minutes} minute{}",
+                            course.code,
+                            if minutes == 1 { "" } else { "s" }
+                        ))
                     ),
                 );
-                push(&mut out, "TRIGGER:-PT10M");
+                push(&mut out, &format!("TRIGGER:-PT{minutes}M"));
                 push(&mut out, "END:VALARM");
             }
             push(&mut out, "END:VEVENT");

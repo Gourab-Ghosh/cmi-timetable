@@ -233,6 +233,14 @@ pub enum Dialog {
         code: Option<String>,
         prefill: Option<String>,
     },
+    /// "Import from JSON" on Course selection found these codes in the file:
+    /// `known` are in this catalog (or the student's own), `unknown` aren't
+    /// and will be left out. The dialog asks replace-or-add; nothing changes
+    /// until the user picks.
+    ImportSelection {
+        known: Vec<String>,
+        unknown: Vec<String>,
+    },
 }
 
 /// An in-flight pointer drag.
@@ -691,6 +699,58 @@ impl App {
                 "Added {code}. ⚠ It clashes with {}. It's on your timetable \
                  either way.",
                 clashing.join(", ")
+            ));
+        }
+    }
+
+    /// The import dialog's two answers, one undoable step either way:
+    /// `replace` makes the file's courses the whole selection; otherwise
+    /// they join what's already there. Restoring a deleted course on the
+    /// way in mirrors `add_course` — on your timetable and deleted at once
+    /// is not a state.
+    pub fn import_selection(&self, codes: &[String], replace: bool) {
+        let n = codes.len();
+        let already: usize = self
+            .selection
+            .with_untracked(|sel| codes.iter().filter(|c| sel.contains(c)).count());
+        let label = if replace {
+            "replace my courses with a file's"
+        } else {
+            "add a file's courses"
+        };
+        let codes = codes.to_vec();
+        self.act(label, move |sel, ovs| {
+            if replace {
+                sel.clear();
+            }
+            for code in &codes {
+                if !sel.contains(code) {
+                    sel.push(code.clone());
+                }
+                ovs.unhide(code);
+            }
+        });
+        let plural = |n: usize| if n == 1 { "course" } else { "courses" };
+        if replace {
+            self.toast_undo(format!(
+                "Your timetable is now the file's {n} {}.",
+                plural(n)
+            ));
+        } else if already == n {
+            self.toast_undo(
+                "Every course in that file was already on your timetable — \
+                 nothing changed.",
+            );
+        } else {
+            let added = n - already;
+            self.toast_undo(format!(
+                "Added {added} {} from the file{}.",
+                plural(added),
+                if already > 0 {
+                    " — the rest were already on your timetable"
+                } else {
+                    ""
+                },
             ));
         }
     }

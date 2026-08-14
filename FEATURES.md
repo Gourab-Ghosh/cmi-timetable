@@ -298,7 +298,8 @@ with an explanation of why that happens and what still worked.
 - The whole timetable, or a single course — the choice appears only when you
   have more than one course, since with one there is only one file to make.
 - A date range, pre-filled from the semester CMI names.
-- An optional **10-minute reminder** on every class.
+- An optional **reminder** on every class — you pick how many minutes
+  before it starts (10 unless you say otherwise).
 - Honours your changes — moved classes, your own courses, your rooms — and
   courses annotated "starts …" or "runs … only" are exported with their own
   dates.
@@ -314,17 +315,26 @@ with an explanation of why that happens and what still worked.
   added by you (moved ones carry the CMI original alongside). Stable keys and
   deterministic order, so scripts can merge two timetables or analyse one
   without scraping anything.
-- **Export snapshot** (My data → Downloaded timetable) writes everything CMI was
-  offering at the moment of the last sync — the whole catalog, halls and
-  slots — as a single file. **Import snapshot** loads such a file back, on
-  the welcome screen or in My data: the timetable appears exactly as CMI
-  published it when the file was made, even years later, even if CMI's site
-  has changed or gone. The app is honest about provenance: the sync pill says
+- **Import from JSON** sits right beside it and reads the courses back out
+  of such a file. If your timetable already has courses, a dialog asks — in
+  whole sentences — whether the file's courses should **replace** yours or
+  **join** them; nothing changes until you pick, and either answer is one
+  Ctrl+Z from undone. Codes this semester's catalog doesn't know are named
+  and left out; an empty timetable is never asked (there is nothing to
+  replace).
+- **Export everything** (My data → Everything in one file) writes the whole
+  planner as one JSON backup: the timetable downloaded from CMI — the whole
+  catalog, halls and slots — plus your selected courses, every change you
+  made, your own courses, your settings and any conflicts you postponed.
+  **Import everything** loads such a file back, on the welcome screen or in
+  My data, and the planner then looks exactly like the one that made the
+  file — even years later, even if CMI's site has changed or gone. It
+  replaces what the browser has saved (it asks first when there is anything
+  to lose), and the app stays honest about provenance: the sync pill says
   "imported", and the data keeps its original fetch date (old data does not
-  become young by travelling in a file). Importing runs through the same
-  merge as a real sync, so your changes and any conflicts keep their
-  meanings — and a damaged or wrong-kind file is refused with a plain
-  explanation, leaving what you had untouched.
+  become young by travelling in a file). A damaged or wrong-kind file is
+  refused with a plain explanation naming what the file actually was,
+  leaving what you had untouched.
 
 ### Print
 
@@ -440,7 +450,7 @@ its own, never as a change CMI made.
 | **Density** | Comfortable or compact |
 | **On a phone** | The timetable opens on today's classes (the whole week is one tap away), tap targets sized for fingers, a header that packs tight, and long-press to drag |
 | **Motion** | Animations respect "reduce motion" |
-| **The wheel** | Scroll over a focused box with a step — credits, a meeting's start or end time, an export date, or any dropdown — and it moves one step. Only while the box has focus, so a value never changes because you scrolled past it |
+| **The wheel** | Scroll over any box with a step — credits, a meeting's start or end time, an export date, the reminder lead, or any dropdown — and it moves one step. Hovering is enough, no click first; while the wheel is over a box, the box takes the scroll and the page behind it stays put. The reminder lead nudges by single minutes on the wheel while its arrows jump by fives |
 | **Enter** | Saves in the editor, downloads in Export, and dismisses the keyboard in a search box |
 | **Escape** | Cancels a drag, then a keyboard move, then an open filter menu, then a dialog — in that order |
 

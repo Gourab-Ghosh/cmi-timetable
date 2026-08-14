@@ -1,18 +1,23 @@
-//! The two JSON file formats the app writes (and one it reads back):
+//! The two JSON file formats the app writes (and reads back):
 //!
 //! - `cmi-timetable-export` — the student's own week, for programmatic
-//!   merging and analysis. Write-only: the app never imports it, so it owes
-//!   nothing to the internal serde shapes and can afford to be explicit
-//!   (minutes AND "HH:MM", short day AND ISO weekday). Built in /app, which
-//!   owns course resolution; this module only supplies the shared pieces.
-//! - `cmi-snapshot` — everything CMI offered at one moment, wrapped in a
-//!   versioned envelope around the internal `Snapshot` serde JSON. Another
-//!   student can load it years later, even if CMI's site has changed or
-//!   gone — the whole point of the format.
+//!   merging and analysis. Written in full, read back only for its course
+//!   CODES (the "Import from JSON" on Course selection); it owes nothing to
+//!   the internal serde shapes and can afford to be explicit (minutes AND
+//!   "HH:MM", short day AND ISO weekday). Built in /app, which owns course
+//!   resolution; this module only supplies the shared pieces.
+//! - `cmi-planner-backup` — the WHOLE planner in one file: the downloaded
+//!   timetable (the internal `Snapshot` serde JSON), the course selection,
+//!   every override, the student's own courses, preferences and any
+//!   conflicts they postponed. Importing it makes another browser look
+//!   exactly like this one, years later, even if CMI's site has changed or
+//!   gone. The envelope and the snapshot are validated HERE; the app-owned
+//!   stores travel as opaque JSON values and the app deserializes them
+//!   fail-closed on its side (they are /app types this crate cannot name).
 //!
-//! Import is fail-closed like everything else: the stored snapshot is
-//! touched only after every check here passes, and each rejection carries
-//! copy that says what the file actually was.
+//! Import is fail-closed like everything else: nothing stored is touched
+//! until every check passes, and each rejection carries copy that says what
+//! the file actually was.
 
 use crate::date::CivilDate;
 use crate::model::Snapshot;
@@ -62,10 +67,9 @@ pub fn semester_slug(label: &str) -> Option<String> {
 }
 
 /// `cmi-timetable-aug-nov-2026-2026-08-14.json` (or without the slug when
-/// the label doesn't parse). `kind` is "timetable" or "snapshot"; `date` is
-/// the date the NAME should carry — export day for a timetable (it names
-/// the student's state on that day), fetch day for a snapshot (two exports
-/// of the same data should get the same name).
+/// the label doesn't parse). `kind` is "timetable" or "planner"; `date` is
+/// the date the NAME should carry — the export day for both (each names
+/// the student's state on that day).
 pub fn json_filename(kind: &str, semester_label: &str, date: CivilDate) -> String {
     match semester_slug(semester_label) {
         Some(slug) => format!("cmi-{kind}-{slug}-{}.json", date.to_iso()),
@@ -73,30 +77,64 @@ pub fn json_filename(kind: &str, semester_label: &str, date: CivilDate) -> Strin
     }
 }
 
-/// The `cmi-snapshot` envelope, as read. (Writing goes through
-/// `snapshot_export_json`, which controls key order.)
+/// The `cmi-planner-backup` envelope, as read. (Writing goes through
+/// `planner_backup_json`, which controls key order.) The five store fields
+/// are /app types this crate cannot name, so they stay `serde_json::Value`
+/// here and the app deserializes each one fail-closed.
 #[derive(Serialize, Deserialize)]
-pub struct SnapshotEnvelope {
+pub struct PlannerBackup {
     pub format: String,
     pub format_version: String,
     #[serde(default)]
     pub exported_at: String,
+    // All defaulted (to JSON null) so a file missing one still parses as an
+    // envelope — the parser then names the missing section honestly instead
+    // of calling the whole file "not a backup".
+    #[serde(default)]
     pub snapshot: serde_json::Value,
+    #[serde(default)]
+    pub selection: serde_json::Value,
+    #[serde(default)]
+    pub overrides: serde_json::Value,
+    #[serde(default)]
+    pub custom_courses: serde_json::Value,
+    #[serde(default)]
+    pub prefs: serde_json::Value,
+    #[serde(default)]
+    pub pending_conflicts: serde_json::Value,
 }
 
-/// Build the `cmi-snapshot` file. `raw_html_gz` is stripped — it multiplies
-/// the file size for a benefit (future parser re-reads) the parsed data
-/// doesn't need; import tolerates its presence anyway.
-pub fn snapshot_export_json(
+/// Everything a validated backup gives the app: the snapshot (already
+/// checked here) plus the raw store values for the app to deserialize.
+#[derive(Debug)]
+pub struct ParsedBackup {
+    pub snapshot: Snapshot,
+    pub selection: serde_json::Value,
+    pub overrides: serde_json::Value,
+    pub custom_courses: serde_json::Value,
+    pub prefs: serde_json::Value,
+    pub pending_conflicts: serde_json::Value,
+}
+
+/// Build the `cmi-planner-backup` file. `raw_html_gz` is stripped from the
+/// snapshot — it multiplies the file size for a benefit (future parser
+/// re-reads) the parsed data doesn't need; import tolerates its presence.
+#[allow(clippy::too_many_arguments)]
+pub fn planner_backup_json(
     snapshot: &Snapshot,
+    selection: serde_json::Value,
+    overrides: serde_json::Value,
+    custom_courses: serde_json::Value,
+    prefs: serde_json::Value,
+    pending_conflicts: serde_json::Value,
     app_version: &str,
     git_commit: &str,
     exported_at_ms: f64,
 ) -> String {
     let mut slim = snapshot.clone();
     slim.raw_html_gz = None;
-    serde_json::json!({
-        "format": "cmi-snapshot",
+    serde_json::to_string_pretty(&serde_json::json!({
+        "format": "cmi-planner-backup",
         "format_version": FORMAT_VERSION,
         "exported_at": iso_utc(exported_at_ms),
         "app": {
@@ -104,9 +142,18 @@ pub fn snapshot_export_json(
             "version": app_version,
             "git_commit": git_commit,
         },
+        "semester": {
+            "label": snapshot.semester_label,
+            "display": snapshot.semester_label_display(),
+        },
         "snapshot": slim,
-    })
-    .to_string()
+        "selection": selection,
+        "overrides": overrides,
+        "custom_courses": custom_courses,
+        "prefs": prefs,
+        "pending_conflicts": pending_conflicts,
+    }))
+    .unwrap_or_default()
 }
 
 /// Why an import was refused — each carries the exact student-facing copy,
@@ -117,6 +164,9 @@ pub enum ImportError {
     WrongFormat(String),
     NewerFormat,
     BadSnapshot(String),
+    /// A real backup envelope with a whole section missing — a truncated or
+    /// hand-edited file, named by the missing part.
+    MissingPart(&'static str),
 }
 
 impl ImportError {
@@ -128,13 +178,14 @@ impl ImportError {
                     .to_string()
             }
             ImportError::WrongFormat(found) if found == "cmi-timetable-export" => {
-                "That's a timetable export — it describes one student's week, \
-                 not CMI's catalog, so it can't be loaded here."
+                "That's a timetable export — it lists courses, not a whole \
+                 planner. “Import from JSON” under Course selection in My \
+                 data reads that kind of file."
                     .to_string()
             }
             ImportError::WrongFormat(_) => {
-                "That file isn't a CMI snapshot — nothing in it says it was \
-                 made by this app's “Export snapshot”."
+                "That file isn't a planner backup — nothing in it says it \
+                 was made by this app's “Export everything”."
                     .to_string()
             }
             ImportError::NewerFormat => {
@@ -145,18 +196,25 @@ impl ImportError {
             ImportError::BadSnapshot(why) => {
                 format!("The snapshot inside this file couldn't be used: {why}")
             }
+            ImportError::MissingPart(part) => {
+                format!(
+                    "That backup has no {part} section inside it — the file \
+                     may be damaged or cut short. Nothing was changed."
+                )
+            }
         }
     }
 }
 
-/// Parse and validate a `cmi-snapshot` file. Returns the snapshot with its
-/// original `fetched_at` (the DATA's age — importing doesn't make old data
-/// young) and whatever `source` the exporter recorded; the caller overwrites
-/// `source` with `SourceTier::Imported`, because the pill must say how THIS
-/// copy arrived, not how the exporter's did. `now_ms` guards against files
-/// claiming to be fetched in the future.
-pub fn parse_snapshot_export(text: &str, now_ms: f64) -> Result<Snapshot, ImportError> {
-    let envelope: SnapshotEnvelope = match serde_json::from_str(text) {
+/// Parse and validate a `cmi-planner-backup` file. Returns the snapshot with
+/// its original `fetched_at` (the DATA's age — importing doesn't make old
+/// data young) and whatever `source` the exporter recorded; the caller
+/// overwrites `source` with `SourceTier::Imported`, because the pill must
+/// say how THIS copy arrived, not how the exporter's did. `now_ms` guards
+/// against files claiming to be fetched in the future. The store values are
+/// returned raw for the app to deserialize fail-closed.
+pub fn parse_planner_backup(text: &str, now_ms: f64) -> Result<ParsedBackup, ImportError> {
+    let envelope: PlannerBackup = match serde_json::from_str(text) {
         Ok(e) => e,
         Err(_) => {
             // Distinguish "not JSON at all / not our shape" from "ours, but
@@ -170,7 +228,7 @@ pub fn parse_snapshot_export(text: &str, now_ms: f64) -> Result<Snapshot, Import
             return Err(ImportError::WrongFormat(found.to_string()));
         }
     };
-    if envelope.format != "cmi-snapshot" {
+    if envelope.format != "cmi-planner-backup" {
         return Err(ImportError::WrongFormat(envelope.format));
     }
     let major = envelope
@@ -180,6 +238,17 @@ pub fn parse_snapshot_export(text: &str, now_ms: f64) -> Result<Snapshot, Import
         .and_then(|n| n.parse::<u32>().ok());
     if major != Some(1) {
         return Err(ImportError::NewerFormat);
+    }
+    for (value, name) in [
+        (&envelope.snapshot, "timetable"),
+        (&envelope.selection, "course-selection"),
+        (&envelope.overrides, "changes"),
+        (&envelope.custom_courses, "own-courses"),
+        (&envelope.prefs, "settings"),
+    ] {
+        if value.is_null() {
+            return Err(ImportError::MissingPart(name));
+        }
     }
     let snapshot: Snapshot = serde_json::from_value(envelope.snapshot).map_err(|e| {
         ImportError::BadSnapshot(format!("it doesn't have the expected shape ({e})"))
@@ -217,5 +286,12 @@ pub fn parse_snapshot_export(text: &str, now_ms: f64) -> Result<Snapshot, Import
             "its fetch date is missing or in the future".to_string(),
         ));
     }
-    Ok(snapshot)
+    Ok(ParsedBackup {
+        snapshot,
+        selection: envelope.selection,
+        overrides: envelope.overrides,
+        custom_courses: envelope.custom_courses,
+        prefs: envelope.prefs,
+        pending_conflicts: envelope.pending_conflicts,
+    })
 }

@@ -35,15 +35,14 @@ fn step_input(input: &web_sys::HtmlInputElement, up: bool) -> bool {
 }
 
 /// Turn the wheel over a box that has a step — credits, a meeting's start or
-/// end time, an export date — and it moves by one step.
+/// end time, an export date, the reminder lead — and it moves by one step.
 ///
-/// **Only while the box has focus.** Every one of these sits inside a dialog
-/// that scrolls, and a value that changes because someone scrolled past it
-/// is a change they never asked for and might not notice. Focus is the
-/// signal that the box is what the wheel is aimed at: click or tab into it
-/// and the wheel adjusts it; leave it alone and the wheel scrolls, as it
-/// always did. (The credits box takes focus by itself when "Other…" opens
-/// it, so in the common flow there is no extra click.)
+/// **Hovering is enough** (R46, by user order — the earlier focus-first
+/// gate read as "scrolling is broken"): the wheel event only lands here
+/// when the cursor is over the box, and pointing at the box is the aim.
+/// While the wheel is over a box the box takes the scroll, so the dialog
+/// behind it stays put; the accepted tradeoff is that a scroll gesture
+/// passing over a box steps it.
 pub fn step_on_wheel(ev: web_sys::WheelEvent) {
     let Some(input) = ev
         .target()
@@ -51,9 +50,10 @@ pub fn step_on_wheel(ev: web_sys::WheelEvent) {
     else {
         return;
     };
-    if !input.matches(":focus").unwrap_or(false) {
-        return;
-    }
+    // Hover is the gate (the wheel event only lands here when the cursor is
+    // over the box) — no click-first required. R46: focus-gating read as
+    // "scrolling is broken" to the person actually using it; pointing at
+    // the box IS the aim.
     // A horizontal-only gesture (a trackpad swipe) is not aimed at a value.
     if ev.delta_y() == 0.0 {
         return;
@@ -61,7 +61,37 @@ pub fn step_on_wheel(ev: web_sys::WheelEvent) {
     // A box with nothing to step from — an empty time, a value the browser
     // will not parse — is left alone, and so is the page: swallowing the
     // scroll without moving anything would just feel broken.
-    if !step_input(&input, ev.delta_y() < 0.0) {
+    //
+    // `data-wheel-step` lets a box give the wheel a finer nudge than its
+    // arrows: the reminder lead jumps by fives on the spinner but by single
+    // minutes on the wheel (R46). Clamped to the box's own min/max.
+    let up = ev.delta_y() < 0.0;
+    let stepped = match input
+        .get_attribute("data-wheel-step")
+        .and_then(|a| a.parse::<f64>().ok())
+    {
+        Some(amount) => match input.value().trim().parse::<f64>() {
+            Ok(current) => {
+                let attr = |name: &str| {
+                    input
+                        .get_attribute(name)
+                        .and_then(|v| v.parse::<f64>().ok())
+                };
+                let mut next = current + if up { amount } else { -amount };
+                if let Some(min) = attr("min") {
+                    next = next.max(min);
+                }
+                if let Some(max) = attr("max") {
+                    next = next.min(max);
+                }
+                input.set_value(&next.to_string());
+                true
+            }
+            Err(_) => false,
+        },
+        None => step_input(&input, up),
+    };
+    if !stepped {
         return;
     }
     ev.prevent_default();
@@ -77,12 +107,10 @@ pub fn step_on_wheel(ev: web_sys::WheelEvent) {
 /// Turn the wheel over a focused dropdown and it moves to the next or the
 /// previous option.
 ///
-/// Same focus gate, and for the same reason, as `step_on_wheel`: a day or a
-/// time slot picked because someone scrolled a dialog past it is a change
-/// they never asked for. A dropdown is a box with a step too — its steps are
-/// just named rather than numbered — and having the wheel move the start
-/// time but not the Time slot next to it is the kind of gap that makes an
-/// app feel arbitrary.
+/// Same hover gate, and for the same reason, as `step_on_wheel`. A dropdown
+/// is a box with a step too — its steps are just named rather than
+/// numbered — and having the wheel move the start time but not the Time
+/// slot next to it is the kind of gap that makes an app feel arbitrary.
 pub fn cycle_on_wheel(ev: web_sys::WheelEvent) {
     let Some(select) = ev
         .target()
@@ -90,9 +118,6 @@ pub fn cycle_on_wheel(ev: web_sys::WheelEvent) {
     else {
         return;
     };
-    if !select.matches(":focus").unwrap_or(false) {
-        return;
-    }
     // An open dropdown scrolls its own list; only the closed box steps.
     if ev.delta_y() == 0.0 {
         return;

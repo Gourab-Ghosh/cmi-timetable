@@ -1825,7 +1825,7 @@ fn the_exported_calendar_follows_the_term() {
         &IcsOptions {
             range_start: start,
             range_end: end,
-            alarm: false,
+            alarm_minutes: None,
             app_url: "https://example.invalid/".to_string(),
             dtstamp: "20270101T000000Z".to_string(),
             calendar_name: snap.semester_label_display(),

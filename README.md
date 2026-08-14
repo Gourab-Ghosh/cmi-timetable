@@ -91,16 +91,20 @@ cache (R32 holds). Debug builds (`trunk serve`) get a self-cleaning stub that
 caches nothing. A new deploy replaces the cache on the next online reload; no
 prompts, no reload loops.
 
-### JSON exports and snapshot import
+### JSON exports and the whole-planner backup
 
 `core/src/export.rs` owns the file formats (versioned, semver'd, natively
-tested); `app/src/export.rs` builds the timetable export from the app's own
-course resolution. `cmi-timetable-export` is write-only (stable keys,
-effective meetings, credit provenance). `cmi-snapshot` wraps the internal
-`Snapshot` serde JSON in an envelope and can be imported back — validated
-fail-closed, labelled `SourceTier::Imported` in the pill, keeping the
-ORIGINAL fetch date, and adopted through the same three-way merge as a real
-sync.
+tested); `app/src/export.rs` builds them from the app's own course
+resolution and stores. `cmi-timetable-export` describes the student's week
+(stable keys, effective meetings, credit provenance); the app also reads
+its course CODES back for "Import from JSON" on Course selection, which
+asks replace-or-add through a dialog. `cmi-planner-backup` carries the
+WHOLE planner — the internal `Snapshot` serde JSON plus selection,
+overrides, custom courses, prefs and postponed conflicts — and importing it
+(welcome screen, or My data → "Everything in one file") replaces the saved
+state after a confirm and reloads: validated fail-closed in core (envelope,
+snapshot sanity) and in app (each store), labelled `SourceTier::Imported`
+in the pill, keeping the ORIGINAL fetch date.
 
 Until the first sync succeeds the app stays on its welcome screen; a failed
 first sync explains itself in a banner and every later page load retries

@@ -90,15 +90,16 @@ fn welcome(app: App) -> impl IntoView {
                      twice a day, and tells you what changed."
                 </p>
                 <p class="welcome-note muted small">
-                    "Got a snapshot file from another student? "
+                    "Got an “Export everything” file — your own from another device, \
+                     or another student's? "
                     <button
                         class="linklike"
-                        on:click=move |_| crate::export::pick_and_import_snapshot(app)
+                        on:click=move |_| crate::export::pick_and_import_backup(app)
                     >
                         "Import it"
                     </button>
-                    " — it loads the timetable exactly as CMI published it when the \
-                     file was made, and needs no connection at all."
+                    " — the planner loads exactly as it was when the file was made, \
+                     and needs no connection at all."
                 </p>
             </div>
         </section>

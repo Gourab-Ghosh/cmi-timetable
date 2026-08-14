@@ -386,7 +386,12 @@ fn hall_days_are_separate(hp: &crate::parse::HallsPage) -> GateCheck {
                  not recognised, which files a whole day's bookings under the day above it",
                 dups.len(),
                 named.join(", "),
-                if dups.len() > 3 { ", …" } else { "" }
+                // Written out — the app never abbreviates with "…".
+                if dups.len() > 3 {
+                    format!(", and {} more", dups.len() - 3)
+                } else {
+                    String::new()
+                }
             )
         },
     }

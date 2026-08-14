@@ -2756,10 +2756,10 @@ def t61_adding_a_meeting_where_a_moved_one_used_to_be(app):
 
 
 def t62_the_wheel_steps_the_boxes_that_have_a_step(app):
-    """Scroll over credits, a meeting time or an export date and it moves one
-    step — but ONLY while that box has focus. All three live in dialogs that
-    scroll, and a value that changed because someone scrolled past it is a
-    change they never asked for."""
+    """Scroll over credits, a meeting time or an export date and it moves
+    one step — hovering is enough, no click first (R46: focus-gating read
+    as "scrolling is broken"). The box swallows the scroll while the wheel
+    is over it, so the dialog behind it stays put."""
     def wheel(el, dy):
         ActionChains(app.d).scroll_from_origin(
             ScrollOrigin.from_element(el), 0, dy).perform()
@@ -2809,25 +2809,24 @@ def t62_the_wheel_steps_the_boxes_that_have_a_step(app):
         wheel(box, 50)
     assert box.get_attribute("value") == "0", box.get_attribute("value")
 
-    # Unfocused, the wheel leaves it alone and scrolls the dialog instead.
+    # Hover is enough — deliberately unfocused, the wheel still steps.
     dialog = app.css(".dialog")
     app.d.execute_script("document.activeElement.blur();")
-    before = box.get_attribute("value")
-    wheel(box, 200)
-    assert box.get_attribute("value") == before, \
-        "an unfocused box must not change when the dialog scrolls past it"
+    wheel(box, -50)
+    assert box.get_attribute("value") == "1", \
+        "hovering must be enough — no click-first (value: %s)" \
+        % box.get_attribute("value")
 
-    # Focused, the dialog stays put — the scroll belongs to the box.
-    box.click()
+    # And while the wheel is over the box, the dialog behind it stays put —
+    # the scroll belongs to the box.
     app.d.execute_script("arguments[0].scrollTop = 0;", dialog)
     wheel(box, 200)
     assert app.d.execute_script("return arguments[0].scrollTop;", dialog) == 0, \
-        "a focused box must swallow the scroll, not scroll the dialog too"
+        "a hovered box must swallow the scroll, not scroll the dialog too"
 
-    # A meeting time steps by a minute.
-    app.d.execute_script("arguments[0].scrollTop = 0;", dialog)
+    # A meeting time steps by a minute — again without a click.
+    app.d.execute_script("arguments[0].scrollTop = 0; document.activeElement.blur();", dialog)
     start_time = app.css("input[type='time'][aria-label='Start time']")
-    start_time.click()
     before = start_time.get_attribute("value")
     wheel(start_time, -50)
     assert start_time.get_attribute("value") != before, \
@@ -2837,17 +2836,29 @@ def t62_the_wheel_steps_the_boxes_that_have_a_step(app):
     # numbered — and the Day control sits right beside the time boxes.
     day = app.css_all(".course-form .meeting-draft select[aria-label='Day']")[0]
     picked = Select(day).first_selected_option.text
-    wheel(day, -50)
-    assert Select(day).first_selected_option.text == picked, \
-        "an unfocused dropdown must not change when the dialog scrolls past it"
-    day.click()
-    app.d.execute_script("document.activeElement.blur(); arguments[0].focus();", day)
     wheel(day, 50)
     stepped = Select(day).first_selected_option.text
-    assert stepped != picked, f"the Day dropdown must step: {picked}"
+    assert stepped != picked, f"the Day dropdown must step on hover: {picked}"
     wheel(day, -50)
     assert Select(day).first_selected_option.text == picked, \
         "and step back the other way"
+
+    # The reminder lead decouples its two steppers: the arrows jump by
+    # fives (step=5 from min=5, so 5-10-15, never 1-6-11), the wheel
+    # nudges by single minutes (data-wheel-step=1).
+    app.boot("/", selection=["TOC"])
+    app.xpath("//button[normalize-space()='Export to calendar']").click()
+    app.wait_css(".dialog")
+    app.xpath("//label[contains(.,'reminder')]//input").click()
+    lead = app.wait_css("label.alarm-lead input")
+    assert lead.get_attribute("step") == "5", lead.get_attribute("step")
+    assert lead.get_attribute("min") == "5", lead.get_attribute("min")
+    assert lead.get_attribute("value") == "10"
+    wheel(lead, -50)
+    assert lead.get_attribute("value") == "11", lead.get_attribute("value")
+    wheel(lead, 50)
+    wheel(lead, 50)
+    assert lead.get_attribute("value") == "9", lead.get_attribute("value")
 
     # And an export date by a day.
     app.xpath("//div[@class='dialog']//button[normalize-space()='Cancel']").click()
@@ -3542,11 +3553,12 @@ def t78_many_filter_chips_collapse_behind_more(app):
         == 7 + n_hidden
 
 
-def t79_json_exports_parse_and_the_snapshot_round_trips(app):
+def t79_json_exports_parse_and_the_backup_restores_everything(app):
     """Export the timetable as JSON (machine-first: stable keys, effective
-    meetings, credit provenance), export the whole snapshot, wipe the
-    browser, import the snapshot back — the same catalog appears, and the
-    pill honestly says 'imported' with the ORIGINAL fetch date's age."""
+    meetings, credit provenance), export the whole planner as one backup
+    file, wipe the browser, import the backup — the selection, the custom
+    move AND the catalog are all back, and the pill honestly says
+    'imported' with the ORIGINAL fetch date's age."""
     app.boot("/", selection=["TOC", "RDBM"], overrides=TOC_OVR)
     app.xpath("//button[normalize-space()='My data']").click()
     dialog = app.wait_css(".dialog")
@@ -3567,20 +3579,28 @@ def t79_json_exports_parse_and_the_snapshot_round_trips(app):
     assert moved[0]["day"] == "Wed" and moved[0]["start"]["hhmm"] == "17:00"
     assert toc["credits"]["source"] in ("assumed", "user", "cmi")
 
-    dialog.find_element(By.XPATH, ".//button[normalize-space()='Export snapshot']").click()
+    # The section lives low in the dialog, beneath the sticky footer at this
+    # scroll position — bring it to the middle first, like a reader would.
+    everything = dialog.find_element(
+        By.XPATH, ".//button[normalize-space()='Export everything']")
+    app.d.execute_script(
+        "arguments[0].scrollIntoView({block: 'center'});", everything)
+    everything.click()
     time.sleep(1.0)
-    snap_files = [f for f in os.listdir(DOWNLOADS) if f.startswith("cmi-snapshot-")]
-    assert snap_files, os.listdir(DOWNLOADS)
-    snap_path = os.path.join(DOWNLOADS, sorted(snap_files)[-1])
-    with open(snap_path, encoding="utf-8") as f:
+    bak_files = [f for f in os.listdir(DOWNLOADS) if f.startswith("cmi-planner-")]
+    assert bak_files, os.listdir(DOWNLOADS)
+    bak_path = os.path.join(DOWNLOADS, sorted(bak_files)[-1])
+    with open(bak_path, encoding="utf-8") as f:
         envelope = json.load(f)
-    assert envelope["format"] == "cmi-snapshot"
+    assert envelope["format"] == "cmi-planner-backup"
     assert envelope["snapshot"]["courses"], "the whole catalog rides in the file"
+    assert set(envelope["selection"]) == {"TOC", "RDBM"}, envelope["selection"]
+    assert envelope["overrides"]["items"], "the custom move rides in the file"
     assert "raw_html_gz" not in envelope["snapshot"] \
         or envelope["snapshot"]["raw_html_gz"] is None
 
-    # Wipe everything, import the file, and the catalog is back — labelled
-    # honestly as imported, at the DATA's age.
+    # Wipe everything, import the file, and the WHOLE planner is back —
+    # labelled honestly as imported, at the DATA's age.
     app.boot("/", seed=False)
     app.wait_css(".welcome-card")
     # The first-run auto-sync fails against the stopped CMI and toasts about
@@ -3600,15 +3620,84 @@ def t79_json_exports_parse_and_the_snapshot_round_trips(app):
         app.xpath("//button[normalize-space()='Import it']").click()
         file_input = WebDriverWait(app.d, 10).until(
             lambda d: d.find_element(By.CSS_SELECTOR, "#cmitt-import-input"))
-    file_input.send_keys(snap_path)
+    file_input.send_keys(bak_path)
+    # A fresh browser has nothing to lose, so the import asks nothing and
+    # reloads into the imported state.
     app.wait_css(".tabs .tab", timeout=20)
-    # The pill updates a beat after adoption — wait, don't snapshot-assert.
     WebDriverWait(app.d, 10).until(
         lambda d: "imported" in app.css(".sync-pill").text,
         message=f"pill: {app.css('.sync-pill').text!r}")
+    # The selection came back...
+    app.wait_css("td[data-day='2'][data-slot='1020'] button.chip[aria-label^='TOC,']")
+    # ...with the custom move intact (TOC on Wed 17:00, not CMI's Tue), and
+    # the whole catalog behind it.
     app.open_tab("Catalog")
     app.wait_css("section[aria-label='Catalog']")
-    app.chip("TOC")  # the imported catalog renders
+    app.chip("QCOM")  # a course that was never selected — the catalog is whole
+
+
+def t81_importing_courses_asks_replace_or_add(app):
+    """'Import from JSON' on Course selection reads the codes out of a
+    timetable export and asks — in whole sentences — whether they replace
+    the current courses or join them. Codes the catalog doesn't know are
+    named and left out; an empty timetable skips the question (nothing to
+    replace); and either answer is one undoable step."""
+    crafted = os.path.join(DOWNLOADS, "crafted-import.json")
+    with open(crafted, "w", encoding="utf-8") as f:
+        json.dump({"format": "cmi-timetable-export", "format_version": "1.0.0",
+                   "courses": [{"code": "MFD"}, {"code": "TOC"},
+                               {"code": "BOGUS9"}]}, f)
+
+    app.boot("/", selection=["TOC", "QCOM"])
+    app.xpath("//button[normalize-space()='My data']").click()
+    dialog = app.wait_css(".dialog")
+
+    def send_import():
+        dialog.find_element(
+            By.XPATH, ".//button[normalize-space()='Import from JSON…']").click()
+        file_input = WebDriverWait(app.d, 10).until(
+            lambda d: d.find_element(By.CSS_SELECTOR, "#cmitt-import-input"))
+        file_input.send_keys(crafted)
+
+    # Keep both: MFD joins, TOC is recognised as already there, BOGUS9 is
+    # named and left out.
+    send_import()
+    ask = WebDriverWait(app.d, 10).until(
+        lambda d: app.css(".dialog") if "Courses from a file"
+        in app.css(".dialog").text else None)
+    assert "2 courses from this semester" in ask.text, ask.text
+    assert "Left out: BOGUS9" in ask.text, ask.text
+    ask.find_element(
+        By.XPATH, ".//button[contains(.,'Keep mine and add')]").click()
+    app.wait_toast("Added 1 course from the file")
+    for code in ("TOC", "QCOM", "MFD"):
+        app.wait_css(f"button.chip[aria-label^='{code},']")
+
+    # Replace: the selection becomes exactly the file's two.
+    app.xpath("//button[normalize-space()='My data']").click()
+    dialog = app.wait_css(".dialog")
+    send_import()
+    ask = WebDriverWait(app.d, 10).until(
+        lambda d: app.css(".dialog") if "Courses from a file"
+        in app.css(".dialog").text else None)
+    ask.find_element(
+        By.XPATH, ".//button[contains(.,'Replace mine')]").click()
+    app.wait_toast("Your timetable is now the file's 2 courses.")
+    app.d.find_element(By.TAG_NAME, "body").send_keys(Keys.ESCAPE)
+    WebDriverWait(app.d, 10).until(
+        lambda d: not app.css_all("button.chip[aria-label^='QCOM,']"),
+        message="QCOM must be gone after Replace")
+
+    # An empty timetable skips the question — there is nothing to replace.
+    app.xpath("//button[normalize-space()='My data']").click()
+    dialog = app.wait_css(".dialog")
+    dialog.find_element(
+        By.XPATH, ".//button[normalize-space()='Clear selection']").click()
+    app.wait_toast("Your timetable is empty now")
+    send_import()
+    app.wait_toast("Added 2 courses from the file.")
+    assert "Courses from a file" not in app.css(".dialog").text, \
+        "an empty selection must not be asked what to replace"
 
 
 def t80_a_seminar_is_assumed_zero_credits(app):
@@ -3709,8 +3798,9 @@ TESTS = [
     t76_no_false_conflict_and_decide_later_survives_reload,
     t77_what_changed_shows_what_a_dropped_course_was,
     t78_many_filter_chips_collapse_behind_more,
-    t79_json_exports_parse_and_the_snapshot_round_trips,
+    t79_json_exports_parse_and_the_backup_restores_everything,
     t80_a_seminar_is_assumed_zero_credits,
+    t81_importing_courses_asks_replace_or_add,
 ]
 
 

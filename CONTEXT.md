@@ -95,7 +95,7 @@ and no committed mirror (fixtures exist only for tests/e2e seed).
 ```text
 /core   parsers, model, validate (gate), merge (3-way), diff, ics, share,
         date, export (JSON file formats: cmi-timetable-export /
-        cmi-snapshot envelope + import validation, iso_utc, filenames);
+        cmi-planner-backup envelope + import validation, iso_utc, filenames);
         feature `html` = native scraper path (tests + e2e seed).
         core/examples/snapshot_json.rs → fixtures → snapshot JSON (e2e
         seed; test tooling only, nothing ships it).
@@ -2450,6 +2450,94 @@ re-pinned to "Added by you"; harnesses count as pinned copy too.
 Verified by eye after the fixes: phone opens on today with a 3-row
 header and all five tabs visible; print-clash back to one page with clean
 names and readable ⚠ chips; desktop pages unchanged.
+
+### R46 — the backup that carries everything, and the import that asks
+
+User: the R43 snapshot export "is not exactly what I wanted" — it must copy
+"each and everything of the website": the timetable, the selected courses,
+the overwrites, all of it. Remove Export/Import snapshot from Downloaded
+timetable (back to its pre-R43 state), place whole-planner import/export
+somewhere smart, JSON, machine-processable. Plus: an "Import from JSON"
+beside "Export as JSON" under Course selection that asks replace-or-add
+(the ask clarified mid-round: that popup belongs ONLY to the selection
+import; the whole-planner import just confirms and replaces), the pair
+side by side with distance from the heading and from Clear selection,
+hover explanations on the buttons, no three-dots anywhere ever, a
+configurable calendar-reminder lead (was fixed at 10 minutes), and beauty
+throughout.
+
+What changed:
+
+**1. `cmi-snapshot` is GONE, replaced by `cmi-planner-backup`** (never
+deployed, so no compatibility owed). One envelope: format/version/
+exported_at/app/semester + the raw-stripped internal `Snapshot` + the five
+app stores verbatim (selection, overrides, custom_courses, prefs,
+pending_conflicts). Core (`core/src/export.rs`) validates the envelope,
+version gate (major-1), snapshot sanity, and NAMES a missing section
+(`ImportError::MissingPart` — serde defaults each store to null so a
+truncated file isn't mistaken for a foreign one); the app deserializes
+each store fail-closed (`app/src/export.rs::import_planner_backup_text`),
+confirms when there is anything to lose, saves every localStorage key
+(snapshot FIRST — a quota failure there aborts before anything else is
+written), sets `SourceTier::Imported` (original fetched_at kept), and
+`location.reload()`s so the imported state boots through the one normal
+path. Buttons: My data → new "Everything in one file" section (above
+Start fresh; visible explainer line + titled buttons "Export everything" /
+"Import everything…"); the welcome screen's "Import it" now takes this
+file. Filename kind: `cmi-planner-<slug>-<export-date>.json`. Native
+tests: `core/tests/export_tests.rs` (round trip, every refusal message,
+minor-version tolerance).
+
+**2. "Import from JSON" on Course selection.** Reads codes back out of a
+`cmi-timetable-export` (leniently: format id + `courses[].code`; planner
+backups and foreign files are redirected/refused by name). Codes resolve
+like share links (own courses first, then catalog case-insensitively);
+unknown ones are named and left out. A non-empty timetable gets the
+`Dialog::ImportSelection` popup — two whole-sentence choice cards
+("Replace mine with the file's" / "Keep mine and add the file's", each
+stating its consequence, `.choice-btn` CSS), code badges, Cancel returns
+to My data; an empty timetable skips the question (nothing to replace).
+Either answer is ONE undoable act (`App::import_selection`) with honest
+toasts (added-count vs already-there). Layout: `.btn-pair` groups
+Export-as-JSON + Import-from-JSON beside the heading; Clear selection
+sits apart at the row's far end; every button in My data now carries a
+title tooltip.
+
+**3. Calendar reminder lead is the student's choice.** `IcsOptions.alarm`
+(bool) → `alarm_minutes: Option<u16>`; TRIGGER carries `-PT{n}M` and the
+alarm text counts in the same number. UI: the checkbox stays; a minutes
+box (default 10, clamped 1–1440 at export) appears only while ticked. Its
+two steppers are deliberately decoupled after live user feedback: the
+ARROWS jump by fives (step=5 counting from min=5 — a floor of 1 made the
+awkward 1-6-11 series), the WHEEL nudges by single minutes
+(`data-wheel-step="1"`, handled with manual clamped arithmetic in
+`domx::step_on_wheel`). Golden unchanged (Some(10));
+`alarm_lead_is_configurable` pins a custom lead.
+
+**3b. The wheel is hover-gated now, everywhere.** The old focus-first gate
+(FEATURES' "only while the box has focus") read as "scrolling is broken"
+to the user actually using it — user order: hover must be enough, on this
+box and every number box in future. `domx::step_on_wheel` and
+`cycle_on_wheel` drop the focus check; the box under the cursor takes the
+scroll (preventDefault) so the dialog behind it stays put. t62 re-pinned
+to hover behavior; the deliberate tradeoff (a wheel gesture passing over
+a box now steps it) is accepted and documented in FEATURES' wheel row.
+
+**4. Three dots.** At HEAD the CSS has no `text-overflow` anywhere and no
+line-clamp; the "…" in progress labels ("Syncing…") and affordances
+("Import from JSON…") are ongoing-action convention, not truncation. The
+one real truncation-by-dots was validate.rs's duplicate-halls list ("A, B,
+C, …") → now words: ", and N more". (The dots the user still sees live on
+the DEPLOYED site, which predates R43's grid fixes.)
+
+e2e: t79 reworked (backup file asserted: selection + overrides ride along;
+wiped browser restores the custom TOC move, the selection AND the full
+catalog; fresh browser asks nothing; sticky-footer click needed
+scrollIntoView); NEW t81 (crafted file with a bogus code: keep-both adds
+only the new course, replace makes the selection exactly the file's,
+"Left out: BOGUS9" named, empty timetable skips the popup). Suite: **114
+native + 81/81 e2e** (expected — verify before commit). FEATURES/README/
+e2e-README rewritten for the new formats.
 
 ## 8. Open bugs — found, confirmed, NOT fixed (do not delete)
 

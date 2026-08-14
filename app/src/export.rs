@@ -1,14 +1,15 @@
-//! The JSON exports and the snapshot import (formats: `core/src/export.rs`).
+//! The JSON exports and imports (formats: `core/src/export.rs`).
 //!
 //! The timetable export is built HERE because /app owns course resolution —
 //! the user's own courses win over CMI's, a selected course CMI dropped
 //! still exports as its stub, and every meeting is the EFFECTIVE one the
-//! student actually attends. Core supplies the envelope, the validation,
-//! the timestamps and the filenames, so the pieces with format contracts
-//! stay natively testable.
+//! student actually attends. The whole-planner backup is assembled here for
+//! the same reason: the stores are /app state. Core supplies the envelope,
+//! the validation, the timestamps and the filenames, so the pieces with
+//! format contracts stay natively testable.
 
+use crate::domx;
 use crate::state::App;
-use crate::{domx, fetch};
 use leptos::prelude::*;
 use serde_json::json;
 use ttcore::model::{CreditAssumption, Meeting, SourceTier};
@@ -188,60 +189,243 @@ pub fn download_timetable_export(app: &App) {
     app.toast("Timetable exported as JSON.");
 }
 
-/// Download the snapshot export. The filename carries the FETCH date — two
-/// exports of the same stored snapshot are the same data.
-pub fn download_snapshot_export(app: &App) {
+/// The whole planner as one `cmi-planner-backup` file: the downloaded
+/// timetable plus every store the app saves — selection, overrides, the
+/// student's own courses, preferences, postponed conflicts. Importing it
+/// makes another browser look exactly like this one.
+pub fn planner_backup_json(app: &App) -> String {
     let snapshot = app.snapshot.get_untracked();
-    let fetched = ttcore::date::CivilDate::from_days(
-        ((snapshot.fetched_at / 1000.0) as i64).div_euclid(86_400),
-    );
-    let name = ttcore::export::json_filename("snapshot", &snapshot.semester_label, fetched);
-    let json = ttcore::export::snapshot_export_json(
+    let val = |r: Result<serde_json::Value, _>| r.unwrap_or(serde_json::Value::Null);
+    ttcore::export::planner_backup_json(
         &snapshot,
+        val(serde_json::to_value(app.selection.get_untracked())),
+        val(serde_json::to_value(app.overrides.get_untracked())),
+        val(serde_json::to_value(app.customs.get_untracked())),
+        val(serde_json::to_value(app.prefs.get_untracked())),
+        val(serde_json::to_value(app.conflicts.get_untracked())),
         crate::state::APP_VERSION,
         crate::state::GIT_COMMIT,
         domx::now_ms(),
-    );
-    domx::download_text(&name, "application/json", &json);
-    app.toast("Snapshot exported as JSON.");
+    )
 }
 
-/// Load a `cmi-snapshot` file: validate fail-closed, confirm when it would
-/// replace NEWER data with older, then adopt through the same three-way
-/// merge a real sync uses — so custom changes, conflicts and the
-/// What-changed digest all keep their meanings.
-pub fn import_snapshot_text(app: App, text: &str) {
-    let mut snapshot = match ttcore::export::parse_snapshot_export(text, domx::now_ms()) {
-        Ok(s) => s,
+/// Download the whole-planner backup. The filename carries the EXPORT date —
+/// it names the planner's state on that day.
+pub fn download_planner_backup(app: &App) {
+    let label = app.snapshot.with_untracked(|s| s.semester_label.clone());
+    let name = ttcore::export::json_filename("planner", &label, domx::today_local());
+    domx::download_text(&name, "application/json", &planner_backup_json(app));
+    app.toast("Everything exported as one JSON file.");
+}
+
+/// Load a `cmi-planner-backup` file: validate EVERYTHING fail-closed (the
+/// envelope and snapshot in core, each app store here), confirm — this
+/// replaces the whole planner, there is no merge — then write every store
+/// and reload, so the app boots from the imported state through the same
+/// code path as any other start.
+pub fn import_planner_backup_text(app: App, text: &str) {
+    let mut backup = match ttcore::export::parse_planner_backup(text, domx::now_ms()) {
+        Ok(b) => b,
         Err(e) => {
             app.toast(e.message());
             return;
         }
     };
-    let current_fetched = app.snapshot.with_untracked(|s| s.fetched_at);
-    if app.has_data() && snapshot.fetched_at < current_fetched {
-        let old_date = domx::fmt_local_date(snapshot.fetched_at);
-        let new_date = domx::fmt_local_date(current_fetched);
+    // The app-owned stores, each fail-closed: a file that half-parses is a
+    // damaged file, and a damaged file changes nothing.
+    let refused = |what: &str| {
+        format!(
+            "That backup couldn't be used: the {what} inside it don't have \
+             the shape this app saves. Nothing was changed."
+        )
+    };
+    let Ok(selection) = serde_json::from_value::<Vec<String>>(backup.selection.take()) else {
+        app.toast(refused("selected courses"));
+        return;
+    };
+    let Ok(overrides) =
+        serde_json::from_value::<ttcore::model::OverridesStore>(backup.overrides.take())
+    else {
+        app.toast(refused("changes"));
+        return;
+    };
+    let Ok(customs) =
+        serde_json::from_value::<ttcore::model::CustomStore>(backup.custom_courses.take())
+    else {
+        app.toast(refused("own courses"));
+        return;
+    };
+    let Ok(prefs) = serde_json::from_value::<crate::state::Prefs>(backup.prefs.take()) else {
+        app.toast(refused("settings"));
+        return;
+    };
+    // Absent in older files → no postponed conflicts; anything present must
+    // parse whole.
+    let conflicts: Vec<ttcore::merge::Conflict> = if backup.pending_conflicts.is_null() {
+        Vec::new()
+    } else {
+        match serde_json::from_value(backup.pending_conflicts.take()) {
+            Ok(c) => c,
+            Err(_) => {
+                app.toast(refused("postponed questions"));
+                return;
+            }
+        }
+    };
+
+    if app.has_data() || !app.selection.with_untracked(|s| s.is_empty()) {
+        let made = domx::fmt_local_date(backup.snapshot.fetched_at);
         let ok = domx::window()
             .confirm_with_message(&format!(
-                "This file was fetched on {old_date}; what you have now was fetched \
-                 on {new_date}. Replace your newer copy with the older one?"
+                "Load this file in place of everything saved here? Your current \
+                 courses, changes and settings in this browser are replaced by \
+                 the file's (its timetable was fetched on {made}). This cannot \
+                 be undone."
             ))
             .unwrap_or(false);
         if !ok {
             return;
         }
     }
+
     // The pill must say how THIS copy arrived, not how the exporter's did.
     // `fetched_at` stays: importing a file does not make old data young.
-    snapshot.source = SourceTier::Imported;
-    fetch::adopt(&app, snapshot, true, fetch::Adoption::Fetched);
+    backup.snapshot.source = SourceTier::Imported;
+    // The snapshot goes first and gates the rest: a quota failure here must
+    // not leave the file's selection sitting on top of the old timetable.
+    if crate::storage::save_snapshot(&backup.snapshot) == crate::storage::SnapshotSave::Failed {
+        app.toast(
+            "Your browser wouldn't store the file's timetable (out of \
+             space?), so nothing was changed.",
+        );
+        return;
+    }
+    let _ = crate::storage::save(crate::storage::KEY_SELECTION, &selection);
+    let _ = crate::storage::save(crate::storage::KEY_OVERRIDES, &overrides);
+    let _ = crate::storage::save(crate::storage::KEY_CUSTOM, &customs);
+    let _ = crate::storage::save(crate::storage::KEY_PREFS, &prefs);
+    if conflicts.is_empty() {
+        crate::storage::remove(crate::storage::KEY_CONFLICTS);
+    } else {
+        let _ = crate::storage::save(crate::storage::KEY_CONFLICTS, &conflicts);
+    }
+    // Boot from the imported state through the one code path every start
+    // uses — no hand-rebuilt signal state to drift.
+    let _ = domx::window().location().reload();
 }
 
-/// Open a file picker and run the import. One hidden input, attached to the
-/// document (a detached input can't receive a file — from the browser's
-/// file dialog or from an automated test), replaced on each use.
-pub fn pick_and_import_snapshot(app: App) {
+/// Read just the course CODES back out of a `cmi-timetable-export` file, for
+/// "Import from JSON" on Course selection. Lenient about everything except
+/// what it needs: the format name and a list of course codes.
+pub fn parse_timetable_export_codes(text: &str) -> Result<Vec<String>, String> {
+    let value: serde_json::Value = serde_json::from_str(text).map_err(|_| {
+        "That file couldn't be read as JSON — it may be damaged, or not a \
+         file this app made."
+            .to_string()
+    })?;
+    let format = value.get("format").and_then(|f| f.as_str()).unwrap_or("");
+    if format == "cmi-planner-backup" {
+        return Err(
+            "That's a whole-planner backup, not a course list — “Import \
+             everything” in My data loads it."
+                .to_string(),
+        );
+    }
+    if format != "cmi-timetable-export" {
+        return Err(
+            "That file isn't a timetable export — nothing in it says it was \
+             made by this app's “Export as JSON”."
+                .to_string(),
+        );
+    }
+    let Some(courses) = value.get("courses").and_then(|c| c.as_array()) else {
+        return Err("That file has no course list inside it.".to_string());
+    };
+    let mut codes: Vec<String> = Vec::new();
+    for course in courses {
+        if let Some(code) = course.get("code").and_then(|c| c.as_str())
+            && !code.trim().is_empty()
+            && !codes.iter().any(|c| c.eq_ignore_ascii_case(code))
+        {
+            codes.push(code.trim().to_string());
+        }
+    }
+    if codes.is_empty() {
+        return Err("That file lists no courses at all.".to_string());
+    }
+    Ok(codes)
+}
+
+/// "Import from JSON" on Course selection: read the codes, sort them into
+/// ones this catalog knows and ones it doesn't, and ask — replace or add —
+/// through the import dialog. Nothing changes until the user picks.
+pub fn import_selection_text(app: App, text: &str) {
+    let codes = match parse_timetable_export_codes(text) {
+        Ok(c) => c,
+        Err(msg) => {
+            app.toast(msg);
+            return;
+        }
+    };
+    // Resolved the way share links resolve codes: the student's own courses
+    // first, then CMI's catalog with its own casing.
+    let snapshot = app.snapshot.get_untracked();
+    let mut known: Vec<String> = Vec::new();
+    let mut unknown: Vec<String> = Vec::new();
+    for code in codes {
+        let resolved = app
+            .customs
+            .with_untracked(|cs| cs.get(&code).map(|c| c.code.clone()))
+            .or_else(|| snapshot.course_ci(&code).map(|c| c.code.clone()));
+        match resolved {
+            Some(canonical) => {
+                if !known.contains(&canonical) {
+                    known.push(canonical);
+                }
+            }
+            None => unknown.push(code),
+        }
+    }
+    if known.is_empty() {
+        app.toast(
+            "None of that file's courses are in this semester's catalog, so \
+             there is nothing to add.",
+        );
+        return;
+    }
+    // An empty timetable has nothing to replace or keep — the question
+    // would answer itself, so don't ask it.
+    if app.selection.with_untracked(|s| s.is_empty()) {
+        app.import_selection(&known, false);
+        if !unknown.is_empty() {
+            app.toast(format!(
+                "Left out: {} — not in CMI's catalog this semester.",
+                unknown.join(", ")
+            ));
+        }
+        return;
+    }
+    app.dialog.set(Some(crate::state::Dialog::ImportSelection {
+        known,
+        unknown,
+    }));
+}
+
+/// Open a file picker for the whole-planner backup.
+pub fn pick_and_import_backup(app: App) {
+    pick_json_file(app, import_planner_backup_text);
+}
+
+/// Open a file picker for "Import from JSON" on Course selection.
+pub fn pick_and_import_selection(app: App) {
+    pick_json_file(app, import_selection_text);
+}
+
+/// Open a file picker and hand the file's text to `on_text`. One hidden
+/// input, attached to the document (a detached input can't receive a file —
+/// from the browser's file dialog or from an automated test), replaced on
+/// each use.
+fn pick_json_file(app: App, on_text: fn(App, &str)) {
     use wasm_bindgen::JsCast;
     use wasm_bindgen::closure::Closure;
     let document = domx::document();
@@ -271,7 +455,7 @@ pub fn pick_and_import_snapshot(app: App) {
         let reader_for_load = reader.clone();
         let onload = Closure::<dyn FnMut()>::new(move || {
             if let Some(text) = reader_for_load.result().ok().and_then(|v| v.as_string()) {
-                import_snapshot_text(app, &text);
+                on_text(app, &text);
             }
         });
         reader.set_onload(Some(onload.as_ref().unchecked_ref()));

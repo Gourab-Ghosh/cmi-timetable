@@ -1669,6 +1669,9 @@ pub fn DialogHost() -> impl IntoView {
                         Dialog::EditCourse { code, prefill } => {
                             course_editor_dialog(app, code, prefill).into_any()
                         }
+                        Dialog::ImportSelection { known, unknown } => {
+                            import_selection_dialog(app, known, unknown).into_any()
+                        }
                     };
                     view! {
                         <div class="overlay" on:click=move |_| app.dismiss_dialog()>
@@ -2768,6 +2771,90 @@ pub fn overrides_list(app: App) -> impl IntoView {
 // "My data" — everything saved in the browser, with removal options
 // ---------------------------------------------------------------------------
 
+/// "Import from JSON" found courses in the file — ask what they should do
+/// to the selection. Two whole-sentence choices instead of a yes/no: the
+/// difference between replacing and joining is the entire decision, so each
+/// button says its consequence. Nothing changes until one is pressed, and
+/// either answer is one Ctrl+Z from undone.
+fn import_selection_dialog(app: App, known: Vec<String>, unknown: Vec<String>) -> impl IntoView {
+    let n = known.len();
+    let plural = |n: usize| if n == 1 { "course" } else { "courses" };
+    let lede = format!(
+        "This file lists {n} {} from this semester. What should {} do to the \
+         courses already on your timetable?",
+        plural(n),
+        if n == 1 { "it" } else { "they" },
+    );
+    let left_out = (!unknown.is_empty()).then(|| {
+        format!(
+            "Left out: {} — {} in CMI's catalog this semester, so the app \
+             can't add {}.",
+            unknown.join(", "),
+            if unknown.len() == 1 {
+                "it isn't"
+            } else {
+                "they aren't"
+            },
+            if unknown.len() == 1 { "it" } else { "them" },
+        )
+    });
+    let codes = known.clone();
+    let known_add = known.clone();
+    let replace_note = format!(
+        "Your timetable becomes exactly {} {} — only the selection changes; \
+         your custom times and your own courses stay saved.",
+        if n == 1 { "this" } else { "these" },
+        plural(n),
+    );
+    view! {
+        <div>
+            <h2>"Courses from a file"</h2>
+            <p class="muted small">{lede}</p>
+            <div class="chipline">
+                {known
+                    .iter()
+                    .map(|code| view! { <span class="badge import-code">{code.clone()}</span> })
+                    .collect_view()}
+            </div>
+            {left_out.map(|text| view! { <p class="muted small">{text}</p> })}
+            <div class="choice-list">
+                <button
+                    class="choice-btn"
+                    on:click=move |_| {
+                        app.import_selection(&codes, true);
+                        app.dialog.set(None);
+                    }
+                >
+                    <strong>"Replace mine with the file's"</strong>
+                    <span class="muted small">{replace_note}</span>
+                </button>
+                <button
+                    class="choice-btn"
+                    on:click=move |_| {
+                        app.import_selection(&known_add, false);
+                        app.dialog.set(None);
+                    }
+                >
+                    <strong>"Keep mine and add the file's"</strong>
+                    <span class="muted small">
+                        "The file's courses join what's already on your timetable — \
+                         nothing is taken away."
+                    </span>
+                </button>
+            </div>
+            <div class="actions">
+                <div class="grow"></div>
+                <button
+                    class="btn"
+                    on:click=move |_| app.dialog.set(Some(Dialog::MyData))
+                >
+                    "Cancel"
+                </button>
+            </div>
+        </div>
+    }
+}
+
 fn my_data_dialog(app: App) -> impl IntoView {
     let clear_snapshot = move |_| {
         // Its neighbour, "Delete all app data", asks first — and this one
@@ -2845,25 +2932,61 @@ fn my_data_dialog(app: App) -> impl IntoView {
             </section>
 
             <section class="data-section">
+                // The pair that reads and writes the same file sits together;
+                // the destructive Clear keeps its distance on the far right.
                 <header>
                     <h3>"Course selection"</h3>
+                    <div class="btn-pair">
+                        {move || {
+                            (!app.selection.with(|s| s.is_empty()))
+                                .then(|| {
+                                    view! {
+                                        <button
+                                            class="btn small"
+                                            title="Saves your timetable as a JSON file — \
+                                                   every course and meeting as you actually \
+                                                   attend them, for scripts and tools to \
+                                                   read, and for “Import from JSON” to load \
+                                                   in another browser."
+                                            on:click=move |_| {
+                                                crate::export::download_timetable_export(&app)
+                                            }
+                                        >
+                                            "Export as JSON"
+                                        </button>
+                                    }
+                                })
+                        }}
+                        {move || {
+                            app.has_data()
+                                .then(|| {
+                                    view! {
+                                        <button
+                                            class="btn small"
+                                            title="Reads the courses out of an “Export as \
+                                                   JSON” file and asks whether they should \
+                                                   replace your current courses or join \
+                                                   them. Nothing changes until you pick."
+                                            on:click=move |_| {
+                                                crate::export::pick_and_import_selection(app)
+                                            }
+                                        >
+                                            "Import from JSON…"
+                                        </button>
+                                    }
+                                })
+                        }}
+                    </div>
+                    <div class="grow"></div>
                     {move || {
                         (!app.selection.with(|s| s.is_empty()))
                             .then(|| {
                                 view! {
                                     <button
-                                        class="btn small"
-                                        title="Your timetable as a JSON file — every course \
-                                               and meeting as you actually attend them, for \
-                                               scripts and tools to read"
-                                        on:click=move |_| crate::export::download_timetable_export(
-                                            &app,
-                                        )
-                                    >
-                                        "Export as JSON"
-                                    </button>
-                                    <button
                                         class="btn small danger"
+                                        title="Empties your timetable. Your changes and \
+                                               your own courses stay saved, and Undo \
+                                               brings the selection back."
                                         on:click=move |_| {
                                             app.act("clear selection", |sel, _| sel.clear());
                                             app.toast_undo(
@@ -2918,30 +3041,17 @@ fn my_data_dialog(app: App) -> impl IntoView {
                             .then(|| {
                                 view! {
                                     <button
-                                        class="btn small"
-                                        title="Everything CMI is offering right now, as a \
-                                               JSON file — load it back later (or in another \
-                                               browser), even if CMI's site has changed"
-                                        on:click=move |_| crate::export::download_snapshot_export(
-                                            &app,
-                                        )
+                                        class="btn small danger"
+                                        title="Forgets the timetable downloaded from CMI. \
+                                               Your courses and changes stay; the app shows \
+                                               its welcome screen until the next sync."
+                                        on:click=clear_snapshot
                                     >
-                                        "Export snapshot"
-                                    </button>
-                                    <button class="btn small danger" on:click=clear_snapshot>
                                         "Clear"
                                     </button>
                                 }
                             })
                     }}
-                    <button
-                        class="btn small"
-                        title="Load a snapshot file exported earlier — the timetable \
-                               appears exactly as CMI published it when the file was made"
-                        on:click=move |_| crate::export::pick_and_import_snapshot(app)
-                    >
-                        "Import snapshot…"
-                    </button>
                 </header>
                 <p class="small">
                     {move || {
@@ -2999,6 +3109,48 @@ fn my_data_dialog(app: App) -> impl IntoView {
                 </header>
                 <p class="muted small">
                     "Theme and density. Your filters and the tab you're on stay put."
+                </p>
+            </section>
+
+            <section class="data-section">
+                <header>
+                    <h3>"Everything in one file"</h3>
+                    <div class="btn-pair">
+                        {move || {
+                            app.has_data()
+                                .then(|| {
+                                    view! {
+                                        <button
+                                            class="btn small"
+                                            title="Saves the whole planner as one JSON \
+                                                   file: the downloaded timetable, your \
+                                                   courses, your changes and your settings."
+                                            on:click=move |_| {
+                                                crate::export::download_planner_backup(&app)
+                                            }
+                                        >
+                                            "Export everything"
+                                        </button>
+                                    }
+                                })
+                        }}
+                        <button
+                            class="btn small"
+                            title="Loads an “Export everything” file in place of what \
+                                   this browser has saved — the planner then looks \
+                                   exactly like the one that made the file. It asks \
+                                   before replacing anything."
+                            on:click=move |_| crate::export::pick_and_import_backup(app)
+                        >
+                            "Import everything…"
+                        </button>
+                    </div>
+                </header>
+                <p class="muted small">
+                    "One file holds it all — the downloaded timetable, your courses, \
+                     your changes, your own courses and your settings. Import it on \
+                     any device and the planner looks exactly like this one, even \
+                     years from now. Importing replaces what's here, and asks first."
                 </p>
             </section>
 
@@ -4378,6 +4530,9 @@ fn export_dialog(app: App, scope: Option<String>) -> impl IntoView {
     let from = RwSignal::new(default_start.to_iso());
     let to = RwSignal::new(default_end.to_iso());
     let alarm = RwSignal::new(false);
+    // The reminder lead in minutes, as typed. Parsed (and clamped to a real
+    // lead) only at export time — a half-typed number must not fight back.
+    let alarm_lead = RwSignal::new("10".to_string());
     let scope_sel = RwSignal::new(scope.unwrap_or_else(|| "__all__".to_string()));
     let error = RwSignal::new(String::new());
 
@@ -4447,7 +4602,13 @@ fn export_dialog(app: App, scope: Option<String>) -> impl IntoView {
         let opts = ttcore::ics::IcsOptions {
             range_start: start,
             range_end: end,
-            alarm: alarm.get_untracked(),
+            alarm_minutes: alarm.get_untracked().then(|| {
+                alarm_lead
+                    .get_untracked()
+                    .trim()
+                    .parse::<u16>()
+                    .map_or(10, |m| m.clamp(1, 1440))
+            }),
             app_url: domx::share_url(&format!("?c={c_param}")),
             dtstamp: domx::dtstamp_utc_now(),
             calendar_name: format!("CMI Timetable {}", snapshot.semester_label_display()),
@@ -4549,8 +4710,37 @@ fn export_dialog(app: App, scope: Option<String>) -> impl IntoView {
                     prop:checked=move || alarm.get()
                     on:change=move |ev| alarm.set(event_target_checked(&ev))
                 />
-                <span>"Add a 10-minute reminder to every class"</span>
+                <span>"Add a reminder to every class"</span>
             </label>
+            // The lead is the student's choice; the box appears only once
+            // there is a reminder for it to describe.
+            {move || {
+                alarm
+                    .get()
+                    .then(|| {
+                        view! {
+                            <label class="opt alarm-lead">
+                                // The arrows jump by fives (step counts
+                                // from min, so min=5 keeps them 5, 10, 15 —
+                                // a floor of 1 made them 1, 6, 11); the
+                                // wheel nudges by single minutes
+                                // (data-wheel-step). Any lead can be typed;
+                                // export clamps to 1–1440.
+                                <input
+                                    type="number"
+                                    min="5"
+                                    max="1440"
+                                    step="5"
+                                    data-wheel-step="1"
+                                    prop:value=move || alarm_lead.get()
+                                    on:input=move |ev| alarm_lead.set(event_target_value(&ev))
+                                    on:wheel=domx::step_on_wheel
+                                />
+                                <span>"minutes before it starts"</span>
+                            </label>
+                        }
+                    })
+            }}
             <p class="muted small">
                 "Courses with a “starts …” or “runs … only” note are exported with their own dates."
             </p>
