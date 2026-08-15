@@ -991,6 +991,9 @@ ul.meetings .replaces { grid-column: 1 / -1; }
 .cr-line .cr-value { font-weight: 650; font-variant-numeric: tabular-nums; }
 /* The "why this number" sentence under an assumed credit value. */
 .cr-line .cr-why { display: block; margin-top: 0.15rem; }
+/* The card's credits sentence: its own quiet line under the header row,
+   not jammed into the flex row beside the name. */
+.card .cr-note { margin: 0.15rem 0 0; }
 
 /* Courses missing from the catalog because you deleted them. A shorter
    catalog than CMI's has to explain itself where the absence is felt. */
@@ -1522,6 +1525,9 @@ details.facet .menu .menu-empty { margin: 0.2rem 0 0; }
   border-top: 1px solid var(--line);
   flex-wrap: wrap;
 }
+/* The editor's "Also add … to my timetable" box sits left of the buttons,
+   in the same sticky footer, so it is on screen at the moment of saving. */
+.dialog .actions label.opt { margin-right: auto; }
 /* The bottom bar — always the last thing in a dialog body — is a true
    full-width footer: it bleeds over the dialog's side padding and owns the
    bottom padding the dialog no longer has. Long forms scroll; the buttons
@@ -1898,7 +1904,7 @@ pre.devpre {
 }
 .seg button:last-child { border-right: none; }
 .seg button:hover { color: var(--text); }
-.seg button[aria-pressed="true"] {
+.seg button[aria-checked="true"] {
   background: linear-gradient(120deg, var(--accent-wash), var(--accent2-wash));
   color: var(--accent);
   font-weight: 650;

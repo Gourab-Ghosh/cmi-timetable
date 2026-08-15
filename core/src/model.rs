@@ -616,6 +616,13 @@ pub struct CreditOverride {
 pub struct HiddenCourse {
     pub course: String,
     pub created_at: f64,
+    /// Whether the course was on the user's timetable when it was deleted.
+    /// Deleting took the selection too, so Restore gives both back. Absent
+    /// (false) in data written before this was recorded — those restore the
+    /// old way, to the catalog only. Everywhere selection is already
+    /// explicit (share links, imports, add), the entry dies with its flag.
+    #[serde(default)]
+    pub was_selected: bool,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -701,13 +708,23 @@ impl OverridesStore {
             .any(|h| h.course.eq_ignore_ascii_case(course))
     }
 
-    pub fn hide(&mut self, course: &str, now: f64) {
+    pub fn hide(&mut self, course: &str, was_selected: bool, now: f64) {
         if !self.is_hidden(course) {
             self.hidden.push(HiddenCourse {
                 course: course.to_string(),
                 created_at: now,
+                was_selected,
             });
         }
+    }
+
+    /// Was the course on the timetable when it was deleted? False when it
+    /// isn't hidden at all, or was hidden by data from before the flag.
+    pub fn hidden_was_selected(&self, course: &str) -> bool {
+        self.hidden
+            .iter()
+            .find(|h| h.course.eq_ignore_ascii_case(course))
+            .is_some_and(|h| h.was_selected)
     }
 
     /// `true` if the course was hidden and is now back.
@@ -852,7 +869,7 @@ mod tests {
         let mut store = OverridesStore::default();
         store.add("TOC", Some(meeting), None, 0.0);
         store.set_credits("TOC", 2, 0.0);
-        store.hide("QCOM", 0.0);
+        store.hide("QCOM", true, 0.0);
 
         for spelling in ["TOC", "toc", "Toc"] {
             assert_eq!(store.for_course(spelling).count(), 1, "{spelling}");
@@ -860,7 +877,17 @@ mod tests {
         }
         for spelling in ["QCOM", "qcom", "QCom"] {
             assert!(store.is_hidden(spelling), "{spelling}");
+            assert!(store.hidden_was_selected(spelling), "{spelling}");
         }
+
+        // Stored data from before was_selected existed still loads — the
+        // field defaults to false, so such entries restore to the catalog
+        // only, exactly as they did when they were written.
+        let old_json = r#"{"next_id":1,"items":[],"credits":[],
+            "hidden":[{"course":"OLD1","created_at":0.0}]}"#;
+        let old: OverridesStore = serde_json::from_str(old_json).unwrap();
+        assert!(old.is_hidden("OLD1"));
+        assert!(!old.hidden_was_selected("OLD1"));
 
         // Setting again in another case corrects the entry rather than
         // adding a second one that shadows it.

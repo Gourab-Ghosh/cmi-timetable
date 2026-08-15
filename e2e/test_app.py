@@ -111,7 +111,7 @@ def build_seed():
     SEED_SNAPSHOT_JSON = json.dumps(SEED_SNAPSHOT)
 
 
-def cache_from_before_cmi_moved_toc(gone_code="QCOM"):
+def cache_from_before_cmi_moved_toc(gone_code="QCOM", also_move_iss=False):
     """A cached snapshot that disagrees with CMI's live pages, plus the
     override anchored to it.
 
@@ -123,20 +123,31 @@ def cache_from_before_cmi_moved_toc(gone_code="QCOM"):
     point of view that is exactly an upstream move of a meeting the student
     had customised, which is the situation under test.
 
+    `also_move_iss` plays the same trick on ISS's Tue 09:10, so a sync
+    raises TWO conflicts — for tests that answer one row and leave one.
+
     `gone_code` is renamed in the cache only, so that course looks removed
     upstream on the next sync. Returns (snapshot_json, overrides, gone_code).
     """
     snap = json.loads(SEED_SNAPSHOT_JSON)
     moved_from = None
+    iss_from = None
     for course in snap["courses"]:
-        if course["code"] != "TOC":
-            continue
-        for m in course["meetings"]:
-            if m["day"] == "Tue" and m["slot"]["start_min"] == 550:
-                m["day"] = "Fri"
-                m["slot"] = {"start_min": 840, "end_min": 915}
-                moved_from = json.loads(json.dumps(m))
+        if course["code"] == "TOC":
+            for m in course["meetings"]:
+                if m["day"] == "Tue" and m["slot"]["start_min"] == 550:
+                    m["day"] = "Fri"
+                    m["slot"] = {"start_min": 840, "end_min": 915}
+                    moved_from = json.loads(json.dumps(m))
+        if also_move_iss and course["code"] == "ISS":
+            for m in course["meetings"]:
+                if m["day"] == "Tue" and m["slot"]["start_min"] == 550:
+                    m["day"] = "Fri"
+                    m["slot"] = {"start_min": 840, "end_min": 915}
+                    iss_from = json.loads(json.dumps(m))
     assert moved_from is not None, "the fixture must still have TOC on Tue 09:10"
+    assert not also_move_iss or iss_from is not None, \
+        "the fixture must still have ISS on Tue 09:10"
 
     renamed = f"{gone_code}X"
     assert not any(c["code"] == renamed for c in snap["courses"]), \
@@ -145,16 +156,26 @@ def cache_from_before_cmi_moved_toc(gone_code="QCOM"):
         if course["code"] == gone_code:
             course["code"] = renamed
 
-    overrides = {
-        "next_id": 1,
-        "items": [{
-            "id": 0, "course": "TOC",
+    items = [{
+        "id": 0, "course": "TOC",
+        "base": {"day": "Fri",
+                 "slot": {"start_min": 840, "end_min": 915},
+                 "hall": moved_from.get("hall"), "temp_booking": False},
+        "to": {"day": "Wed", "slot": {"start_min": 1020, "end_min": 1095},
+               "hall": moved_from.get("hall"), "temp_booking": False},
+        "created_at": 1754000000000.0}]
+    if also_move_iss:
+        items.append({
+            "id": 1, "course": "ISS",
             "base": {"day": "Fri",
                      "slot": {"start_min": 840, "end_min": 915},
-                     "hall": moved_from.get("hall"), "temp_booking": False},
-            "to": {"day": "Wed", "slot": {"start_min": 1020, "end_min": 1095},
-                   "hall": moved_from.get("hall"), "temp_booking": False},
-            "created_at": 1754000000000.0}],
+                     "hall": iss_from.get("hall"), "temp_booking": False},
+            "to": {"day": "Thu", "slot": {"start_min": 1020, "end_min": 1095},
+                   "hall": iss_from.get("hall"), "temp_booking": False},
+            "created_at": 1754000000000.0})
+    overrides = {
+        "next_id": len(items),
+        "items": items,
         "credits": [],
     }
     return json.dumps(snap), overrides, renamed
@@ -680,6 +701,13 @@ def t14_edit_dialog_and_unscheduled(app):
     form.find_element(
         By.XPATH, ".//button[contains(normalize-space(),'Add a weekly meeting')]").click()
     app.wait_css(".dialog .course-form #ce-day-0")
+    # SVA isn't on the timetable, so the footer asks — a ticked box, visible
+    # BEFORE the save, instead of a "Save changes" that quietly adds (R48,
+    # §8.10). Ticked is the default, so saving still adds it.
+    add_box = app.xpath(
+        "//div[@class='dialog']//div[contains(@class,'actions')]"
+        "//label[contains(.,'Also add SVA to my timetable')]//input")
+    assert add_box.is_selected(), "the add box must start ticked"
     app.xpath("//div[@class='dialog']//button[normalize-space()='Save changes']").click()
     app.wait_toast("Added SVA")
     app.open_tab("My timetable")
@@ -885,7 +913,7 @@ def t21_halls_drag_moves_hall_and_slot(app):
     app.open_tab("Halls")
     section = app.wait_css("section[aria-label='Lecture halls']")
     section.find_element(
-        By.XPATH, ".//div[@role='group'][@aria-label='Day']//button[normalize-space()='Tue']"
+        By.XPATH, ".//div[@role='radiogroup'][@aria-label='Day']//button[normalize-space()='Tue']"
     ).click()
     src_cell = "td[data-hall='Lecture Hall 803'][data-slot='550']"
     dst_cell = "td[data-hall='Seminar Hall'][data-slot='840']"
@@ -911,7 +939,7 @@ def t21_halls_drag_moves_hall_and_slot(app):
     app.open_tab("Halls")
     section = app.wait_css("section[aria-label='Lecture halls']")
     section.find_element(
-        By.XPATH, ".//div[@role='group'][@aria-label='Day']//button[normalize-space()='Tue']"
+        By.XPATH, ".//div[@role='radiogroup'][@aria-label='Day']//button[normalize-space()='Tue']"
     ).click()
     app.wait_css(f"{dst_cell} button.chip[aria-label^='TOC,']")
     assert not app.chips("TOC", src_cell)
@@ -927,7 +955,7 @@ def t21_halls_drag_moves_hall_and_slot(app):
     app.open_tab("Halls")
     section = app.wait_css("section[aria-label='Lecture halls']")
     section.find_element(
-        By.XPATH, ".//div[@role='group'][@aria-label='Day']//button[normalize-space()='Tue']"
+        By.XPATH, ".//div[@role='radiogroup'][@aria-label='Day']//button[normalize-space()='Tue']"
     ).click()
     section.find_element(By.XPATH, ".//button[contains(.,'Edit layout')]").click()
     app.drag(app.chip("TOC", dst_cell), app.css(src_cell))
@@ -1149,7 +1177,16 @@ def t30_sync_merge_conflict_flow(app):
         app.xpath("//button[normalize-space()='Sync now']").click()
         dialog = app.wait_css(".dialog", timeout=30)
         assert "your time" in dialog.text and "Tue 09:10" in dialog.text, dialog.text
-        # Default is "Use CMI's" — actively keep the user's time instead.
+        # NOTHING is answered for you: no radio pre-checked, and Apply
+        # (which would have nothing to do) is disabled until you answer.
+        assert not [r for r in dialog.find_elements(
+            By.CSS_SELECTOR, ".conflict-item input[type='radio']")
+            if r.is_selected()], "no conflict row may come pre-answered"
+        apply_btn = dialog.find_element(
+            By.XPATH, ".//button[normalize-space()='Apply']")
+        assert apply_btn.get_attribute("disabled") is not None, \
+            "Apply must be disabled while nothing is answered"
+        # Answer every row: keep the user's time.
         dialog.find_element(
             By.XPATH, ".//button[normalize-space()='Keep mine for all']"
         ).click()
@@ -1566,8 +1603,15 @@ def t38_duration_based_credits(app):
     )
     # The * is the same mark the printed sheet uses for the app's guesses.
     assert badge.text.strip() == "2 cr*", badge.text
+    # The explanation is VISIBLE on the card (a tooltip is invisible on a
+    # phone and unreachable by keyboard — R48, §8.13).
+    note = app.xpath(
+        "//section[@aria-label='My courses']//div[contains(@class,'card')]"
+        "[.//button[starts-with(@aria-label,'MATH,')]]"
+        "//p[contains(@class,'cr-note')]"
+    )
     assert "It runs Oct-Nov, so the app counts one credit per month" \
-        in badge.get_attribute("title"), badge.get_attribute("title")
+        in note.text, note.text
 
     # The details dialog spells the same assumption out.
     chip = app.chip("MATH", "section[aria-label='My courses']")
@@ -1682,6 +1726,13 @@ def t40_custom_course_create(app):
     section = app.wait_css("section[aria-label='My courses']")
     badge = app.css("section[aria-label='My courses'] .badge.custom")
     assert badge.text == "Added by you", badge.text
+    # The badge is a button now: its explanation lives in the details
+    # dialog, where touch and keyboard can actually reach it (R48, §8.13).
+    badge.click()
+    dlg = app.wait_css(".dialog")
+    assert "You created this course. It isn't on CMI's pages." in dlg.text, dlg.text
+    app.d.find_element(By.TAG_NAME, "body").send_keys(Keys.ESCAPE)
+    app.wait_gone(".dialog")
     assert "⚠ clash" in section.text, section.text
     pills = [p.text for p in app.css_all(".credit-summary .cs-pill")]
     assert "1 course at 2 credits" in pills, pills
@@ -2046,7 +2097,7 @@ def t45_editor_survives_a_sync(app):
 def _halls_day(app, short):
     """Switch the Halls tab to a day by its short name."""
     app.xpath(
-        "//section[@aria-label='Lecture halls']//div[@role='group' and @aria-label='Day']"
+        "//section[@aria-label='Lecture halls']//div[@role='radiogroup' and @aria-label='Day']"
         f"//button[normalize-space()='{short}']"
     ).click()
     time.sleep(0.3)
@@ -2222,6 +2273,10 @@ def t48_master_grid_extra_column(app):
     app.wait_css(grid)
     extra = app.css(f"{grid} thead th.extra")
     assert "18:30" in extra.text, extra.text
+    # The tinted column explains itself in visible words under the grid —
+    # not in a tooltip a phone never shows (R48, §8.13).
+    assert "outside CMI's regular grid" in app.css(grid).text, \
+        "the extra column needs its visible explanation"
     assert app.chips("TOC", f"{grid} td[data-day='1'][data-slot='1110']"), \
         "the moved meeting belongs in its own column"
     assert not app.chips("TOC", f"{grid} td[data-day='1'][data-slot='1020']"), \
@@ -2426,8 +2481,9 @@ def t53_delete_a_cmi_course(app):
     app.wait_toast("TOC is back")
     app.d.find_element(By.CSS_SELECTOR, "body").send_keys(Keys.ESCAPE)
 
-    # Back in the catalog — but NOT back on the timetable: what was deleted
-    # was the course, not your selection.
+    # Back in the catalog — AND back on the timetable: the deletion took the
+    # selection with it (TOC was selected when deleted), so Restore gives
+    # back everything the deletion took.
     app.open_tab("Catalog")
     app.wait_css("section[aria-label='Catalog']")
     WebDriverWait(app.d, 5).until(
@@ -2435,9 +2491,16 @@ def t53_delete_a_cmi_course(app):
         message="Restore must bring the course back to the catalog",
     )
     assert not app.css_all(".deleted-note")
-    assert app.d.execute_script(
+    assert sorted(app.d.execute_script(
         "return JSON.parse(localStorage.getItem('cmitt.v1.selection'));"
-    ) == ["ISS"], "restoring must not re-add it to the timetable"
+    )) == ["ISS", "TOC"], \
+        "restore must return the course to the timetable it was deleted from"
+    app.open_tab("My timetable")
+    app.wait_css("section[aria-label='My timetable'] table.tt")
+    WebDriverWait(app.d, 5).until(
+        lambda d: bool(app.chips("TOC", "section[aria-label='My timetable'] table.tt")),
+        message="the restored course must be back on the timetable grid",
+    )
 
 
 def t54_editor_saves_everything_in_one_step(app):
@@ -2537,6 +2600,12 @@ def t56_a_link_brings_a_deleted_course_back(app):
     assert app.d.execute_script(
         "return JSON.parse(localStorage.getItem('cmitt.v1.overrides')).hidden.length;"
     ) == 1, "sanity: the deletion is stored"
+    # The entry remembers the deletion took the selection too, so a later
+    # Restore can give both back (R48, §8.11).
+    assert app.d.execute_script(
+        "return JSON.parse(localStorage.getItem('cmitt.v1.overrides'))"
+        ".hidden[0].was_selected;"
+    ) is True, "a deletion of a selected course must record was_selected"
 
     # The bookmark from before the deletion, on the same browser.
     app.boot("/?c=TOC,ISS", fresh=False)
@@ -3209,7 +3278,7 @@ def t68_a_keyboard_move_on_a_phone_shows_where_it_is(app):
                 By.CSS_SELECTOR, ".day-list .slotrow.kbd-cursor[data-day='2']"))
         assert app.xpath("//div[@aria-label='Day view']"
                          "//button[normalize-space()='Wed']"
-                         ).get_attribute("aria-pressed") == "true", \
+                         ).get_attribute("aria-checked") == "true", \
             "the day strip has to say where the cursor went"
         assert app.css(".day-list .slotrow.kbd-cursor").is_displayed()
         body.send_keys(Keys.ENTER)
@@ -3844,7 +3913,216 @@ def t80_a_seminar_is_assumed_zero_credits(app):
         "//span[contains(@class,'badge')][contains(normalize-space(),'cr')]"
     )
     assert badge.text.strip() == "0 cr*", badge.text
-    assert "seminar" in badge.get_attribute("title"), badge.get_attribute("title")
+    note = app.xpath(
+        "//section[@aria-label='My courses']//div[contains(@class,'card')]"
+        "[.//button[starts-with(@aria-label,'CSEM,')]]"
+        "//p[contains(@class,'cr-note')]"
+    )
+    assert "seminar" in note.text, note.text
+
+
+def t82_conflicts_apply_answers_only_what_you_answered(app):
+    """Opening the conflicts dialog to look costs nothing: no row comes
+    pre-answered, Apply acts only on the rows you answered, the rest stay
+    queued (surviving Dismiss and a reload), and the banner's Dismiss hides
+    the banner without answering anything."""
+    cached, overrides, gone = cache_from_before_cmi_moved_toc(also_move_iss=True)
+    serve_cmi()
+    try:
+        app.boot("/", selection=["TOC", "ISS"], overrides=overrides,
+                 raw_snapshot=cached)
+        app.xpath("//button[normalize-space()='Sync now']").click()
+        dialog = app.wait_css(".dialog", timeout=30)
+        items = dialog.find_elements(By.CSS_SELECTOR, ".conflict-item")
+        assert len(items) == 2, f"two customised meetings moved: {len(items)}"
+
+        # Answer ONE row — keep the user's Wednesday for TOC — and leave ISS.
+        toc_item = next(i for i in items if "TOC" in i.text)
+        toc_item.find_element(
+            By.XPATH, ".//label[contains(.,'your time')]//input").click()
+        dialog.find_element(By.XPATH, ".//button[normalize-space()='Apply']").click()
+        app.wait_toast("still queued")
+
+        # The answered row is applied…
+        app.wait_css("td[data-day='2'][data-slot='1020'] button.chip[aria-label^='TOC,']")
+        # …and the unanswered one is exactly as it was: still queued, banner
+        # counting one.
+        banner = app.xpath("//div[contains(@class,'banner')][contains(.,'conflict')]")
+        assert "1 timetable change" in banner.text, banner.text
+        stored = app.d.execute_script(
+            "return JSON.parse(localStorage.getItem('cmitt.v1.conflicts'));")
+        assert len(stored) == 1 and stored[0]["course"] == "ISS", stored
+
+        # Dismiss hides the banner but answers nothing…
+        banner.find_element(By.XPATH, ".//button[normalize-space()='Dismiss']").click()
+        WebDriverWait(app.d, 5).until(
+            lambda d: not app.css_all(".banner.warn"),
+            message="Dismiss must hide the conflicts banner",
+        )
+        assert app.d.execute_script(
+            "return JSON.parse(localStorage.getItem('cmitt.v1.conflicts')).length;"
+        ) == 1, "Dismiss must not touch the queue — hiding is not answering"
+        # …and the question comes back with the next visit.
+        app.d.get(f"{BASE}/")
+        app.wait_css(".header h1")
+        WebDriverWait(app.d, 10).until(
+            lambda d: any("conflict" in b.text for b in app.css_all(".banner.warn")),
+            message="the banner must return after a reload — the question stands",
+        )
+    finally:
+        stop_serving_cmi()
+
+
+def t83_saving_an_edit_asks_before_adding(app):
+    """Editing a course that isn't on your timetable shows a ticked 'Also
+    add … to my timetable' box in the footer. Untick it and Save stores the
+    changes WITHOUT quietly changing the clash picture and the credit total;
+    a course already on the timetable is never asked."""
+    app.boot("/")
+    app.open_tab("Catalog")
+    app.wait_css("section[aria-label='Catalog']")
+    app.chip("TOC").click()
+    app.wait_css(".dialog").find_element(
+        By.XPATH, ".//button[normalize-space()='Edit this course']").click()
+    app.wait_css(".dialog .course-form")
+
+    # The box is in the sticky footer, ticked — the add is asked, not assumed.
+    box = app.xpath(
+        "//div[@class='dialog']//div[contains(@class,'actions')]"
+        "//label[contains(.,'Also add TOC to my timetable')]//input")
+    assert box.is_selected(), "the add box must start ticked"
+    box.click()
+
+    # A real edit: move Tuesday's meeting to Wednesday 17:00.
+    Select(app.css("#ce-day-0")).select_by_visible_text("Wednesday")
+    app.xpath("//div[@class='dialog']//button[normalize-space()='Save changes']").click()
+    app.wait_toast("Saved your changes to TOC")
+    assert app.d.execute_script(
+        "return JSON.parse(localStorage.getItem('cmitt.v1.selection') || '[]');"
+    ) == [], "unticked: saving must not add the course"
+    assert app.d.execute_script(
+        "return JSON.parse(localStorage.getItem('cmitt.v1.overrides')).items.length;"
+    ) == 1, "the change itself must be stored"
+
+    # A course already on the timetable has no box to offer — there is
+    # nothing to ask.
+    app.boot("/?c=ISS")
+    app.open_tab("My courses")
+    app.wait_css("section[aria-label='My courses']")
+    app.xpath("//button[normalize-space()='Edit this course']").click()
+    app.wait_css(".dialog .course-form")
+    assert not app.d.find_elements(
+        By.XPATH, "//div[@class='dialog']//label[contains(.,'Also add')]"), \
+        "a selected course's editor must not offer an add box"
+
+
+def t84_editing_a_dropped_course_invents_no_credit_change(app):
+    """A course CMI has dropped has no official credit value to differ from,
+    so its editor shows a sentence instead of a credits picker, and an
+    untouched Save writes no 'Credits you set: ? → 4' the student never
+    made."""
+    app.boot("/", selection=["TOC", "GONE"])
+    app.open_tab("My courses")
+    section = app.wait_css("section[aria-label='My courses']")
+    assert "No longer on CMI's timetable" in section.text, section.text
+    card = app.xpath(
+        "//section[@aria-label='My courses']//div[contains(@class,'card')]"
+        "[.//button[starts-with(@aria-label,'GONE,')]]")
+    card.find_element(
+        By.XPATH, ".//button[normalize-space()='Edit this course']").click()
+    form = app.wait_css(".dialog .course-form")
+
+    # No picker that cannot act — a sentence says why.
+    assert "no official credit value to change" in form.text, form.text
+    assert not app.d.find_elements(
+        By.CSS_SELECTOR, ".dialog .course-form div[role='radiogroup']"), \
+        "a dropped course must not offer a credits picker"
+
+    app.xpath("//div[@class='dialog']//button[normalize-space()='Save changes']").click()
+    app.wait_toast("Saved your changes to GONE")
+    stored = app.d.execute_script(
+        "return JSON.parse(localStorage.getItem('cmitt.v1.overrides') "
+        "|| '{\"credits\":[]}').credits.length;")
+    assert stored == 0, \
+        f"an untouched save must not invent a credits change: {stored}"
+
+
+def t85_a_course_hidden_by_filters_is_not_offered_as_new(app):
+    """When the search WOULD find a course but a facet set earlier hides it,
+    the empty state names the course and offers to clear the filters —
+    ahead of the create button, whose suggested code the duplicate guard
+    can't recognise (it comes from the name)."""
+    app.boot("/")
+    app.open_tab("Catalog")
+    app.wait_css("section[aria-label='Catalog'] .filterbar")
+    # A Day facet excludes SVA outright: CMI never gave it a time.
+    app.xpath(
+        "//details[contains(@class,'facet')]/summary[starts-with(normalize-space(),'Day')]"
+    ).click()
+    app.wait_css("details.facet[open] .menu")
+    app.xpath(
+        "//details[contains(@class,'facet') and @open]//label[contains(.,'Fri')]//input"
+    ).click()
+    app.d.find_element(By.TAG_NAME, "body").send_keys(Keys.ESCAPE)
+    search = app.css("section[aria-label='Catalog'] .filterbar input[type='search']")
+    search.send_keys("SVA")
+    empty = app.wait_css("section[aria-label='Catalog'] .empty")
+    assert "(SVA) is in the catalog — a filter above is hiding it" in empty.text, \
+        empty.text
+    empty.find_element(
+        By.XPATH, ".//button[normalize-space()='Clear filters to show it']").click()
+    # The facets lift, the search stays, and the named course is on screen.
+    WebDriverWait(app.d, 10).until(
+        lambda d: bool(app.chips("SVA", "section[aria-label='Catalog']")),
+        message="clearing the filters must reveal the course the message named",
+    )
+    assert app.css(
+        "section[aria-label='Catalog'] .filterbar input[type='search']"
+    ).get_attribute("value") == "SVA", "the search text must survive the click"
+
+
+def t86_seg_groups_are_radio_groups_with_arrow_keys(app):
+    """The day pickers and the credits row are radio groups: one Tab stop
+    (the chosen value), and an arrow key moves the focus AND the choice in
+    the same stroke."""
+    # Halls day picker.
+    app.boot("/")
+    app.open_tab("Halls")
+    app.wait_css("section[aria-label='Lecture halls']")
+    group = "//section[@aria-label='Lecture halls']" \
+            "//div[@role='radiogroup' and @aria-label='Day']"
+    tue = app.xpath(group + "//button[normalize-space()='Tue']")
+    tue.click()
+    stops = app.d.find_elements(By.XPATH, group + "//button[@tabindex='0']")
+    assert len(stops) == 1 and stops[0].text == "Tue", \
+        f"exactly one Tab stop, the chosen day: {[s.text for s in stops]}"
+    tue.send_keys(Keys.ARROW_LEFT)
+    mon = app.xpath(group + "//button[normalize-space()='Mon']")
+    WebDriverWait(app.d, 5).until(
+        lambda d: mon.get_attribute("aria-checked") == "true",
+        message="one arrow stroke must move the choice",
+    )
+    assert app.d.execute_script("return document.activeElement.textContent;") == "Mon", \
+        "the focus must travel with the choice"
+
+    # The editor's credits row.
+    app.boot("/?c=TOC")
+    app.open_tab("My courses")
+    app.wait_css("section[aria-label='My courses']")
+    app.xpath("//button[normalize-space()='Edit this course']").click()
+    app.wait_css(".dialog .course-form")
+    seg = "//div[@class='dialog']//div[@role='radiogroup']"
+    chosen = app.d.find_elements(By.XPATH, seg + "//button[@tabindex='0']")
+    assert len(chosen) == 1, "one Tab stop in the credits group"
+    start = int(chosen[0].text)
+    chosen[0].send_keys(Keys.ARROW_LEFT)
+    prev = app.xpath(seg + f"//button[normalize-space()='{start - 1}']")
+    WebDriverWait(app.d, 5).until(
+        lambda d: prev.get_attribute("aria-checked") == "true",
+        message="the arrow must choose the previous credit value",
+    )
+    app.xpath("//div[@class='dialog']//button[normalize-space()='Cancel']").click()
+    app.wait_gone(".dialog")
 
 
 TESTS = [
@@ -3929,6 +4207,11 @@ TESTS = [
     t79_json_exports_parse_and_the_backup_restores_everything,
     t80_a_seminar_is_assumed_zero_credits,
     t81_importing_courses_asks_replace_or_add,
+    t82_conflicts_apply_answers_only_what_you_answered,
+    t83_saving_an_edit_asks_before_adding,
+    t84_editing_a_dropped_course_invents_no_credit_change,
+    t85_a_course_hidden_by_filters_is_not_offered_as_new,
+    t86_seg_groups_are_radio_groups_with_arrow_keys,
 ]
 
 

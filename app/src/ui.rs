@@ -667,7 +667,8 @@ pub fn BannerView() -> impl IntoView {
         }}
         {move || {
             let n = app.conflicts.with(|c| c.len());
-            (n > 0 && app.dialog.with(|d| !matches!(d, Some(Dialog::Conflicts))))
+            (n > 0 && !app.conflicts_dismissed.get()
+                && app.dialog.with(|d| !matches!(d, Some(Dialog::Conflicts))))
                 .then(|| {
                     view! {
                         <div class="banner warn" role="status">
@@ -683,6 +684,16 @@ pub fn BannerView() -> impl IntoView {
                                 on:click=move |_| app.dialog.set(Some(Dialog::Conflicts))
                             >
                                 "Review"
+                            </button>
+                            // Waves the banner away for this sitting — the
+                            // questions stay queued (hiding one is not
+                            // answering it), and the banner returns with the
+                            // next sync or reload.
+                            <button
+                                class="btn small"
+                                on:click=move |_| app.conflicts_dismissed.set(true)
+                            >
+                                "Dismiss"
                             </button>
                         </div>
                     }
@@ -1705,10 +1716,12 @@ fn trap_tab(ev: &web_sys::KeyboardEvent) {
     };
     // A disabled control cannot take focus, so counting one as the first or
     // last stop hands Tab to an element that refuses it — and the focus
-    // escapes the dialog it was meant to stay in.
+    // escapes the dialog it was meant to stay in. A roving radio that isn't
+    // the choice (tabindex -1) isn't a Tab stop either, so it can't be the
+    // trap's first or last one.
     let Ok(focusables) = dialog.query_selector_all(
-        "button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), \
-         textarea:not([disabled]), [tabindex]:not([tabindex='-1'])",
+        "button:not([disabled]):not([tabindex='-1']), [href], input:not([disabled]), \
+         select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex='-1'])",
     ) else {
         return;
     };
@@ -2121,14 +2134,15 @@ fn details_dialog(app: App, code: String) -> impl IntoView {
                     })}
             </dl>
             <div class="chipline">
+                // The badge's explanation is beside it in visible words —
+                // this is the sentence the card's badge-button lands on, so
+                // a tooltip would bury it again.
                 {is_custom
                     .then(|| {
                         view! {
-                            <span
-                                class="badge custom"
-                                title="You created this course. It isn't on CMI's pages."
-                            >
-                                "Added by you"
+                            <span class="badge custom">"Added by you"</span>
+                            <span class="muted small">
+                                "You created this course. It isn't on CMI's pages."
                             </span>
                         }
                     })}
@@ -2148,12 +2162,10 @@ fn details_dialog(app: App, code: String) -> impl IntoView {
                 {deleted
                     .then(|| {
                         view! {
-                            <span
-                                class="badge alarm"
-                                title="You deleted this course — it is hidden from the catalog \
-                                       and the master grid until you restore it"
-                            >
-                                "Deleted by you"
+                            <span class="badge alarm">"Deleted by you"</span>
+                            <span class="muted small">
+                                "You deleted this course — it is hidden from the catalog \
+                                 and the master grid until you restore it."
                             </span>
                         }
                     })}
@@ -2742,10 +2754,22 @@ pub fn overrides_list(app: App) -> impl IntoView {
                                 title="Put every one of CMI's courses back the way they \
                                        publish it. Your own courses are kept."
                                 on:click=move |_| {
-                                    app.act("remove all custom changes", |_, ovs| {
+                                    app.act("remove all custom changes", |sel, ovs| {
                                         ovs.items.clear();
                                         ovs.credits.clear();
-                                        ovs.hidden.clear();
+                                        // A deletion took the selection with
+                                        // it, so undoing the deletion gives
+                                        // the selection back too — same as
+                                        // every other Restore.
+                                        for h in ovs.hidden.drain(..) {
+                                            if h.was_selected
+                                                && !sel
+                                                    .iter()
+                                                    .any(|c| c.eq_ignore_ascii_case(&h.course))
+                                            {
+                                                sel.push(h.course);
+                                            }
+                                        }
                                     });
                                     app.toast_undo(
                                         "Your changes to CMI's courses are removed — your \
@@ -3457,6 +3481,10 @@ fn course_editor_dialog(app: App, code: Option<String>, prefill: Option<String>)
     // Anything that isn't the user's own course is written as overrides on
     // top of CMI's data, and shows their name and code rather than fields.
     let is_cmi = cmi_course.is_some() || orphan.is_some();
+    // A course CMI has dropped: still editable (its meetings are the user's
+    // own overrides), but it has no official credit value to differ from,
+    // so the credits picker would be a control that cannot act.
+    let dropped = orphan.is_some();
     // What CMI had when this form opened. Removals are judged against THIS,
     // not against whatever a sync lands mid-edit: the form can only speak
     // about the meetings it showed.
@@ -3468,6 +3496,14 @@ fn course_editor_dialog(app: App, code: Option<String>, prefill: Option<String>)
     // means: a course they never scheduled waits in the tray, a course whose
     // classes you struck out does not appear at all.
     let cmi_scheduled_it = !official_at_open.is_empty();
+    // Editing a CMI course that isn't on the timetable: saving CAN add it,
+    // but the add is asked with a ticked box in the footer, never assumed —
+    // "Save changes" must not quietly change the clash picture and the
+    // credit total. (Untracked read: the whole builder is untracked by
+    // contract — a tracked `is_selected` would rebuild the form mid-edit.)
+    let offer_add = is_cmi && !creating && !untrack(|| app.is_selected(&subject.code));
+    let add_to_timetable = RwSignal::new(true);
+    let add_label = format!("Also add {} to my timetable", subject.code);
     // The code being edited, whoever owns it…
     let editing_code = (!creating).then(|| subject.code.clone());
     // …and the one the SAVE path needs: `save_custom_course` takes the code
@@ -3695,7 +3731,16 @@ fn course_editor_dialog(app: App, code: Option<String>, prefill: Option<String>)
                     .into_iter()
                     .map(|(from, to)| EditedMeeting { from, to })
                     .collect();
-                app.save_course_edit(code, official_at_open.clone(), edited, Some(credits_v));
+                // A dropped course has no official credits to differ from —
+                // None says nothing about credits, rather than storing a
+                // change the student never made.
+                app.save_course_edit(
+                    code,
+                    official_at_open.clone(),
+                    edited,
+                    official_credits.map(|_| credits_v),
+                    add_to_timetable.get_untracked(),
+                );
                 app.dialog.set(None);
                 return;
             }
@@ -3921,45 +3966,77 @@ fn course_editor_dialog(app: App, code: Option<String>, prefill: Option<String>)
                 })}
             <div class="fieldrow">
                 <span class="fieldlabel" id="ce-credits-label">"Credits"</span>
-                <div class="seg" role="group" aria-labelledby="ce-credits-label">
-                    {[0u8, 1, 2, 3, 4]
-                        .into_iter()
-                        .map(|v| {
-                            view! {
+                // No official value exists for a dropped course, so there is
+                // no credits choice to offer — a picker here could not act
+                // (nothing it set would be stored), and this app doesn't
+                // show controls that cannot act.
+                {dropped
+                    .then(|| {
+                        view! {
+                            <span class="muted small">
+                                {format!(
+                                    "CMI no longer lists this course, so there's no official \
+                                     credit value to change. It counts {start_credits} in \
+                                     your total."
+                                )}
+                            </span>
+                        }
+                    })}
+                {(!dropped)
+                    .then(|| {
+                        view! {
+                            // A radio group, not six toggles: one Tab stop
+                            // (the chosen value), arrows move and choose.
+                            <div
+                                class="seg"
+                                role="radiogroup"
+                                aria-labelledby="ce-credits-label"
+                                on:keydown=domx::seg_radio_keydown
+                            >
+                                {[0u8, 1, 2, 3, 4]
+                                    .into_iter()
+                                    .map(|v| {
+                                        let checked = move || {
+                                            !credits_other.get() && credits.get() == v
+                                        };
+                                        view! {
+                                            <button
+                                                type="button"
+                                                role="radio"
+                                                aria-checked=move || {
+                                                    if checked() { "true" } else { "false" }
+                                                }
+                                                tabindex=move || if checked() { "0" } else { "-1" }
+                                                on:click=move |_| {
+                                                    credits_other.set(false);
+                                                    credits.set(v);
+                                                    app.dialog_dirty.set(true);
+                                                }
+                                            >
+                                                {v}
+                                            </button>
+                                        }
+                                    })
+                                    .collect_view()}
                                 <button
                                     type="button"
-                                    aria-pressed=move || {
-                                        if !credits_other.get() && credits.get() == v {
-                                            "true"
-                                        } else {
-                                            "false"
-                                        }
+                                    role="radio"
+                                    aria-checked=move || {
+                                        if credits_other.get() { "true" } else { "false" }
                                     }
+                                    tabindex=move || if credits_other.get() { "0" } else { "-1" }
                                     on:click=move |_| {
-                                        credits_other.set(false);
-                                        credits.set(v);
+                                        credits_other.set(true);
                                         app.dialog_dirty.set(true);
                                     }
                                 >
-                                    {v}
+                                    "Other…"
                                 </button>
-                            }
-                        })
-                        .collect_view()}
-                    <button
-                        type="button"
-                        aria-pressed=move || if credits_other.get() { "true" } else { "false" }
-                        on:click=move |_| {
-                            credits_other.set(true);
-                            app.dialog_dirty.set(true);
+                            </div>
                         }
-                    >
-                        "Other…"
-                    </button>
-                </div>
+                    })}
                 {move || {
-                    credits_other
-                        .get()
+                    (!dropped && credits_other.get())
                         .then(|| {
                             view! {
                                 <input
@@ -4385,6 +4462,21 @@ fn course_editor_dialog(app: App, code: Option<String>, prefill: Option<String>)
             // deleting lives in the course's own dialog, next to Edit, where
             // it can't be hit while you are half-way through a change.
             <div class="actions">
+                {offer_add
+                    .then(|| {
+                        view! {
+                            <label class="opt">
+                                <input
+                                    type="checkbox"
+                                    prop:checked=move || add_to_timetable.get()
+                                    on:change=move |ev| {
+                                        add_to_timetable.set(event_target_checked(&ev));
+                                    }
+                                />
+                                <span>{add_label.clone()}</span>
+                            </label>
+                        }
+                    })}
                 <button class="btn" on:click=move |_| app.dialog.set(None)>
                     "Cancel"
                 </button>
@@ -4422,27 +4514,34 @@ fn focus_later(id: String) {
 
 fn conflicts_dialog(app: App) -> impl IntoView {
     let conflicts = app.conflicts.get_untracked();
-    let keep_mine = RwSignal::new(vec![false; conflicts.len()]);
+    // Every row starts UNANSWERED. Pre-choosing a side answered "use CMI's"
+    // for whoever opened the dialog just to look — Apply then threw away
+    // their times for rows they never touched.
+    let keep_mine = RwSignal::new(vec![None::<bool>; conflicts.len()]);
     let conflicts_apply = conflicts.clone();
 
     view! {
         <div>
             <h2>"CMI changed times you customised"</h2>
             <p class="muted">
-                "Pick what to keep for each one. CMI's new time is selected to start \
-                 with, so switch the ones where you'd rather keep yours. Nothing \
-                 changes until you press Apply."
+                "Pick what to keep for each one. Nothing is picked for you, and \
+                 Apply only acts on the rows you've answered — the rest stay \
+                 queued until you decide. Nothing changes until you press Apply."
             </p>
             <div class="actions" style="justify-content:flex-start">
                 <button
                     class="btn small"
-                    on:click=move |_| keep_mine.update(|v| v.iter_mut().for_each(|x| *x = false))
+                    on:click=move |_| {
+                        keep_mine.update(|v| v.iter_mut().for_each(|x| *x = Some(false)));
+                    }
                 >
                     "Use CMI's for all"
                 </button>
                 <button
                     class="btn small"
-                    on:click=move |_| keep_mine.update(|v| v.iter_mut().for_each(|x| *x = true))
+                    on:click=move |_| {
+                        keep_mine.update(|v| v.iter_mut().for_each(|x| *x = Some(true)));
+                    }
                 >
                     "Keep mine for all"
                 </button>
@@ -4477,8 +4576,8 @@ fn conflicts_dialog(app: App) -> impl IntoView {
                                 <input
                                     type="radio"
                                     name=group.clone()
-                                    prop:checked=move || !keep_mine.with(|v| v[i])
-                                    on:change=move |_| keep_mine.update(|v| v[i] = false)
+                                    prop:checked=move || keep_mine.with(|v| v[i] == Some(false))
+                                    on:change=move |_| keep_mine.update(|v| v[i] = Some(false))
                                 />
                                 <span class="change-what">
                                     {change_tag("CMI's new time", false)}
@@ -4489,8 +4588,8 @@ fn conflicts_dialog(app: App) -> impl IntoView {
                                 <input
                                     type="radio"
                                     name=group
-                                    prop:checked=move || keep_mine.with(|v| v[i])
-                                    on:change=move |_| keep_mine.update(|v| v[i] = true)
+                                    prop:checked=move || keep_mine.with(|v| v[i] == Some(true))
+                                    on:change=move |_| keep_mine.update(|v| v[i] = Some(true))
                                 />
                                 <span class="change-what">
                                     {change_tag("your time", true)}
@@ -4507,13 +4606,27 @@ fn conflicts_dialog(app: App) -> impl IntoView {
                 </button>
                 <button
                     class="btn primary"
+                    // With nothing answered there is nothing Apply could do,
+                    // and this app doesn't offer controls that cannot act.
+                    disabled=move || keep_mine.with(|v| v.iter().all(|k| k.is_none()))
                     on:click=move |_| {
-                        let choices: Vec<_> = conflicts_apply
+                        let picks = keep_mine.get_untracked();
+                        // Only the rows the user actually answered; the rest
+                        // go back to the queue, exactly as they were.
+                        let answered: Vec<_> = conflicts_apply
                             .iter()
                             .cloned()
-                            .zip(keep_mine.get_untracked())
+                            .zip(picks.iter())
+                            .filter_map(|(c, k)| k.map(|k| (c, k)))
                             .collect();
-                        app.resolve_conflicts(choices);
+                        let remaining: Vec<_> = conflicts_apply
+                            .iter()
+                            .cloned()
+                            .zip(picks.iter())
+                            .filter(|(_, k)| k.is_none())
+                            .map(|(c, _)| c)
+                            .collect();
+                        app.resolve_conflicts(answered, remaining);
                         app.dialog.set(None);
                     }
                 >

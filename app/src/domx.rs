@@ -222,6 +222,48 @@ pub fn blur_on_enter(ev: web_sys::KeyboardEvent) {
     }
 }
 
+/// One keydown for every `.seg` radio group: an arrow moves the focus AND
+/// makes the choice, the way radio buttons have always worked — Tab gets one
+/// stop, not six. Left/Up go back, Right/Down go forward, the ends wrap.
+pub fn seg_radio_keydown(ev: web_sys::KeyboardEvent) {
+    let forward = match ev.key().as_str() {
+        "ArrowRight" | "ArrowDown" => true,
+        "ArrowLeft" | "ArrowUp" => false,
+        _ => return,
+    };
+    let Some(button) = ev
+        .target()
+        .and_then(|t| t.dyn_into::<web_sys::Element>().ok())
+        .and_then(|el| el.closest("button").ok().flatten())
+    else {
+        return;
+    };
+    // Element-only walking: Leptos leaves comment markers between siblings,
+    // and plain next_sibling would land on one.
+    let next = if forward {
+        button.next_element_sibling()
+    } else {
+        button.previous_element_sibling()
+    };
+    let next = next.or_else(|| {
+        let parent = button.parent_element()?;
+        if forward {
+            parent.first_element_child()
+        } else {
+            parent.last_element_child()
+        }
+    });
+    let Some(target) = next.and_then(|el| el.dyn_into::<web_sys::HtmlElement>().ok()) else {
+        return;
+    };
+    // The arrow belongs to the group: not to the page (no scrolling), and
+    // not to move mode (dnd's document handler must not also move a chip).
+    ev.prevent_default();
+    ev.stop_propagation();
+    let _ = target.focus();
+    target.click();
+}
+
 /// Close every open filter-facet dropdown, except (optionally) one — the
 /// facets are native `<details>` elements, which never close on their own.
 pub fn close_open_facets(except: Option<&web_sys::Element>) {

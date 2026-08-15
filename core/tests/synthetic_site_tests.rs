@@ -1698,7 +1698,7 @@ fn a_new_term_meets_a_full_planner() {
     // Cryptography is worth 2 credits here, whatever the page implies.
     mine.set_credits("CRYP", 2, 3.0);
     // Quantum Field Theory is not for them.
-    mine.hide("QFT", 4.0);
+    mine.hide("QFT", false, 4.0);
 
     let selection: Vec<String> = ["CAL1", "TOPO", "CRYP", "AIML"]
         .iter()
@@ -1888,7 +1888,7 @@ fn a_link_carries_the_whole_planner() {
         1.0,
     );
     mine.set_credits("CRYP", 2, 2.0);
-    mine.hide("QFT", 3.0);
+    mine.hide("QFT", false, 3.0);
 
     let reading_group = Course::custom(
         "RGRP".to_string(),

@@ -376,6 +376,11 @@ pub struct App {
     pub toast_seq: RwSignal<u64>,
     pub banner: RwSignal<Option<Banner>>,
     pub conflicts: RwSignal<Vec<Conflict>>,
+    /// The conflicts banner, waved away for THIS session only. Never
+    /// persisted, and reset by every `set_conflicts`: hiding a question is
+    /// not answering it, so the queue survives and the banner returns with
+    /// the next sync, partial apply, or reload.
+    pub conflicts_dismissed: RwSignal<bool>,
     pub what_changed: RwSignal<Option<SnapshotDiff>>,
     /// Unknown codes from a shared URL (dismissible warning chips).
     pub unknown_codes: RwSignal<Vec<String>>,
@@ -847,41 +852,87 @@ impl App {
         let code = code.to_string();
         let now = domx::now_ms();
         self.act(&format!("delete {code}"), |sel, ovs| {
+            // Remember whether the deletion is also taking the selection,
+            // so Restore can give back everything it took.
+            let was = sel.iter().any(|c| c.eq_ignore_ascii_case(&code));
             sel.retain(|c| !c.eq_ignore_ascii_case(&code));
-            ovs.hide(&code, now);
+            ovs.hide(&code, was, now);
         });
         self.toast_undo(format!("Deleted {code} — restore it from Your changes"));
     }
 
-    /// Put a deleted course back, with every change you had made to it. It
-    /// does not rejoin the timetable: what was deleted was the course, not
-    /// your selection.
+    /// Put a deleted course back, with every change you had made to it —
+    /// and its place on your timetable, if it was there when you deleted
+    /// it. Deleting took the course AND your selection of it; Restore
+    /// returns both.
     pub fn restore_course(&self, code: &str) {
+        let was = self
+            .overrides
+            .with_untracked(|o| o.hidden_was_selected(code));
         let code = code.to_string();
-        self.act(&format!("restore {code}"), |_, ovs| {
+        let toast_code = code.clone();
+        self.act(&format!("restore {code}"), move |sel, ovs| {
             ovs.unhide(&code);
+            if was && !sel.iter().any(|c| c.eq_ignore_ascii_case(&code)) {
+                sel.push(code.clone());
+            }
         });
-        self.toast_undo(format!(
-            "{code} is back in the catalog and the master grid. It isn't on \
-             your timetable — add it when you want it."
-        ));
+        self.toast_undo(if was {
+            format!(
+                "{toast_code} is back — in the catalog, the master grid, and \
+                 on your timetable, where it was when you deleted it."
+            )
+        } else {
+            format!(
+                "{toast_code} is back in the catalog and the master grid. It \
+                 isn't on your timetable — add it when you want it."
+            )
+        });
     }
 
     pub fn restore_all_courses(&self) {
-        let n = self.overrides.with_untracked(|o| o.hidden.len());
+        let (n, reselect): (usize, Vec<String>) = self.overrides.with_untracked(|o| {
+            (
+                o.hidden.len(),
+                o.hidden
+                    .iter()
+                    .filter(|h| h.was_selected)
+                    .map(|h| h.course.clone())
+                    .collect(),
+            )
+        });
         if n == 0 {
             return;
         }
-        self.act("restore deleted courses", |_, ovs| ovs.hidden.clear());
-        self.toast_undo(if n == 1 {
-            "1 course you deleted is back in the catalog and grids. It isn't on \
-             your timetable — add it if you want it."
-                .to_string()
-        } else {
-            format!(
-                "{n} courses you deleted are back in the catalog and grids. They \
-                 aren't on your timetable — add the ones you want."
-            )
+        let back = reselect.len();
+        self.act("restore deleted courses", move |sel, ovs| {
+            ovs.hidden.clear();
+            for code in &reselect {
+                if !sel.iter().any(|c| c.eq_ignore_ascii_case(code)) {
+                    sel.push(code.clone());
+                }
+            }
+        });
+        let plural = |n: usize| if n == 1 { "course" } else { "courses" };
+        self.toast_undo(match back {
+            0 => format!(
+                "{n} {} you deleted {} back in the catalog and grids — none \
+                 were on your timetable when deleted, so add the ones you want.",
+                plural(n),
+                if n == 1 { "is" } else { "are" },
+            ),
+            b if b == n => format!(
+                "{n} {} you deleted {} back — in the catalog, the grids, and \
+                 on your timetable, where they were when you deleted them.",
+                plural(n),
+                if n == 1 { "is" } else { "are" },
+            ),
+            b => format!(
+                "{n} {} you deleted are back in the catalog and grids — {b} \
+                 also returned to your timetable, where they were when you \
+                 deleted them.",
+                plural(n),
+            ),
         });
     }
 
@@ -1157,12 +1208,22 @@ impl App {
     /// unchanged keeps its id and the day it was made (the sync merge
     /// compares that against CMI's edits), and one that only changed target
     /// keeps them too — it is the same decision, revised.
+    ///
+    /// `credits: None` means the editor had no official value to compare
+    /// against (a course CMI has dropped) — the save then says nothing
+    /// about credits: it neither stores a "change" the student never made
+    /// nor deletes one they made while CMI still listed the course.
+    ///
+    /// `add_to_timetable` is the editor's "Also add {code} to my timetable"
+    /// box: when the course isn't selected, saving adds it only if the box
+    /// stayed ticked — the add is asked, never assumed.
     pub fn save_course_edit(
         &self,
         code: &str,
         official: Vec<Meeting>,
         rows: Vec<EditedMeeting>,
         credits: Option<u8>,
+        add_to_timetable: bool,
     ) {
         // (base, to) for every override the saved form implies.
         //
@@ -1177,10 +1238,6 @@ impl App {
         // existed nowhere, and a save that changed nothing made it vanish.
         let mut desired: Vec<(Option<Meeting>, Option<Meeting>)> = Vec::new();
         let mut claimed: Vec<usize> = Vec::new();
-        let mut invented = false;
-        for row in &rows {
-            invented |= row.from.is_none();
-        }
         for row in &rows {
             let Some(base) = row.from.as_ref().and_then(|f| f.base.clone()) else {
                 continue;
@@ -1233,15 +1290,24 @@ impl App {
             }
         }
 
-        let credits_now = credits.filter(|n| {
-            self.snapshot
-                .with_untracked(|s| s.course_ci(code).map(|c| c.effective_credits()))
-                != Some(*n)
-        });
+        // A credits override is a statement of difference from CMI's
+        // official value. Without an official value (CMI dropped the course
+        // — possibly mid-edit, so this is checked here and not only in the
+        // form) there is nothing to differ from: say nothing about credits.
+        let official_credits = self
+            .snapshot
+            .with_untracked(|s| s.course_ci(code).map(|c| c.effective_credits()));
+        let credits_now: Option<Option<u8>> = match official_credits {
+            None => None,
+            Some(off) => credits.map(|n| (n != off).then_some(n)),
+        };
         let was_selected = self.is_selected(code);
-        // A meeting you place must never be invisible: giving a time to a
-        // course that isn't on your timetable puts it there, in the same step.
-        let select_now = !was_selected && invented;
+        // Adding is asked, not assumed: when the course isn't on the
+        // timetable the editor shows a ticked "Also add … to my timetable"
+        // box, and this flag is its answer — the step was visible before it
+        // happened, instead of a "Save changes" that quietly changed the
+        // clash picture and the credit total.
+        let select_now = !was_selected && add_to_timetable;
         let code = code.to_string();
         let now = domx::now_ms();
         self.act(&format!("edit {code}"), |sel, ovs| {
@@ -1279,8 +1345,9 @@ impl App {
                 }
             }
             match credits_now {
-                Some(n) => ovs.set_credits(&code, n, now),
-                None => ovs.remove_credits(&code),
+                Some(Some(n)) => ovs.set_credits(&code, n, now),
+                Some(None) => ovs.remove_credits(&code),
+                None => {}
             }
             if select_now && !sel.iter().any(|c| c.eq_ignore_ascii_case(&code)) {
                 sel.push(code.clone());
@@ -1365,19 +1432,34 @@ impl App {
         } else if let Err(e) = crate::storage::save(crate::storage::KEY_CONFLICTS, &conflicts) {
             leptos::logging::warn!("cmitt: couldn't store pending conflicts: {e}");
         }
+        // A new queue is a new question — a Dismiss given to the old banner
+        // doesn't carry over.
+        self.conflicts_dismissed.set(false);
         self.conflicts.set(conflicts);
     }
 
-    /// Resolve all queued conflicts in one undoable step.
+    /// Resolve the ANSWERED conflicts in one undoable step; the unanswered
+    /// `remaining` go back to the queue exactly as they were, so opening
+    /// the dialog to look never costs an answer.
     /// `choices[i] = (conflict, keep_mine)`.
-    pub fn resolve_conflicts(&self, choices: Vec<(Conflict, bool)>) {
+    pub fn resolve_conflicts(&self, choices: Vec<(Conflict, bool)>, remaining: Vec<Conflict>) {
         self.act("resolve timetable conflicts", |_, ovs| {
             for (conflict, keep_mine) in &choices {
                 ttcore::merge::resolve_conflict(ovs, conflict, *keep_mine);
             }
         });
-        self.set_conflicts(Vec::new());
-        self.toast_undo("Your timetable now uses the times you picked.");
+        let left = remaining.len();
+        self.set_conflicts(remaining);
+        self.toast_undo(if left == 0 {
+            "Your timetable now uses the times you picked.".to_string()
+        } else {
+            format!(
+                "Your timetable now uses the times you picked. The {} you left \
+                 blank {} still queued — Review on the banner takes you back.",
+                if left == 1 { "row" } else { "rows" },
+                if left == 1 { "is" } else { "are" },
+            )
+        });
     }
 
     // -- derived data --------------------------------------------------------

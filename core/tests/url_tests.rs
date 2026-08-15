@@ -86,6 +86,7 @@ fn share_payload_round_trip() {
         hidden: vec![HiddenCourse {
             course: "QCOM".to_string(),
             created_at: 1_754_000_000_000.0,
+            was_selected: true,
         }],
     };
     let encoded = encode_share(&selection, &overrides, &[]);

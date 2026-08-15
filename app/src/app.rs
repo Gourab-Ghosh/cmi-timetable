@@ -71,6 +71,7 @@ fn init_app() -> (App, bool) {
         toast_seq: RwSignal::new(0),
         banner: RwSignal::new(None),
         conflicts: RwSignal::new(conflicts),
+        conflicts_dismissed: RwSignal::new(false),
         what_changed: RwSignal::new(None),
         unknown_codes: RwSignal::new(Vec::new()),
         fetch_log: RwSignal::new(Vec::new()),

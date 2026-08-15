@@ -106,7 +106,10 @@ Every course this semester, searchable and filterable.
 - Filters are **undoable** like everything else, and shown as removable chips
   so you always know why a list is short.
 - Nothing found? The empty state offers to add it as a course of your own,
-  and tells you if you had deleted it earlier.
+  and tells you if you had deleted it earlier. And when a filter set earlier
+  is what's hiding a course your search would find, it names the course and
+  offers **Clear filters to show it** — ahead of the create button, so you
+  don't mint a duplicate by accident.
 
 ### 🏛 Halls
 
@@ -141,6 +144,13 @@ in a single form: every weekly meeting's day, time and hall, its credits, and
 — for a course of your own — its name and code.
 
 - Saved in **one step you can undo in one go**.
+- Editing a course that isn't on your timetable shows a ticked **Also add
+  {code} to my timetable** box beside Save — the add happens only with your
+  tick, so "Save changes" never quietly changes your clash picture or your
+  credit total. Untick it and only the changes themselves are stored.
+- A course CMI has dropped has no official credit value to differ from, so
+  its editor says exactly that instead of offering a credits picker — and an
+  untouched Save invents no "credits you set" change.
 - Each row you change says **which of CMI's meetings it stands in for**, with
   a **Put it back** beside it.
 - Meetings you struck out are listed underneath, so those can come back too.
@@ -187,7 +197,9 @@ from a search that found nothing.
   links that share your timetable, and the form says so.
 - They behave like real courses **everywhere** — clash detection, grids, drag
   & drop, credit totals, `.ics` export, share links.
-- A violet **Added by you** badge marks them.
+- A violet **Added by you** badge marks them — and the badge is a button:
+  tapping it opens the course's details, where the badge is explained in
+  visible words (no hover needed, so it works on a phone).
 - **Remove** parks one with its definition intact; only **Delete** destroys —
   and both are undoable.
 - If a later CMI sync introduces the same code, **your version keeps winning**,
@@ -200,7 +212,9 @@ this is about *your copy* of them: the course leaves your timetable, the
 catalog and the master grid.
 
 - The deletion is recorded with everything else you changed, with a **Restore**
-  that brings the course back along with the changes you had made to it.
+  that brings the course back along with the changes you had made to it — and
+  its place on your timetable, if it was there when you deleted it. Deleting
+  took both, so Restore returns both.
 - The catalog says **how many are hidden** — a list quietly shorter than CMI's
   is one nobody can trust.
 - A share link naming a deleted course **lifts the deletion** rather than
@@ -412,11 +426,15 @@ timetable.
 - **What changed** — a readable digest: new courses, courses no longer listed,
   and per-course lines like *renamed: X → Y* or *credits: 2 → 4*.
 - **Conflicts** — when CMI moves a class you had moved yourself, you are asked
-  which version to keep, per course, and told what each choice means. Answer
-  **Decide later** and the question stays — through reloads too — until you
-  answer it. And if CMI's change and yours turn out to say the same thing
-  (same day, time and room), there is nothing to ask: your change is retired
-  with a note, and CMI's own listing takes over.
+  which version to keep, per course, and told what each choice means. Nothing
+  is answered for you: every row starts blank, Apply is disabled until you
+  answer something, and it acts only on the rows you answered — the rest stay
+  queued. Answer **Decide later** and the question stays — through reloads
+  too — until you answer it; the banner's **Dismiss** just hides the banner
+  for this sitting (hiding a question is not answering it — it returns with
+  the next sync or reload). And if CMI's change and yours turn out to say the
+  same thing (same day, time and room), there is nothing to ask: your change
+  is retired with a note, and CMI's own listing takes over.
 - **Opening a share link in a fresh browser never invents a conflict.** A
   browser that has never synced has no history to compare, so the first sync
   asks nothing — the link's changes simply apply.
@@ -464,6 +482,9 @@ its own, never as a change CMI made.
   — so a screen reader hears them rather than nothing.
 - Meaning is never carried by colour alone: a clash has a ⚠ and a word, a
   selected course has a ✓ and a ring.
+- The day pickers and the editor's credits row are **radio groups**: one Tab
+  stop each, arrow keys move the focus and the choice in the same stroke, and
+  a screen reader hears one choice of six — not six separate toggles.
 - `I` opens details on a focused chip; `M` starts a keyboard move.
 
 ---
@@ -504,7 +525,7 @@ tested on their own.
 
 **Tested like it matters:** 114 native tests — including a synthetic CMI
 website the tests generate themselves, with other semesters, other time
-formats, renamed halls and ten different kinds of broken page — plus 81
+formats, renamed halls and ten different kinds of broken page — plus 86
 end-to-end browser tests driving the real app in a real browser: drag & drop,
 touch gestures, keyboard-only flows, storage corruption, and a stand-in CMI
 that lets the true sync path be exercised end to end.

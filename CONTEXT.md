@@ -2643,6 +2643,99 @@ README extended, and the audit records live in `.workagents/` per the
 worker-output rule. Suite after the fixes: fmt + clippy clean, **114
 native + 81/81 e2e**, deploy rehearsal green, shots regenerated.
 
+### R48 — the seven §8 bugs, closed: nothing answered for you, nothing taken silently
+
+User: "Fix each and every issue that is not fixed till now." That is §8:
+the seven confirmed, deliberately deferred entries 8.7–8.13 (8.6 is a
+deliberate non-bug and stays). Each was scouted by a read-only agent
+(reports: `.workagents/r48-scouts-raw.json`), fixed, and pinned by a test
+that fails without the fix, per §8's own exit rule. The suite grew 81 →
+**86** e2e (t82–t86); native stays 114 (one model test extended in
+place).
+
+**8.7 — the conflicts dialog answered "use CMI's" for you.** Every row
+now starts UNANSWERED (`vec![None::<bool>]`, ui.rs); Apply is disabled
+until something is answered and acts only on answered rows —
+`resolve_conflicts(answered, remaining)` re-queues the rest through
+`set_conflicts` (so they persist, t76's machinery); the toast says the
+blank rows are still queued. The banner gained Dismiss: session-only
+(`App::conflicts_dismissed`, reset by every set_conflicts) — hiding a
+question is not answering it, and the banner returns on the next sync or
+reload. Dialog copy rewritten ("Nothing is picked for you…"). Pins: t30
+(no radio pre-checked, Apply disabled at open) and NEW t82 (two-conflict
+fixture via `cache_from_before_cmi_moved_toc(also_move_iss=True)`: answer
+one row → the other survives Apply, Dismiss, and a reload). Known
+leftover, deliberate: undo of "resolve timetable conflicts" restores the
+overrides but not the queue (push_undo never snapshotted conflicts —
+pre-existing, unchanged).
+
+**8.8 — the empty catalog offered to mint a duplicate.** A third probe
+(text-only `Filters` through `course_matches`, so it uses the search's
+own semantics; courses cloned OUT of the snapshot signal first) names a
+course the search would find but a facet hides: "“{name}” ({code}) is in
+the catalog — a filter above is hiding it" + "Clear filters to show it"
+(keeps the search text, lifts every facet, one undo step labelled "clear
+the filters hiding {code}"), rendered AHEAD of the create button. Pin:
+NEW t85 (Day facet + SVA, which no Day can match).
+
+**8.9 — editing a dropped course invented a credits change.** Save now
+compares at save time: no official value (`course_ci` → None) → credits
+are `None` all the way down, and `save_course_edit`'s match gained a
+leave-alone arm (`Some(Some)/Some(None)/None`) so None can never delete a
+pre-drop override. The orphan's editor shows a sentence ("CMI no longer
+lists this course, so there's no official credit value to change…")
+instead of a picker that cannot act. Pin: NEW t84 (untouched save of a
+stub writes zero credits rows).
+
+**8.10 — "Save changes" silently added the course.** `invented` is gone;
+`save_course_edit` takes `add_to_timetable: bool` — the answer of a
+ticked "Also add {code} to my timetable" box in the editor's sticky
+footer, offered only when the course isn't selected (untracked read, per
+the builder's contract). Pins: t14 (box present + ticked, "Added SVA"
+still lands) and NEW t83 (unticked: "Saved your changes", selection stays
+empty, override stored; a selected course sees no box).
+
+**8.11 — Restore gave back less than Delete took.** `HiddenCourse` gained
+`#[serde(default)] was_selected` (old blobs/backups/links keep loading;
+the native store test pins the default); `hide()` records it;
+`restore_course`, `restore_all_courses` AND the bulk "Undo my changes to
+CMI's courses" re-select what was selected (case-insensitive guard);
+toasts say which way it went, keeping t53's "{code} is back" prefix.
+Pins: t53 re-pinned (selection == ["ISS","TOC"], chip back on the grid),
+t56 (stored entry carries was_selected: true), the extended native test
+(old JSON → false).
+
+**8.12 — six tab stops, no arrow keys.** All three `.seg` groups (editor
+credits, My-timetable day strip, Halls day picker) are
+`role="radiogroup"` with `role="radio"`, `aria-checked`, roving
+`tabindex` (exactly one "0" each — the conditions are exclusive by
+construction), and one shared `domx::seg_radio_keydown`: arrows walk
+element siblings (comment markers skipped), wrap at the ends, focus AND
+click — so every group's own on:click logic runs untouched;
+preventDefault + stopPropagation keep the arrow from the page and from
+move mode. styles.css re-keyed (`[aria-checked="true"]`), trap_tab now
+skips tabindex=-1 buttons. The edit-layout toggle keeps aria-pressed — it
+is a real toggle. Pins: NEW t86 (halls + credits groups: one tab stop,
+arrow moves-and-chooses, focus travels), t68 re-pinned to aria-checked,
+the four role='group' xpaths re-pinned to radiogroup.
+
+**8.13 — explanations nobody on a phone could reach.** The card's credits
+badge lost its title; the SAME sentences render as a visible
+`.cr-note` line under the header row (reactive — set/clear your own
+number and it changes). "Added by you" and "CMI now lists this code too"
+on cards are BUTTONS opening the details dialog, where the sentences are
+visible text beside the badges ("Deleted by you" got the same treatment);
+the tinted extra-column th's tooltip became a visible note under all
+three grids (My timetable / Master / Halls, each in its own words). Pins:
+t38 + t80 re-pinned to the visible note, t40 clicks the badge-button into
+the dialog sentence, t48 asserts the master grid's note.
+
+FEATURES.md updated in the same round (conflicts, restore, editor box,
+dropped-course credits, empty-state offer, badge-button, radio groups,
+86-test count); e2e/README likewise. Suite: fmt + clippy clean, **114
+native + 86/86 e2e**, deploy rehearsal green, shots regenerated —
+verified before the commit.
+
 ## 8. Open bugs — found, confirmed, NOT fixed (do not delete)
 
 Rules for this section: entries stay until the bug is actually fixed and a
@@ -2653,96 +2746,11 @@ which test now fails without the fix.
 The five entries that lived here (8.1–8.5, found by the R30 synthetic-site
 audit) were all fixed in R34; what each one was and how it was fixed is in
 R34's §7 entry, along with the test that fails without it. The four the R40
-audit added (8.14–8.17) were fixed in R41 — same place, same rule: R41's §7
-entry says what each was and which test fails without the fix. 8.6 below is
-not a bug and never leaves. 8.7–8.12 were found by the R37 audit agents,
-confirmed by reading the source, and deliberately NOT fixed in that round —
-each is a change of behaviour big enough to want its own look, not a line to
-slip into a batch.
-
-### 8.7 The conflicts dialog answers "use CMI's version" for you
-
-`ui.rs` builds the dialog with `RwSignal::new(vec![false; conflicts.len()])`
-— `keep_mine == false` on every row, i.e. CMI's version pre-chosen — and
-Apply zips ALL rows, not the answered ones. `keep_mine == false` deletes the
-user's override outright (`core/src/merge.rs`). So a student who opens the
-dialog to see what changed about one course, then presses Apply, throws away
-their own times for every other course in the list without ever touching it.
-There is no undecided state. One smaller thing rides along: the banner that
-is the dialog's only entrance has no Dismiss, unlike every other banner.
-(A second rider this entry used to carry — "Decide later" losing the queue
-on reload because `app.conflicts` was memory-only — is fixed as of the R47
-pre-deploy audit's re-check: the queue is saved under `cmitt.v1.conflicts`
-whenever it changes (`state.rs`), loaded at boot (`app.rs`), and rides in
-planner backups; t79 pins the backup leg.) The core bug stands at
-`ui.rs` (`vec![false; conflicts.len()]`).
-Fix shape: `Option<bool>` per row, Apply acts only on answered rows (or is
-disabled until all are answered), and give the banner a Dismiss.
-
-### 8.8 "No courses match" offers to create a duplicate of a filtered-out course
-
-Filters live in `Prefs` and survive reloads. A Branch or Day facet set weeks
-ago hides the row, and the empty state's only offer is "Add "Algebra" as your
-own course" — which creates a phantom duplicate, because the suggested code
-comes from the NAME, so the duplicate-code guard never fires. (Type the code
-instead and the guard fires, telling you to "just add the official course
-from the catalog" — the catalog that is currently saying nothing matches.)
-Fix shape: a third probe beside the existing `mine`/`deleted` ones — a
-snapshot course matching the text that the other facets excluded — offering
-"Clear filters to show it" ahead of the create button.
-
-### 8.9 Editing a course CMI has dropped invents a credits change
-
-`state.rs` compares the edited credits against `snapshot.course_ci(code)`,
-which is `None` for a course that is on the user's timetable but no longer in
-CMI's catalog, so the comparison always differs and Save always writes a
-credits override — for a stub whose credits default to the assumed 4. It then
-appears in Your changes as "Credits you set: ? → 4", a change the student
-never made and now has to remove by hand. Fix shape: send credits only when
-there is an official value to compare against (`official_credits` is already
-`None` in exactly that case).
-
-### 8.10 Saving an edit to a course you are not taking adds it to your timetable
-
-An added row has no origin, so `invented` is true, so `select_now` is true,
-so Save also selects the course — changing the clash picture and the credit
-total. The button says "Save changes" and nothing in the form mentions it.
-(The toast afterwards does say "Added X".) Fix shape: a checkbox in the
-editor's actions row when the course is not selected — "also add {code} to my
-timetable", ticked by default — so the extra step is visible before it
-happens rather than reported after.
-
-### 8.11 "Restore" hands back less than "Delete" took
-
-`delete_course` removes the code from the selection AND hides it;
-`restore_course` only unhides. So the button labelled Restore gives the
-course back to the catalog but not to the timetable, and from the
-catalog's deleted-note the only offered action restores every deleted course
-at once. (Ctrl+Z does the right thing, but only while it is still the top of
-the stack.) Fix shape: record `was_selected` on the hidden entry and re-select
-on restore.
-
-### 8.12 The `.seg` groups are six tab stops and no arrow keys
-
-Credits 0–4/Other, the My-timetable day picker and the Halls day picker are
-each a single choice built from `aria-pressed` buttons: six tab stops, no
-Left/Right, and a screen reader hears six independent toggles rather than one
-choice of six. Fix shape: `role="radiogroup"` + `role="radio"`/`aria-checked`,
-roving `tabindex`, and Left/Right in one `on:keydown`. Left alone this round
-because `aria-pressed` is asserted by several e2e tests and the change wants
-its own round to verify properly.
-
-### 8.13 Hover-only explanations on elements that cannot take focus
-
-Several `title` attributes sit on `<span>`/`<th>` elements — the credits
-badge on a course card ("assumed from its … duration" / "set by you — CMI:
-4"), the "also on CMI now", "Custom" and "Deleted by you" badges, and the
-master grid's extra-column header. A `title` there is invisible on every
-touch screen and unreachable by keyboard, and for the credits badge it is the
-only explanation of that number anywhere on the card. Fix shape: render the
-credits note as visible `.muted.small` text beside the badge (the dialog
-already does exactly that), and make the other badges buttons that open the
-dialog where the same sentence is already visible.
+audit added (8.14–8.17) were fixed in R41 — same place, same rule. The seven
+the R37 audit added (8.7–8.13), deliberately deferred because each was a
+change of behaviour big enough to want its own look, were all fixed in R48 —
+R48's §7 entry says what each was, how it was fixed, and which test now
+fails without the fix. 8.6 below is not a bug and never leaves.
 
 ### 8.6 Deliberate non-bug — do not "fix" this
 

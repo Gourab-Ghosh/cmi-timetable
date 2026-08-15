@@ -355,9 +355,20 @@ fn my_timetable(app: App) -> impl IntoView {
             <div class="toolbar noprint">
                 <h2 style="margin:0">"My timetable"</h2>
                 <div class="grow"></div>
-                <div class="seg mobile-only" role="group" aria-label="Day view">
+                // One choice of six, not six toggles: a radio group with a
+                // single Tab stop; arrows move the focus and the choice.
+                <div
+                    class="seg mobile-only"
+                    role="radiogroup"
+                    aria-label="Day view"
+                    on:keydown=crate::domx::seg_radio_keydown
+                >
                     <button
-                        aria-pressed=move || if day_mode.get().is_none() { "true" } else { "false" }
+                        role="radio"
+                        aria-checked=move || {
+                            if day_mode.get().is_none() { "true" } else { "false" }
+                        }
+                        tabindex=move || if day_mode.get().is_none() { "0" } else { "-1" }
                         on:click=move |_| day_mode.set(None)
                     >
                         "Week"
@@ -368,8 +379,12 @@ fn my_timetable(app: App) -> impl IntoView {
                             .map(|d| {
                                 view! {
                                     <button
-                                        aria-pressed=move || {
+                                        role="radio"
+                                        aria-checked=move || {
                                             if day_mode.get() == Some(d) { "true" } else { "false" }
+                                        }
+                                        tabindex=move || {
+                                            if day_mode.get() == Some(d) { "0" } else { "-1" }
                                         }
                                         on:click=move |_| day_mode.set(Some(d))
                                     >
@@ -445,17 +460,12 @@ fn my_timetable(app: App) -> impl IntoView {
                                             display_slot_grid(app)
                                                 .into_iter()
                                                 .map(|(s, extra)| {
+                                                    // The tinted column's explanation is the
+                                                    // visible note under the grid — a title
+                                                    // here is invisible on touch and
+                                                    // unreachable by keyboard.
                                                     view! {
-                                                        <th
-                                                            scope="col"
-                                                            class:extra=extra
-                                                            title=extra
-                                                                .then_some(
-                                                                    "Outside CMI's regular grid — \
-                                                                     this column exists because one \
-                                                                     of your meetings needs it",
-                                                                )
-                                                        >
+                                                        <th scope="col" class:extra=extra>
                                                             {s.label()}
                                                         </th>
                                                     }
@@ -495,6 +505,23 @@ fn my_timetable(app: App) -> impl IntoView {
                                 </tbody>
                             </table>
                         </div>
+                        // Said under the grid, where a touch screen and a
+                        // keyboard can read it — this used to be a tooltip
+                        // on the tinted column's header.
+                        {move || {
+                            display_slot_grid(app)
+                                .iter()
+                                .any(|(_, extra)| *extra)
+                                .then(|| {
+                                    view! {
+                                        <p class="muted small">
+                                            "The tinted column with the odd time is outside \
+                                             CMI's regular grid — it exists because one of \
+                                             your meetings needs it."
+                                        </p>
+                                    }
+                                })
+                        }}
 
                         // Per-day list (mobile alternative).
                         {move || {
@@ -1323,43 +1350,7 @@ fn course_card(app: App, course: Course) -> impl IntoView {
                 <strong>{course.display_name()}</strong>
                 <span class="muted">{course.instructors.join(" / ")}</span>
                 <div class="grow" style="flex:1"></div>
-                <span
-                    class="badge"
-                    class:accent=move || app.credits_custom(&cr_code).is_some()
-                    title=move || {
-                        if app.credits_custom(&cr_code_title).is_some() {
-                            if cr_assumed {
-                                format!(
-                                    "You set this course's credits yourself. CMI doesn't \
-                                     list credits for it — without your number the app \
-                                     would count {cr_official}."
-                                )
-                            } else {
-                                format!(
-                                    "You set this course's credits yourself. CMI lists \
-                                     {cr_official}."
-                                )
-                            }
-                        } else if let Some(span) = &cr_duration {
-                            format!(
-                                "CMI doesn't list credits for this course. It runs \
-                                 {span}, so the app counts one credit per month. Set \
-                                 your own number with Edit this course."
-                            )
-                        } else if cr_seminar {
-                            "CMI doesn't list credits for this seminar, so the app \
-                             counts 0. Set your own number with Edit this course."
-                                .to_string()
-                        } else if cr_assumed {
-                            "CMI doesn't list credits for this course, so the app \
-                             counts the usual 4. Set your own number with Edit this \
-                             course."
-                                .to_string()
-                        } else {
-                            String::new()
-                        }
-                    }
-                >
+                <span class="badge" class:accent=move || app.credits_custom(&cr_code).is_some()>
                     // The same marks the printed sheet uses and explains:
                     // * = the app's guess, ✎ = the student's own number.
                     {move || {
@@ -1374,30 +1365,83 @@ fn course_card(app: App, course: Course) -> impl IntoView {
                     }}
                 </span>
             </div>
+            // Why the number is what it is — visible words, because for an
+            // assumed value this is the only explanation the card has, and a
+            // tooltip is invisible on a phone. Reactive: setting or clearing
+            // your own number changes the sentence.
+            {move || {
+                let sentence = if app.credits_custom(&cr_code_title).is_some() {
+                    Some(if cr_assumed {
+                        format!(
+                            "You set this course's credits yourself. CMI doesn't list \
+                             credits for it — without your number the app would count \
+                             {cr_official}."
+                        )
+                    } else {
+                        format!(
+                            "You set this course's credits yourself. CMI lists \
+                             {cr_official}."
+                        )
+                    })
+                } else if let Some(span) = &cr_duration {
+                    Some(format!(
+                        "CMI doesn't list credits for this course. It runs {span}, so \
+                         the app counts one credit per month. Set your own number with \
+                         Edit this course."
+                    ))
+                } else if cr_seminar {
+                    Some(
+                        "CMI doesn't list credits for this seminar, so the app counts \
+                         0. Set your own number with Edit this course."
+                            .to_string(),
+                    )
+                } else if cr_assumed {
+                    Some(
+                        "CMI doesn't list credits for this course, so the app counts \
+                         the usual 4. Set your own number with Edit this course."
+                            .to_string(),
+                    )
+                } else {
+                    None
+                };
+                sentence.map(|s| view! { <p class="muted small cr-note">{s}</p> })
+            }}
             <div class="row" style="margin-top:0.3rem">
                 {is_custom
                     .then(|| {
+                        let details_code = code.clone();
                         view! {
-                            <span
+                            // A button, not a span: the explanation lives in
+                            // the details dialog, where touch and keyboard
+                            // can reach it.
+                            <button
                                 class="badge custom"
-                                title="You created this course. It isn't on CMI's pages."
+                                title="You created this course. It isn't on CMI's \
+                                       pages. Opens this course's details."
+                                on:click=move |_| {
+                                    app.dialog.set(Some(Dialog::Details(details_code.clone())));
+                                }
                             >
                                 "Added by you"
-                            </span>
+                            </button>
                         }
                     })}
                 {shadows
                     .then(|| {
+                        let details_code = code.clone();
                         view! {
-                            <span
+                            <button
                                 class="badge warn"
                                 title="You made this course, and CMI's timetable now \
                                        lists the same code. You're seeing your version. \
-                                       Click the code chip to compare them or switch \
-                                       to CMI's."
+                                       Opens this course's details, where you can \
+                                       compare them or switch to CMI's."
+                                on:click=move |_| {
+                                    app.dialog.set(Some(Dialog::Details(details_code.clone())));
+                                }
                             >
                                 "CMI now lists this code too"
-                            </span>
+                            </button>
                         }
                     })}
                 {branch_chips}
@@ -1705,6 +1749,22 @@ fn master_grid(app: App) -> impl IntoView {
                     </tbody>
                 </table>
             </div>
+            // The tinted column, explained where everyone can read it — not
+            // in a tooltip a phone never shows.
+            {move || {
+                app.master_slot_grid()
+                    .iter()
+                    .any(|(_, extra)| *extra)
+                    .then(|| {
+                        view! {
+                            <p class="muted small">
+                                "The tinted column with the odd time is outside CMI's \
+                                 regular grid — it exists because a course meets at that \
+                                 time."
+                            </p>
+                        }
+                    })
+            }}
         </section>
     }
 }
@@ -1830,6 +1890,27 @@ fn catalog(app: App) -> impl IntoView {
                                     })
                             })
                             .flatten();
+                        // A course the SEARCH would find but a FACET set
+                        // earlier (maybe weeks ago — filters persist) is
+                        // hiding. The text-only probe uses the search box's
+                        // own matching, so anything it finds was excluded by
+                        // the other facets. The courses are cloned out of the
+                        // snapshot first: course_matches may reach the
+                        // snapshot itself.
+                        let filtered_out = (!needle.is_empty())
+                            .then(|| {
+                                let text_only = crate::state::Filters {
+                                    text: search.clone(),
+                                    ..Default::default()
+                                };
+                                let courses = app.snapshot.with(|s| s.courses.clone());
+                                courses
+                                    .into_iter()
+                                    .filter(|c| !app.is_custom(&c.code))
+                                    .find(|c| crate::state::course_matches(&app, c, &text_only))
+                                    .map(|c| (c.code.clone(), c.name.clone()))
+                            })
+                            .flatten();
                         view! {
                             <div class="empty panel">
                                 <p class="big">"No courses match."</p>
@@ -1892,6 +1973,44 @@ fn catalog(app: App) -> impl IntoView {
                                                 on:click=move |_| app.set_tab(Tab::MyCourses)
                                             >
                                                 "Show it in My courses"
+                                            </button>
+                                        }
+                                    })}
+                                // It IS in the catalog — a facet set earlier
+                                // is hiding it. Name the course and offer to
+                                // lift the filters, ahead of the create
+                                // button, instead of letting a duplicate be
+                                // minted whose code the guard can't
+                                // recognise (the suggested code comes from
+                                // the NAME).
+                                {filtered_out
+                                    .map(|(code, name)| {
+                                        let label = format!("clear the filters hiding {code}");
+                                        view! {
+                                            <p class="muted">
+                                                {format!(
+                                                    "“{name}” ({code}) is in the catalog — a \
+                                                     filter above is hiding it.",
+                                                )}
+                                            </p>
+                                            <button
+                                                class="btn"
+                                                on:click=move |_| {
+                                                    // Keep the search text so the click
+                                                    // lands on exactly the course named.
+                                                    app.act_filters_in(
+                                                        false,
+                                                        &label,
+                                                        false,
+                                                        |f| {
+                                                            let text = std::mem::take(&mut f.text);
+                                                            *f = crate::state::Filters::default();
+                                                            f.text = text;
+                                                        },
+                                                    );
+                                                }
+                                            >
+                                                "Clear filters to show it"
                                             </button>
                                         }
                                     })}
@@ -2718,14 +2837,22 @@ fn halls_view(app: App) -> impl IntoView {
         <section aria-label="Lecture halls">
             <div class="toolbar">
                 <h2 style="margin:0">"Halls"</h2>
-                <div class="seg" role="group" aria-label="Day">
+                <div
+                    class="seg"
+                    role="radiogroup"
+                    aria-label="Day"
+                    on:keydown=crate::domx::seg_radio_keydown
+                >
                     // The whole week first, then the days in week order: the
                     // widest view is where reading starts, and narrowing to a
-                    // day is the step you take from it.
+                    // day is the step you take from it. A radio group: one
+                    // Tab stop, arrows move the choice.
                     <button
-                        aria-pressed=move || {
+                        role="radio"
+                        aria-checked=move || {
                             if view_mode() == HallsView::All { "true" } else { "false" }
                         }
+                        tabindex=move || if view_mode() == HallsView::All { "0" } else { "-1" }
                         title="Every day at once"
                         on:click=move |_| {
                             app.prefs.update(|p| p.halls_view = Some(HallsView::All));
@@ -2740,11 +2867,19 @@ fn halls_view(app: App) -> impl IntoView {
                             .map(|d| {
                                 view! {
                                     <button
-                                        aria-pressed=move || {
+                                        role="radio"
+                                        aria-checked=move || {
                                             if view_mode() == HallsView::Day(d) {
                                                 "true"
                                             } else {
                                                 "false"
+                                            }
+                                        }
+                                        tabindex=move || {
+                                            if view_mode() == HallsView::Day(d) {
+                                                "0"
+                                            } else {
+                                                "-1"
                                             }
                                         }
                                         on:click=move |_| {
@@ -2779,6 +2914,21 @@ fn halls_view(app: App) -> impl IntoView {
                 // together, so a room reads down the page instead of across
                 // five tables you have to hold in your head.
                 HallsView::All => hall_table(app, app.hall_days(), true),
+            }}
+            // The tinted column, explained in visible words — not a tooltip.
+            {move || {
+                app.hall_slot_grid()
+                    .iter()
+                    .any(|(_, extra)| *extra)
+                    .then(|| {
+                        view! {
+                            <p class="muted small">
+                                "The tinted column with the odd time is outside CMI's \
+                                 regular grid — it exists because a meeting sits at that \
+                                 time."
+                            </p>
+                        }
+                    })
             }}
 
             // Find a free hall — results appear once BOTH day and slot are

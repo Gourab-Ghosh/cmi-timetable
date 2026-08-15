@@ -23,7 +23,7 @@ Environment knobs: `CHROME_BIN` (default `/usr/bin/chromium`), `DIST_DIR`,
 `PORT`, `CARGO_TARGET_DIR` (for the seed generator; defaults to
 `~/.rust-target-e2e`).
 
-Covered flows (81 tests): Sync-now header + hidden developer mode (URL
+Covered flows (86 tests): Sync-now header + hidden developer mode (URL
 endpoint only), `?c=` selection + clash badges/panel (any casing), unknown-
 code warning, credits defaulting to 4 and per-course credit overwrites,
 master-grid ⚠ would-clash markers and clash toast on add, the ⓘ details
@@ -117,7 +117,17 @@ undo step, a whitespace-variant duplicate code is named once, a code with
 a comma or % is refused in the form with the share-link reason, the wheel
 never reverses direction against a clamp, never fills an empty box, and
 gathers trackpad deltas into whole notches, and a server answering 503 —
-GitHub Pages during an outage — loses to the worker's cached copy), and a
+GitHub Pages during an outage — loses to the worker's cached copy; R48
+closed the seven long-documented §8 bugs, each pinned: the conflicts
+dialog answers nothing for you and applies only the rows you answered
+with the rest queued and a Dismiss that hides without answering, Restore
+returns a deleted course to the timetable it was deleted from, an
+untouched save of a dropped course invents no credit change, editing an
+unselected course asks with a ticked box before adding it, a course
+hidden by filters is named with "Clear filters to show it" instead of a
+duplicate-minting create offer, the day pickers and credits row are
+arrow-key radio groups, and every badge/credits explanation is visible
+text or a button to the details dialog rather than a hover title), and a
 creditless seminar counting 0 with the note saying why; and the order
 of the source chain, which
 exists for a reason a browser enforces: on CMI's own network cmi.ac.in is a
