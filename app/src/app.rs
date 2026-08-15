@@ -10,6 +10,8 @@
 use crate::state::{App, Route, SyncMeta};
 use crate::{dev, dnd, domx, fetch, storage, ui, views};
 use leptos::prelude::*;
+use std::collections::HashMap;
+use std::sync::Arc;
 use ttcore::model::{CustomStore, OverridesStore, Snapshot, SourceTier};
 use wasm_bindgen::JsCast;
 use wasm_bindgen::closure::Closure;
@@ -86,8 +88,41 @@ fn init_app() -> (App, bool) {
         edit_mode: RwSignal::new(false),
     };
     provide_context(app);
+    // One index for every chip on the page: name, hue and "CMI lists no
+    // branch for this", by course code. Each chip used to walk the whole
+    // catalog for its own name — a few hundred chips on the master grid
+    // meant tens of thousands of string comparisons per render. Provided
+    // here, at the root, so it outlives any view that reads it, and a memo
+    // so a sync still refreshes every chip that took a name from it.
+    provide_context(CourseIndex(Memo::new(move |_| {
+        app.snapshot.with(|s| {
+            Arc::new(
+                s.courses
+                    .iter()
+                    .map(|c| {
+                        (
+                            c.code.clone(),
+                            (
+                                c.name.clone(),
+                                crate::hues::course_hue(&c.branches),
+                                c.branches.is_empty(),
+                            ),
+                        )
+                    })
+                    .collect::<HashMap<String, ChipIdentity>>(),
+            )
+        })
+    })));
     (app, corrupt)
 }
+
+/// What a chip needs to name and colour itself: the course's name, its hue,
+/// and whether CMI lists no branch for it.
+pub type ChipIdentity = (String, u16, bool);
+
+/// Course identity for chips, by code. See where it is provided, above.
+#[derive(Clone, Copy)]
+pub struct CourseIndex(pub Memo<Arc<HashMap<String, ChipIdentity>>>);
 
 /// The offline note. Fires only when this page was served by our service
 /// worker (an offline copy exists and answered) AND the app's own origin is
@@ -230,7 +265,9 @@ fn apply_url_state(app: App) {
     // Resolve incoming codes case-insensitively and canonicalize them — the
     // user's own courses first (a shared link may carry them), then the
     // catalog's own casing (whatever CMI uses; people type "toc" in URLs).
-    let snapshot = app.snapshot.get_untracked();
+    // Read through the signal, never a copy of it: this runs at boot, and a
+    // clone here copied every course, every hall booking and the gzipped
+    // pages to answer a handful of code lookups.
     let mut known: Vec<String> = Vec::new();
     let mut unknown: Vec<String> = Vec::new();
     for code in state.selection {
@@ -243,7 +280,10 @@ fn apply_url_state(app: App) {
                     .find(|c| c.code.eq_ignore_ascii_case(&code))
                     .map(|c| c.code.clone())
             })
-            .or_else(|| snapshot.course_ci(&code).map(|c| c.code.clone()));
+            .or_else(|| {
+                app.snapshot
+                    .with_untracked(|s| s.course_ci(&code).map(|c| c.code.clone()))
+            });
         match resolved {
             Some(canonical) => {
                 if !known.contains(&canonical) {

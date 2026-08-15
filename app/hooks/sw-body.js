@@ -24,10 +24,20 @@ self.addEventListener('install', (event) => {
   event.waitUntil(
     caches
       .open(CACHE)
-      // cache:'reload' bypasses the HTTP cache, so the precache holds what
-      // the server serves NOW, not a CDN-stale copy of it.
+      // cache:'reload' bypasses the HTTP cache — right for the entries whose
+      // URL never changes (the shell), because a CDN-stale copy of those is
+      // a real risk. The wasm, JS and CSS carry a content hash in their
+      // names, so the copy the page has just downloaded IS the copy the
+      // server would send: re-fetching them was downloading the whole build
+      // a second time, on the first visit, while the app was starting.
       .then((cache) =>
-        cache.addAll(MANIFEST.map((url) => new Request(url, { cache: 'reload' })))
+        cache.addAll(
+          MANIFEST.map((url) =>
+            /-[0-9a-f]{8,}\.(wasm|js|css)$/.test(url)
+              ? new Request(url)
+              : new Request(url, { cache: 'reload' })
+          )
+        )
       )
       .then(() => self.skipWaiting())
   );

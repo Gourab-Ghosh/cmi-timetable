@@ -2222,7 +2222,10 @@ pub fn effective_meetings(course: &Course, overrides: &OverridesStore) -> Vec<Ef
 }
 
 /// Facet matching: OR within a facet, AND across facets.
-pub fn course_matches(app: &App, course: &Course, f: &Filters) -> bool {
+/// `overrides` is passed in, not read here: this runs once per course in a
+/// filter pass, and cloning the whole override store per course made the
+/// search box quadratic in what the user had customised.
+pub fn course_matches(app: &App, course: &Course, f: &Filters, overrides: &OverridesStore) -> bool {
     // A course the user deleted is out of the catalog and the master grid
     // entirely. It comes first because no filter should be able to bring
     // one back — restoring it is a decision, made in "Your changes".
@@ -2235,8 +2238,7 @@ pub fn course_matches(app: &App, course: &Course, f: &Filters) -> bool {
     if !f.instructors.is_empty() && !course.instructors.iter().any(|i| f.instructors.contains(i)) {
         return false;
     }
-    let overrides = app.overrides.get();
-    let eff = effective_meetings(course, &overrides);
+    let eff = effective_meetings(course, overrides);
     if !f.days.is_empty() && !eff.iter().any(|e| f.days.contains(&e.meeting.day)) {
         return false;
     }

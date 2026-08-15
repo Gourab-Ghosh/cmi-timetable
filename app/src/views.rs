@@ -10,7 +10,10 @@ use crate::ui::{
     filter_bar, overrides_list,
 };
 use leptos::prelude::*;
-use ttcore::model::{Course, Day, Meeting, ScheduleStatus, Slot, Snapshot};
+use std::collections::HashMap;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
+use ttcore::model::{Course, Day, HallBooking, Meeting, ScheduleStatus, Slot, Snapshot};
 
 pub fn planner(app: App) -> impl IntoView {
     // Memoized: prefs carries filters/density too, and a filter change must
@@ -215,12 +218,6 @@ pub fn column_for(slot_grid: &[Slot], meeting: &Meeting) -> Option<u16> {
         .map(|s| s.start_min)
 }
 
-/// See `App::display_slot_grid` — official columns plus synthetic ones for
-/// out-of-grid meetings.
-fn display_slot_grid(app: App) -> Vec<(Slot, bool)> {
-    app.display_slot_grid()
-}
-
 fn grid_cell(
     app: App,
     day: Day,
@@ -295,46 +292,60 @@ fn my_timetable(app: App) -> impl IntoView {
         }
     });
 
-    let selected_effs = move || -> Vec<(Course, Vec<EffMeeting>)> {
-        app.selected_courses()
-            .into_iter()
-            .map(|c| {
-                let eff = app.effective_meetings(&c);
-                (c, eff)
-            })
-            .collect()
-    };
+    // The week's own columns and days, worked out once each: both walk the
+    // selection (and `grid_days` the whole catalog), and they were read in
+    // the header, in every row, in every cell and again below the table.
+    let columns = Memo::new(move |_| app.display_slot_grid());
+    let days = Memo::new(move |_| app.grid_days());
+
+    // Every chip on the week, filed under the cell that draws it — one pass
+    // instead of one per cell. (Same shape as the master grid's `placed`.)
+    let placed = Memo::new(move |_| {
+        let cols: Vec<Slot> = columns.get().into_iter().map(|(s, _)| s).collect();
+        let mut cells: HashMap<(Day, u16), Vec<(String, EffMeeting)>> = HashMap::new();
+        for course in app.selected_courses() {
+            for eff in app.effective_meetings(&course) {
+                let Some(col) = column_for(&cols, &eff.meeting) else {
+                    continue;
+                };
+                cells
+                    .entry((eff.meeting.day, col))
+                    .or_default()
+                    .push((course.code.clone(), eff));
+            }
+        }
+        cells
+    });
 
     let cell_chips = move |day: Day, slot: Slot| -> Vec<AnyView> {
-        let columns: Vec<Slot> = display_slot_grid(app).into_iter().map(|(s, _)| s).collect();
-        selected_effs()
-            .into_iter()
-            .flat_map(|(course, effs)| {
-                effs.into_iter()
-                    .filter(|e| {
-                        e.meeting.day == day
-                            && column_for(&columns, &e.meeting) == Some(slot.start_min)
-                    })
-                    .map(|e| {
-                        let sublabel = (e.meeting.slot != slot).then(|| e.meeting.slot.label());
-                        chip(
-                            app,
-                            ChipProps {
-                                code: course.code.clone(),
-                                eff: Some(e),
-                                show_hall: true,
-                                draggable: true,
-                                from_master: false,
-                                click: ChipClick::Details,
-                                sublabel,
-                                warn_wont_fit: false,
-                            },
-                        )
-                        .into_any()
-                    })
-                    .collect::<Vec<_>>()
-            })
-            .collect()
+        placed.with(|cells| {
+            cells
+                .get(&(day, slot.start_min))
+                .map(|chips| {
+                    chips
+                        .iter()
+                        .map(|(code, eff)| {
+                            let sublabel =
+                                (eff.meeting.slot != slot).then(|| eff.meeting.slot.label());
+                            chip(
+                                app,
+                                ChipProps {
+                                    code: code.clone(),
+                                    eff: Some(eff.clone()),
+                                    show_hall: true,
+                                    draggable: true,
+                                    from_master: false,
+                                    click: ChipClick::Details,
+                                    sublabel,
+                                    warn_wont_fit: false,
+                                },
+                            )
+                            .into_any()
+                        })
+                        .collect()
+                })
+                .unwrap_or_default()
+        })
     };
 
     let unscheduled = move || -> Vec<Course> {
@@ -500,7 +511,7 @@ fn my_timetable(app: App) -> impl IntoView {
                                             <span aria-hidden="true"></span>
                                         </th>
                                         {move || {
-                                            display_slot_grid(app)
+                                            columns.get()
                                                 .into_iter()
                                                 .map(|(s, extra)| {
                                                     // The tinted column's explanation is the
@@ -519,13 +530,13 @@ fn my_timetable(app: App) -> impl IntoView {
                                 </thead>
                                 <tbody>
                                     {move || {
-                                        app.grid_days()
+                                        days.get()
                                             .into_iter()
                                             .map(|day| {
                                                 view! {
                                                     <tr>
                                                         <th class="rowhead" scope="row">{day.short()}</th>
-                                                        {display_slot_grid(app)
+                                                        {columns.get()
                                                             .into_iter()
                                                             .map(|(slot, extra)| {
                                                                 grid_cell(
@@ -552,7 +563,7 @@ fn my_timetable(app: App) -> impl IntoView {
                         // keyboard can read it — this used to be a tooltip
                         // on the tinted column's header.
                         {move || {
-                            display_slot_grid(app)
+                            columns.get()
                                 .iter()
                                 .any(|(_, extra)| *extra)
                                 .then(|| {
@@ -573,7 +584,7 @@ fn my_timetable(app: App) -> impl IntoView {
                                 .map(|day| {
                                     view! {
                                         <div class="day-list mobile-only" style="margin-top:0.6rem">
-                                            {display_slot_grid(app)
+                                            {columns.get()
                                                 .into_iter()
                                                 .map(|(slot, extra)| {
                                                     let start = slot.start_min;
@@ -1136,9 +1147,10 @@ fn my_courses(app: App) -> impl IntoView {
     // courses here.
     let filtered = Memo::new(move |_| {
         let f = app.filters_in(true);
+        let ovs = app.overrides.get();
         app.selected_courses()
             .into_iter()
-            .filter(|c| crate::state::course_matches(&app, c, &f))
+            .filter(|c| crate::state::course_matches(&app, c, &f, &ovs))
             .collect::<Vec<_>>()
     });
     let shown = Signal::derive(move || filtered.get().len());
@@ -1584,6 +1596,17 @@ fn course_card(app: App, course: Course) -> impl IntoView {
 // 3. Master grid
 // ---------------------------------------------------------------------------
 
+/// One chip the master grid will draw, with everything the cell needs to
+/// render it already worked out. Kept in a map from cell to chips (see
+/// `master_grid`), so no cell has to look through the catalog to find out
+/// what belongs in it.
+#[derive(Clone, PartialEq)]
+struct GridChip {
+    code: String,
+    eff: EffMeeting,
+    warn_wont_fit: bool,
+}
+
 fn master_grid(app: App) -> impl IntoView {
     let matched = Memo::new(move |_| {
         // This re-runs on every keystroke in the search box, and `.get`
@@ -1593,10 +1616,11 @@ fn master_grid(app: App) -> impl IntoView {
         // reach the snapshot itself (the "fits my schedule" filter does),
         // and that must not happen inside a read of it.
         let f = app.filters();
+        let ovs = app.overrides.get();
         let courses = app.snapshot.with(|s| s.courses.clone());
         courses
             .into_iter()
-            .filter(|c| crate::state::course_matches(&app, c, &f))
+            .filter(|c| crate::state::course_matches(&app, c, &f, &ovs))
             .collect::<Vec<_>>()
     });
     // What this grid can actually put on screen. It draws courses only
@@ -1609,70 +1633,134 @@ fn master_grid(app: App) -> impl IntoView {
             .filter(|c| !app.effective_meetings(c).is_empty())
             .collect::<Vec<_>>()
     });
-    let count = Signal::derive(move || filtered.get().len());
+    // `with`, not `get`, for both: these read a length, and `get` would
+    // deep-clone every matching course to do it.
+    let count = Signal::derive(move || filtered.with(Vec::len));
     // Dropping those from the count without a word would be its own small
     // lie — they match what was asked for, they are simply somewhere else.
-    let unplaced = Signal::derive(move || matched.get().len() - filtered.get().len());
+    let unplaced = Signal::derive(move || matched.with(Vec::len) - filtered.with(Vec::len));
 
-    let cell_chips = move |day: Day, slot: Slot| -> Vec<AnyView> {
+    // The columns, worked out once for the whole table rather than in the
+    // header, in every row, and again in the note underneath.
+    let columns = Memo::new(move |_| app.master_slot_grid());
+    // Memoised for a second reason: `grid_days` walks every course in the
+    // catalog, and read raw in the table body it made the body depend on the
+    // selection — so picking one course tore down and rebuilt every row and
+    // every cell. As a memo the body rebuilds only when the DAYS change, and
+    // a click repaints the cells it actually touched.
+    let days = Memo::new(move |_| app.grid_days());
+
+    // Every chip this grid will draw, filed under the cell that draws it —
+    // worked out ONCE per change instead of once per cell.
+    //
+    // The cell closure used to run the whole pipeline itself: clone the
+    // matching courses, rebuild the column list, walk each course's
+    // effective meetings and ask `fits_schedule` (a scan of the timetable)
+    // about each one — and it ran in every cell, so a five-day grid with
+    // seven columns did all of that thirty-five times over. One pass fills
+    // this map; a cell is then a lookup.
+    let placed = Memo::new(move |_| {
         // The display columns, not CMI's raw grid: a meeting moved to 19:00
         // gets a column of its own here exactly as it does on My timetable,
         // instead of being clamped into the 17:00 one.
-        let slot_grid: Vec<Slot> = app.master_slot_grid().into_iter().map(|(s, _)| s).collect();
-        filtered
-            .get()
-            .into_iter()
-            .flat_map(|course| {
-                // ⚠ marker on unselected courses that would clash with the
-                // current timetable (visible whether or not the
-                // "Fits my schedule" filter is on).
-                let warn_wont_fit = !app.is_selected(&course.code) && !app.fits_schedule(&course);
-                app.effective_meetings(&course)
-                    .into_iter()
-                    .filter(|e| {
-                        e.meeting.day == day
-                            && column_for(&slot_grid, &e.meeting) == Some(slot.start_min)
+        let slot_grid: Vec<Slot> = columns.get().into_iter().map(|(s, _)| s).collect();
+        // The timetable to clash against, built ONCE. `fits_schedule` asks
+        // this question by rebuilding the whole selection from scratch —
+        // resolving every picked code through the catalog and walking its
+        // meetings — and the ⚠ needs the answer for every course on the
+        // page. Same rule as `App::would_clash_with`, including its
+        // case-insensitive "a course never clashes with itself".
+        let mine: Vec<(String, Day, Slot)> = app.overrides.with(|ovs| {
+            app.selected_courses()
+                .iter()
+                .flat_map(|c| {
+                    effective_meetings(c, ovs)
+                        .into_iter()
+                        .map(|e| (c.code.clone(), e.meeting.day, e.meeting.slot))
+                })
+                .collect()
+        });
+        let mut cells: HashMap<(Day, u16), Vec<GridChip>> = HashMap::new();
+        for course in filtered.get() {
+            let effs = app.effective_meetings(&course);
+            // ⚠ marker on unselected courses that would clash with the
+            // current timetable (visible whether or not the
+            // "Fits my schedule" filter is on).
+            let warn_wont_fit = !app.is_selected(&course.code)
+                && effs.iter().any(|e| {
+                    mine.iter().any(|(other, day, slot)| {
+                        !other.eq_ignore_ascii_case(&course.code)
+                            && *day == e.meeting.day
+                            && slot.overlaps(&e.meeting.slot)
                     })
-                    .map(|e| {
-                        let info_code = course.code.clone();
-                        // Out-of-grid times get their own column, but a
-                        // meeting can still borrow a column it merely falls
-                        // inside (09:30 in the 09:10 slot) — say the real
-                        // time rather than let the header speak for it.
-                        let sublabel = (e.meeting.slot != slot).then(|| e.meeting.slot.label());
-                        view! {
-                            <span class="chipwrap">
-                                {chip(
-                                    app,
-                                    ChipProps {
-                                        code: course.code.clone(),
-                                        eff: Some(e),
-                                        show_hall: false,
-                                        draggable: true,
-                                        from_master: true,
-                                        click: ChipClick::Toggle,
-                                        sublabel,
-                                        warn_wont_fit,
-                                    },
-                                )}
-                                <button
-                                    class="chip-info"
-                                    aria-label=format!("Details for {}", info_code)
-                                    title=format!("Details for {}", info_code)
-                                    on:click=move |_| {
-                                        app.dialog
-                                            .set(Some(Dialog::Details(info_code.clone())));
-                                    }
-                                >
-                                    "ⓘ"
-                                </button>
-                            </span>
-                        }
-                        .into_any()
-                    })
-                    .collect::<Vec<_>>()
-            })
-            .collect()
+                });
+            for eff in effs {
+                let Some(col) = column_for(&slot_grid, &eff.meeting) else {
+                    continue;
+                };
+                cells
+                    .entry((eff.meeting.day, col))
+                    .or_default()
+                    .push(GridChip {
+                        code: course.code.clone(),
+                        eff,
+                        warn_wont_fit,
+                    });
+            }
+        }
+        cells
+    });
+
+    let cell_chips = move |day: Day, slot: Slot| -> Vec<AnyView> {
+        placed.with(|cells| {
+            cells
+                .get(&(day, slot.start_min))
+                .map(|chips| {
+                    chips
+                        .iter()
+                        .map(|c| {
+                            let info_code = c.code.clone();
+                            // Out-of-grid times get their own column, but a
+                            // meeting can still borrow a column it merely
+                            // falls inside (09:30 in the 09:10 slot) — say
+                            // the real time rather than let the header speak
+                            // for it.
+                            let sublabel =
+                                (c.eff.meeting.slot != slot).then(|| c.eff.meeting.slot.label());
+                            view! {
+                                <span class="chipwrap">
+                                    {chip(
+                                        app,
+                                        ChipProps {
+                                            code: c.code.clone(),
+                                            eff: Some(c.eff.clone()),
+                                            show_hall: false,
+                                            draggable: true,
+                                            from_master: true,
+                                            click: ChipClick::Toggle,
+                                            sublabel,
+                                            warn_wont_fit: c.warn_wont_fit,
+                                        },
+                                    )}
+                                    <button
+                                        class="chip-info"
+                                        aria-label=format!("Details for {}", info_code)
+                                        title=format!("Details for {}", info_code)
+                                        on:click=move |_| {
+                                            app.dialog
+                                                .set(Some(Dialog::Details(info_code.clone())));
+                                        }
+                                    >
+                                        "ⓘ"
+                                    </button>
+                                </span>
+                            }
+                            .into_any()
+                        })
+                        .collect()
+                })
+                .unwrap_or_default()
+        })
     };
 
     view! {
@@ -1757,7 +1845,8 @@ fn master_grid(app: App) -> impl IntoView {
                         <tr>
                             <th class="rowhead corner" scope="col"></th>
                             {move || {
-                                app.master_slot_grid()
+                                columns
+                                    .get()
                                     .into_iter()
                                     .map(|(s, extra)| {
                                         view! {
@@ -1772,13 +1861,14 @@ fn master_grid(app: App) -> impl IntoView {
                     </thead>
                     <tbody>
                         {move || {
-                            app.grid_days()
+                            days.get()
                                 .into_iter()
                                 .map(|day| {
                                     view! {
                                         <tr>
                                             <th class="rowhead" scope="row">{day.short()}</th>
-                                            {app.master_slot_grid()
+                                            {columns
+                                                .get()
                                                 .into_iter()
                                                 .map(|(slot, extra)| {
                                                     grid_cell(
@@ -1802,7 +1892,8 @@ fn master_grid(app: App) -> impl IntoView {
             // The tinted column, explained where everyone can read it — not
             // in a tooltip a phone never shows.
             {move || {
-                app.master_slot_grid()
+                columns
+                    .get()
                     .iter()
                     .any(|(_, extra)| *extra)
                     .then(|| {
@@ -1861,10 +1952,11 @@ fn catalog(app: App) -> impl IntoView {
         // reach the snapshot itself (the "fits my schedule" filter does),
         // and that must not happen inside a read of it.
         let f = app.filters();
+        let ovs = app.overrides.get();
         let courses = app.snapshot.with(|s| s.courses.clone());
         courses
             .into_iter()
-            .filter(|c| crate::state::course_matches(&app, c, &f))
+            .filter(|c| crate::state::course_matches(&app, c, &f, &ovs))
             .collect::<Vec<_>>()
     });
     let count = Signal::derive(move || filtered.get().len());
@@ -1902,7 +1994,15 @@ fn catalog(app: App) -> impl IntoView {
             // fingerprints the content so a sync remounts changed rows.
             <For
                 each=move || filtered.get()
-                key=|course| format!("{course:?}")
+                // A fingerprint, not a printout: the key must change when
+                // anything shown about the course does, and `{course:?}`
+                // built a few hundred bytes of text per course — every
+                // keystroke in the search box, for the whole catalog.
+                key=|course| {
+                    let mut h = DefaultHasher::new();
+                    course.hash(&mut h);
+                    h.finish()
+                }
                 children=move |course| catalog_row(app, course)
             />
             {move || {
@@ -1957,7 +2057,7 @@ fn catalog(app: App) -> impl IntoView {
                                 courses
                                     .into_iter()
                                     .filter(|c| !app.is_custom(&c.code))
-                                    .find(|c| crate::state::course_matches(&app, c, &text_only))
+                                    .find(|c| crate::state::course_matches(&app, c, &text_only, &app.overrides.get()))
                                     .map(|c| (c.code.clone(), c.name.clone()))
                             })
                             .flatten();
@@ -2253,6 +2353,7 @@ fn hall_col_of(slot_grid: &[Slot], m: &Meeting) -> Option<u16> {
 }
 
 /// What one of CMI's hall bookings means for THIS user's timetable.
+#[derive(Clone)]
 enum BookingCell {
     /// Nothing of the user's to reconcile it with — a code the catalog
     /// doesn't list, or a room CMI allocated without a matching meeting in
@@ -2354,16 +2455,12 @@ fn hall_booking_state(
 #[allow(clippy::too_many_arguments)]
 fn hall_booking_chip(
     app: App,
-    snapshot: &Snapshot,
-    columns: &[Slot],
     code: &str,
-    day: Day,
-    slot: Slot,
+    // Decided once, when the bookings were filed into cells.
+    state: &BookingCell,
     column: Slot,
-    temp: bool,
-    hall: &str,
 ) -> Option<AnyView> {
-    match hall_booking_state(app, snapshot, columns, code, day, slot, column, temp, hall) {
+    match state.clone() {
         // The ✓ this page promises, on a chip that had no way to show it:
         // a booking with no meeting behind it is still a course you may be
         // taking, and the mark is about your timetable, not about what can
@@ -2392,16 +2489,16 @@ fn hall_booking_chip(
 ///
 /// The grid draws these at their new spot, and the free-hall finder counts
 /// them as occupying the room — one source, so the two agree.
-fn user_placements(
-    app: App,
-    snapshot: &Snapshot,
-    columns: &[Slot],
-    day: Day,
-) -> Vec<(String, u16, String, EffMeeting)> {
+/// Placements are worked out for the WHOLE table at once, not day by day:
+/// the merged week draws six days, and asking per day meant six clones of
+/// the override store and six walks of the catalog to partition one answer.
+type Placements = HashMap<Day, Vec<(String, u16, String, EffMeeting)>>;
+
+fn user_placements(app: App, snapshot: &Snapshot, columns: &[Slot], days: &[Day]) -> Placements {
     let overrides = app.overrides.get();
-    let mut out: Vec<(String, u16, String, EffMeeting)> = Vec::new();
+    let mut out: Placements = HashMap::new();
     let mut push = |code: &str, eff: EffMeeting| {
-        if eff.meeting.day != day {
+        if !days.contains(&eff.meeting.day) {
             return;
         }
         let (Some(hall), Some(col)) =
@@ -2409,7 +2506,9 @@ fn user_placements(
         else {
             return;
         };
-        out.push((hall, col, code.to_string(), eff));
+        out.entry(eff.meeting.day)
+            .or_default()
+            .push((hall, col, code.to_string(), eff));
     };
     // Everything on the timetable first — that includes the user's own
     // courses (every meeting of theirs is a placement: customs carry no
@@ -2481,46 +2580,86 @@ fn hall_eff_chip(app: App, code: &str, eff: EffMeeting, column: Slot) -> AnyView
 #[allow(clippy::too_many_arguments)]
 /// Is anything standing in this hall, on this day, at this time?
 ///
+/// CMI's bookings, filed under the cell that draws them: hall, then day and
+/// column. Built once per table.
+///
+/// Every cell used to filter the whole allocation itself — and the busy
+/// summary above it did the same filter a second time. With a row per hall
+/// and a column per slot, the merged week ran that list hundreds of times
+/// over; now a cell is a lookup and the list is walked once.
+/// A booking as the grid needs it: CMI's row, plus what each of its course
+/// codes resolves to. The state is worked out here, once, because the busy
+/// summary above the table and the cell that draws the chip were asking the
+/// same question of the same booking — and each answer costs a catalog
+/// lookup and a walk of the course's meetings.
+struct IndexedBooking<'a> {
+    booking: &'a HallBooking,
+    codes: Vec<(String, BookingCell)>,
+}
+
+type CellBookings<'a> = HashMap<(Day, u16), Vec<IndexedBooking<'a>>>;
+
+fn bookings_by_cell<'a>(
+    app: App,
+    snapshot: &'a Snapshot,
+    cols: &[Slot],
+) -> HashMap<&'a str, CellBookings<'a>> {
+    let mut by_hall: HashMap<&str, CellBookings> = HashMap::new();
+    for b in &snapshot.hall_bookings {
+        // The same column rule the table draws with — a booking that starts
+        // inside a column belongs to it. One that fits no column at all is
+        // drawn by nothing, exactly as before.
+        let Some(col) = hall_col_for_slot(cols, b.slot) else {
+            continue;
+        };
+        // The column as the cell will hand it to the chip, so a booking is
+        // judged against the same column it is drawn in.
+        let column = cols
+            .iter()
+            .find(|s| s.start_min == col)
+            .copied()
+            .unwrap_or(Slot::new(col, col + 1));
+        let codes = b
+            .codes
+            .iter()
+            .map(|code| {
+                let state = hall_booking_state(
+                    app, snapshot, cols, code, b.day, b.slot, column, b.temp, &b.hall,
+                );
+                (code.clone(), state)
+            })
+            .collect();
+        by_hall
+            .entry(b.hall.as_str())
+            .or_default()
+            .entry((b.day, col))
+            .or_default()
+            .push(IndexedBooking { booking: b, codes });
+    }
+    by_hall
+}
+
 /// The grid's per-hall summary and the free-hall finder both ask through
 /// this, so "free" cannot come to mean two different things on one page.
 fn hall_cell_busy(
-    app: App,
-    snapshot: &Snapshot,
-    cols: &[Slot],
+    // The bookings already standing in THIS cell, each carrying what its
+    // codes resolve to. They arrive worked out (see `bookings_by_cell`)
+    // because the caller draws a grid: re-filtering CMI's whole allocation
+    // here — and re-deciding every booking a second time — meant doing it
+    // once per hall per day per slot.
+    cell: &[IndexedBooking<'_>],
     placed: &[(String, u16, String, EffMeeting)],
     hall: &str,
-    day: Day,
     start: u16,
 ) -> bool {
-    // The column being asked about, so a booking drawn in it is judged
-    // against the same column the table drew it in.
-    let column = cols
-        .iter()
-        .find(|s| s.start_min == start)
-        .copied()
-        .unwrap_or(Slot::new(start, start + 1));
-    let cmi_has_it = snapshot
-        .hall_bookings
-        .iter()
-        // Same column rule the table draws with — a booking that starts
-        // inside this column occupies the room, and answering "free" for it
-        // would send someone to a room with a class in it.
-        .filter(|b| {
-            b.hall == hall && b.day == day && hall_col_for_slot(cols, b.slot) == Some(start)
-        })
-        .any(|b| {
-            // A bare TMP cell carries no codes at all (the halls page books
-            // the room without naming a course) — the room is taken.
-            b.codes.is_empty()
-                || b.codes.iter().any(|code| {
-                    !matches!(
-                        hall_booking_state(
-                            app, snapshot, cols, code, day, b.slot, column, b.temp, hall,
-                        ),
-                        BookingCell::Gone,
-                    )
-                })
-        });
+    let cmi_has_it = cell.iter().any(|b| {
+        // A bare TMP cell carries no codes at all (the halls page books
+        // the room without naming a course) — the room is taken.
+        b.booking.codes.is_empty()
+            || b.codes
+                .iter()
+                .any(|(_, state)| !matches!(state, BookingCell::Gone))
+    });
     let yours = placed
         .iter()
         .any(|(h, col, _, _)| h.trim().eq_ignore_ascii_case(hall.trim()) && *col == start);
@@ -2551,9 +2690,8 @@ struct RowChrome {
 #[allow(clippy::too_many_arguments)]
 fn hall_row(
     app: App,
-    snapshot: &Snapshot,
     columns: &[(Slot, bool)],
-    cols: &[Slot],
+    cells: &CellBookings<'_>,
     arrivals: &[(String, u16, String, EffMeeting)],
     hall: &str,
     own: bool,
@@ -2632,18 +2770,15 @@ fn hall_row(
                     // pages can disagree about the times, and a booking at
                     // 12:00 against an 11:50 column must not fall through
                     // the table and leave the room reading as free.
-                    // Borrowed, not cloned: the merged week draws a cell for
-                    // every hall × day × slot, and each booking carries its
-                    // own Vec of course codes.
-                    let bookings: Vec<&_> = snapshot
-                        .hall_bookings
-                        .iter()
-                        .filter(|b| {
-                            b.hall == hall
-                                && b.day == day
-                                && hall_col_for_slot(cols, b.slot) == Some(slot.start_min)
-                        })
-                        .collect();
+                    // Looked up, not searched for: `cells` was filed by the
+                    // same column rule one pass ago (see `bookings_by_cell`).
+                    let empty: Vec<IndexedBooking> = Vec::new();
+                    let bookings: &Vec<IndexedBooking> = cells
+                        .get(&(day, slot.start_min))
+                        .unwrap_or(&empty);
+                    let has_arrivals = arrivals.iter().any(|(h, col, _, _)| {
+                        h.trim().eq_ignore_ascii_case(hall.trim()) && *col == slot.start_min
+                    });
                     view! {
                         <td
                             data-day=day.index().to_string()
@@ -2661,26 +2796,23 @@ fn hall_row(
                                     })
                             }
                         >
+                            // Only when there is something to lay out: the
+                            // week view draws four hundred cells and most of
+                            // them are empty, so an unconditional flex box
+                            // was a few hundred elements the browser had to
+                            // build, style and lay out to hold nothing.
+                            {(!bookings.is_empty() || has_arrivals)
+                                .then(|| {
+                                    view! {
                             <div class="sidebyside">
                                 {bookings
                                     .iter()
                                     .map(|b| {
-                                        let hall_chip = hall.clone();
                                         let chips: Vec<_> = b
                                             .codes
                                             .iter()
-                                            .filter_map(|code| {
-                                                hall_booking_chip(
-                                                    app,
-                                                    snapshot,
-                                                    cols,
-                                                    code,
-                                                    day,
-                                                    b.slot,
-                                                    slot,
-                                                    b.temp,
-                                                    &hall_chip,
-                                                )
+                                            .filter_map(|(code, state)| {
+                                                hall_booking_chip(app, code, state, slot)
                                             })
                                             .collect();
                                         // The badge belongs to a booking that is
@@ -2688,8 +2820,8 @@ fn hall_row(
                                         // only course away, an orphan "temporary
                                         // booking" would mark an empty cell. A bare
                                         // TMP cell has no codes and keeps it.
-                                        let badge = b.temp
-                                            && (b.codes.is_empty() || !chips.is_empty());
+                                        let badge = b.booking.temp
+                                            && (b.booking.codes.is_empty() || !chips.is_empty());
                                         view! {
                                             {chips.into_iter().collect_view()}
                                             {badge
@@ -2727,7 +2859,8 @@ fn hall_row(
                                                     )
                                             })
                                                 && bookings.iter().any(|bk| {
-                                                    bk.codes
+                                                    bk.booking
+                                                        .codes
                                                         .iter()
                                                         .any(|c| c.eq_ignore_ascii_case(code))
                                                 }))
@@ -2737,6 +2870,8 @@ fn hall_row(
                                     })
                                     .collect_view()}
                             </div>
+                                    }
+                                })}
                         </td>
                     }
                 })
@@ -2749,7 +2884,17 @@ fn hall_row(
 /// A halls table. `days` is what its body covers: one day, or — in the merged
 /// layout — the whole week, hall by hall, so a room's week reads down the
 /// page instead of across five separate tables.
-fn hall_table(app: App, days: Vec<Day>, merged: bool) -> AnyView {
+fn hall_table(
+    app: App,
+    // Shared with the rest of the tab (the note under the table and the
+    // free-hall finder ask the same question): `hall_slot_grid` walks the
+    // bookings, the overrides and the selection, and it was recomputed in
+    // the header, in the body, in the note and twice in the finder.
+    cols_memo: Memo<Vec<(Slot, bool)>>,
+    halls_memo: Memo<Vec<String>>,
+    days: Vec<Day>,
+    merged: bool,
+) -> AnyView {
     let day_corner = if merged {
         "Day".to_string()
     } else {
@@ -2777,7 +2922,8 @@ fn hall_table(app: App, days: Vec<Day>, merged: bool) -> AnyView {
                             {day_corner}
                         </th>
                         {move || {
-                            app.hall_slot_grid()
+                            cols_memo
+                                .get()
                                 .into_iter()
                                 .map(|(s, extra)| {
                                     view! {
@@ -2793,19 +2939,25 @@ fn hall_table(app: App, days: Vec<Day>, merged: bool) -> AnyView {
                 <tbody>
                     {move || {
                         let snapshot = app.snapshot.get();
-                        let columns = app.hall_slot_grid();
+                        let columns = cols_memo.get();
                         let cols: Vec<Slot> = columns.iter().map(|(s, _)| *s).collect();
-                        // Everything the user placed, day by day, drawn at its
-                        // new spot so a drop updates the grid and not just the
-                        // toast.
+                        // Everything the user placed, drawn at its new spot so
+                        // a drop updates the grid and not just the toast. The
+                        // whole week is worked out in one pass and handed out
+                        // by day.
+                        let mut placed_week =
+                            user_placements(app, &snapshot, &cols, &days);
                         let arrivals: Vec<(Day, Vec<_>)> = days
                             .iter()
-                            .map(|d| (*d, user_placements(app, &snapshot, &cols, *d)))
+                            .map(|d| (*d, placed_week.remove(d).unwrap_or_default()))
                             .collect();
+                        // CMI's allocation, filed by the cell that draws it.
+                        let by_hall = bookings_by_cell(app, &snapshot, &cols);
+                        let no_cells: CellBookings = HashMap::new();
                         // CMI's halls first, then the places the user invented
                         // — a course you put in "1002" has to be visible on the
                         // page that shows where things are.
-                        let own_halls = app.user_halls();
+                        let own_halls = halls_memo.get();
                         let span = arrivals.len();
                         snapshot
                             .halls
@@ -2815,6 +2967,8 @@ fn hall_table(app: App, days: Vec<Day>, merged: bool) -> AnyView {
                             .chain(own_halls.into_iter().map(|h| (h, true)))
                             .enumerate()
                             .map(|(n, (hall, own))| {
+                                let cells =
+                                    by_hall.get(hall.as_str()).unwrap_or(&no_cells);
                                 // How busy the hall is all week, said once
                                 // under its name: on a page whose whole point
                                 // is finding a room, "free all week" is the
@@ -2825,13 +2979,14 @@ fn hall_table(app: App, days: Vec<Day>, merged: bool) -> AnyView {
                                         .map(|(day, placed)| {
                                             cols.iter()
                                                 .filter(|s| {
+                                                    let cell = cells
+                                                        .get(&(*day, s.start_min))
+                                                        .map(|v| v.as_slice())
+                                                        .unwrap_or(&[]);
                                                     hall_cell_busy(
-                                                        app,
-                                                        &snapshot,
-                                                        &cols,
+                                                        cell,
                                                         placed,
                                                         &hall,
-                                                        *day,
                                                         s.start_min,
                                                     )
                                                 })
@@ -2848,9 +3003,8 @@ fn hall_table(app: App, days: Vec<Day>, merged: bool) -> AnyView {
                                     .map(|(i, (day, placed))| {
                                         hall_row(
                                             app,
-                                            &snapshot,
                                             &columns,
-                                            &cols,
+                                            cells,
                                             placed,
                                             &hall,
                                             own,
@@ -2881,7 +3035,15 @@ fn halls_view(app: App) -> impl IntoView {
     let finder_day = RwSignal::new(None::<usize>); // day index
     let finder_start = RwSignal::new(None::<u16>); // slot start_min
 
-    let view_mode = move || app.halls_view();
+    // Memoised, both of them. `halls_view()` asks `hall_days()`, which asks
+    // `grid_days()`, which walks every course in the catalog building its
+    // effective meetings — and the day strip alone asked for it fifteen
+    // times per render (two attributes on every button), before the table
+    // underneath asked again.
+    let day_list = Memo::new(move |_| app.hall_days());
+    let view_mode = Memo::new(move |_| app.halls_view());
+    let hall_cols = Memo::new(move |_| app.hall_slot_grid());
+    let own_halls = Memo::new(move |_| app.user_halls());
 
     view! {
         <section aria-label="Lecture halls">
@@ -2900,9 +3062,9 @@ fn halls_view(app: App) -> impl IntoView {
                     <button
                         role="radio"
                         aria-checked=move || {
-                            if view_mode() == HallsView::All { "true" } else { "false" }
+                            if view_mode.get() == HallsView::All { "true" } else { "false" }
                         }
-                        tabindex=move || if view_mode() == HallsView::All { "0" } else { "-1" }
+                        tabindex=move || if view_mode.get() == HallsView::All { "0" } else { "-1" }
                         title="Every day at once"
                         on:click=move |_| {
                             app.prefs.update(|p| p.halls_view = Some(HallsView::All));
@@ -2912,21 +3074,22 @@ fn halls_view(app: App) -> impl IntoView {
                         "All"
                     </button>
                     {move || {
-                        app.hall_days()
+                        day_list
+                            .get()
                             .into_iter()
                             .map(|d| {
                                 view! {
                                     <button
                                         role="radio"
                                         aria-checked=move || {
-                                            if view_mode() == HallsView::Day(d) {
+                                            if view_mode.get() == HallsView::Day(d) {
                                                 "true"
                                             } else {
                                                 "false"
                                             }
                                         }
                                         tabindex=move || {
-                                            if view_mode() == HallsView::Day(d) {
+                                            if view_mode.get() == HallsView::Day(d) {
                                                 "0"
                                             } else {
                                                 "-1"
@@ -2957,17 +3120,18 @@ fn halls_view(app: App) -> impl IntoView {
                  on ✎ Edit layout to drag a course to another room or time."
             </p>
 
-            {move || match view_mode() {
+            {move || match view_mode.get() {
                 // One day: the corner says which, and every row is a hall.
-                HallsView::Day(d) => hall_table(app, vec![d], false),
+                HallsView::Day(d) => hall_table(app, hall_cols, own_halls, vec![d], false),
                 // The whole week: still ONE table, a hall's days kept
                 // together, so a room reads down the page instead of across
                 // five tables you have to hold in your head.
-                HallsView::All => hall_table(app, app.hall_days(), true),
+                HallsView::All => hall_table(app, hall_cols, own_halls, day_list.get(), true),
             }}
             // The tinted column, explained in visible words — not a tooltip.
             {move || {
-                app.hall_slot_grid()
+                hall_cols
+                    .get()
                     .iter()
                     .any(|(_, extra)| *extra)
                     .then(|| {
@@ -2998,7 +3162,8 @@ fn halls_view(app: App) -> impl IntoView {
                             "Pick a day…"
                         </option>
                         {move || {
-                            app.hall_days()
+                            day_list
+                                .get()
                                 .into_iter()
                                 .map(|d| {
                                     view! {
@@ -3027,7 +3192,8 @@ fn halls_view(app: App) -> impl IntoView {
                         {move || {
                             // The same columns the table shows, so a time you
                             // can see is a time you can ask about.
-                            app.hall_slot_grid()
+                            hall_cols
+                                .get()
                                 .into_iter()
                                 .map(|(s, _)| {
                                     view! {
@@ -3047,14 +3213,18 @@ fn halls_view(app: App) -> impl IntoView {
                     let (day_idx, start) = (finder_day.get()?, finder_start.get()?);
                     let day = *Day::ALL.get(day_idx)?;
                     let snapshot = app.snapshot.get();
-                    let columns = app.hall_slot_grid();
+                    let columns = hall_cols.get();
                     let cols: Vec<Slot> = columns.iter().map(|(s, _)| *s).collect();
                     let slot_label = cols
                         .iter()
                         .find(|s| s.start_min == start)
                         .map(|s| s.label())
                         .unwrap_or_default();
-                    let placed = user_placements(app, &snapshot, &cols, day);
+                    let placed = user_placements(app, &snapshot, &cols, &[day])
+                        .remove(&day)
+                        .unwrap_or_default();
+                    let by_hall = bookings_by_cell(app, &snapshot, &cols);
+                    let no_cells: CellBookings = HashMap::new();
                     // "Free" has to mean the same thing the grid above shows:
                     // a room CMI hasn't allocated AND that nothing of yours
                     // has been moved into. A meeting you moved AWAY frees its
@@ -3063,14 +3233,20 @@ fn halls_view(app: App) -> impl IntoView {
                         .halls
                         .iter()
                         .filter(|hall| {
-                            !hall_cell_busy(app, &snapshot, &cols, &placed, hall, day, start)
+                            let cell = by_hall
+                                .get(hall.as_str())
+                                .unwrap_or(&no_cells)
+                                .get(&(day, start))
+                                .map(|v| v.as_slice())
+                                .unwrap_or(&[]);
+                            !hall_cell_busy(cell, &placed, hall, start)
                         })
                         .cloned()
                         .collect();
                     // Places of the user's own are not CMI's to allocate, so
                     // they are never offered here — say so rather than let
                     // the list look incomplete.
-                    let own = app.user_halls();
+                    let own = own_halls.get();
                     let n = free.len();
                     Some(view! {
                         // The answer first, as a number and a heading, then

@@ -6,6 +6,7 @@ use crate::state::{
 };
 use crate::{dnd, domx, fetch, hues, storage};
 use leptos::prelude::*;
+use std::collections::HashMap;
 use ttcore::model::{Course, Day, Meeting, ScheduleStatus, Slot, Snapshot, SourceTier};
 use wasm_bindgen::JsCast;
 use wasm_bindgen::closure::Closure;
@@ -81,6 +82,8 @@ pub fn chip(app: App, p: ChipProps) -> impl IntoView {
     // else); their chips take a per-code hashed hue so two customs stay
     // tellable apart — violet is the badge's job, not the chip's.
     // Fields: (name, hue, neutral).
+    let index =
+        use_context::<crate::app::CourseIndex>().expect("CourseIndex is provided at the root");
     let identity = {
         let code = p.code.clone();
         Memo::new(move |_| {
@@ -89,12 +92,13 @@ pub fn chip(app: App, p: ChipProps) -> impl IntoView {
             let own = app.customs.with(|cs| cs.get(&code).map(|c| c.name.clone()));
             match own {
                 Some(name) => (name, hues::branch_hue(&code), false),
-                None => app.snapshot.with(|s| {
-                    let course = s.course(&code);
-                    let name = course.map(|c| c.name.clone()).unwrap_or_default();
-                    let branches = course.map(|c| c.branches.clone()).unwrap_or_default();
-                    (name, hues::course_hue(&branches), branches.is_empty())
-                }),
+                // Through the root's index (app.rs), not by walking the
+                // catalog: this runs once per chip, and a grid draws them
+                // in the hundreds.
+                None => index
+                    .0
+                    .with(|map| map.get(&code).cloned())
+                    .unwrap_or_else(|| (String::new(), hues::course_hue(&[]), true)),
             }
         })
     };
@@ -927,6 +931,15 @@ fn facet_menu(
     };
     let visible_all = visible.clone();
     let visible_none = visible.clone();
+    // A closed menu builds nothing. Every bar carries eight of these, and
+    // the Course facet alone is one row per course in the catalog — some
+    // three hundred rows, each with a checkbox, a label and an effect
+    // keeping it in step with the filters. All of it was being built for
+    // menus that start closed, on every tab that has a filter bar, and
+    // thrown away again on the next tab switch. Latched, not toggled: once
+    // opened it stays mounted, so closing a menu never costs the rows their
+    // focus or scroll position.
+    let opened = RwSignal::new(false);
 
     view! {
         // Facets behave like menus: opening one closes the others
@@ -940,6 +953,7 @@ fn facet_menu(
                     .and_then(|t| t.dyn_into::<web_sys::Element>().ok())
                     && el.has_attribute("open")
                 {
+                    opened.set(true);
                     crate::domx::close_open_facets(Some(&el));
                 }
             }
@@ -947,13 +961,19 @@ fn facet_menu(
             // The count sits inside the summary, so read aloud it came out
             // as "Branch 3" — which sounds like the name of a branch rather
             // than three filters being on.
-            <summary aria-label=move || {
-                match count.get() {
-                    0 => name.to_string(),
-                    1 => format!("{name}, 1 selected"),
-                    n => format!("{name}, {n} selected"),
+            <summary
+                // A frame earlier than the toggle: by the time the menu is
+                // on screen its rows are built, so opening one looks the
+                // same as it always did.
+                on:pointerdown=move |_| opened.set(true)
+                aria-label=move || {
+                    match count.get() {
+                        0 => name.to_string(),
+                        1 => format!("{name}, 1 selected"),
+                        n => format!("{name}, {n} selected"),
+                    }
                 }
-            }>
+            >
                 {name}
                 {move || {
                     let n = count.get();
@@ -1019,6 +1039,9 @@ fn facet_menu(
                     </button>
                 </div>
                 {move || {
+                    if !opened.get() {
+                        return ().into_any();
+                    }
                     let rows = visible();
                     if rows.is_empty() {
                         view! {
@@ -2017,12 +2040,14 @@ fn credits_display(app: App, course: &Course) -> impl IntoView + use<> {
 }
 
 fn details_dialog(app: App, code: String) -> impl IntoView {
-    let snapshot = app.snapshot.get();
     // The user's own definition wins, as everywhere else.
     let is_custom = app.is_custom(&code);
+    // One course, not the catalog: `app.snapshot.get()` cloned every course,
+    // every hall booking and the gzipped copies of CMI's pages to read one
+    // name — every time the ⓘ was pressed.
     let Some(course) = app
         .custom_course(&code)
-        .or_else(|| snapshot.course(&code).cloned())
+        .or_else(|| app.snapshot.with(|s| s.course(&code).cloned()))
     else {
         let selected = app.is_selected(&code);
         let remove_code = code.clone();
@@ -5077,8 +5102,18 @@ fn what_changed_dialog(app: App) -> impl IntoView {
     // Tracked (stateless dialog): undo while open must not leave the
     // "in your timetable" badges disagreeing with the live chips beside them.
     let diff = app.what_changed.get().unwrap_or_default();
-    let snapshot = app.snapshot.get();
     let selection = app.selection.get();
+    // Just the names this dialog will print, not the catalog they came from:
+    // `app.snapshot.get()` here cloned every course, every booking and the
+    // gzipped copies of CMI's pages — once to open the dialog, and again on
+    // every tick of the filter below.
+    let names: HashMap<String, String> = app.snapshot.with(|s| {
+        diff.added
+            .iter()
+            .chain(diff.changed.iter().map(|c| &c.code))
+            .filter_map(|code| s.course(code).map(|c| (code.clone(), c.name.clone())))
+            .collect()
+    });
 
     // How much of this update is the reader's own week. It decides whether
     // the filter is offered at all: a box whose only possible result is an
@@ -5096,7 +5131,7 @@ fn what_changed_dialog(app: App) -> impl IntoView {
     // it, and a keyboard user would land back on the page.)
     let sections = move || {
         let selection = selection.clone();
-        let snapshot = snapshot.clone();
+        let names = names.clone();
         let mine = move |code: &str| selection.iter().any(|c| c == code);
         let only_mine = mine_count > 0 && app.prefs.with(|p| p.changes_mine_only);
         let keep = |is_mine: bool| !only_mine || is_mine;
@@ -5124,12 +5159,7 @@ fn what_changed_dialog(app: App) -> impl IntoView {
             .collect();
         changed.sort_by_key(|c| (!mine(&c.code), c.code.clone()));
 
-        let course_name = move |code: &str| {
-            snapshot
-                .course(code)
-                .map(|c| c.name.clone())
-                .unwrap_or_default()
-        };
+        let course_name = move |code: &str| names.get(code).cloned().unwrap_or_default();
 
         // Under the filter every line IS one of the reader's courses, so a
         // badge repeating that on each of them is noise — the ticked box

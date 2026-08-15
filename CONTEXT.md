@@ -3148,6 +3148,84 @@ only fires while the page is open, so "checks twice a day" flat would be a
 promise the app cannot keep in a closed tab. t25's pin moved from "sync every
 few days" to "twice a day".
 
+### R57 — the two slow tabs, measured and made fast
+
+User: the Master grid and Halls tabs "load a little bit slowly"; then, mid-round,
+"check if any more optimizations can be done on the whole code".
+
+**Measure first, and measure what the user feels.** `.workagents/perf-cold.py`:
+a fresh page per sample, CPU throttled 4× (a student's laptop, not this
+machine), timing the FIRST click on each tab — warm re-clicks are ~20 ms for
+everything and hide the entire problem. Same-session before/after, the
+baseline built from a `git worktree` at the previous commit so both numbers
+come from one machine state. Median ms, and elements left in `<main>`:
+
+| tab | before | after | nodes before → after |
+|---|---|---|---|
+| My timetable | 14 | 10 | 192 → 192 |
+| My courses | 31 | 25 | 299 → 209 |
+| Catalog | 87 | 68 | 1461 → 903 |
+| Master grid | 114 | 67 | 1354 → 817 |
+| Halls | 116 | 86 | 1368 → 1095 |
+
+`perf-split.py` (long-animation-frame entries) splits script from
+style/layout/paint, which is how the CSS experiments below were killed.
+
+**What was actually wrong.** One shape, three times over: work that belongs
+to a whole table was being done in every cell of it.
+
+- The Master grid's cell closure ran the entire pipeline per cell — cloning
+  the filtered course list, rebuilding the column list, walking every
+  course's effective meetings and asking `fits_schedule` (itself a rebuild of
+  the whole selection) about every course. Five days × seven columns = 35
+  times over. Now one `placed` memo fills a `HashMap<(Day, u16), Vec<GridChip>>`
+  and a cell is a lookup. The clash baseline is built once per pass, inline,
+  by the same rule as `would_clash_with` (self-exclusion included).
+- Halls did it twice: every cell re-filtered CMI's whole booking list, and
+  the "N booked slots" summary above the table re-filtered it again — then
+  both asked `hall_booking_state` about the same booking, each answer costing
+  a catalog lookup and an allocation. Now `bookings_by_cell` files every
+  booking under its cell AND decides its state once (`IndexedBooking`).
+- `halls_view()` → `hall_days()` → `grid_days()` walks the whole catalog, and
+  the day strip alone called it ~15 times per render (two attributes on each
+  button). Memoised, with `hall_slot_grid`/`user_halls` beside it.
+- Same treatment for My timetable's grid, and `grid_days` memoised in both
+  table bodies — read raw it made the body depend on the selection, so
+  picking one course tore down and rebuilt every row.
+
+**Whole-app sweep** (second workflow). Applied: facet menus build their
+option rows on first open instead of building ~330 hidden rows per filter bar
+(the single biggest node saving — it is why Catalog and My courses got faster
+too, and `pointerdown` latches it a frame before the menu is visible);
+`course_matches` takes the override store instead of cloning it per course;
+the catalog's `<For>` key is a `DefaultHasher` fingerprint instead of
+`format!("{course:?}")` (~60 KB of throwaway text per keystroke — `Course`
+gained `Hash`, and the key is now probabilistic rather than exact, which is
+the one behaviour change in this round); one root-provided `CourseIndex`
+memo instead of every chip linear-scanning the catalog for its own name;
+`count`/`unplaced` use `.with` instead of cloning; the What-changed dialog,
+the details dialog and `apply_url_state` read through the snapshot signal
+instead of deep-cloning it (raw gzipped pages and all); halls cells skip
+their flex wrapper when empty (~270 elements in the week view); the service
+worker no longer re-downloads the content-hashed build it has just fetched;
+Trunk minifies on release (CSS 77 KB → 44 KB).
+
+**Deliberately NOT kept — measured and reverted.** `table-layout: fixed` on
+the halls grid, `content-visibility: auto` on its rows, `overflow-wrap:
+break-word`, and dropping the cell hover transition: each is a plausible
+rendering win, none moved the number, and the first two change how the table
+sizes and paints. An unproven change that alters appearance does not ship.
+(The first attempt at fixed layout also mis-sized the two sticky gutters and
+mangled the header — the shot is in `e2e/shots/perf-halls-fixed.png`.)
+
+**Still open, in the audits** (`.workagents/r57-*.json`): each chip creates
+about a dozen reactive nodes and two DragSpecs (hundreds per grid); every
+hall cell owns a `class:drop-ok` effect on the whole `drag` signal, so one
+pointermove wakes 420 of them; the filter bar's option memos clone the course
+and meeting lists on every keystroke; `diff_snapshots` is O(courses²); a
+search keystroke serialises and writes all preferences. None of them is a
+tab-switch cost, which is why they waited.
+
 ## 8. Open bugs — found, confirmed, NOT fixed (do not delete)
 
 Rules for this section: entries stay until the bug is actually fixed and a

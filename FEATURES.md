@@ -539,6 +539,14 @@ its own, never as a change CMI made.
   the planner still opens and everything in it works — and a quiet note says
   you're offline. Only syncing with CMI's pages needs the internet. A new
   version of the app replaces the copy on your next online reload.
+- **Every tab opens at once.** Switching to the Master grid or Halls used to
+  take a visible beat on a slower laptop: both were working out the whole
+  timetable again inside every cell of the table. They now work it out once
+  and draw from it, and the filter menus build their long option lists when
+  you first open one rather than for every tab you visit. On a machine four
+  times slower than a desktop, the Master grid went from 114 ms to 67 ms and
+  Halls from 116 ms to 86 ms — under the tenth of a second that reads as
+  "instant".
 - No accounts, no analytics, no cookies, no tracking. The only network
   requests it ever makes are for CMI's two timetable pages — through a public
   relay, or straight from cmi.ac.in if no relay answers. A relay learns which

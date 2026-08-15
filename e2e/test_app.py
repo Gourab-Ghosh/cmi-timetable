@@ -3241,6 +3241,13 @@ def t66_controls_that_cannot_act_are_not_offered(app):
     app.xpath("//section[@aria-label='Master grid']//details[contains(@class,'facet')]"
               "/summary[starts-with(normalize-space(),'Instructor')]").click()
     app.wait_css("details.facet[open] .menu")
+    # A menu builds its rows when it first opens, not while it is closed
+    # (that was three hundred rows per filter bar, on every tab switch).
+    WebDriverWait(app.d, 10).until(
+        lambda d: d.find_elements(
+            By.CSS_SELECTOR, "details.facet[open] .menu label.opt"),
+        message="the open menu never built its rows",
+    )
     rows = [r.text.strip() for r in app.css_all("details.facet[open] .menu label.opt")]
     assert picked in rows, f"a ticked value out of scope must still show: {rows}"
     assert app.css_all("details.facet[open] .menu input:checked"), \

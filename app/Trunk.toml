@@ -9,6 +9,10 @@
 [build]
 target = "index.html"
 public_url = "/"
+# Release builds ship minified CSS/JS/HTML. The stylesheet is a third
+# comments — worth keeping in the source, not worth sending to every
+# visitor before the first paint.
+minify = "on_release"
 
 # Offline support: after the build lands in the staging dir, write sw.js —
 # a service worker precaching this exact build. Debug builds get a stub
