@@ -3342,6 +3342,52 @@ server switched off, including a deep link. The whole 91-test suite serves
 from a root, so nothing else in this repo would have caught a sub-path
 mistake, which is the one class of bug that only appears once deployed.
 
+### R58b — the final pre-deploy pass, and what only a real browser could tell
+
+The user asked for as much testing as possible before deploying. Four checks
+were added because nothing in the repo covered them, and two of them changed
+what was believed.
+
+**The deploy build itself.** `./deploy.sh --build-only` — the real path,
+inside Docker `rust:1`, with the real `--public-url`. 114 native tests pass
+in the container and the artifact lands in `app/dist-deploy`. Note it emits a
+DIFFERENT wasm hash from a local build (a different rustc), which is normal
+and is why the upgrade test below swaps to `dist-deploy`, not to a local one.
+
+**Upgrading a live user** (`.workagents/upgrade-path.py`) — the gap that
+mattered most. Every other test starts from an empty browser and one build; a
+deploy replaces the site under people who already have localStorage AND an
+installed worker holding a full precache. The artifact on `gh-pages` (live
+build `90bf69c`, six commits back — it predates R53's `RemovedCourse` shape
+change and R55's new pref) is fetched, used like a student (real sync, two
+courses, a drag, a filter), and then the directory is swapped underneath the
+same origin. Result: the new build takes over, no corrupt-storage banner,
+selection, overrides, prefs and the cached snapshot survive byte-identically,
+the moved class is still where the user put it, the old cache is deleted, and
+offline still works. Three of that file's early "passes" were worthless and
+are now fenced — an empty override store compared equal to an empty one, and
+the cache handover was waited on with a predicate the OLD worker satisfied
+(both workers live at the same `./sw.js` URL, so only the cache NAME, which
+carries the build hash, can tell them apart).
+
+**Today's real CMI pages** still parse. `core`'s `snapshot_json` example over
+freshly fetched `timetable.php` / `lecturehalls.php`: gate passed, 78
+courses, 14 halls, 156 bookings, 18 branches, 6 slots. The fixtures cannot
+say this, and a CMI markup change would break the first sync for everyone.
+
+**Can a student sync right now** (`.workagents/live-network-check.py`) —
+and here curl lied. From the shell, BOTH relays look dead: allorigins
+answers 522, corsproxy answers `403 {"error":"Server-side requests are not
+allowed on your plan"}`, and cmi.ac.in sends no `Access-Control-Allow-Origin`
+even on a GET carrying an Origin header. From a REAL browser driving the real
+artifact, the sync SUCCEEDS: allorigins is genuinely down, the app falls
+through to corsproxy.io, which answers 200 to a browser — its 403 was
+rejecting curl, exactly as its message said. The fallback chain doing its
+job, visibly. The lesson for the next round: a relay's health cannot be
+judged with curl, because these services discriminate on Origin; drive the
+browser. (allorigins being down also means tier 1 is currently dead weight —
+worth re-checking, not worth reordering on one sample.)
+
 ## 8. Open bugs — found, confirmed, NOT fixed (do not delete)
 
 Rules for this section: entries stay until the bug is actually fixed and a
