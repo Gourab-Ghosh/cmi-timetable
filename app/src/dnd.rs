@@ -192,7 +192,7 @@ pub fn perform_drop(
         && (target_hall.is_none() || base.hall == target_hall)
     {
         if let Some(id) = spec.ov_id {
-            app.reset_override(id, Some(format!("{} back on CMI's time", spec.code)));
+            app.reset_override(id, Some(format!("Moved {} back to CMI's time", spec.code)));
         }
         return true;
     }

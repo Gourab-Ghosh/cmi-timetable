@@ -120,7 +120,7 @@ gathers trackpad deltas into whole notches, and a server answering 503 —
 GitHub Pages during an outage — loses to the worker's cached copy; R48
 closed the seven long-documented §8 bugs, each pinned: the conflicts
 dialog answers nothing for you and applies only the rows you answered
-with the rest queued and a Dismiss that hides without answering, Restore
+with the rest still waiting and a Dismiss that hides without answering, Restore
 returns a deleted course to the timetable it was deleted from, an
 untouched save of a dropped course invents no credit change, editing an
 unselected course asks with a ticked box before adding it, a course

@@ -193,8 +193,8 @@ from a search that found nothing.
 
 - Name first, with a code suggested from the name; credits 0–20; any number of
   weekly meetings, on CMI's slots or at times of your own. The code stays
-  within 12 characters and can't contain `,` or `%` — those would break the
-  links that share your timetable, and the form says so.
+  within 12 characters and can't contain a comma or a % sign — those would
+  break the links that share your timetable, and the form says so.
 - They behave like real courses **everywhere** — clash detection, grids, drag
   & drop, credit totals, `.ics` export, share links.
 - A violet **Added by you** badge marks them — and the badge is a button:
@@ -428,8 +428,8 @@ timetable.
 - **Conflicts** — when CMI moves a class you had moved yourself, you are asked
   which version to keep, per course, and told what each choice means. Nothing
   is answered for you: every row starts blank, Apply is disabled until you
-  answer something, and it acts only on the rows you answered — the rest stay
-  queued. Answer **Decide later** and the question stays — through reloads
+  answer something, and it acts only on the rows you answered — the rest keep
+  waiting. Answer **Decide later** and the question stays — through reloads
   too — until you answer it; the banner's **Dismiss** just hides the banner
   for this sitting (hiding a question is not answering it — it returns with
   the next sync or reload). And if CMI's change and yours turn out to say the
@@ -440,8 +440,9 @@ timetable.
   asks nothing — the link's changes simply apply.
 - **What changed keeps what a dropped course was** — name, teacher, and when
   it met — so the digest can tell you what you lost, even though the fresh
-  timetable no longer knows it. That detail lives only in the digest; close
-  it and it is gone.
+  timetable no longer knows it. The record is laid out like a course card:
+  teacher beside the name, meetings as aligned day/time/hall rows. That
+  detail lives only in the digest; close it and it is gone.
 - **Courses CMI drops** stay visible with a badge, and anything you had placed
   for them stays on your week.
 - **Changes that no longer apply** are announced rather than silently

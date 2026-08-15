@@ -527,8 +527,8 @@ impl App {
                 format!(
                     "Your browser wouldn't let the app save your {what}. Everything is \
                      still here for now, but it may not come back next time you open \
-                     the app. Freeing some space — or clearing the cached timetable \
-                     under My data — should fix it.",
+                     the app. Freeing some browser space — or clearing the downloaded \
+                     timetable under My data — usually fixes it.",
                 ),
             );
         }
@@ -916,21 +916,23 @@ impl App {
         let plural = |n: usize| if n == 1 { "course" } else { "courses" };
         self.toast_undo(match back {
             0 => format!(
-                "{n} {} you deleted {} back in the catalog and grids — none \
-                 were on your timetable when deleted, so add the ones you want.",
+                "{n} {} you deleted {} back in the catalog and the master \
+                 grid — none were on your timetable when you deleted them, so \
+                 add the ones you want.",
                 plural(n),
                 if n == 1 { "is" } else { "are" },
             ),
             b if b == n => format!(
-                "{n} {} you deleted {} back — in the catalog, the grids, and \
-                 on your timetable, where they were when you deleted them.",
+                "{n} {} you deleted {} back — in the catalog, the master \
+                 grid, and on your timetable, where they were when you deleted \
+                 them.",
                 plural(n),
                 if n == 1 { "is" } else { "are" },
             ),
             b => format!(
-                "{n} {} you deleted are back in the catalog and grids — {b} \
-                 also returned to your timetable, where they were when you \
-                 deleted them.",
+                "{n} {} you deleted are back in the catalog and the master \
+                 grid — {b} also returned to your timetable, where they were \
+                 when you deleted them.",
                 plural(n),
             ),
         });
@@ -1455,7 +1457,7 @@ impl App {
         } else {
             format!(
                 "Your timetable now uses the times you picked. The {} you left \
-                 blank {} still queued — Review on the banner takes you back.",
+                 blank {} still waiting — press Review on the banner to finish.",
                 if left == 1 { "row" } else { "rows" },
                 if left == 1 { "is" } else { "are" },
             )

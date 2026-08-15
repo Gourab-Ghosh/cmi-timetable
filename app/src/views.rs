@@ -84,7 +84,7 @@ fn welcome(app: App) -> impl IntoView {
                     }}
                 </p>
                 <p class="welcome-note muted small">
-                    "Nothing is shipped with the app: it fetches CMI's own pages \
+                    "The app has no timetable of its own — it fetches CMI's pages \
                      from cmi.ac.in. CMI keeps editing them through the semester, so \
                      sync every few days. The app also re-checks on its own, at most \
                      twice a day, and tells you what changed."
@@ -98,8 +98,8 @@ fn welcome(app: App) -> impl IntoView {
                     >
                         "Import it"
                     </button>
-                    " — the planner loads exactly as it was when the file was made, \
-                     and needs no connection at all."
+                    " — the app loads everything exactly as it was when the file \
+                     was made, and needs no connection at all."
                 </p>
             </div>
         </section>
@@ -599,7 +599,7 @@ fn my_timetable(app: App) -> impl IntoView {
                         // while one of YOUR courses is waiting for you.
                         let mine = items.iter().filter(|c| app.is_custom(&c.code)).count();
                         let note = if mine == items.len() {
-                            "your own courses, waiting for a time you set"
+                            "your own courses, waiting for you to set a time"
                         } else if mine == 0 {
                             "CMI lists these courses but hasn't put them on the timetable"
                         } else {
@@ -650,9 +650,9 @@ fn my_timetable(app: App) -> impl IntoView {
                                                     // a button offering to schedule it.
                                                     <button
                                                         class="btn small"
-                                                        title="Give it a time, change its \
-                                                               credits — everything about this \
-                                                               course, in one form"
+                                                        title="Give it a time, or change its \
+                                                               hall and credits — all in one \
+                                                               place"
                                                         on:click=move |_| {
                                                             app.dialog
                                                                 .set(
@@ -785,9 +785,9 @@ fn my_timetable(app: App) -> impl IntoView {
                                 </h3>
                                 <p class="muted small">
                                     "Everything you've added, deleted or overwritten in \
-                                     your timetable. Each one can go back to CMI's \
-                                     version on its own — and every change is undoable \
-                                     (Ctrl+Z)."
+                                     your timetable. You can put any one of them back \
+                                     to CMI's version without touching the rest — and \
+                                     every change is undoable (Ctrl+Z)."
                                 </p>
                                 {overrides_list(app)}
                             </div>
@@ -1024,7 +1024,7 @@ fn my_courses(app: App) -> impl IntoView {
         } else if reasons > 1 {
             notes.push(format!(
                 "CMI doesn't list credits for {guessed} of your courses, so the \
-                 app filled the numbers in — that part of the total above is a \
+                 app fills the numbers in — that part of the total above is a \
                  guess."
             ));
             if n_seminar > 0 {
@@ -1032,7 +1032,7 @@ fn my_courses(app: App) -> impl IntoView {
             }
             if n_months > 0 {
                 notes.push(
-                    "A course that runs only part of the semester counts one \
+                    "A course that runs only part of the semester counts as one \
                      credit per month."
                         .to_string(),
                 );
@@ -1416,7 +1416,7 @@ fn course_card(app: App, course: Course) -> impl IntoView {
                             // can reach it.
                             <button
                                 class="badge custom"
-                                title="You created this course. It isn't on CMI's \
+                                title="You made this course. It isn't on CMI's \
                                        pages. Opens this course's details."
                                 on:click=move |_| {
                                     app.dialog.set(Some(Dialog::Details(details_code.clone())));
@@ -1658,7 +1658,7 @@ fn master_grid(app: App) -> impl IntoView {
             // picked adds it and places it in the one gesture — that line is
             // last but whole.)
             <ul class="grid-legend muted small">
-                <li>"Click a course to add it to your timetable; click it again to remove it."</li>
+                <li>"Click a course to add it to your timetable. Click it again to remove it."</li>
                 <li><span class="legend-mark">"✓"</span>" already on your timetable"</li>
                 <li><span class="legend-mark">"⚠"</span>" clashes with something you have"</li>
                 <li>
@@ -1668,7 +1668,7 @@ fn master_grid(app: App) -> impl IntoView {
                 <li>
                     <span class="legend-mark">"✎"</span>
                     " Edit layout lets you drag a course straight into the slot you \
-                     want — that adds it too"
+                     want — the drop adds it to your timetable too"
                 </li>
             </ul>
             {filter_bar(app, FilterScope::OnTheGrid, count)}
@@ -1915,8 +1915,8 @@ fn catalog(app: App) -> impl IntoView {
                             <div class="empty panel">
                                 <p class="big">"No courses match."</p>
                                 <p>
-                                    "Take a filter off above, or clear the search box, to \
-                                     see more."
+                                    "To see more, take a filter off above or clear the \
+                                     search box."
                                 </p>
                                 <div class="row" style="justify-content:center">
                                     <button
@@ -2515,7 +2515,7 @@ fn hall_row(
         view! {
             <span
                 class="badge custom"
-                title="A place you added — CMI's allocation does not list it"
+                title="A hall you added — CMI's allocation does not list it"
             >
                 "your own"
             </span>
@@ -2924,8 +2924,8 @@ fn halls_view(app: App) -> impl IntoView {
                         view! {
                             <p class="muted small">
                                 "The tinted column with the odd time is outside CMI's \
-                                 regular grid — it exists because a meeting sits at that \
-                                 time."
+                                 regular grid — it exists because a meeting falls at \
+                                 that time."
                             </p>
                         }
                     })
@@ -3043,8 +3043,8 @@ fn halls_view(app: App) -> impl IntoView {
                                 .then(|| {
                                     view! {
                                         <p class="muted small finder-note">
-                                            "Every hall CMI publishes is booked then — \
-                                             try another slot or day."
+                                            "Every hall in CMI's allocation is booked at \
+                                             that time — try another slot or day."
                                         </p>
                                     }
                                 })}
@@ -3065,14 +3065,16 @@ fn halls_view(app: App) -> impl IntoView {
                                         <p class="muted small finder-note">
                                             {if own.len() == 1 {
                                                 format!(
-                                                    "“{}” is your own addition, so CMI's \
-                                                     allocation does not cover it.",
+                                                    "“{}” is a hall you added yourself — it \
+                                                     isn't part of CMI's allocation, so it \
+                                                     isn't listed here.",
                                                     own[0],
                                                 )
                                             } else {
                                                 format!(
-                                                    "Your own additions ({}) are not part of \
-                                                     CMI's allocation, so it does not cover them.",
+                                                    "The halls you added yourself ({}) aren't \
+                                                     part of CMI's allocation, so they aren't \
+                                                     listed here.",
                                                     own.join(", "),
                                                 )
                                             }}

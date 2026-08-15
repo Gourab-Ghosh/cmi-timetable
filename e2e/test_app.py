@@ -655,7 +655,7 @@ def t11_my_data_lists_and_removes_overrides(app):
         By.XPATH, ".//li[contains(.,'TOC')]//button[normalize-space()=\"Back to CMI's time\"]"
     ).click()
     WebDriverWait(app.d, 10).until(
-        lambda d: "Nothing yet. Add or delete a course" in app.css(".dialog").text
+        lambda d: "Nothing yet. When you add or delete a course" in app.css(".dialog").text
     )
     app.xpath("//div[@class='dialog']//button[normalize-space()='Close']").click()
     # Back on CMI's official Tuesday slot.
@@ -797,7 +797,7 @@ def t17_credit_override(app):
     app.chip("TOC", "section[aria-label='My courses']").click()
     dialog = app.wait_css(".dialog")
     assert "set by you" in dialog.text, dialog.text
-    assert "the app counted 4" in dialog.text, dialog.text
+    assert "without your number the app would count 4" in dialog.text, dialog.text
     app.xpath("//div[@class='dialog']//button[normalize-space()='Close']").click()
     app.wait_gone(".dialog")
     section = app.css("section[aria-label='My courses']")
@@ -959,7 +959,7 @@ def t21_halls_drag_moves_hall_and_slot(app):
     ).click()
     section.find_element(By.XPATH, ".//button[contains(.,'Edit layout')]").click()
     app.drag(app.chip("TOC", dst_cell), app.css(src_cell))
-    app.wait_toast("TOC back on CMI's time")
+    app.wait_toast("Moved TOC back to CMI's time")
     back = app.wait_css(f"{src_cell} button.chip[aria-label^='TOC,']")
     assert "overridden" not in back.get_attribute("class")
     assert not app.chips("TOC", dst_cell)
@@ -1473,7 +1473,7 @@ def t36_out_of_grid_meeting_gets_its_own_column(app):
         app.xpath(
             "//div[@class='dialog']//button[normalize-space()=\"Back to CMI's time\"]"
         ).click()
-        app.wait_toast("TOC back on CMI's time")
+        app.wait_toast("Moved TOC back to CMI's time")
         time.sleep(0.3)
     app.d.find_element(By.CSS_SELECTOR, "body").send_keys(Keys.ESCAPE)
     time.sleep(0.3)
@@ -1590,7 +1590,7 @@ def t38_duration_based_credits(app):
     assert pills == ["1 course at 4 credits", "2 courses at 2 credits"], pills
     # Two courses carry assumptions (at different values), one is stated.
     assert "CMI doesn't list credits for 2 of your courses" in section.text, section.text
-    assert "so the app filled the numbers in" in section.text, section.text
+    assert "so the app fills the numbers in" in section.text, section.text
     # One sentence per reason that actually fired.
     assert "one credit per month" in section.text, section.text
     assert "Anything else counts as 4" in section.text, section.text
@@ -1692,7 +1692,7 @@ def t40_custom_course_create(app):
     code_box.send_keys("A,B")
     app.xpath("//button[normalize-space()='Add to my timetable']").click()
     err = app.css(".course-form .form-error")
-    assert "can't contain , or %" in err.text, err.text
+    assert "can't contain a comma or a % sign" in err.text, err.text
     code_box.send_keys(Keys.CONTROL, "a")
     code_box.send_keys("GERMAN")
 
@@ -1730,7 +1730,7 @@ def t40_custom_course_create(app):
     # dialog, where touch and keyboard can actually reach it (R48, §8.13).
     badge.click()
     dlg = app.wait_css(".dialog")
-    assert "You created this course. It isn't on CMI's pages." in dlg.text, dlg.text
+    assert "You made this course. It isn't on CMI's pages." in dlg.text, dlg.text
     app.d.find_element(By.TAG_NAME, "body").send_keys(Keys.ESCAPE)
     app.wait_gone(".dialog")
     assert "⚠ clash" in section.text, section.text
@@ -3681,9 +3681,18 @@ def t77_what_changed_shows_what_a_dropped_course_was(app):
         app.xpath("//button[normalize-space()='See what changed']").click()
         dialog = app.wait_css(".dialog")
         assert gone in dialog.text, dialog.text
-        detail = dialog.find_element(By.CSS_SELECTOR, ".diff-removed-detail").text
-        assert "Was taught by" in detail or "Met " in detail, \
-            f"the dropped course must say what it was: {detail!r}"
+        # Its last record is laid out like a course card: teacher beside the
+        # name, meetings as aligned when/where rows — not one squeezed line.
+        item = next(i for i in dialog.find_elements(By.CSS_SELECTOR, ".diff-item")
+                    if gone in i.text)
+        assert item.find_element(By.CSS_SELECTOR, "span.muted").text.strip(), \
+            "the dropped course must still name its teacher"
+        rows = item.find_elements(By.CSS_SELECTOR, "ul.meetings li")
+        assert rows, "the dropped course must keep its meeting rows"
+        assert "–" in rows[0].find_element(By.CSS_SELECTOR, ".when .t").text, \
+            f"a meeting row must show the time span: {rows[0].text!r}"
+        assert rows[0].find_element(By.CSS_SELECTOR, ".where .hall").text.strip(), \
+            f"a meeting row must say where the class met: {rows[0].text!r}"
         # …and nowhere else: closing the dialog, the code appears in no grid
         # or list (the fresh snapshot never heard of it).
         app.d.find_element(By.CSS_SELECTOR, "body").send_keys(Keys.ESCAPE)
@@ -3941,11 +3950,11 @@ def t82_conflicts_apply_answers_only_what_you_answered(app):
         toc_item.find_element(
             By.XPATH, ".//label[contains(.,'your time')]//input").click()
         dialog.find_element(By.XPATH, ".//button[normalize-space()='Apply']").click()
-        app.wait_toast("still queued")
+        app.wait_toast("still waiting")
 
         # The answered row is applied…
         app.wait_css("td[data-day='2'][data-slot='1020'] button.chip[aria-label^='TOC,']")
-        # …and the unanswered one is exactly as it was: still queued, banner
+        # …and the unanswered one is exactly as it was: still waiting, banner
         # counting one.
         banner = app.xpath("//div[contains(@class,'banner')][contains(.,'conflict')]")
         assert "1 timetable change" in banner.text, banner.text

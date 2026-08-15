@@ -235,8 +235,8 @@ pub fn import_planner_backup_text(app: App, text: &str) {
     // damaged file, and a damaged file changes nothing.
     let refused = |what: &str| {
         format!(
-            "That backup couldn't be used: the {what} inside it don't have \
-             the shape this app saves. Nothing was changed."
+            "That backup couldn't be used: the {what} inside it don't look \
+             the way this app saves them. Nothing was changed."
         )
     };
     let Ok(selection) = serde_json::from_value::<Vec<String>>(backup.selection.take()) else {
@@ -332,14 +332,15 @@ pub fn import_planner_backup_text(app: App, text: &str) {
             restored &= crate::storage::restore_raw(key, old);
         }
         app.toast(if restored {
-            "Your browser wouldn't store everything in that file (out of \
-             space?), so nothing was changed."
+            "Your browser wouldn't store everything in that file — it's \
+             probably short on space — so nothing was changed."
         } else {
             // The old values fit before, so this is close to unreachable —
             // but if it happens, pretending nothing changed would be a lie.
             "Your browser ran out of space during the import, and putting \
-             things back hit the same wall. Open My data and check what \
-             this browser still holds before trusting it."
+             your old data back failed for the same reason. Open My data \
+             and check what this browser still holds before trusting what's \
+             saved here."
         });
         return;
     }
@@ -436,8 +437,15 @@ pub fn import_selection_text(app: App, text: &str) {
         app.import_selection(&known, false);
         if !unknown.is_empty() {
             app.toast(format!(
-                "Left out: {} — not in CMI's catalog this semester.",
-                unknown.join(", ")
+                "Left out: {} — {} in CMI's catalog this semester, so the app \
+                 can't add {}.",
+                unknown.join(", "),
+                if unknown.len() == 1 {
+                    "it isn't"
+                } else {
+                    "they aren't"
+                },
+                if unknown.len() == 1 { "it" } else { "them" },
             ));
         }
         return;

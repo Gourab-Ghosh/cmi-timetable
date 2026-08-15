@@ -117,8 +117,8 @@ fn offline_note(app: App) {
         if offline {
             app.toast(
                 "You're offline — everything here still works. Your timetable \
-                 and changes live in this browser; only syncing with CMI needs \
-                 a connection.",
+                 and changes live in this browser, so only syncing with CMI \
+                 needs a connection.",
             );
         }
     });
@@ -180,9 +180,9 @@ fn apply_url_state(app: App) {
         app.set_banner_sticky(
             crate::state::BannerKind::Warn,
             format!(
-                "This link carries its own version of {} — you already have a course \
-                 with that code, so yours stays. To use theirs instead, delete yours \
-                 under My data and open the link again.",
+                "This link carries its own version of {} — where you already have a \
+                 course under the same code, yours stays. To use the link's version \
+                 instead, delete yours under My data and open the link again.",
                 kept_yours.join(", "),
             ),
         );
@@ -220,7 +220,7 @@ fn apply_url_state(app: App) {
             });
             if replaced_own_work {
                 app.toast_undo(
-                    "This link brought its own times and credits, and they replaced yours",
+                    "This link brought its own times and credits, and they replaced yours.",
                 );
             }
         }
@@ -275,7 +275,7 @@ fn apply_url_state(app: App) {
             unhide_selected(sel, ovs);
         });
         if replaced_own_work {
-            app.toast_undo("This link brought its own times and credits, and they replaced yours");
+            app.toast_undo("This link brought its own times and credits, and they replaced yours.");
         }
     } else {
         app.sync_url();

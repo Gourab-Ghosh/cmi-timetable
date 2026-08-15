@@ -93,7 +93,7 @@ fn backup_refusals() {
     let mut v: serde_json::Value = serde_json::from_str(&backup_text()).unwrap();
     v.as_object_mut().unwrap().remove("selection");
     let err = parse_planner_backup(&v.to_string(), NOW).unwrap_err();
-    assert_eq!(err, ImportError::MissingPart("course-selection"));
+    assert_eq!(err, ImportError::MissingPart("course selection"));
     assert!(err.message().contains("damaged"), "{}", err.message());
 
     // Snapshot sanity: no courses.

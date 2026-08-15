@@ -194,12 +194,12 @@ impl ImportError {
                     .to_string()
             }
             ImportError::NewerFormat => {
-                "This file was made by a newer version of the app — update the \
+                "That file was made by a newer version of the app — update the \
                  app, then try again."
                     .to_string()
             }
             ImportError::BadSnapshot(why) => {
-                format!("The snapshot inside this file couldn't be used: {why}")
+                format!("The timetable inside that file couldn't be used: {why}")
             }
             ImportError::MissingPart(part) => {
                 format!(
@@ -257,17 +257,17 @@ pub fn parse_planner_backup(text: &str, now_ms: f64) -> Result<ParsedBackup, Imp
     }
     for (value, name) in [
         (&envelope.snapshot, "timetable"),
-        (&envelope.selection, "course-selection"),
+        (&envelope.selection, "course selection"),
         (&envelope.overrides, "changes"),
-        (&envelope.custom_courses, "own-courses"),
+        (&envelope.custom_courses, "own courses"),
         (&envelope.prefs, "settings"),
     ] {
         if value.is_null() {
             return Err(ImportError::MissingPart(name));
         }
     }
-    let snapshot: Snapshot = serde_json::from_value(envelope.snapshot).map_err(|e| {
-        ImportError::BadSnapshot(format!("it doesn't have the expected shape ({e})"))
+    let snapshot: Snapshot = serde_json::from_value(envelope.snapshot).map_err(|_| {
+        ImportError::BadSnapshot("it doesn't look the way this app saves it".to_string())
     })?;
 
     // Sanity — the raw pages aren't in the file, so the real validation gate

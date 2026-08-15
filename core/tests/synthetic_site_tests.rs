@@ -1380,7 +1380,7 @@ fn a_page_with_no_label_still_reads() {
         out.report
             .warnings
             .iter()
-            .any(|w| w.contains("no semester label")),
+            .any(|w| w.contains("neither page carries a semester label")),
         "{:?}",
         out.report.warnings
     );

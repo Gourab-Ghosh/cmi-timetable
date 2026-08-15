@@ -293,7 +293,11 @@ pub fn branch_chip(app: App, code: &str) -> impl IntoView + use<> {
                 .snapshot
                 .with(|s| s.branch(&code).map(|b| b.title.clone()))
                 .unwrap_or_default();
-            format!("{code} · {title}")
+            if title.is_empty() {
+                code.to_string()
+            } else {
+                format!("{code} · {title}")
+            }
         })
     };
     view! {
@@ -347,8 +351,8 @@ pub fn edit_toggle(app: App) -> impl IntoView {
                      M, and move it with the arrow keys. Drop a moved course back on \
                      CMI's slot to undo its move."
                 } else {
-                    "While editing, drag a chip onto any room and time. Drop it back \
-                     where CMI put it to undo the move."
+                    "Turn this on to drag a course onto another room and time. Drop it \
+                     back where CMI put it to undo the move."
                 }
             }
             on:click=move |_| {
@@ -430,7 +434,7 @@ pub fn Header() -> impl IntoView {
         let s = app.sync.get();
         if s.fetched_at <= 0.0 {
             "No timetable data yet — press ⟳ Fetch the timetable to get it from \
-             cmi.ac.in"
+             CMI's pages"
                 .to_string()
         } else {
             format!(
@@ -524,7 +528,7 @@ pub fn Header() -> impl IntoView {
             </button>
             <button
                 class="btn"
-                title="Everything saved in your browser, with removal options"
+                title="Everything the app saves in your browser, and how to remove it"
                 on:click=move |_| app.dialog.set(Some(Dialog::MyData))
             >
                 "My data"
@@ -1919,7 +1923,10 @@ fn credits_display(app: App, course: &Course) -> impl IntoView + use<> {
         String::new()
     };
     let official_short = if official_assumed {
-        format!("CMI doesn't list credits for this one; the app counted {official}.")
+        format!(
+            "CMI doesn't list credits for this course — without your number \
+             the app would count {official}."
+        )
     } else {
         format!("CMI lists {official}.")
     };
@@ -1980,7 +1987,7 @@ fn details_dialog(app: App, code: String) -> impl IntoView {
                 <h2 class="mono">{code}</h2>
                 <p>
                     "CMI's timetable no longer lists this course. Anything you \
-                     placed for it stays on your week until you take it off."
+                     placed for it stays on your timetable until you take it off."
                 </p>
                 {selected
                     .then(|| {
@@ -2003,7 +2010,7 @@ fn details_dialog(app: App, code: String) -> impl IntoView {
                                 <button
                                     class="btn"
                                     title="Change its times, hall and credits — the course \
-                                           is gone from CMI's pages, your copy is not"
+                                           is gone from CMI's pages, but your copy isn't"
                                     on:click=move |_| {
                                         app.dialog
                                             .set(
@@ -2142,7 +2149,7 @@ fn details_dialog(app: App, code: String) -> impl IntoView {
                         view! {
                             <span class="badge custom">"Added by you"</span>
                             <span class="muted small">
-                                "You created this course. It isn't on CMI's pages."
+                                "You made this course. It isn't on CMI's pages."
                             </span>
                         }
                     })}
@@ -2208,7 +2215,7 @@ fn details_dialog(app: App, code: String) -> impl IntoView {
                     view! {
                         <p class="muted">
                             "You've removed all of this course's meetings — restore \
-                             them from the ✎ changes list whenever you want them back."
+                             them from Your changes whenever you want them back."
                         </p>
                     }
                         .into_any()
@@ -2456,9 +2463,9 @@ pub fn overrides_list(app: App) -> impl IntoView {
             if overrides.is_empty() && customs.is_empty() {
                 return view! {
                     <p class="muted small">
-                        "Nothing yet. Add or delete a course, move or create a meeting, \
-                         or change credits, and it appears here beside what CMI \
-                         publishes — so you can always put it back."
+                        "Nothing yet. When you add or delete a course, move or create \
+                         a meeting, or change credits, the change appears here beside \
+                         what CMI publishes — so you can always put it back."
                     </p>
                 }
                     .into_any();
@@ -2552,7 +2559,7 @@ pub fn overrides_list(app: App) -> impl IntoView {
                                 // for the times and halls a row carries. This
                                 // is a sentence.
                                 <span class="muted small">
-                                    "hidden from the catalog and grids"
+                                    "hidden from the catalog and the master grid"
                                 </span>
                             </span>
                             <button
@@ -2637,9 +2644,9 @@ pub fn overrides_list(app: App) -> impl IntoView {
                     OwnChange::Removed if o.base.is_some() => {
                         format!("{course}'s meeting is back")
                     }
-                    OwnChange::Room => format!("{course} back in CMI's room"),
+                    OwnChange::Room => format!("Moved {course} back to CMI's room"),
                     OwnChange::Time | OwnChange::TimeAndRoom => {
-                        format!("{course} back on CMI's time")
+                        format!("Moved {course} back to CMI's time")
                     }
                     _ => format!("{course}'s meeting removed"),
                 };
@@ -2751,8 +2758,8 @@ pub fn overrides_list(app: App) -> impl IntoView {
                         view! {
                             <button
                                 class="btn small danger"
-                                title="Put every one of CMI's courses back the way they \
-                                       publish it. Your own courses are kept."
+                                title="Put CMI's courses back exactly as CMI publishes \
+                                       them. Your own courses are kept."
                                 on:click=move |_| {
                                     app.act("remove all custom changes", |sel, ovs| {
                                         ovs.items.clear();
@@ -2804,8 +2811,8 @@ fn import_selection_dialog(app: App, known: Vec<String>, unknown: Vec<String>) -
     let n = known.len();
     let plural = |n: usize| if n == 1 { "course" } else { "courses" };
     let lede = format!(
-        "This file lists {n} {} from this semester. What should {} do to the \
-         courses already on your timetable?",
+        "This file lists {n} {} from this semester. Should {} replace the \
+         courses already on your timetable, or join them?",
         plural(n),
         if n == 1 { "it" } else { "they" },
     );
@@ -2825,7 +2832,7 @@ fn import_selection_dialog(app: App, known: Vec<String>, unknown: Vec<String>) -
     let codes = known.clone();
     let known_add = known.clone();
     let replace_note = format!(
-        "Your timetable becomes exactly {} {} — only the selection changes; \
+        "Your timetable becomes exactly {} {}. Only the selection changes — \
          your custom times and your own courses stay saved.",
         if n == 1 { "this" } else { "these" },
         plural(n),
@@ -2917,7 +2924,7 @@ fn my_data_dialog(app: App) -> impl IntoView {
         // The questions those conflicts asked were about a snapshot that no
         // longer exists — clear their stored copy too.
         app.set_conflicts(Vec::new());
-        app.toast("Saved timetable cleared — fetch it again whenever you like.");
+        app.toast("Downloaded timetable cleared — fetch it again whenever you like.");
     };
 
     let delete_everything = move |_| {
@@ -3067,7 +3074,7 @@ fn my_data_dialog(app: App) -> impl IntoView {
                                     <button
                                         class="btn small danger"
                                         title="Forgets the timetable downloaded from CMI. \
-                                               Your courses and changes stay; the app shows \
+                                               Your courses and changes stay. The app shows \
                                                its welcome screen until the next sync."
                                         on:click=clear_snapshot
                                     >
@@ -3132,7 +3139,8 @@ fn my_data_dialog(app: App) -> impl IntoView {
                     </button>
                 </header>
                 <p class="muted small">
-                    "Theme and density. Your filters and the tab you're on stay put."
+                    "Theme and density live here. Your filters and the tab you're on \
+                     stay put."
                 </p>
             </section>
 
@@ -3171,10 +3179,11 @@ fn my_data_dialog(app: App) -> impl IntoView {
                     </div>
                 </header>
                 <p class="muted small">
-                    "One file holds it all — the downloaded timetable, your courses, \
-                     your changes, your own courses and your settings. Import it on \
-                     any device and the planner looks exactly like this one, even \
-                     years from now. Importing replaces what's here, and asks first."
+                    "One file holds it all — the downloaded timetable, the courses \
+                     you picked, your changes, your own courses and your settings. \
+                     Import it on any device and the planner looks exactly like this \
+                     one, even years from now. Importing replaces what's here, and \
+                     asks first."
                 </p>
             </section>
 
@@ -3469,8 +3478,8 @@ fn course_editor_dialog(app: App, code: Option<String>, prefill: Option<String>)
             <div>
                 <h2>"That course isn't here any more"</h2>
                 <p class="muted">
-                    "It went while you were opening it — CMI's timetable changed, or it \
-                     was deleted in another tab."
+                    "It disappeared while you were opening it — CMI's timetable \
+                     changed, or it was deleted in another tab."
                 </p>
                 <div class="actions">{close_button(app)}</div>
             </div>
@@ -3554,11 +3563,10 @@ fn course_editor_dialog(app: App, code: Option<String>, prefill: Option<String>)
         if !c.credits_assumed() {
             format!("CMI lists {}.", c.effective_credits())
         } else if c.credit_assumption() == ttcore::model::CreditAssumption::Seminar {
-            "CMI doesn't list credits for this course. The app counts 0 — it's a seminar."
-                .to_string()
+            "CMI doesn't list credits for this seminar, so the app counts 0.".to_string()
         } else {
             format!(
-                "CMI doesn't list credits for this course. The app counts {}.",
+                "CMI doesn't list credits for this course, so the app counts {}.",
                 c.effective_credits()
             )
         }
@@ -3773,8 +3781,8 @@ fn course_editor_dialog(app: App, code: Option<String>, prefill: Option<String>)
             // and silently drop off the timetable.
             if code_v.contains(',') || code_v.contains('%') {
                 error.set(
-                    "A code can't contain , or % — they'd break the links \
-                     that share your timetable."
+                    "A code can't contain a comma or a % sign — they'd break \
+                     the links that share your timetable."
                         .to_string(),
                 );
                 return;
@@ -3976,8 +3984,8 @@ fn course_editor_dialog(app: App, code: Option<String>, prefill: Option<String>)
                             <span class="muted small">
                                 {format!(
                                     "CMI no longer lists this course, so there's no official \
-                                     credit value to change. It counts {start_credits} in \
-                                     your total."
+                                     credit value to change. The app counts {start_credits} \
+                                     in your total."
                                 )}
                             </span>
                         }
@@ -4369,9 +4377,9 @@ fn course_editor_dialog(app: App, code: Option<String>, prefill: Option<String>)
                                     // would send the user looking for a chip
                                     // that is not there.
                                     "No meetings left — this course will not appear on \
-                                     your week. Every class you removed is listed under \
-                                     Your changes, and can be put back from there or \
-                                     from here."
+                                     your timetable. Every meeting you removed is listed \
+                                     under Your changes, and can be put back from there \
+                                     or from here."
                                 } else {
                                     "No meetings yet — the course will wait in \
                                      “No fixed slot yet” on My timetable until you give \
@@ -4524,9 +4532,9 @@ fn conflicts_dialog(app: App) -> impl IntoView {
         <div>
             <h2>"CMI changed times you customised"</h2>
             <p class="muted">
-                "Pick what to keep for each one. Nothing is picked for you, and \
-                 Apply only acts on the rows you've answered — the rest stay \
-                 queued until you decide. Nothing changes until you press Apply."
+                "Pick what to keep for each change. Nothing is picked for you, \
+                 and nothing changes until you press Apply. Rows you leave \
+                 unanswered keep waiting until you decide."
             </p>
             <div class="actions" style="justify-content:flex-start">
                 <button
@@ -4717,8 +4725,8 @@ fn export_dialog(app: App, scope: Option<String>) -> impl IntoView {
             .collect();
         if courses.iter().all(|c| c.meetings.is_empty()) {
             error.set(
-                "Nothing to export yet — none of these courses has a time. Open one \
-                 and add a weekly meeting, then come back."
+                "Nothing to export yet — nothing going into this file has a time. \
+                 Open a course and add a weekly meeting, then come back."
                     .to_string(),
             );
             return;
@@ -4871,8 +4879,8 @@ fn export_dialog(app: App, scope: Option<String>) -> impl IntoView {
             </p>
             <p class="muted small">
                 "The file repeats each class weekly between the dates above, holidays \
-                 included — check CMI's semester schedule and delete those weeks in \
-                 your calendar."
+                 included — check CMI's semester schedule and delete the holiday \
+                 weeks from your calendar."
             </p>
             // A persistent live region: screen readers announce changes
             // INSIDE one, not the arrival of a new node, so a validation
@@ -4930,7 +4938,7 @@ fn share_dialog(app: App) -> impl IntoView {
             <h2>"Share your timetable"</h2>
             <p class="muted small">
                 "Anyone who opens the link sees the same courses you have. The link \
-                 carries the course codes itself — nothing is uploaded anywhere, and \
+                 itself carries the course codes — nothing is uploaded anywhere, and \
                  your copy stays in this browser."
             </p>
             {(!custom_codes.is_empty())
@@ -4939,7 +4947,7 @@ fn share_dialog(app: App) -> impl IntoView {
                         <p class="muted small">
                             {format!(
                                 "{} {} you made yourself. Only “Copy link with custom \
-                                 changes” carries {}; the plain link carries just the \
+                                 changes” carries {}. The plain link carries just the \
                                  code{}, which {} nothing in someone else's browser.",
                                 custom_codes.join(", "),
                                 if custom_codes.len() == 1 {
@@ -4984,8 +4992,8 @@ fn share_dialog(app: App) -> impl IntoView {
                     class="btn"
                     disabled=!has_extras
                     title=if has_extras {
-                        "Includes your moved/created meetings, credit changes and \
-                         your own courses"
+                        "Includes the meetings you moved or added, your credit \
+                         changes and your own courses"
                     } else {
                         "You have no custom changes yet"
                     }
@@ -5087,39 +5095,62 @@ fn what_changed_dialog(app: App) -> impl IntoView {
                             // course lives in the diff itself — the fresh
                             // snapshot has never heard of it. Shown HERE and
                             // nowhere else; when the diff goes, this data
-                            // goes with it (it is never stored).
-                            let who = (!r.instructors.is_empty())
-                                .then(|| r.instructors.join(", "));
-                            let when = (!r.meetings.is_empty())
-                                .then(|| {
-                                    r.meetings
-                                        .iter()
-                                        .map(|m| m.describe())
-                                        .collect::<Vec<_>>()
-                                        .join(" · ")
-                                });
+                            // goes with it (it is never stored). Laid out
+                            // the way a course card is — instructor beside
+                            // the name, meetings as aligned when/where rows —
+                            // so its last record reads like the course did,
+                            // not like a sentence squeezed through a comma.
                             view! {
                                 <div class="diff-item">
                                     <span class="chip mono" style="--hue:215">
                                         {r.code.clone()}
                                     </span>
                                     <span class="name">{r.name.clone()}</span>
+                                    {(!r.instructors.is_empty())
+                                        .then(|| {
+                                            view! {
+                                                <span class="muted">{r.instructors.join(" / ")}</span>
+                                            }
+                                        })}
                                     {is_mine
                                         .then(|| {
                                             view! {
                                                 <span class="badge warn">"still in your timetable"</span>
                                             }
                                         })}
-                                    <p class="diff-removed-detail muted small">
-                                        {match (who, when) {
-                                            (Some(who), Some(when)) => {
-                                                format!("Was taught by {who} — met {when}.")
+                                    {(!r.meetings.is_empty())
+                                        .then(|| {
+                                            view! {
+                                                <ul class="meetings">
+                                                    {r.meetings
+                                                        .iter()
+                                                        .map(|m| {
+                                                            view! {
+                                                                <li>
+                                                                    <span class="when">
+                                                                        <span class="d">{m.day.short()}</span>
+                                                                        " "
+                                                                        <span class="t">{m.slot.label()}</span>
+                                                                    </span>
+                                                                    <span class="where">
+                                                                        {match &m.hall {
+                                                                            Some(h) => {
+                                                                                view! { <span class="hall">{h.clone()}</span> }
+                                                                                    .into_any()
+                                                                            }
+                                                                            None => {
+                                                                                view! { <span class="hall tba">"Hall TBA"</span> }
+                                                                                    .into_any()
+                                                                            }
+                                                                        }}
+                                                                    </span>
+                                                                </li>
+                                                            }
+                                                        })
+                                                        .collect_view()}
+                                                </ul>
                                             }
-                                            (Some(who), None) => format!("Was taught by {who}."),
-                                            (None, Some(when)) => format!("Met {when}."),
-                                            (None, None) => String::new(),
-                                        }}
-                                    </p>
+                                        })}
                                 </div>
                             }
                         })

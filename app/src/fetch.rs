@@ -313,10 +313,10 @@ pub fn adopt(app: &App, new_snapshot: Snapshot, announce: bool, from: Adoption) 
             app.set_banner(
                 BannerKind::Warn,
                 "Your browser is short on space, so the app saved your timetable \
-                 but not the spare copy of CMI's pages it keeps alongside it. \
-                 Nothing on screen is missing, and your courses and changes are \
-                 safe. Each sync tries to save that copy again; freeing some \
-                 browser space makes room for it.",
+                 but not its spare copy of CMI's pages. Nothing on screen is \
+                 missing, and your courses and changes are safe. Each sync tries \
+                 to save that copy again — freeing some browser space makes room \
+                 for it.",
             );
         }
         storage::SnapshotSave::Failed => {
@@ -558,8 +558,8 @@ pub async fn run_update(app: App, manual: bool) {
             "The app couldn't fetch the timetable the usual way, so it's asking CMI's \
              own website directly. Your browser may now ask whether this page can \
              reach devices on your local network — that question is about this fetch, \
-             and it's safe to allow. If you say no, only this one route won't work; \
-             nothing else changes.",
+             and it's safe to allow. If you say no, only this one route won't work. \
+             Nothing else changes.",
         );
         match fetch_pages_tier(
             app,
@@ -602,7 +602,7 @@ pub async fn run_update(app: App, manual: bool) {
          network, that was this app fetching the timetable from cmi.ac.in — on CMI's \
          own network, cmi.ac.in counts as a local address. Allowing it lets the app \
          fetch straight from CMI when nothing else works. Blocking it only means that \
-         one route won't work; the app still tries its usual routes first."
+         one route won't work — the app still tries its usual routes first."
     } else {
         ""
     };
@@ -610,12 +610,12 @@ pub async fn run_update(app: App, manual: bool) {
     let text = if gate_failed_any && no_data {
         "CMI's website answered, but its pages don't look the way this app \
          expects, so nothing could be loaded. Try again in a while. If it keeps \
-         happening, the app needs a fix from whoever maintains it — CMI's own \
-         timetable page still works in a browser: www.cmi.ac.in/practical/timetable.php"
+         happening, the app needs an update. Until then, CMI's own timetable \
+         page still works in a browser: www.cmi.ac.in/practical/timetable.php"
             .to_string()
     } else if gate_failed_any {
         format!(
-            "CMI's page looks different from what this app expected, so your saved timetable \
+            "CMI's page looks different from what this app expects, so your saved timetable \
              from {saved_date} was kept. Nothing was lost. If this keeps happening, the \
              app needs an update."
         )
@@ -633,8 +633,8 @@ pub async fn run_update(app: App, manual: bool) {
         )
     } else if !online {
         format!(
-            "You appear to be offline, so you're seeing the timetable saved in your \
-             browser from {saved_date}."
+            "Your browser says you're offline, so you're seeing your saved \
+             timetable from {saved_date}."
         )
     } else {
         format!(
@@ -758,7 +758,7 @@ pub fn simulate_parse_failure(app: App) {
                 BannerKind::Warn,
                 format!(
                     "Simulated a parse failure: CMI's page looks different from what this app \
-                     expected, so your saved timetable from {saved_date} was kept. Nothing \
+                     expects, so your saved timetable from {saved_date} was kept. Nothing \
                      was lost."
                 ),
             );

@@ -196,7 +196,7 @@ fn run_gate(
         }
         (Some(t), None) => {
             report.warnings.push(
-                "no semester label found on the lecture-halls page; using the timetable's"
+                "the lecture-halls page carries no semester label — the app uses the timetable page's"
                     .to_string(),
             );
             GateCheck {
@@ -207,7 +207,8 @@ fn run_gate(
         }
         (None, Some(h)) => {
             report.warnings.push(
-                "no semester label found on the timetable page; using the halls page's".to_string(),
+                "the timetable page carries no semester label — the app uses the halls page's"
+                    .to_string(),
             );
             GateCheck {
                 rule: "semester label".into(),
@@ -219,9 +220,9 @@ fn run_gate(
             // The label is display-only metadata; rules 2–6 guard the data
             // itself. Rewording of the heading must not block a fresh
             // semester, so this is warn-only — CONFLICTING labels still fail.
-            report
-                .warnings
-                .push("no semester label found on either page; continuing without one".to_string());
+            report.warnings.push(
+                "neither page carries a semester label — the app continues without one".to_string(),
+            );
             GateCheck {
                 rule: "semester label".into(),
                 passed: true,
@@ -425,12 +426,12 @@ fn halls_page_completeness(
             format!("the halls page covers every day the timetable schedules ({total} classes)")
         } else if passed {
             format!(
-                "the halls page never mentions {}, but only {stranded} of {total} classes                  meet then — a room CMI has not allocated, not a missing page",
+                "the halls page never mentions {}, but only {stranded} of {total} classes meet then — that looks like a room CMI has not allocated, not a missing page",
                 named.join(", ")
             )
         } else {
             format!(
-                "the halls page never mentions {}, where {stranded} of {total} classes                  meet — it looks cut short",
+                "the halls page never mentions {}, where {stranded} of {total} classes meet — it looks cut short",
                 named.join(", ")
             )
         },

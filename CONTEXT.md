@@ -651,7 +651,7 @@ regenerates the .ics golden.
   selected course with no time is part of the timetable, not a footnote.
 - "Your changes" groups are headed by `.cg-head` (colour rail + small caps
   + count), coloured by `OwnChange::tone()`. See §4.
-- Tests: 100 native + 66/66 e2e green. Meeting removals: `MeetingOverride.to`
+- Tests: 114 native + 86/86 e2e green (as of R49). Meeting removals: `MeetingOverride.to`
   is `Option<Meeting>` (None = removed; legacy JSON/share payloads still
   load — present meeting ⇒ Some). Out-of-grid times: **all three tables grow
   synthetic `.extra` columns**, each from its own source, all built by the
@@ -2735,6 +2735,80 @@ dropped-course credits, empty-state offer, badge-button, radio groups,
 86-test count); e2e/README likewise. Suite: fmt + clippy clean, **114
 native + 86/86 e2e**, deploy rehearsal green, shots regenerated —
 verified before the commit.
+
+### R49 — the words a student actually reads: one cramped line, then all of them
+
+The user saw the dropped-course detail in What changed ("Was taught by
+Bijita Sarma — met Tue 15:30–16:45 · Lecture Hall 803 · Thu …") and called
+it ugly and unreadable; then flagged the details dialog's credits note
+("CMI doesn't list credits for this one; the app counted 4.") as odd, asked
+for a sweep of ALL such text, and asked that the site be verified beautiful
+afterwards.
+
+**The layout fix.** The removed-course entry in the What-changed dialog no
+longer squeezes a teacher and N meetings through one comma'd sentence. It is
+laid out the way a course card is: instructor muted beside the name,
+meetings as the same aligned when/where `ul.meetings` rows every card uses
+(hall or "Hall TBA" per row). The `.diff-removed-detail` class and its CSS
+are GONE (superseding the R43 §7 note that named it); `.diff-item
+ul.meetings { flex-basis: 100% }` places the rows. **t77** re-pinned to the
+structure (teacher span, `.when .t` en dash, `.where .hall`).
+
+**The copy sweep.** Workflow wf_d30c8b77-249: 6 finders read every string
+surface (app/src, core messages, index.html) against the app's voice; 2
+judges (line-editor, voice-consistency) ruled on all 95 candidates (the
+judges died once on a session limit and were resumed from cache — six
+cached finders replayed, judges re-ran). 61 both-agreed applied, 11
+text-disagreements and 8 fix/reject splits arbitrated by hand, 15 rejected
+as deliberate. ~77 strings changed; the decisions (and every arbitration)
+are in `.workagents/r49-copy-worklist.md`, the raw sweep in
+`r49-copy-sweep-raw.json`. Highlights:
+
+- Credits family unified on "the app counts N" — the editor's two-sentence
+  notes folded into the one-sentence card shape; the flagged note became
+  "CMI doesn't list credits for this course — without your number the app
+  would count 4." (**t17** re-pinned). Rejected the "counts it as N"
+  variant that would have churned the family's pins for no gain.
+- Semicolon splices, "your week" (→ "your timetable"), "the grids" (→ "the
+  master grid"), "the ✎ changes list" (→ "Your changes"), "cached
+  timetable" (→ "downloaded timetable", the section's real name).
+- Verbless toasts: "{} back on CMI's time" → "Moved {} back to CMI's time"
+  in dnd AND the Your-changes reset buttons (+ the Room sibling the sweep
+  missed — found by grepping old fragments after the agents ran).
+- Core import errors: "course-selection"/"own-courses" prose-ified,
+  BadSnapshot no longer leaks the raw serde error into a toast, "snapshot"
+  → "timetable", "This file" → "That file" (export_tests re-pinned).
+- validate.rs: two gate strings carried 18 literal spaces from a botched
+  line-join; the three "no semester label found on …; …" splices became
+  sentences (synthetic_site_tests re-pinned to "neither page carries a
+  semester label").
+- The share-link duplicate-code banner no longer breaks grammar when the
+  list has two codes; the branch-chip tooltip gained the empty-title guard
+  its sibling already had; the import question asks what its buttons do
+  ("replace … or join them?").
+- KEPT deliberately: the ⚠ clash mark in toasts, "CMI lists {n}.", the
+  per-month sentence, and 12 other flagged-but-fine strings (see the
+  worklist's reject table).
+
+Pins updated: t11/t12 ("Nothing yet. When you add or delete…"), t38
+("fills the numbers in"), t17, t40 ("You made this course."), t77
+(structure), t82 ("still waiting"), the comma/% guard ("a comma or a %
+sign"), drag-back toasts ×2, native ×2. shoot.py's edit-mode selector
+still looked for the badge as a `span` — it has been a `<button>` since
+R48 — fixed (the full-set regen is exactly what catches this drift).
+
+Gates on the final tree: fmt + clippy clean, **114 native + 86/86 e2e**
+(one clean full run; the first run caught the two pins named above),
+deploy rehearsal green, shoot.py fully regenerated + the dropped-course /
+conflicts / credits harness shots — all reviewed by eye (dialog lede,
+banner copy, LAN note, My-data inventory, mobile, prints). FEATURES.md
+(code rule wording, conflicts "keep waiting", digest card-layout bullet)
+and e2e/README updated same round.
+
+Lesson recorded: copy pins hide in TESTS, DOCS and SHOOT SCRIPTS — grep
+all three for every fragment BEFORE the suite run, and grep the SOURCE for
+sibling occurrences of each fixed string after applying (two toasts shared
+the same defect; the sweep listed one).
 
 ## 8. Open bugs — found, confirmed, NOT fixed (do not delete)
 
