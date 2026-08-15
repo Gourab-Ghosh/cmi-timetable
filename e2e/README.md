@@ -110,7 +110,7 @@ chip still removable when expanded, the two JSON exports parsing and the
 whole-planner backup restoring EVERYTHING through a wiped browser — the
 selection, the custom move and the full catalog, with the pill saying
 "imported" (R46 reshaped this: the backup file replaced the old
-snapshot-only export, and "Import from JSON" on Course selection asks
+snapshot-only export, and "Import my courses" on Course selection asks
 replace-or-add through a dialog, names the codes it must leave out, and
 skips the question when the timetable is empty; R47's pre-deploy audit
 added pins for the honest edges: an import that adds nothing spends no

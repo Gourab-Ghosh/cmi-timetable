@@ -725,7 +725,7 @@ impl App {
             .selection
             .with_untracked(|sel| codes.iter().filter(|c| sel.contains(c)).count());
         let label = if replace {
-            "replace my courses with a file's"
+            "replace my courses with the ones from a file"
         } else {
             "add a file's courses"
         };
@@ -755,7 +755,7 @@ impl App {
         let plural = |n: usize| if n == 1 { "course" } else { "courses" };
         if replace {
             self.toast_undo(format!(
-                "Your timetable is now the file's {n} {}.",
+                "Your timetable now has exactly the {n} {} from that file.",
                 plural(n)
             ));
         } else {
@@ -1463,7 +1463,8 @@ impl App {
         } else {
             format!(
                 "Your timetable now uses the times you picked. The {} you left \
-                 blank {} still waiting — press Review on the banner to finish.",
+                 unanswered {} still waiting — press Review in the message at \
+                 the top of the page to finish.",
                 if left == 1 { "row" } else { "rows" },
                 if left == 1 { "is" } else { "are" },
             )

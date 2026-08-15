@@ -178,14 +178,13 @@ impl ImportError {
     pub fn message(&self) -> String {
         match self {
             ImportError::NotJson => {
-                "That file couldn't be read as JSON — it may be damaged, or not \
-                 a file this app made."
+                "That file couldn't be read — it may be damaged, or it may not \
+                 be a file this app made."
                     .to_string()
             }
             ImportError::WrongFormat(found) if found == "cmi-timetable-export" => {
-                "That's a timetable export — it lists courses, not a whole \
-                 planner. “Import from JSON” under Course selection in My \
-                 data reads that kind of file."
+                "That file lists courses only — it isn't a whole planner. Use \
+                 “Import my courses…” under Course selection to load it."
                     .to_string()
             }
             ImportError::WrongFormat(_) => {
@@ -194,8 +193,9 @@ impl ImportError {
                     .to_string()
             }
             ImportError::NewerFormat => {
-                "That file was made by a newer version of the app — update the \
-                 app, then try again."
+                "That file was made by a newer version of this app than the \
+                 one you're using — reload this page to get the newest \
+                 version, then try again."
                     .to_string()
             }
             ImportError::BadSnapshot(why) => {
@@ -203,16 +203,14 @@ impl ImportError {
             }
             ImportError::MissingPart(part) => {
                 format!(
-                    "That backup has no {part} section inside it — the file \
+                    "Part of that backup is missing — the {part}. The file \
                      may be damaged or cut short. Nothing was changed."
                 )
             }
-            ImportError::BadEnvelope => {
-                "That file says it's a planner backup, but its version stamp \
-                 is missing or damaged — it may have been edited by hand. \
-                 Nothing was changed."
-                    .to_string()
-            }
+            ImportError::BadEnvelope => "That file says it's a planner backup, but it doesn't say \
+                 which version of the app made it — it may be damaged, or \
+                 edited by hand. Nothing was changed."
+                .to_string(),
         }
     }
 }
@@ -258,8 +256,8 @@ pub fn parse_planner_backup(text: &str, now_ms: f64) -> Result<ParsedBackup, Imp
     for (value, name) in [
         (&envelope.snapshot, "timetable"),
         (&envelope.selection, "course selection"),
-        (&envelope.overrides, "changes"),
-        (&envelope.custom_courses, "own courses"),
+        (&envelope.overrides, "changes you made"),
+        (&envelope.custom_courses, "courses you added"),
         (&envelope.prefs, "settings"),
     ] {
         if value.is_null() {
@@ -278,7 +276,9 @@ pub fn parse_planner_backup(text: &str, now_ms: f64) -> Result<ParsedBackup, Imp
         ));
     }
     if snapshot.slot_grid.is_empty() {
-        return Err(ImportError::BadSnapshot("it has no time grid".to_string()));
+        return Err(ImportError::BadSnapshot(
+            "it doesn't list any class times".to_string(),
+        ));
     }
     let slot_ok = |s: &crate::model::Slot| s.start_min < s.end_min && s.end_min <= 1440;
     if !snapshot.slot_grid.iter().all(slot_ok)
@@ -299,7 +299,9 @@ pub fn parse_planner_backup(text: &str, now_ms: f64) -> Result<ParsedBackup, Imp
     }
     if snapshot.fetched_at <= 0.0 || snapshot.fetched_at > now_ms + 86_400_000.0 {
         return Err(ImportError::BadSnapshot(
-            "its fetch date is missing or in the future".to_string(),
+            "it doesn't say when it was downloaded from CMI, or the date it \
+             gives is in the future"
+                .to_string(),
         ));
     }
     Ok(ParsedBackup {

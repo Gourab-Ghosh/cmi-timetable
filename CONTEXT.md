@@ -2457,8 +2457,8 @@ User: the R43 snapshot export "is not exactly what I wanted" — it must copy
 "each and everything of the website": the timetable, the selected courses,
 the overwrites, all of it. Remove Export/Import snapshot from Downloaded
 timetable (back to its pre-R43 state), place whole-planner import/export
-somewhere smart, JSON, machine-processable. Plus: an "Import from JSON"
-beside "Export as JSON" under Course selection that asks replace-or-add
+somewhere smart, JSON, machine-processable. Plus: an "Import my courses"
+beside "Export my courses" under Course selection that asks replace-or-add
 (the ask clarified mid-round: that popup belongs ONLY to the selection
 import; the whole-planner import just confirms and replaces), the pair
 side by side with distance from the heading and from Clear selection,
@@ -2488,7 +2488,7 @@ file. Filename kind: `cmi-planner-<slug>-<export-date>.json`. Native
 tests: `core/tests/export_tests.rs` (round trip, every refusal message,
 minor-version tolerance).
 
-**2. "Import from JSON" on Course selection.** Reads codes back out of a
+**2. "Import my courses" on Course selection.** Reads codes back out of a
 `cmi-timetable-export` (leniently: format id + `courses[].code`; planner
 backups and foreign files are redirected/refused by name). Codes resolve
 like share links (own courses first, then catalog case-insensitively);
@@ -2848,6 +2848,84 @@ last sync". Gates on the final tree: fmt + clippy clean, **114 native +
 (`dropped-2-what-changed-dialog.png`, `dropped-3-record-popup.png`) and
 reviewed by eye. FEATURES.md digest bullet and e2e/README updated same
 round.
+
+### R51 — one name for the person at the front of the room
+
+The user: the digest hint says "teacher", but the app's own label — the
+details dialog's and the popup's kv row — is "Instructor". Change it, and
+anywhere else "teacher" appears. Applied: the digest hint is now "Click a
+code to see what the course was — its instructor, and when and where it
+met." (rephrased while at it to cover everything the popup shows —
+instructor, days, times, halls), the code chip's hover title matches, the
+editor's internal `cmi_teachers` binding became `cmi_instructors`, and
+FEATURES.md + t77's comments/assert-messages say instructor too. No pinned
+STRING changed (t77 asserts structure, not the word), so no pin edits.
+Gates: fmt + clippy clean, 114 native + 86/86 e2e, rehearsal green, digest
+hint re-shot and eyeballed.
+
+### R52 — no word on screen a student can't already know
+
+The user, on the popup's "it lives in this digest and nowhere else": a
+regular user has no idea what "digest" means. The rule for the round, in
+their words: every text on the website must be understandable by a regular
+user with NO knowledge of the app's code, no term they can't know, and no
+sentence that sounds odd.
+
+**The trigger fixed first**, then a sweep: workflow wf_70647a4a-e4b, 6
+finders over every string surface + 2 judges (plain-language: would a
+non-technical student understand every word; natural-voice: does it sound
+human read aloud). 3 workers died on a model limit and were resumed from
+cache. 72 candidates → 42 agreed verbatim, 24 arbitrated by hand, 6
+rejected. ~66 strings changed; decisions in
+`.workagents/r52-plain-language-worklist.md`, raw in
+`r52-jargon-sweep-raw.json`.
+
+**Renames that rippled through app + core + docs + tests:**
+
+- **"Export as JSON" → "Export my courses"**, **"Import from JSON…" →
+  "Import my courses…"**. JSON is a format name nothing outside the app
+  needs here; .ics survives (a calendar app genuinely needs it) but its
+  BUTTON became "Download calendar file", the format named once in the
+  dialog title.
+- **"via proxy (allorigins.win)" → "through the helper site
+  allorigins.win"** (core `SourceTier::label`), and the most-seen toast in
+  the app dropped the route entirely: **"Timetable updated."** The route
+  still lives in the pill's tooltip and the fetch log. `source_label` was
+  removed from `adopt()`; `label()` stays alive for the pill and dev.rs.
+- **"Density: comfortable/compact" → "Rows: roomy/tight"**; "TMP" → "Temp";
+  "5 h ago" → "5 hours ago" (with a singular arm); "focused course" → "Tab
+  to a course"; "the pointer" → "the mouse"; "overwrites" → "replaces".
+- **MissingPart** template became "Part of that backup is missing — the
+  {part}." and its fillers were renamed ("changes"→"changes you made",
+  "own courses"→"courses you added") so EVERY filler is grammatical — the
+  old template produced "has no own courses section inside it".
+- Toasts stopped pointing at things with no on-screen name: "banner" →
+  "the message at the top of the page"; "fetch date" → "when it was
+  downloaded from CMI"; "version stamp" → "which version of the app made
+  it"; "update the app" → "reload this page" (there is no installer —
+  verified the SW is network-first for navigations, so a reload really
+  does get the newest build).
+
+**Deliberately kept technical (6 rejects):** the developer-mode toasts and
+gate table (parse failure, the gate, re-parse, raw page copies, "too
+thin"). That screen's reader is the maintainer, and its toasts must match
+the buttons and rule names on the same hidden screen.
+
+Pins updated: 11 e2e (button xpaths ×4, `Download calendar file`, share
+`aria-label` ×2, `through the helper site`, the credits "Use the app's"
+button, the replace toast) and 2 native (`Import my courses`, "which
+version of the app made it"); FEATURES.md (two button names + the Row
+height row), README.md, e2e/README.md, CONTEXT.md's own quotes. Gates on
+the final tree: fmt + clippy clean, **114 native + 86/86 e2e** (one clean
+run; the first caught 3 pins the grep missed — an aria-label and a toast),
+deploy rehearsal green, full shoot.py regen + the dropped-course and
+credits harnesses, reviewed by eye (My data's renamed buttons, master
+grid's "Rows: roomy", the popup, the LAN-permission toast).
+
+Lesson recorded: a rename ripples further than its string — grep for the
+OLD label inside other strings (tooltips quote buttons), in `aria-label`s
+(two e2e selectors keyed on one), and in the docs, and re-run the FULL
+suite rather than the tests you think you touched.
 
 ## 8. Open bugs — found, confirmed, NOT fixed (do not delete)
 

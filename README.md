@@ -97,7 +97,7 @@ prompts, no reload loops.
 tested); `app/src/export.rs` builds them from the app's own course
 resolution and stores. `cmi-timetable-export` describes the student's week
 (stable keys, effective meetings, credit provenance); the app also reads
-its course CODES back for "Import from JSON" on Course selection, which
+its course CODES back for "Import my courses" on Course selection, which
 asks replace-or-add through a dialog. `cmi-planner-backup` carries the
 WHOLE planner — the internal `Snapshot` serde JSON plus selection,
 overrides, custom courses, prefs and postponed conflicts — and importing it

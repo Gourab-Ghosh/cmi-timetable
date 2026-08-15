@@ -324,17 +324,17 @@ with an explanation of why that happens and what still worked.
 
 ### JSON, for your own tools
 
-- **Export as JSON** (My data → Course selection) writes your week as a
+- **Export my courses** (My data → Course selection) writes your week as a
   machine-readable file: every selected course with its credits — and where
   each number came from: CMI, the app's guess and why, or you — plus the
   meetings you actually attend, each marked as CMI's own, moved by you, or
   added by you (moved ones carry the CMI original alongside). Stable keys and
   deterministic order, so scripts can merge two timetables or analyse one
   without scraping anything.
-- **Import from JSON** sits right beside it and reads the courses back out
+- **Import my courses** sits right beside it and reads the courses back out
   of such a file. If your timetable already has courses, a dialog asks — in
   whole sentences — whether the file's courses should **replace** yours or
-  **join** them; nothing changes until you pick, and either answer is one
+  **be added** to them; nothing changes until you pick, and either answer is one
   Ctrl+Z from undone. Codes this semester's catalog doesn't know are named
   and left out; an empty timetable is never asked (there is nothing to
   replace).
@@ -438,11 +438,11 @@ timetable.
 - **Opening a share link in a fresh browser never invents a conflict.** A
   browser that has never synced has no history to compare, so the first sync
   asks nothing — the link's changes simply apply.
-- **What changed keeps what a dropped course was** — name, teacher, and when
+- **What changed keeps what a dropped course was** — name, instructor, and when
   it met — so the digest can tell you what you lost, even though the fresh
   timetable no longer knows it. The list stays one line per course; clicking
   the code opens the record as its own pop-up, laid out like a course's
-  details page (teacher row, aligned day/time/hall meeting rows), with
+  details page (instructor row, aligned day/time/hall meeting rows), with
   **Back to What changed** returning to the digest. That record lives only
   in the digest; dismiss it and it is gone.
 - **Courses CMI drops** stay visible with a badge, and anything you had placed
@@ -470,7 +470,7 @@ its own, never as a change CMI made.
 | | |
 |:--|:--|
 | **Theme** | Auto (follows your system), light, or dark |
-| **Density** | Comfortable or compact |
+| **Row height** | Roomy or tight |
 | **On a phone** | The timetable opens on today's classes (the whole week is one tap away), tap targets sized for fingers, a header that packs tight, and long-press to drag |
 | **Motion** | Animations respect "reduce motion" |
 | **The wheel** | Scroll over any box with a step — credits, a meeting's start or end time, an export date, the reminder lead, or any dropdown — and it moves one step. Hovering is enough, no click first; while the wheel is over a box, the box takes the scroll and the page behind it stays put. The reminder lead nudges by single minutes on the wheel while its arrows jump by fives. A trackpad flick counts by full notches — a step or two per gesture, not ten — an empty box is never filled by a passing wheel, and the wheel never moves a value opposite to the way you scrolled |

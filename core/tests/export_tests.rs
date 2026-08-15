@@ -67,7 +67,7 @@ fn backup_refusals() {
         ImportError::WrongFormat("cmi-timetable-export".to_string())
     );
     assert!(
-        err.message().contains("Import from JSON"),
+        err.message().contains("Import my courses"),
         "{}",
         err.message()
     );
@@ -118,7 +118,11 @@ fn backup_refusals() {
     v.as_object_mut().unwrap().remove("format_version");
     let err = parse_planner_backup(&v.to_string(), NOW).unwrap_err();
     assert_eq!(err, ImportError::BadEnvelope);
-    assert!(err.message().contains("version stamp"), "{}", err.message());
+    assert!(
+        err.message().contains("which version of the app made it"),
+        "{}",
+        err.message()
+    );
 
     // Same when the stamp is mistyped to a non-string.
     let mut v: serde_json::Value = serde_json::from_str(&backup_text()).unwrap();

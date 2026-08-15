@@ -1152,7 +1152,7 @@ def t29_share_link_carries_custom_changes(app):
     app.xpath("//button[normalize-space()='Share']").click()
     app.wait_css(".dialog")
     url = app.css(
-        "input[aria-label='Share link including custom times']"
+        "input[aria-label='Share link with courses and your changes']"
     ).get_attribute("value")
     assert "?c=" in url and "s=" in url, url
     app.boot("/?" + url.split("?", 1)[1])  # fresh storage + shared link
@@ -1262,7 +1262,7 @@ def t33_export_ics_honors_overrides(app):
     app.boot("/", selection=["TOC"], overrides=TOC_OVR)
     app.xpath("//button[normalize-space()='Export to calendar']").click()
     dialog = app.wait_css(".dialog")
-    dialog.find_element(By.XPATH, ".//button[normalize-space()='Download .ics']").click()
+    dialog.find_element(By.XPATH, ".//button[normalize-space()='Download calendar file']").click()
     path = None
     deadline = time.time() + 10
     while time.time() < deadline:
@@ -1826,7 +1826,7 @@ def t41_custom_course_edit_park_share_delete(app):
     dialog = app.wait_css(".dialog")
     assert "GYM" in dialog.text, dialog.text  # the travels-only-with hint
     url = app.css(
-        "input[aria-label='Share link including custom times']"
+        "input[aria-label='Share link with courses and your changes']"
     ).get_attribute("value")
     app.boot("/?" + url.split("?", 1)[1])
     # Thursday: the definition the per-meeting edit wrote, not the form's.
@@ -2881,7 +2881,7 @@ def t62_the_wheel_steps_the_boxes_that_have_a_step(app):
     # The app hears it, exactly as if it had been typed: "Use CMI's value"
     # only shows when the value differs from CMI's.
     wheel(box, -50)
-    app.xpath("//button[starts-with(normalize-space(),\"Back to the app's\") or starts-with(normalize-space(),\"Use CMI's\")]")
+    app.xpath("//button[starts-with(normalize-space(),\"Use the app's\") or starts-with(normalize-space(),\"Use CMI's\")]")
 
     # The box's own min/max do the clamping, not us.
     for _ in range(25):
@@ -3412,7 +3412,7 @@ def t72_a_relay_is_asked_before_cmi_itself(app):
         app.wait_css(".tabs .tab", timeout=30)
         app.wait_gone(".welcome-card")
         title = app.css(".sync-pill").get_attribute("title")
-        assert "via proxy" in title, title
+        assert "through the helper site" in title, title
         tiers = fetch_log_tiers(app)
         assert tiers, "the sync must have been logged"
         assert all(t.startswith("proxy:") for t in tiers), \
@@ -3670,7 +3670,7 @@ def t76_no_false_conflict_and_decide_later_survives_reload(app):
 
 def t77_what_changed_shows_what_a_dropped_course_was(app):
     """A dropped course is exactly the one the fresh snapshot can't
-    describe — so the digest itself must carry what it WAS: name, teacher,
+    describe — so the digest itself must carry what it WAS: name, instructor,
     and when it met. Shown in the dialog, and nowhere else in the app."""
     serve_cmi()
     try:
@@ -3682,24 +3682,24 @@ def t77_what_changed_shows_what_a_dropped_course_was(app):
         dialog = app.wait_css(".dialog")
         assert gone in dialog.text, dialog.text
         # The digest lists a dropped course as ONE line — code, name, badge.
-        # The record (teacher and times) waits behind the code, or a
+        # The record (instructor and times) waits behind the code, or a
         # many-course digest drowns in detail nobody asked to read yet.
         item = next(i for i in dialog.find_elements(By.CSS_SELECTOR, ".diff-item")
                     if gone in i.text)
         assert not item.find_elements(By.CSS_SELECTOR, "ul.meetings li"), \
             "the digest row must not carry meeting rows inline"
         assert not item.find_elements(By.CSS_SELECTOR, "span.muted"), \
-            "the digest row must not carry the teacher inline"
-        # Clicking the code opens the record as its own popup — teacher in a
+            "the digest row must not carry the instructor inline"
+        # Clicking the code opens the record as its own popup — instructor in a
         # kv row, meetings as the same aligned when/where rows cards use.
         item.find_element(By.CSS_SELECTOR, "button.chip").click()
         WebDriverWait(app.d, 10).until(
             lambda d: "No longer on CMI's timetable" in app.css(".dialog").text)
         popup = app.css(".dialog")
         assert gone in popup.text, popup.text
-        assert "last record" in popup.text, popup.text
+        assert "everything the app still knows about it" in popup.text, popup.text
         assert popup.find_element(By.CSS_SELECTOR, ".kv dd").text.strip(), \
-            "the popup must name the teacher"
+            "the popup must name the instructor"
         rows = popup.find_elements(By.CSS_SELECTOR, "ul.meetings li")
         assert rows, "the popup must carry the meeting rows"
         assert "–" in rows[0].find_element(By.CSS_SELECTOR, ".when .t").text, \
@@ -3763,7 +3763,7 @@ def t79_json_exports_parse_and_the_backup_restores_everything(app):
     app.boot("/", selection=["TOC", "RDBM"], overrides=TOC_OVR)
     app.xpath("//button[normalize-space()='My data']").click()
     dialog = app.wait_css(".dialog")
-    dialog.find_element(By.XPATH, ".//button[normalize-space()='Export as JSON']").click()
+    dialog.find_element(By.XPATH, ".//button[normalize-space()='Export my courses']").click()
     time.sleep(1.0)
     tt_files = [f for f in os.listdir(DOWNLOADS) if f.startswith("cmi-timetable-")
                 and f.endswith(".json")]
@@ -3838,7 +3838,7 @@ def t79_json_exports_parse_and_the_backup_restores_everything(app):
 
 
 def t81_importing_courses_asks_replace_or_add(app):
-    """'Import from JSON' on Course selection reads the codes out of a
+    """'Import my courses' on Course selection reads the codes out of a
     timetable export and asks — in whole sentences — whether they replace
     the current courses or join them. Codes the catalog doesn't know are
     named and left out; an empty timetable skips the question (nothing to
@@ -3858,7 +3858,7 @@ def t81_importing_courses_asks_replace_or_add(app):
 
     def send_import():
         dialog.find_element(
-            By.XPATH, ".//button[normalize-space()='Import from JSON…']").click()
+            By.XPATH, ".//button[normalize-space()='Import my courses…']").click()
         file_input = WebDriverWait(app.d, 10).until(
             lambda d: d.find_element(By.CSS_SELECTOR, "#cmitt-import-input"))
         file_input.send_keys(crafted)
@@ -3874,7 +3874,7 @@ def t81_importing_courses_asks_replace_or_add(app):
     assert ask.text.count("BOGUS9") == 1, \
         f"a whitespace-variant duplicate must be deduped, not named twice: {ask.text}"
     ask.find_element(
-        By.XPATH, ".//button[contains(.,'Keep mine and add')]").click()
+        By.XPATH, ".//button[contains(.,'Keep my courses and add')]").click()
     app.wait_toast("Added 1 course from the file")
     for code in ("TOC", "QCOM", "MFD"):
         app.wait_css(f"button.chip[aria-label^='{code},']")
@@ -3887,8 +3887,8 @@ def t81_importing_courses_asks_replace_or_add(app):
         lambda d: app.css(".dialog") if "Courses from a file"
         in app.css(".dialog").text else None)
     ask.find_element(
-        By.XPATH, ".//button[contains(.,'Replace mine')]").click()
-    app.wait_toast("Your timetable is now the file's 2 courses.")
+        By.XPATH, ".//button[contains(.,'Replace my courses')]").click()
+    app.wait_toast("Your timetable now has exactly the 2 courses from that file.")
     app.d.find_element(By.TAG_NAME, "body").send_keys(Keys.ESCAPE)
     WebDriverWait(app.d, 10).until(
         lambda d: not app.css_all("button.chip[aria-label^='QCOM,']"),
@@ -3914,7 +3914,7 @@ def t81_importing_courses_asks_replace_or_add(app):
         lambda d: app.css(".dialog") if "Courses from a file"
         in app.css(".dialog").text else None)
     ask.find_element(
-        By.XPATH, ".//button[contains(.,'Keep mine and add')]").click()
+        By.XPATH, ".//button[contains(.,'Keep my courses and add')]").click()
     app.wait_toast("nothing changed")
     app.d.find_element(By.TAG_NAME, "body").send_keys(Keys.ESCAPE)
     app.wait_gone(".dialog")

@@ -305,7 +305,6 @@ pub fn adopt(app: &App, new_snapshot: Snapshot, announce: bool, from: Adoption) 
     app.overrides.set(merge.overrides);
     app.persist_overrides();
 
-    let source_label = new_snapshot.source.label();
     app.snapshot.set(new_snapshot.clone());
     match storage::save_snapshot(&new_snapshot) {
         storage::SnapshotSave::Full => {}
@@ -413,7 +412,7 @@ pub fn adopt(app: &App, new_snapshot: Snapshot, announce: bool, from: Adoption) 
         app.dialog.set(Some(crate::state::Dialog::Conflicts));
     }
     if announce {
-        app.toast(format!("Timetable updated ({source_label})."));
+        app.toast("Timetable updated.");
     }
 }
 
@@ -555,11 +554,11 @@ pub async fn run_update(app: App, manual: bool) {
         direct_tried = true;
         progress(&app, "That didn't work — asking cmi.ac.in directly…");
         app.toast(
-            "The app couldn't fetch the timetable the usual way, so it's asking CMI's \
+            "The app couldn't get the timetable the usual way, so it's asking CMI's \
              own website directly. Your browser may now ask whether this page can \
-             reach devices on your local network — that question is about this fetch, \
-             and it's safe to allow. If you say no, only this one route won't work. \
-             Nothing else changes.",
+             reach devices on your local network — that question is about the app \
+             asking cmi.ac.in for the timetable, and it's safe to allow. If you say \
+             no, the app simply can't ask CMI directly. Nothing else changes.",
         );
         match fetch_pages_tier(
             app,
@@ -599,10 +598,11 @@ pub async fn run_update(app: App, manual: bool) {
     // at which of the two events caused the other.
     let lan_note = if direct_tried && online {
         " If your browser asked whether this page may reach devices on your local \
-         network, that was this app fetching the timetable from cmi.ac.in — on CMI's \
+         network, that was this app getting the timetable from cmi.ac.in — on CMI's \
          own network, cmi.ac.in counts as a local address. Allowing it lets the app \
-         fetch straight from CMI when nothing else works. Blocking it only means that \
-         one route won't work — the app still tries its usual routes first."
+         ask CMI directly when nothing else works. Blocking it only means the app \
+         can't ask CMI directly — it still tries its usual way of getting the \
+         timetable first."
     } else {
         ""
     };

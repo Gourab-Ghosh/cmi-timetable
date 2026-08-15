@@ -180,9 +180,9 @@ fn apply_url_state(app: App) {
         app.set_banner_sticky(
             crate::state::BannerKind::Warn,
             format!(
-                "This link carries its own version of {} — where you already have a \
-                 course under the same code, yours stays. To use the link's version \
-                 instead, delete yours under My data and open the link again.",
+                "This link brings its own version of {}. You already made your own, \
+                 so the app kept what you have. To use the link's version instead, \
+                 delete yours in My data and open the link again.",
                 kept_yours.join(", "),
             ),
         );

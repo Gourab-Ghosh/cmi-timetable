@@ -186,7 +186,7 @@ pub fn download_timetable_export(app: &App) {
     let label = app.snapshot.with_untracked(|s| s.semester_label.clone());
     let name = ttcore::export::json_filename("timetable", &label, domx::today_local());
     domx::download_text(&name, "application/json", &timetable_export_json(app));
-    app.toast("Timetable exported as JSON.");
+    app.toast("Your courses were saved to a file — check your downloads.");
 }
 
 /// The whole planner as one `cmi-planner-backup` file: the downloaded
@@ -215,7 +215,7 @@ pub fn download_planner_backup(app: &App) {
     let label = app.snapshot.with_untracked(|s| s.semester_label.clone());
     let name = ttcore::export::json_filename("planner", &label, domx::today_local());
     domx::download_text(&name, "application/json", &planner_backup_json(app));
-    app.toast("Everything exported as one JSON file.");
+    app.toast("Everything was saved to one file — check your downloads.");
 }
 
 /// Load a `cmi-planner-backup` file: validate EVERYTHING fail-closed (the
@@ -252,7 +252,7 @@ pub fn import_planner_backup_text(app: App, text: &str) {
     let Ok(customs) =
         serde_json::from_value::<ttcore::model::CustomStore>(backup.custom_courses.take())
     else {
-        app.toast(refused("own courses"));
+        app.toast(refused("courses you added"));
         return;
     };
     let Ok(prefs) = serde_json::from_value::<crate::state::Prefs>(backup.prefs.take()) else {
@@ -277,10 +277,10 @@ pub fn import_planner_backup_text(app: App, text: &str) {
         let made = domx::fmt_local_date(backup.snapshot.fetched_at);
         let ok = domx::window()
             .confirm_with_message(&format!(
-                "Load this file in place of everything saved here? Your current \
-                 courses, changes and settings in this browser are replaced by \
-                 the file's (its timetable was fetched on {made}). This cannot \
-                 be undone."
+                "Load this file and replace everything saved here? Your \
+                 courses, changes and settings in this browser will be \
+                 replaced by the ones in the file — its timetable was \
+                 downloaded from CMI on {made}. This cannot be undone."
             ))
             .unwrap_or(false);
         if !ok {
@@ -354,22 +354,22 @@ pub fn import_planner_backup_text(app: App, text: &str) {
 /// what it needs: the format name and a list of course codes.
 pub fn parse_timetable_export_codes(text: &str) -> Result<Vec<String>, String> {
     let value: serde_json::Value = serde_json::from_str(text).map_err(|_| {
-        "That file couldn't be read as JSON — it may be damaged, or not a \
+        "That file couldn't be read — it may be damaged, or it may not be a \
          file this app made."
             .to_string()
     })?;
     let format = value.get("format").and_then(|f| f.as_str()).unwrap_or("");
     if format == "cmi-planner-backup" {
         return Err(
-            "That's a whole-planner backup, not a course list — “Import \
-             everything” in My data loads it."
+            "That's an “Export everything” file, not a course list — use \
+             “Import everything…” under “Everything in one file” to load it."
                 .to_string(),
         );
     }
     if format != "cmi-timetable-export" {
         return Err(
-            "That file isn't a timetable export — nothing in it says it was \
-             made by this app's “Export as JSON”."
+            "That file doesn't look like one this app made — nothing in it \
+             says it came from “Export my courses”."
                 .to_string(),
         );
     }

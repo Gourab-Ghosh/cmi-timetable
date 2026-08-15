@@ -479,7 +479,7 @@ pub fn fmt_local_date(ms: f64) -> String {
     )
 }
 
-/// "just now" / "12 min ago" / "2 h ago" / "3 days ago".
+/// "just now" / "12 min ago" / "2 hours ago" / "3 days ago".
 ///
 /// Takes `now` as a parameter so callers can drive it from a ticking signal
 /// and the text re-renders as time passes, not only when `ms` changes.
@@ -491,7 +491,7 @@ pub fn rel_time(ms: f64, now: f64) -> String {
     } else if mins < 60.0 {
         format!("{} min ago", mins as u32)
     } else if mins < 48.0 * 60.0 {
-        format!("{} h ago", (mins / 60.0) as u32)
+        format!("{} hours ago", (mins / 60.0) as u32)
     } else {
         format!("{} days ago", (mins / 1440.0) as u32)
     }

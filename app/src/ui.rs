@@ -161,7 +161,7 @@ pub fn chip(app: App, p: ChipProps) -> impl IntoView {
             aria_pre.push_str(", your custom meeting (not on CMI's timetable)");
         } else if let Some(base) = p.eff.as_ref().and_then(|e| e.base.as_ref()) {
             aria_pre.push_str(&format!(
-                ", your custom time — overwrites CMI's {}",
+                ", your custom time — replaces CMI's {}",
                 base.describe()
             ));
         } else {
@@ -276,7 +276,7 @@ pub fn chip(app: App, p: ChipProps) -> impl IntoView {
                 .then(|| view! { <span class="wontfit" aria-hidden="true">"⚠"</span> })}
             <span class="code">{p.code}</span>
             {sub.map(|s| view! { <span class="hall">{s}</span> })}
-            {temp.then(|| view! { <span class="hall">"TMP"</span> })}
+            {temp.then(|| view! { <span class="hall">"Temp"</span> })}
         </button>
     }
 }
@@ -1989,8 +1989,8 @@ fn details_dialog(app: App, code: String) -> impl IntoView {
             <div>
                 <h2 class="mono">{code}</h2>
                 <p>
-                    "CMI's timetable no longer lists this course. Anything you \
-                     placed for it stays on your timetable until you take it off."
+                    "CMI's timetable no longer lists this course. It stays on your \
+                     timetable, with any times you set for it, until you remove it."
                 </p>
                 {selected
                     .then(|| {
@@ -2391,8 +2391,8 @@ pub fn custom_changes_pill(app: App) -> impl IntoView {
                     view! {
                         <button
                             class="btn small"
-                            title="Everything you've added, deleted or changed — with \
-                                   one-click removal"
+                            title="Everything you've added, deleted or changed — open \
+                                   this to put any of it back"
                             on:click=move |_| app.dialog.set(Some(Dialog::MyData))
                         >
                             {format!("✎ {n} change{}", if n == 1 { "" } else { "s" })}
@@ -2805,7 +2805,7 @@ pub fn overrides_list(app: App) -> impl IntoView {
 // "My data" — everything saved in the browser, with removal options
 // ---------------------------------------------------------------------------
 
-/// "Import from JSON" found courses in the file — ask what they should do
+/// "Import my courses…" found courses in the file — ask what they should do
 /// to the selection. Two whole-sentence choices instead of a yes/no: the
 /// difference between replacing and joining is the entire decision, so each
 /// button says its consequence. Nothing changes until one is pressed, and
@@ -2815,7 +2815,7 @@ fn import_selection_dialog(app: App, known: Vec<String>, unknown: Vec<String>) -
     let plural = |n: usize| if n == 1 { "course" } else { "courses" };
     let lede = format!(
         "This file lists {n} {} from this semester. Should {} replace the \
-         courses already on your timetable, or join them?",
+         courses already on your timetable, or be added to them?",
         plural(n),
         if n == 1 { "it" } else { "they" },
     );
@@ -2835,8 +2835,8 @@ fn import_selection_dialog(app: App, known: Vec<String>, unknown: Vec<String>) -
     let codes = known.clone();
     let known_add = known.clone();
     let replace_note = format!(
-        "Your timetable becomes exactly {} {}. Only the selection changes — \
-         your custom times and your own courses stay saved.",
+        "Your timetable becomes exactly {} {}. Only the courses on it change — \
+         the times you set and your own courses stay saved.",
         if n == 1 { "this" } else { "these" },
         plural(n),
     );
@@ -2859,7 +2859,7 @@ fn import_selection_dialog(app: App, known: Vec<String>, unknown: Vec<String>) -
                         app.dialog.set(None);
                     }
                 >
-                    <strong>"Replace mine with the file's"</strong>
+                    <strong>"Replace my courses with the file's"</strong>
                     <span class="muted small">{replace_note}</span>
                 </button>
                 <button
@@ -2869,7 +2869,7 @@ fn import_selection_dialog(app: App, known: Vec<String>, unknown: Vec<String>) -
                         app.dialog.set(None);
                     }
                 >
-                    <strong>"Keep mine and add the file's"</strong>
+                    <strong>"Keep my courses and add the file's"</strong>
                     <span class="muted small">
                         "The file's courses join what's already on your timetable — \
                          nothing is taken away."
@@ -2911,7 +2911,7 @@ fn my_data_dialog(app: App) -> impl IntoView {
             .confirm_with_message(&format!(
                 "Clear the timetable this app downloaded from CMI? Your courses \
                  and your changes stay. The app shows its welcome screen until \
-                 you fetch CMI's pages again.{extra}"
+                 you fetch the timetable again.{extra}"
             ))
             .unwrap_or(false)
         {
@@ -2950,9 +2950,9 @@ fn my_data_dialog(app: App) -> impl IntoView {
         <div class="my-data">
             <h2>"My data"</h2>
             <p class="muted small dialog-lede">
-                "Everything the app knows lives in this browser. This list is the \
-                 complete inventory — nothing is ever sent to a server, and every \
-                 item can be removed right here."
+                "Everything the app knows lives in this browser. This list shows \
+                 all of it — nothing is ever sent to a server, and you can remove \
+                 any of it right here."
             </p>
 
             // Every custom change together, and exactly which CMI data each
@@ -2977,16 +2977,16 @@ fn my_data_dialog(app: App) -> impl IntoView {
                                     view! {
                                         <button
                                             class="btn small"
-                                            title="Saves your timetable as a JSON file — \
-                                                   every course and meeting as you actually \
-                                                   attend them, for scripts and tools to \
-                                                   read, and for “Import from JSON” to load \
-                                                   in another browser."
+                                            title="Saves the courses on your timetable to \
+                                                   a file — every course and meeting as \
+                                                   you actually attend them. Use “Import \
+                                                   my courses…” to load them in another \
+                                                   browser."
                                             on:click=move |_| {
                                                 crate::export::download_timetable_export(&app)
                                             }
                                         >
-                                            "Export as JSON"
+                                            "Export my courses"
                                         </button>
                                     }
                                 })
@@ -2997,15 +2997,16 @@ fn my_data_dialog(app: App) -> impl IntoView {
                                     view! {
                                         <button
                                             class="btn small"
-                                            title="Reads the courses out of an “Export as \
-                                                   JSON” file and asks whether they should \
-                                                   replace your current courses or join \
-                                                   them. Nothing changes until you pick."
+                                            title="Opens a file you saved with “Export my \
+                                                   courses” and asks whether its courses \
+                                                   should replace the courses on your \
+                                                   timetable or be added to them. Nothing \
+                                                   changes until you choose."
                                             on:click=move |_| {
                                                 crate::export::pick_and_import_selection(app)
                                             }
                                         >
-                                            "Import from JSON…"
+                                            "Import my courses…"
                                         </button>
                                     }
                                 })
@@ -3019,8 +3020,8 @@ fn my_data_dialog(app: App) -> impl IntoView {
                                     <button
                                         class="btn small danger"
                                         title="Empties your timetable. Your changes and \
-                                               your own courses stay saved, and Undo \
-                                               brings the selection back."
+                                               your own courses stay saved, and Undo puts \
+                                               the courses back."
                                         on:click=move |_| {
                                             app.act("clear selection", |sel, _| sel.clear());
                                             app.toast_undo(
@@ -3097,7 +3098,7 @@ fn my_data_dialog(app: App) -> impl IntoView {
                                         .to_string()
                                 } else {
                                     format!(
-                                        "{} · fetched {} · {}",
+                                        "{} · last synced {} · {}",
                                         s.semester_label_display(),
                                         domx::fmt_local(s.fetched_at),
                                         s.source.label(),
@@ -3157,9 +3158,9 @@ fn my_data_dialog(app: App) -> impl IntoView {
                                     view! {
                                         <button
                                             class="btn small"
-                                            title="Saves the whole planner as one JSON \
-                                                   file: the downloaded timetable, your \
-                                                   courses, your changes and your settings."
+                                            title="Saves the whole planner as one file: \
+                                                   the downloaded timetable, your courses, \
+                                                   your changes and your settings."
                                             on:click=move |_| {
                                                 crate::export::download_planner_backup(&app)
                                             }
@@ -3172,9 +3173,9 @@ fn my_data_dialog(app: App) -> impl IntoView {
                         <button
                             class="btn small"
                             title="Loads an “Export everything” file in place of what \
-                                   this browser has saved — the planner then looks \
-                                   exactly like the one that made the file. It asks \
-                                   before replacing anything."
+                                   this browser has saved — everything then looks \
+                                   exactly as it did on the device that made the file. \
+                                   It asks before replacing anything."
                             on:click=move |_| crate::export::pick_and_import_backup(app)
                         >
                             "Import everything…"
@@ -3399,7 +3400,7 @@ impl MeetRowDraft {
                     parse_hhmm(&self.start.get_untracked()),
                     parse_hhmm(&self.end.get_untracked()),
                 ) else {
-                    return Err("enter times as HH:MM, e.g. 18:00".to_string());
+                    return Err("enter times like 18:00, using a 24-hour clock".to_string());
                 };
                 if start >= end {
                     return Err("the start time must be before the end time".to_string());
@@ -3658,11 +3659,11 @@ fn course_editor_dialog(app: App, code: Option<String>, prefill: Option<String>)
                     String::new()
                 } else {
                     format!(
-                        "{} {} clashes with {} — you can still {}.",
+                        "{} {} clashes with {} — you can still {} it.",
                         m.day.short(),
                         m.slot.label(),
                         partners.join(", "),
-                        if row_is_edit(&own) { "save" } else { "add it" },
+                        if row_is_edit(&own) { "save" } else { "add" },
                     )
                 }
             })
@@ -3845,7 +3846,7 @@ fn course_editor_dialog(app: App, code: Option<String>, prefill: Option<String>)
 
     let cmi_name = subject.name.clone();
     let cmi_code_text = subject.code.clone();
-    let cmi_teachers = subject.instructors.join(" / ");
+    let cmi_instructors = subject.instructors.join(" / ");
 
     view! {
         // One listener for the whole form instead of a line in thirty
@@ -3917,12 +3918,12 @@ fn course_editor_dialog(app: App, code: Option<String>, prefill: Option<String>)
                             <span class="fieldlabel">"Code"</span>
                             <span class="ro-value mono">{cmi_code_text}</span>
                         </div>
-                        {(!cmi_teachers.is_empty())
+                        {(!cmi_instructors.is_empty())
                             .then(|| {
                                 view! {
                                     <div class="fieldrow ro">
                                         <span class="fieldlabel">"Taught by"</span>
-                                        <span class="ro-value">{cmi_teachers}</span>
+                                        <span class="ro-value">{cmi_instructors}</span>
                                     </div>
                                 }
                             })}
@@ -4108,7 +4109,7 @@ fn course_editor_dialog(app: App, code: Option<String>, prefill: Option<String>)
                                                 }
                                             >
                                                 {if official_credits_assumed {
-                                                    format!("Back to the app's {official}")
+                                                    format!("Use the app's {official}")
                                                 } else {
                                                     format!("Use CMI's {official}")
                                                 }}
@@ -4379,10 +4380,10 @@ fn course_editor_dialog(app: App, code: Option<String>, prefill: Option<String>)
                                     // whose classes you struck out. Saying it
                                     // would send the user looking for a chip
                                     // that is not there.
-                                    "No meetings left — this course will not appear on \
+                                    "No meetings left — this course won't appear on \
                                      your timetable. Every meeting you removed is listed \
-                                     under Your changes, and can be put back from there \
-                                     or from here."
+                                     under Your changes, and you can put any of them back \
+                                     there or under “Meetings you removed” just below."
                                 } else {
                                     "No meetings yet — the course will wait in \
                                      “No fixed slot yet” on My timetable until you give \
@@ -4536,8 +4537,8 @@ fn conflicts_dialog(app: App) -> impl IntoView {
             <h2>"CMI changed times you customised"</h2>
             <p class="muted">
                 "Pick what to keep for each change. Nothing is picked for you, \
-                 and nothing changes until you press Apply. Rows you leave \
-                 unanswered keep waiting until you decide."
+                 and nothing changes until you press Apply. Anything you leave \
+                 unanswered stays waiting, so you can come back and finish later."
             </p>
             <div class="actions" style="justify-content:flex-start">
                 <button
@@ -4728,8 +4729,8 @@ fn export_dialog(app: App, scope: Option<String>) -> impl IntoView {
             .collect();
         if courses.iter().all(|c| c.meetings.is_empty()) {
             error.set(
-                "Nothing to export yet — nothing going into this file has a time. \
-                 Open a course and add a weekly meeting, then come back."
+                "Nothing to export yet — none of these courses has a weekly meeting. \
+                 Open a course, add a meeting, then come back."
                     .to_string(),
             );
             return;
@@ -4878,7 +4879,8 @@ fn export_dialog(app: App, scope: Option<String>) -> impl IntoView {
                     })
             }}
             <p class="muted small">
-                "Courses with a “starts …” or “runs … only” note are exported with their own dates."
+                "If a course says “starts …” or “runs … only”, the file uses those \
+                 dates for it instead of the ones above."
             </p>
             <p class="muted small">
                 "The file repeats each class weekly between the dates above, holidays \
@@ -4900,7 +4902,7 @@ fn export_dialog(app: App, scope: Option<String>) -> impl IntoView {
                     "Cancel"
                 </button>
                 <button class="btn primary" on:click=move |_| download.run(())>
-                    "Download .ics"
+                    "Download calendar file"
                 </button>
             </div>
         </div>
@@ -4950,8 +4952,9 @@ fn share_dialog(app: App) -> impl IntoView {
                         <p class="muted small">
                             {format!(
                                 "{} {} you made yourself. Only “Copy link with custom \
-                                 changes” carries {}. The plain link carries just the \
-                                 code{}, which {} nothing in someone else's browser.",
+                                 changes” carries {}. The “Courses only” link carries \
+                                 just the code{}, which {} nothing in someone else's \
+                                 browser.",
                                 custom_codes.join(", "),
                                 if custom_codes.len() == 1 {
                                     "is a course"
@@ -4989,7 +4992,7 @@ fn share_dialog(app: App) -> impl IntoView {
                     readonly
                     prop:value=with_times
                     style="flex:1"
-                    aria-label="Share link including custom times"
+                    aria-label="Share link with courses and your changes"
                 />
                 <button
                     class="btn"
@@ -5090,13 +5093,13 @@ fn what_changed_dialog(app: App) -> impl IntoView {
                 "No longer listed",
                 removed.len(),
                 view! {
-                    // One line per course — the record (teacher and times)
+                    // One line per course — the record (instructor and times)
                     // waits behind the code. Inline it made a many-course
                     // digest unreadable, so the section says once where the
                     // details went instead of hinting on every row.
                     <p class="muted small diff-hint">
                         "Click a code to see what the course was — its \
-                         teacher and times."
+                         instructor, and when and where it met."
                     </p>
                     {removed
                         .iter()
@@ -5115,7 +5118,7 @@ fn what_changed_dialog(app: App) -> impl IntoView {
                                     <button
                                         class="chip mono"
                                         style="--hue:215"
-                                        title="See what this course was — its teacher and times"
+                                        title="See what this course was — its instructor, and when and where it met"
                                         on:click=move |_| {
                                             app.dialog
                                                 .set(Some(Dialog::RemovedCourse(record.clone())));
@@ -5211,11 +5214,15 @@ fn removed_course_dialog(app: App, record: ttcore::diff::RemovedCourse) -> impl 
             <p class="muted small">
                 {if still_mine {
                     "CMI's pages no longer list this course, but it stays on your \
-                     timetable until you remove it. This is the app's last record of \
-                     it — it lives in this digest and nowhere else."
+                     timetable until you remove it. What you see here is everything \
+                     the app still knows about it — once you press Dismiss on the \
+                     update message at the top of the page, these details are gone \
+                     for good."
                 } else {
-                    "CMI's pages no longer list this course. This is the app's last \
-                     record of it — it lives in this digest and nowhere else."
+                    "CMI's pages no longer list this course. What you see here is \
+                     everything the app still knows about it — once you press Dismiss \
+                     on the update message at the top of the page, these details are \
+                     gone for good."
                 }}
             </p>
             <dl class="kv">
@@ -5232,7 +5239,7 @@ fn removed_course_dialog(app: App, record: ttcore::diff::RemovedCourse) -> impl 
             </dl>
             <h3 style="margin-top:0.8rem">"Meetings"</h3>
             {if meetings.is_empty() {
-                view! { <p class="muted">"CMI's pages gave it no weekly times."</p> }.into_any()
+                view! { <p class="muted">"CMI's pages never listed a time for it."</p> }.into_any()
             } else {
                 view! {
                     <ul class="meetings">

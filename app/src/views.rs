@@ -517,7 +517,7 @@ fn my_timetable(app: App) -> impl IntoView {
                                         <p class="muted small">
                                             "The tinted column with the odd time is outside \
                                              CMI's regular grid — it exists because one of \
-                                             your meetings needs it."
+                                             your meetings falls at that time."
                                         </p>
                                     }
                                 })
@@ -619,8 +619,8 @@ fn my_timetable(app: App) -> impl IntoView {
                                 // route and it had no hint at all.
                                 <p class="muted small tray-hint">
                                     "Turn on ✎ Edit layout and drag one onto the grid, or \
-                                     press Edit this course to set its time — and its hall, \
-                                     credits or name while you're there."
+                                     use the “Edit this course” button to set its time — \
+                                     and its hall, credits or name while you're there."
                                 </p>
                                 <div class="items">
                                     {items
@@ -784,10 +784,10 @@ fn my_timetable(app: App) -> impl IntoView {
                                     " Your changes"
                                 </h3>
                                 <p class="muted small">
-                                    "Everything you've added, deleted or overwritten in \
+                                    "Everything you've added, deleted or changed in \
                                      your timetable. You can put any one of them back \
-                                     to CMI's version without touching the rest — and \
-                                     every change is undoable (Ctrl+Z)."
+                                     to CMI's version without touching the rest, and \
+                                     Ctrl+Z undoes your last change."
                                 </p>
                                 {overrides_list(app)}
                             </div>
@@ -891,9 +891,9 @@ fn my_timetable(app: App) -> impl IntoView {
                                 <p class="print-footnote">
                                     <span>
                                         {move || {
-                                            let mut legend = "✎ customised in the planner · \
-                                                              * assumed credits (not listed \
-                                                              by CMI)"
+                                            let mut legend = "✎ you changed this · * credits \
+                                                              the app guessed (CMI doesn't \
+                                                              list them)"
                                                 .to_string();
                                             if !app.clashes().is_empty() {
                                                 legend.push_str(
@@ -903,7 +903,10 @@ fn my_timetable(app: App) -> impl IntoView {
                                             legend
                                         }}
                                     </span>
-                                    <span>"Verify against official CMI announcements."</span>
+                                    <span>
+                                        "Check this against CMI's official announcements \
+                                         before you rely on it."
+                                    </span>
                                 </p>
                             </div>
                         }
@@ -1239,8 +1242,12 @@ fn my_courses(app: App) -> impl IntoView {
                 (!parked.is_empty())
                     .then(|| {
                         view! {
-                            <div class="parked" role="group" aria-label="Courses you made, off your timetable">
-                                <h3>"Courses you made, off your timetable"</h3>
+                            <div
+                                class="parked"
+                                role="group"
+                                aria-label="Your own courses that aren't on your timetable"
+                            >
+                                <h3>"Your own courses that aren't on your timetable"</h3>
                                 <p class="muted small">
                                     "These are courses you made yourself and then took off \
                                      your timetable. The app keeps them here, so you can add \
@@ -1416,8 +1423,8 @@ fn course_card(app: App, course: Course) -> impl IntoView {
                             // can reach it.
                             <button
                                 class="badge custom"
-                                title="You made this course. It isn't on CMI's \
-                                       pages. Opens this course's details."
+                                title="You made this course — it isn't on CMI's \
+                                       pages. Click to see its details."
                                 on:click=move |_| {
                                     app.dialog.set(Some(Dialog::Details(details_code.clone())));
                                 }
@@ -1647,8 +1654,8 @@ fn master_grid(app: App) -> impl IntoView {
                     }
                 >
                     {move || match app.prefs.with(|p| p.density) {
-                        Density::Comfortable => "Density: comfortable",
-                        Density::Compact => "Density: compact",
+                        Density::Comfortable => "Rows: roomy",
+                        Density::Compact => "Rows: tight",
                     }}
                 </button>
             </div>
@@ -1663,12 +1670,12 @@ fn master_grid(app: App) -> impl IntoView {
                 <li><span class="legend-mark">"⚠"</span>" clashes with something you have"</li>
                 <li>
                     <span class="legend-mark">"ⓘ"</span>
-                    " full details (or press I on a focused course)"
+                    " full details (or Tab to a course and press I)"
                 </li>
                 <li>
                     <span class="legend-mark">"✎"</span>
                     " Edit layout lets you drag a course straight into the slot you \
-                     want — the drop adds it to your timetable too"
+                     want — dropping it there adds it to your timetable too"
                 </li>
             </ul>
             {filter_bar(app, FilterScope::OnTheGrid, count)}

@@ -460,7 +460,7 @@ impl SourceTier {
     pub fn label(&self) -> String {
         match self {
             SourceTier::Direct => "directly from cmi.ac.in".to_string(),
-            SourceTier::Proxy(name) => format!("via proxy ({name})"),
+            SourceTier::Proxy(name) => format!("through the helper site {name}"),
             SourceTier::Mirror => "from this site's old copy".to_string(),
             SourceTier::Bundled => "bundled with the app".to_string(),
             SourceTier::Imported => "imported from a file".to_string(),
