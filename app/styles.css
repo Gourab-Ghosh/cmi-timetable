@@ -1752,9 +1752,9 @@ details.facet .menu .menu-empty { margin: 0.2rem 0 0; }
 }
 .diff-item + .diff-item { border-top: 1px dashed var(--line); }
 .diff-item .name { font-weight: 550; }
-/* What a dropped course was — its meetings in the same aligned when/where
-   rows a course card uses, on their own full-width line under the name. */
-.diff-item ul.meetings { flex-basis: 100%; margin: 0.15rem 0 0; }
+/* The one-line hint under "No longer listed" — the record itself opens as
+   a popup from the code, so the list stays one line per course. */
+.diff-hint { margin: 0.3rem 0 0.1rem; }
 .diff-lines { flex-basis: 100%; margin: 0.1rem 0 0; padding: 0; list-style: none; }
 .diff-lines li {
   font-family: var(--font-mono);

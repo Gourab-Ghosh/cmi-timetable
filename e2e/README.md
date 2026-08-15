@@ -103,8 +103,9 @@ state being separate from the Catalog+Master grid's shared state (neither
 leaks into the other; undo restores the right set), a share link opened in a
 never-synced browser raising ZERO conflicts on its first sync while a real
 conflict deferred with "Decide later" survives a reload, the What-changed
-digest carrying what a dropped course WAS (and that course haunting nothing
-else), seventy active-filter chips collapsing behind "+N more" with every
+digest carrying what a dropped course WAS — one line per course, the record
+opening as its own popup from the code, Back returning to the digest (and
+that course haunting nothing else), seventy active-filter chips collapsing behind "+N more" with every
 chip still removable when expanded, the two JSON exports parsing and the
 whole-planner backup restoring EVERYTHING through a wiped browser — the
 selection, the custom move and the full catalog, with the pill saying

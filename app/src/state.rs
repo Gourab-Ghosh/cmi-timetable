@@ -219,6 +219,12 @@ pub enum Dialog {
     },
     Share,
     WhatChanged,
+    /// The last record of a course CMI dropped, opened by clicking its code
+    /// in the What-changed digest. The whole record RIDES IN the variant: a
+    /// sync may replace `what_changed` while this is open, and the popup
+    /// must keep showing exactly what was clicked. Back swaps the one
+    /// dialog slot to WhatChanged.
+    RemovedCourse(ttcore::diff::RemovedCourse),
     /// The one editor. `code: None` creates a course of the user's own;
     /// `Some(code)` edits that course, whether it is CMI's or theirs — every
     /// field of it, in one form, saved in one step. `prefill` seeds the name

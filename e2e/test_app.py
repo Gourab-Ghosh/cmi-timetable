@@ -3681,18 +3681,36 @@ def t77_what_changed_shows_what_a_dropped_course_was(app):
         app.xpath("//button[normalize-space()='See what changed']").click()
         dialog = app.wait_css(".dialog")
         assert gone in dialog.text, dialog.text
-        # Its last record is laid out like a course card: teacher beside the
-        # name, meetings as aligned when/where rows — not one squeezed line.
+        # The digest lists a dropped course as ONE line — code, name, badge.
+        # The record (teacher and times) waits behind the code, or a
+        # many-course digest drowns in detail nobody asked to read yet.
         item = next(i for i in dialog.find_elements(By.CSS_SELECTOR, ".diff-item")
                     if gone in i.text)
-        assert item.find_element(By.CSS_SELECTOR, "span.muted").text.strip(), \
-            "the dropped course must still name its teacher"
-        rows = item.find_elements(By.CSS_SELECTOR, "ul.meetings li")
-        assert rows, "the dropped course must keep its meeting rows"
+        assert not item.find_elements(By.CSS_SELECTOR, "ul.meetings li"), \
+            "the digest row must not carry meeting rows inline"
+        assert not item.find_elements(By.CSS_SELECTOR, "span.muted"), \
+            "the digest row must not carry the teacher inline"
+        # Clicking the code opens the record as its own popup — teacher in a
+        # kv row, meetings as the same aligned when/where rows cards use.
+        item.find_element(By.CSS_SELECTOR, "button.chip").click()
+        WebDriverWait(app.d, 10).until(
+            lambda d: "No longer on CMI's timetable" in app.css(".dialog").text)
+        popup = app.css(".dialog")
+        assert gone in popup.text, popup.text
+        assert "last record" in popup.text, popup.text
+        assert popup.find_element(By.CSS_SELECTOR, ".kv dd").text.strip(), \
+            "the popup must name the teacher"
+        rows = popup.find_elements(By.CSS_SELECTOR, "ul.meetings li")
+        assert rows, "the popup must carry the meeting rows"
         assert "–" in rows[0].find_element(By.CSS_SELECTOR, ".when .t").text, \
             f"a meeting row must show the time span: {rows[0].text!r}"
         assert rows[0].find_element(By.CSS_SELECTOR, ".where .hall").text.strip(), \
             f"a meeting row must say where the class met: {rows[0].text!r}"
+        # Back is a return trip, not a dead end: the digest reopens.
+        popup.find_element(
+            By.XPATH, ".//button[normalize-space()='Back to What changed']").click()
+        WebDriverWait(app.d, 10).until(
+            lambda d: "What changed since last sync" in app.css(".dialog").text)
         # …and nowhere else: closing the dialog, the code appears in no grid
         # or list (the fresh snapshot never heard of it).
         app.d.find_element(By.CSS_SELECTOR, "body").send_keys(Keys.ESCAPE)

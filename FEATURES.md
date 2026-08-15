@@ -440,9 +440,11 @@ timetable.
   asks nothing — the link's changes simply apply.
 - **What changed keeps what a dropped course was** — name, teacher, and when
   it met — so the digest can tell you what you lost, even though the fresh
-  timetable no longer knows it. The record is laid out like a course card:
-  teacher beside the name, meetings as aligned day/time/hall rows. That
-  detail lives only in the digest; close it and it is gone.
+  timetable no longer knows it. The list stays one line per course; clicking
+  the code opens the record as its own pop-up, laid out like a course's
+  details page (teacher row, aligned day/time/hall meeting rows), with
+  **Back to What changed** returning to the digest. That record lives only
+  in the digest; dismiss it and it is gone.
 - **Courses CMI drops** stay visible with a badge, and anything you had placed
   for them stays on your week.
 - **Changes that no longer apply** are announced rather than silently

@@ -1681,6 +1681,9 @@ pub fn DialogHost() -> impl IntoView {
                         Dialog::Export { scope } => export_dialog(app, scope).into_any(),
                         Dialog::Share => share_dialog(app).into_any(),
                         Dialog::WhatChanged => what_changed_dialog(app).into_any(),
+                        Dialog::RemovedCourse(record) => {
+                            removed_course_dialog(app, record).into_any()
+                        }
                         Dialog::EditCourse { code, prefill } => {
                             course_editor_dialog(app, code, prefill).into_any()
                         }
@@ -5087,68 +5090,44 @@ fn what_changed_dialog(app: App) -> impl IntoView {
                 "No longer listed",
                 removed.len(),
                 view! {
+                    // One line per course — the record (teacher and times)
+                    // waits behind the code. Inline it made a many-course
+                    // digest unreadable, so the section says once where the
+                    // details went instead of hinting on every row.
+                    <p class="muted small diff-hint">
+                        "Click a code to see what the course was — its \
+                         teacher and times."
+                    </p>
                     {removed
                         .iter()
                         .map(|r| {
                             let is_mine = mine(&r.code);
                             // Everything the dialog knows about a dropped
                             // course lives in the diff itself — the fresh
-                            // snapshot has never heard of it. Shown HERE and
-                            // nowhere else; when the diff goes, this data
-                            // goes with it (it is never stored). Laid out
-                            // the way a course card is — instructor beside
-                            // the name, meetings as aligned when/where rows —
-                            // so its last record reads like the course did,
-                            // not like a sentence squeezed through a comma.
+                            // snapshot has never heard of it. The WHOLE
+                            // record rides in the Dialog variant: a sync can
+                            // replace the digest while the popup is open,
+                            // and the popup must keep showing what was
+                            // clicked.
+                            let record = r.clone();
                             view! {
                                 <div class="diff-item">
-                                    <span class="chip mono" style="--hue:215">
+                                    <button
+                                        class="chip mono"
+                                        style="--hue:215"
+                                        title="See what this course was — its teacher and times"
+                                        on:click=move |_| {
+                                            app.dialog
+                                                .set(Some(Dialog::RemovedCourse(record.clone())));
+                                        }
+                                    >
                                         {r.code.clone()}
-                                    </span>
+                                    </button>
                                     <span class="name">{r.name.clone()}</span>
-                                    {(!r.instructors.is_empty())
-                                        .then(|| {
-                                            view! {
-                                                <span class="muted">{r.instructors.join(" / ")}</span>
-                                            }
-                                        })}
                                     {is_mine
                                         .then(|| {
                                             view! {
                                                 <span class="badge warn">"still in your timetable"</span>
-                                            }
-                                        })}
-                                    {(!r.meetings.is_empty())
-                                        .then(|| {
-                                            view! {
-                                                <ul class="meetings">
-                                                    {r.meetings
-                                                        .iter()
-                                                        .map(|m| {
-                                                            view! {
-                                                                <li>
-                                                                    <span class="when">
-                                                                        <span class="d">{m.day.short()}</span>
-                                                                        " "
-                                                                        <span class="t">{m.slot.label()}</span>
-                                                                    </span>
-                                                                    <span class="where">
-                                                                        {match &m.hall {
-                                                                            Some(h) => {
-                                                                                view! { <span class="hall">{h.clone()}</span> }
-                                                                                    .into_any()
-                                                                            }
-                                                                            None => {
-                                                                                view! { <span class="hall tba">"Hall TBA"</span> }
-                                                                                    .into_any()
-                                                                            }
-                                                                        }}
-                                                                    </span>
-                                                                </li>
-                                                            }
-                                                        })
-                                                        .collect_view()}
-                                                </ul>
                                             }
                                         })}
                                 </div>
@@ -5203,6 +5182,99 @@ fn what_changed_dialog(app: App) -> impl IntoView {
             // used to sit here could not be reached from anywhere in the app
             // — text nobody would ever read, quietly claiming otherwise.
             <div class="actions">{close_button(app)}</div>
+        </div>
+    }
+}
+
+/// One dropped course, in its own popup — opened by clicking the course's
+/// code in the What-changed digest. Laid out in the details dialog's visual
+/// language (chip + name headline, kv rows, meetings list), because to the
+/// reader this IS that course's details page — just the last one it will
+/// ever have. Renders from the record in the Dialog variant, never from
+/// `app.what_changed`: a sync may have replaced the digest since the click.
+fn removed_course_dialog(app: App, record: ttcore::diff::RemovedCourse) -> impl IntoView + use<> {
+    // Untracked, like every dialog builder: a background change must not
+    // rebuild the popup under the reader.
+    let still_mine = untrack(|| app.is_selected(&record.code));
+    let meetings = record.meetings.clone();
+    view! {
+        <div>
+            <div class="row" style="align-items:center;gap:0.55rem;margin-bottom:0.45rem">
+                <span class="chip mono" style="--hue:215">{record.code.clone()}</span>
+                <h2 style="margin:0">{record.name.clone()}</h2>
+            </div>
+            <div class="chipline">
+                <span class="badge warn">"No longer on CMI's timetable"</span>
+                {still_mine
+                    .then(|| view! { <span class="badge warn">"still in your timetable"</span> })}
+            </div>
+            <p class="muted small">
+                {if still_mine {
+                    "CMI's pages no longer list this course, but it stays on your \
+                     timetable until you remove it. This is the app's last record of \
+                     it — it lives in this digest and nowhere else."
+                } else {
+                    "CMI's pages no longer list this course. This is the app's last \
+                     record of it — it lives in this digest and nowhere else."
+                }}
+            </p>
+            <dl class="kv">
+                <dt>
+                    {if record.instructors.len() > 1 { "Instructors" } else { "Instructor" }}
+                </dt>
+                <dd>
+                    {if record.instructors.is_empty() {
+                        "—".to_string()
+                    } else {
+                        record.instructors.join(" / ")
+                    }}
+                </dd>
+            </dl>
+            <h3 style="margin-top:0.8rem">"Meetings"</h3>
+            {if meetings.is_empty() {
+                view! { <p class="muted">"CMI's pages gave it no weekly times."</p> }.into_any()
+            } else {
+                view! {
+                    <ul class="meetings">
+                        {meetings
+                            .iter()
+                            .map(|m| {
+                                view! {
+                                    <li>
+                                        <span class="when">
+                                            <span class="d">{m.day.short()}</span>
+                                            " "
+                                            <span class="t">{m.slot.label()}</span>
+                                        </span>
+                                        <span class="where">
+                                            {match &m.hall {
+                                                Some(h) => {
+                                                    view! { <span class="hall">{h.clone()}</span> }
+                                                        .into_any()
+                                                }
+                                                None => {
+                                                    view! { <span class="hall tba">"Hall TBA"</span> }
+                                                        .into_any()
+                                                }
+                                            }}
+                                        </span>
+                                    </li>
+                                }
+                            })
+                            .collect_view()}
+                    </ul>
+                }
+                    .into_any()
+            }}
+            <div class="actions">
+                <button
+                    class="btn"
+                    on:click=move |_| app.dialog.set(Some(Dialog::WhatChanged))
+                >
+                    "Back to What changed"
+                </button>
+                {close_button(app)}
+            </div>
         </div>
     }
 }

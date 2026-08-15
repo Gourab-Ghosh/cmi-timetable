@@ -2810,6 +2810,45 @@ all three for every fragment BEFORE the suite run, and grep the SOURCE for
 sibling occurrences of each fixed string after applying (two toasts shared
 the same defect; the sweep listed one).
 
+### R50 — the record steps behind the click: one line per dropped course
+
+The user, on the R49 inline layout: with the teacher and meeting rows in
+the list, a digest with many dropped courses grows too large to read. They
+want ONE line per course, the details ONLY on click, in a pop-up as
+beautiful and readable as possible.
+
+**Digest side.** The "No longer listed" rows are back to one line — code,
+name, "still in your timetable" badge. The code chip is now a `<button
+class="chip mono">` (picks up the interactive chip styling for free) that
+opens the popup; ONE muted hint under the section header ("Click a code to
+see what the course was — its teacher and times.", `.diff-hint`) instead of
+per-row noise. The R49 `.diff-item ul.meetings` CSS is gone with the inline
+rows.
+
+**Popup side.** New `Dialog::RemovedCourse(ttcore::diff::RemovedCourse)` —
+the WHOLE record rides in the variant, deliberately: a sync can replace
+`app.what_changed` while the popup is open, and the popup must keep showing
+exactly what was clicked (same reasoning as the editor's one-dialog-slot
+survival in R47's t60, solved by data-in-variant instead of a queue).
+`removed_course_dialog` renders it in the details dialog's own language —
+chip + name headline, badge row ("No longer on CMI's timetable" + "still in
+your timetable" when selected, read UNTRACKED like every dialog builder),
+an honesty lede ("…This is the app's last record of it — it lives in this
+digest and nowhere else."), an Instructor `dl.kv` row, a Meetings
+`ul.meetings` list (or "CMI's pages gave it no weekly times."), and a
+footer with **Back to What changed** (swaps the one dialog slot back — the
+digest signal is untouched, so the list re-renders as it was) beside Close.
+
+Pins: **t77** re-pinned end-to-end — the digest row must carry NO inline
+meeting rows and NO teacher span, clicking the code must open a popup
+containing "last record", a non-empty `.kv dd` teacher, en-dashed `.when
+.t` rows and a `.where .hall`, and Back must land on "What changed since
+last sync". Gates on the final tree: fmt + clippy clean, **114 native +
+86/86 e2e**, deploy rehearsal green, digest + popup re-shot
+(`dropped-2-what-changed-dialog.png`, `dropped-3-record-popup.png`) and
+reviewed by eye. FEATURES.md digest bullet and e2e/README updated same
+round.
+
 ## 8. Open bugs — found, confirmed, NOT fixed (do not delete)
 
 Rules for this section: entries stay until the bug is actually fixed and a
