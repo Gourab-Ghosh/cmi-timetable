@@ -3016,6 +3016,44 @@ green, popup shot in both states plus the would-clash dialog, reviewed by
 eye. FEATURES.md (four bullets), e2e/README (88) and
 `.workagents/r53-keep-dropped-course-design.json` updated same round.
 
+### R54 — two questions about the sync banner, answered in pictures
+
+No code changed this round. The working tree is exactly R53's (`de44398`),
+and `git status` was clean at the end — read this entry only for the answers
+and for the harness, not for a diff.
+
+**Q: can I see the changed courses I have NOT selected?** Yes, and nothing
+about that changed in R53. `what_changed_dialog` (ui.rs) lists CMI's whole
+diff — New courses / No longer listed / Changed — sorted so the reader's own
+codes come first and wear the "in your timetable" badge; everyone else's
+follow underneath. The R53 change was to the BANNER sentence only, which
+names your courses and keeps the campus count as a tail. Two facts worth
+keeping in mind before anyone "improves" this: the banner is the ONLY way
+into that dialog, and `what_changed` is a plain `RwSignal` set in fetch.rs
+and never persisted — so Dismiss or a reload throws the digest away until
+the next sync finds a change. If a future round wants "reopen the last
+digest", that is the thing to change (persist it, plus an entry point in My
+data), not the banner.
+
+**Q: show me.** Screenshots into `e2e/shots/` (gitignored), from
+`.workagents/banner-shots.py` — the reusable part of this round:
+
+- It imports `e2e/test_app.py` as a MODULE (`main()` is `__main__`-guarded,
+  so importing starts nothing) and reuses `build_seed`, `serve_dist`,
+  `serve_fake_cmi`, `make_driver`, `App`. Set `DIST_DIR`/`PORT`/`CMI_PORT`
+  in the environment BEFORE the import — test_app reads them at import time.
+- The diff is staged by walking the seed snapshot BACKWARDS into the cache
+  (move a meeting, blank an instructor to "TBA", suffix a code with "2")
+  and then syncing against the fixture pages. So every number on screen is
+  the app's own arithmetic, not a mock. Note a renamed code shows up as one
+  removal AND one addition, which is why the banner's tail counts diff
+  entries, not courses.
+- The pre-R53 wording was shot by temporarily replacing the `let sentence =`
+  block in `what_changed_panel` with the old parts-joining version, building
+  to a scratch `--dist` OUTSIDE the repo, shooting, then reverting the edit.
+  Never point that build at `app/dist-e2e` or `app/dist`: leaving a patched
+  build in either is how a later e2e run tests code that no longer exists.
+
 ## 8. Open bugs — found, confirmed, NOT fixed (do not delete)
 
 Rules for this section: entries stay until the bug is actually fixed and a
