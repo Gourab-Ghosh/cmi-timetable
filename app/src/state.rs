@@ -223,8 +223,10 @@ pub enum Dialog {
     /// in the What-changed digest. The whole record RIDES IN the variant: a
     /// sync may replace `what_changed` while this is open, and the popup
     /// must keep showing exactly what was clicked. Back swaps the one
-    /// dialog slot to WhatChanged.
-    RemovedCourse(ttcore::diff::RemovedCourse),
+    /// dialog slot to WhatChanged. Keeping it writes this record into the
+    /// user's own courses — the one way anything about a dropped course
+    /// becomes permanent.
+    RemovedCourse(ttcore::model::Course),
     /// The one editor. `code: None` creates a course of the user's own;
     /// `Some(code)` edits that course, whether it is CMI's or theirs — every
     /// field of it, in one form, saved in one step. `prefill` seeds the name
@@ -975,7 +977,8 @@ impl App {
     /// single source of truth for its times — it never carries overrides
     /// (drags and edits write the definition directly), so saving purges
     /// any foreign override that targets its code. Creating selects the
-    /// course; editing leaves its selected/parked state alone.
+    /// course and un-deletes the code, for the same reason `add_course`
+    /// does; editing leaves its selected/parked state alone.
     pub fn save_custom_course(&self, original_code: Option<&str>, course: Course) {
         let creating = original_code.is_none();
         let new_code = course.code.clone();
@@ -1010,9 +1013,117 @@ impl App {
                 ovs.credits.retain(|c| !c.course.eq_ignore_ascii_case(code));
             }
             customs.upsert(course);
-            if creating && !sel.iter().any(|c| c.eq_ignore_ascii_case(&new_code)) {
-                sel.push(new_code.clone());
+            if creating {
+                if !sel.iter().any(|c| c.eq_ignore_ascii_case(&new_code)) {
+                    sel.push(new_code.clone());
+                }
+                // A course cannot be on your timetable AND deleted — the
+                // same rule `add_course` keeps. Reachable for a code CMI has
+                // since dropped: the catalog no longer holds it, so nothing
+                // stops a course being created under a code you deleted.
+                ovs.unhide(&new_code);
             }
+        });
+    }
+
+    /// Keep a course CMI dropped. The "What changed" record is the last copy
+    /// in existence — the new snapshot has never heard of the course, the old
+    /// one was overwritten by the sync, and the digest is never saved — so
+    /// keeping it means writing it into the user's own courses, where it
+    /// survives a reload, a share link and the message being dismissed.
+    ///
+    /// Every field comes from the record verbatim; nothing is invented.
+    /// Credits above all: a course CMI never put a number on stays a course
+    /// without one, so the app goes on calling that number a guess instead of
+    /// promoting 4 into a stated fact and moving the student's total.
+    ///
+    /// The times are the deliberate exception. A dropped course holds its
+    /// place on the timetable through overrides — its stub has no meetings of
+    /// its own — and `save_custom_course` purges those. So whatever is on the
+    /// timetable NOW is folded into the definition first: keeping a course
+    /// never moves a class the student placed themselves.
+    pub fn keep_removed_course(&self, record: &Course) {
+        let code = record.code.clone();
+        if self.is_custom(&code) {
+            return;
+        }
+        // A sync can land while the popup is open. If CMI lists the course
+        // again there is nothing to keep, and writing one now would shadow
+        // their live version from its first second.
+        if self
+            .snapshot
+            .with_untracked(|s| s.course_ci(&code).is_some())
+        {
+            self.toast(format!(
+                "CMI's timetable lists {code} again, so there was nothing to keep. \
+                 What's on your timetable is CMI's own version."
+            ));
+            return;
+        }
+        // Read BEFORE the save: it purges both the meeting overrides and the
+        // credit override under this code. Untracked — a click handler must
+        // not subscribe anything to these reads.
+        let (was_selected, placed, own_credits) = untrack(|| {
+            (
+                self.is_selected(&code),
+                self.effective_meetings(&self.selected_course(&code))
+                    .into_iter()
+                    .map(|e| e.meeting)
+                    .collect::<Vec<Meeting>>(),
+                self.credits_custom(&code),
+            )
+        });
+
+        let mut course = record.clone();
+        // What's on the week wins; CMI's last-known times fill in only when
+        // the student placed none. Merging the two would put the same class
+        // on the week twice — the reason you move a dropped course's class is
+        // that the class moved.
+        course.meetings = if placed.is_empty() {
+            record.meetings.clone()
+        } else {
+            placed
+        };
+        // A temporary-booking mark is a claim about CMI's live hall list, and
+        // CMI no longer publishes this course at all.
+        for m in &mut course.meetings {
+            m.temp_booking = false;
+        }
+        course.meetings.sort_by_key(|m| {
+            (
+                m.day.index(),
+                m.slot.start_min,
+                m.slot.end_min,
+                m.hall.clone(),
+            )
+        });
+        course.status = if course.meetings.is_empty() {
+            ScheduleStatus::UnscheduledListed
+        } else {
+            ScheduleStatus::Scheduled
+        };
+        // The student's own credit number outlives the override that carried
+        // it: the save is about to purge that override.
+        if let Some(n) = own_credits {
+            course.credits = Some(n);
+        }
+        let no_times = course.meetings.is_empty();
+        self.save_custom_course(None, course);
+        self.toast_undo(if no_times {
+            format!(
+                "{code} is your own course now. It has no times yet, so it's waiting \
+                 in “No fixed slot yet” on My timetable."
+            )
+        } else if was_selected {
+            format!(
+                "{code} is your own course now — its name, instructor and times stay \
+                 on your timetable when the update message goes."
+            )
+        } else {
+            format!(
+                "Added {code} to your timetable as your own course — its name, \
+                 instructor and times are saved for good."
+            )
         });
     }
 
@@ -1625,25 +1736,41 @@ impl App {
 
     /// Would this course fit the current selection without any overlap?
     pub fn fits_schedule(&self, course: &Course) -> bool {
-        if self.is_selected(&course.code) {
-            return true;
-        }
+        self.is_selected(&course.code) || self.would_clash_with(course).is_empty()
+    }
+
+    /// Which of the user's courses this one would run into, and when — the
+    /// answer to the ⚠ the grid draws on a course they haven't picked.
+    /// `fits_schedule` is this walk with the names thrown away, so they are
+    /// one function: a badge that warns and a dialog that explains can never
+    /// disagree about what overlaps.
+    ///
+    /// One entry per collision, in reading order (day, then start time).
+    pub fn would_clash_with(&self, course: &Course) -> Vec<(String, Day, Slot)> {
         let selected = self.selected_courses();
-        self.overrides.with(|overrides| {
-            let mine: Vec<(Day, Slot)> = selected
+        let mut hits = self.overrides.with(|overrides| {
+            let mine: Vec<(String, Day, Slot)> = selected
                 .iter()
+                .filter(|c| !c.code.eq_ignore_ascii_case(&course.code))
                 .flat_map(|c| {
                     effective_meetings(c, overrides)
                         .into_iter()
-                        .map(|e| (e.meeting.day, e.meeting.slot))
+                        .map(|e| (c.code.clone(), e.meeting.day, e.meeting.slot))
                 })
                 .collect();
-            effective_meetings(course, overrides).iter().all(|e| {
-                !mine
-                    .iter()
-                    .any(|(d, s)| *d == e.meeting.day && s.overlaps(&e.meeting.slot))
-            })
-        })
+            effective_meetings(course, overrides)
+                .iter()
+                .flat_map(|e| {
+                    mine.iter()
+                        .filter(|(_, d, s)| *d == e.meeting.day && s.overlaps(&e.meeting.slot))
+                        .map(|(other, d, s)| (other.clone(), *d, *s))
+                        .collect::<Vec<_>>()
+                })
+                .collect::<Vec<_>>()
+        });
+        hits.sort_by_key(|(other, d, s)| (d.index(), s.start_min, other.clone()));
+        hits.dedup();
+        hits
     }
 
     /// The personal grid's columns: CMI's slot grid PLUS a synthetic column

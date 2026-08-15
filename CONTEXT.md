@@ -2927,6 +2927,95 @@ OLD label inside other strings (tooltips quote buttons), in `aria-label`s
 (two e2e selectors keyed on one), and in the docs, and re-run the FULL
 suite rather than the tests you think you touched.
 
+### R53 — a dropped course you can keep, and two things the app already knew
+
+User asked for: an option in the removed-course popup to add the course
+back to the timetable "as an overwrite made by me"; then, separately, to
+think about what else would genuinely help "without looking bloated" —
+and explicitly, to add nothing if nothing earns it.
+
+**Keep this as my own course.** Design workflow wf_d1efaef0-7d2 (5
+read-only scouts + 1 designer). The decisions worth remembering:
+
+- `diff::RemovedCourse` is DELETED; `SnapshotDiff.removed` is now
+  `Vec<Course>`. Every read site (`.code/.name/.instructors/.meetings`,
+  `.len()`, the sort) compiled unchanged, and the rebuild needs the fields
+  a summary struct dropped. No serde attribute: the diff is never
+  persisted, so there is no old JSON to stay compatible with.
+- **Credits are NOT `Course::custom`.** That constructor stores
+  `credits: Some(n)` — a STATED value — so a dropped seminar (assumed 0) or
+  an "(Oct–Nov)" course (assumed 2) would come back stated at 4, moving the
+  student's total and dropping the `*` guess marker. `keep_removed_course`
+  clones the record instead, so `credits: None` stays `None` and the app
+  goes on calling its own number a guess.
+- **The times trap (the one that would have lost data).** A dropped course
+  holds its place on the week through overrides — its stub has no meetings
+  — and `save_custom_course` PURGES overrides. Seeding from
+  `record.meetings` alone would silently delete every class the student had
+  moved and put CMI's old times back. So `effective_meetings` of what is on
+  screen NOW is folded into the definition first, falling back to the
+  record only when the student placed none. Merging both was rejected: it
+  puts the same class on the week twice. **t88** pins exactly this.
+- The credit override is read BEFORE the save (which purges it), so the
+  student's own number survives into the definition.
+- Two existing defects fixed on the way: `save_custom_course` now
+  `ovs.unhide()`s on create (a course you deleted and CMI then dropped
+  could end up on the timetable AND deleted), and `temp_booking` is cleared
+  (it claims something about CMI's live hall list, for a course CMI no
+  longer publishes).
+- Three states show a SENTENCE instead of a dead button: already one of
+  your own courses, CMI lists it again, code contains `,`/`%`. After the
+  press the popup returns to the digest (untracked builder can't repaint
+  itself; the digest is tracked and repaints with the row re-sorted).
+- Pins: **t87** (ghost → real course: badge flips, name/instructor back,
+  `4 cr*` still a guess, listed under "Courses you added", undo→redo, then
+  a RELOAD proves permanence — note the undo history is in memory, so undo
+  must be tested BEFORE the refresh) and **t88** (the times rule + no
+  override left behind).
+
+**Two additions from the "earns its place" hunt** (workflow
+wf_12257ea0-5fb: 5 proposal lenses → 2 skeptics whose default was KILL →
+1 final editor; 3 of ~15 survived). Both add ZERO new pixels:
+
+1. **The ⓘ answers the ⚠ it sent you from.** `clashes()` only pairs
+   SELECTED courses, so for an unpicked course the details dialog's clash
+   section was always empty — exactly where the grid's ⚠ sends the reader.
+   New `App::would_clash_with(&Course) -> Vec<(String, Day, Slot)>`;
+   `fits_schedule` is now that walk with the names thrown away, so a badge
+   that warns and a dialog that explains cannot disagree. Heading branches:
+   "Clashes with N of your courses" / "Would clash with N of your courses".
+   Pinned inside **t06**.
+2. **The sync banner leads with your own week.** It said "CMI updated the
+   timetable — 180 courses changed, 175 no longer listed", which reads as a
+   catastrophe when none of it is yours. Now: "CMI changed 2 of your
+   courses — TOC, QCOM." + campus tail; "CMI no longer lists 1 of your
+   courses — …"; or "nothing on your week changed". Names at most 3 codes.
+   Pinned in **t30** ("of your courses" + both codes) and **t71**.
+
+**Deliberately NOT built** (the third survivor): a semester-rollover notice
+with a "Start my {next term} timetable" button. It is real (once a term the
+app marks the student's whole timetable dropped), but it needs a new
+signal, `label_semantics` made public, and a destructive button driven by a
+heuristic — if detection misfires it clears a timetable. The banner change
+above already softens the symptom honestly. Recorded here so a future round
+can pick it up deliberately rather than rediscovering it.
+
+**Also this round, by explicit request: the sync source is back in the
+toast.** R52's plain-language sweep had reduced it to "Timetable updated."
+— the user wants to see where their timetable came from. It now reads
+"Timetable updated (through the helper site corsproxy.io)." /
+"…(directly from cmi.ac.in).", using R52's plain label rather than the old
+"via proxy (…)" with its nested parentheses and insider word. `announce`
+is only set for a live fetch, so the Imported/Bundled arms can't reach it.
+Pinned in **t26** with the exact sentence, so it cannot be quietly dropped
+again; every other `wait_toast("Timetable updated")` is a substring match
+and kept passing.
+
+Gates: fmt + clippy clean, **114 native + 88/88 e2e**, deploy rehearsal
+green, popup shot in both states plus the would-clash dialog, reviewed by
+eye. FEATURES.md (four bullets), e2e/README (88) and
+`.workagents/r53-keep-dropped-course-design.json` updated same round.
+
 ## 8. Open bugs — found, confirmed, NOT fixed (do not delete)
 
 Rules for this section: entries stay until the bug is actually fixed and a

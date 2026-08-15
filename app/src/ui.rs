@@ -2055,19 +2055,27 @@ fn details_dialog(app: App, code: String) -> impl IntoView {
     // of them the only thing that differs is a code and a time, and those
     // are exactly what a sentence buries. Sorted by day, then by time, so
     // the list reads in the order the week happens.
-    let mut clashes: Vec<(String, Day, Slot)> = app
-        .clashes()
-        .into_iter()
-        .filter(|c| c.a == code || c.b == code)
-        .map(|c| {
-            let (other, slot) = if c.a == code {
-                (c.b, c.b_slot)
-            } else {
-                (c.a, c.a_slot)
-            };
-            (other, c.day, slot)
-        })
-        .collect();
+    //
+    // For a course NOT on the timetable there are no clashes to report —
+    // `clashes()` pairs selected courses only — yet this dialog is exactly
+    // where the grid's ⚠ sends the reader to find out what it meant. So an
+    // unpicked course answers with the collisions it WOULD cause.
+    let mut clashes: Vec<(String, Day, Slot)> = if selected {
+        app.clashes()
+            .into_iter()
+            .filter(|c| c.a == code || c.b == code)
+            .map(|c| {
+                let (other, slot) = if c.a == code {
+                    (c.b, c.b_slot)
+                } else {
+                    (c.a, c.a_slot)
+                };
+                (other, c.day, slot)
+            })
+            .collect()
+    } else {
+        app.would_clash_with(&course)
+    };
     clashes.sort_by_key(|(other, day, slot)| (day.index(), slot.start_min, other.clone()));
     // …then one row per COURSE, carrying every time you collide with it: the
     // same course twice on two days is one thing to fix, not two.
@@ -2244,7 +2252,8 @@ fn details_dialog(app: App, code: String) -> impl IntoView {
                         <h3 class="clash-head">
                             <span class="badge alarm">"⚠"</span>
                             {format!(
-                                "Clashes with {n} course{}",
+                                "{} {n} of your course{}",
+                                if selected { "Clashes with" } else { "Would clash with" },
                                 if n == 1 { "" } else { "s" },
                             )}
                         </h3>
@@ -5195,10 +5204,22 @@ fn what_changed_dialog(app: App) -> impl IntoView {
 /// reader this IS that course's details page — just the last one it will
 /// ever have. Renders from the record in the Dialog variant, never from
 /// `app.what_changed`: a sync may have replaced the digest since the click.
-fn removed_course_dialog(app: App, record: ttcore::diff::RemovedCourse) -> impl IntoView + use<> {
+fn removed_course_dialog(app: App, record: ttcore::model::Course) -> impl IntoView + use<> {
     // Untracked, like every dialog builder: a background change must not
     // rebuild the popup under the reader.
     let still_mine = untrack(|| app.is_selected(&record.code));
+    // Whether keeping it is an action at all — read once, and the footer
+    // offers the button or explains its absence accordingly.
+    let already_yours = untrack(|| app.is_custom(&record.code));
+    let back_on_cmi = app
+        .snapshot
+        .with_untracked(|s| s.course_ci(&record.code).is_some());
+    // A comma or a % survives into `?c=`, where the share link turns it back
+    // into a separator before decoding — the course would split in two and
+    // fall off any timetable someone opened from the link.
+    let unshareable = record.code.contains(',') || record.code.contains('%');
+    let can_keep = !already_yours && !back_on_cmi && !unshareable;
+    let keep_record = record.clone();
     let meetings = record.meetings.clone();
     view! {
         <div>
@@ -5215,14 +5236,12 @@ fn removed_course_dialog(app: App, record: ttcore::diff::RemovedCourse) -> impl 
                 {if still_mine {
                     "CMI's pages no longer list this course, but it stays on your \
                      timetable until you remove it. What you see here is everything \
-                     the app still knows about it — once you press Dismiss on the \
-                     update message at the top of the page, these details are gone \
-                     for good."
+                     the app still knows about it, and only until you dismiss the \
+                     update message at the top of the page."
                 } else {
                     "CMI's pages no longer list this course. What you see here is \
-                     everything the app still knows about it — once you press Dismiss \
-                     on the update message at the top of the page, these details are \
-                     gone for good."
+                     everything the app still knows about it, and only until you \
+                     dismiss the update message at the top of the page."
                 }}
             </p>
             <dl class="kv">
@@ -5273,6 +5292,27 @@ fn removed_course_dialog(app: App, record: ttcore::diff::RemovedCourse) -> impl 
                 }
                     .into_any()
             }}
+            // Either the invitation to keep it, or the reason there is
+            // nothing to keep — never a dead button. Sits outside the kv
+            // list and the meetings list so both stay what they are.
+            <p class="muted small keep-note">
+                {if already_yours {
+                    "You already have a course of your own under this code, so there \
+                     is nothing to keep here. Open it from My courses if you want to \
+                     change it."
+                } else if back_on_cmi {
+                    "CMI's timetable lists this course again, so there is nothing to \
+                     keep — what you see on your timetable is CMI's own version."
+                } else if unshareable {
+                    "This course's code has a comma or a % sign in it. The links that \
+                     share your timetable can't carry those, so the app can't save it \
+                     as a course of your own."
+                } else {
+                    "Keep it as a course of your own and none of this is lost when the \
+                     update message goes — it stays on your timetable, and you can \
+                     edit it like any other course of yours."
+                }}
+            </p>
             <div class="actions">
                 <button
                     class="btn"
@@ -5280,6 +5320,26 @@ fn removed_course_dialog(app: App, record: ttcore::diff::RemovedCourse) -> impl 
                 >
                     "Back to What changed"
                 </button>
+                // Second, not first: with no field to focus, the dialog puts
+                // focus on its first button, and a Space press meant to
+                // scroll a tall popup must not write to the user's courses.
+                {can_keep
+                    .then(|| {
+                        view! {
+                            <button
+                                class="btn primary"
+                                title="Saves what CMI last published as a course of your own, \
+                                       so it stays after the update message is gone. Ctrl+Z \
+                                       undoes it."
+                                on:click=move |_| {
+                                    app.keep_removed_course(&keep_record);
+                                    app.dialog.set(Some(Dialog::WhatChanged));
+                                }
+                            >
+                                "Keep this as my own course"
+                            </button>
+                        }
+                    })}
                 {close_button(app)}
             </div>
         </div>

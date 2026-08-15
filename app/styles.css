@@ -1755,6 +1755,10 @@ details.facet .menu .menu-empty { margin: 0.2rem 0 0; }
 /* The one-line hint under "No longer listed" — the record itself opens as
    a popup from the code, so the list stays one line per course. */
 .diff-hint { margin: 0.3rem 0 0.1rem; }
+/* The line that either invites "Keep this as my own course" or says why
+   there is nothing to keep. It belongs to the footer below it, not to the
+   meetings above, so it sits close to the buttons and clear of the list. */
+.dialog .keep-note { margin: 1rem 0 0; }
 .diff-lines { flex-basis: 100%; margin: 0.1rem 0 0; padding: 0; list-style: none; }
 .diff-lines li {
   font-family: var(--font-mono);

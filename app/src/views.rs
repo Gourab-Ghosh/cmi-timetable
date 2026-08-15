@@ -112,28 +112,70 @@ fn what_changed_panel(app: App) -> impl IntoView {
             app.what_changed
                 .get()
                 .map(|diff| {
-                    let mut parts: Vec<String> = Vec::new();
-                    if !diff.changed.is_empty() {
-                        parts.push(format!(
-                            "{} course{} changed",
-                            diff.changed.len(),
-                            if diff.changed.len() == 1 { "" } else { "s" },
+                    // The banner's job is the reader's question, not CMI's
+                    // headline: "did any of MY classes move?" A sync can
+                    // touch two hundred courses and none of them yours, and
+                    // the only way to learn that used to be to open the
+                    // dialog and read all of it. So the sentence leads with
+                    // the student's own week and keeps the campus-wide
+                    // count as a tail. Names at most three codes — the
+                    // dialog is where a longer list belongs.
+                    let mine_changed: Vec<String> = diff
+                        .changed
+                        .iter()
+                        .map(|c| c.code.clone())
+                        .filter(|c| app.is_selected(c))
+                        .collect();
+                    let mine_gone: Vec<String> = diff
+                        .removed
+                        .iter()
+                        .map(|c| c.code.clone())
+                        .filter(|c| app.is_selected(c))
+                        .collect();
+                    let name_them = |codes: &[String]| {
+                        if codes.len() <= 3 {
+                            codes.join(", ")
+                        } else {
+                            format!("{}, and {} more", codes[..3].join(", "), codes.len() - 3)
+                        }
+                    };
+                    let total = diff.changed.len() + diff.added.len() + diff.removed.len();
+                    let mut heads: Vec<String> = Vec::new();
+                    if !mine_changed.is_empty() {
+                        heads.push(format!(
+                            "CMI changed {} of your courses — {}.",
+                            mine_changed.len(),
+                            name_them(&mine_changed),
                         ));
                     }
-                    if !diff.added.is_empty() {
-                        parts.push(format!("{} new", diff.added.len()));
+                    if !mine_gone.is_empty() {
+                        heads.push(format!(
+                            "CMI no longer lists {} of your courses — {}.",
+                            mine_gone.len(),
+                            name_them(&mine_gone),
+                        ));
                     }
-                    if !diff.removed.is_empty() {
-                        parts.push(format!("{} no longer listed", diff.removed.len()));
-                    }
+                    let sentence = if heads.is_empty() {
+                        // Nothing of theirs moved — say exactly that. It IS
+                        // the news, and it saves opening the dialog at all.
+                        format!(
+                            "CMI updated the timetable — nothing on your week changed. \
+                             {total} course{} on campus {} affected.",
+                            if total == 1 { "" } else { "s" },
+                            if total == 1 { "was" } else { "were" },
+                        )
+                    } else {
+                        let others = total - mine_changed.len() - mine_gone.len();
+                        let tail = match others {
+                            0 => String::new(),
+                            1 => " One other course on campus changed too.".to_string(),
+                            n => format!(" {n} other courses on campus changed too."),
+                        };
+                        format!("{}{tail}", heads.join(" "))
+                    };
                     view! {
                         <div class="banner noprint" role="status">
-                            <span>
-                                {format!(
-                                    "CMI updated the timetable since your last sync — {}.",
-                                    parts.join(", "),
-                                )}
-                            </span>
+                            <span>{sentence}</span>
                             <button
                                 class="btn small"
                                 on:click=move |_| app.dialog.set(Some(Dialog::WhatChanged))

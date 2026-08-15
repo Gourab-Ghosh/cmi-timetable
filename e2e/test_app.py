@@ -445,6 +445,24 @@ class App:
             message=f"expected a toast containing {fragment!r}; got: {self.toasts_text()!r}",
         )
 
+    def dismiss_toasts(self):
+        """Clear the toast stack. Toasts sit above the page, so a tall one
+        can cover a dialog's sticky footer and swallow a click meant for a
+        button. Only the ✕ is pressed — never the Undo beside it."""
+        # Dismissing one re-renders the whole stack, so every handle taken
+        # before the click goes stale: re-find the first one each time.
+        for _ in range(12):
+            found = self.d.find_elements(
+                By.CSS_SELECTOR, ".toast button[aria-label='Dismiss']"
+            )
+            if not found:
+                return
+            try:
+                found[0].click()
+            except Exception:
+                time.sleep(0.1)
+        raise AssertionError("toasts did not clear")
+
     def chip(self, code, container="body"):
         return self.d.find_element(
             By.CSS_SELECTOR, f"{container} button.chip[aria-label^='{code},']"
@@ -571,6 +589,23 @@ def t06_master_grid_wont_fit_warning(app):
     mfd = app.chip("MFD")
     assert not mfd.find_elements(By.CSS_SELECTOR, ".wontfit"), \
         "MFD should not be marked as clashing"
+    # The ⓘ answers the ⚠ it sent you from: for a course you haven't picked,
+    # the details name WHICH of your courses it would run into, and when —
+    # otherwise the warning is a dead end and you compare times by hand.
+    nlp.find_element(
+        By.XPATH, "./following-sibling::button[1]").click()
+    dialog = app.wait_css(".dialog")
+    assert "Would clash with 1 of your course" in dialog.text, dialog.text
+    clashes = dialog.find_element(By.CSS_SELECTOR, ".clash-list")
+    assert "TOC" in clashes.text, clashes.text
+    assert "Thursday" in clashes.text, clashes.text
+    app.xpath("//div[@class='dialog']//button[normalize-space()='Close']").click()
+    app.wait_gone(".dialog")
+    # …and a course that fits shows no such section at all.
+    mfd.find_element(By.XPATH, "./following-sibling::button[1]").click()
+    dialog = app.wait_css(".dialog")
+    assert "clash" not in dialog.text.lower(), dialog.text
+    app.xpath("//div[@class='dialog']//button[normalize-space()='Close']").click()
 
 
 def t07_clash_toast_on_add(app):
@@ -1063,6 +1098,10 @@ def t26_first_sync_populates_from_cmi(app):
         app.wait_gone(".welcome-card")
         title = app.css(".sync-pill").get_attribute("title")
         assert "directly from cmi.ac.in" in title, title
+        # The success toast names the route it came through, so "where did
+        # this timetable come from?" is answerable without opening My data.
+        assert "Timetable updated (directly from cmi.ac.in)." in app.toasts_text(), \
+            app.toasts_text()
         assert "direct" not in app.css(".sync-pill").text, \
             "a live route word must not clutter the pill itself"
         app.open_tab("Master grid")
@@ -1194,7 +1233,13 @@ def t30_sync_merge_conflict_flow(app):
         app.wait_toast("Your timetable now uses the times you picked.")
         app.wait_css("td[data-day='2'][data-slot='1020'] button.chip[aria-label^='TOC,']")
         app.wait_toast(f"CMI dropped {gone} from its timetable")
-        banner = app.xpath("//div[contains(@class,'banner')][contains(.,'CMI updated')]")
+        # The banner leads with the reader's own week: their course moved
+        # and another of theirs was dropped, so it names both before any
+        # campus-wide count.
+        banner = app.xpath(
+            "//div[contains(@class,'banner')][contains(.,'See what changed')]")
+        assert "of your courses" in banner.text, banner.text
+        assert gone in banner.text and "TOC" in banner.text, banner.text
         banner.find_element(
             By.XPATH, ".//button[normalize-space()='See what changed']"
         ).click()
@@ -3365,7 +3410,7 @@ def t71_what_changed_never_opens_with_nothing_to_say(app):
         app.wait_toast("Timetable updated")
         time.sleep(0.5)
         body = app.css("body").text
-        assert "CMI updated the timetable since your last sync" not in body, body
+        assert "CMI updated the timetable" not in body, body
         assert not app.d.find_elements(
             By.XPATH, "//button[normalize-space()='See what changed']")
 
@@ -3718,6 +3763,142 @@ def t77_what_changed_shows_what_a_dropped_course_was(app):
         app.open_tab("Catalog")
         cat = app.wait_css("section[aria-label='Catalog']")
         assert gone not in cat.text, "a dropped course must not haunt the catalog"
+    finally:
+        stop_serving_cmi()
+
+
+def t87_a_dropped_course_can_be_kept_as_your_own(app):
+    """The record in "What changed" is the last copy of a dropped course in
+    existence, and it dies with the message. Keeping it writes that record
+    into the user's own courses — permanently, in one undoable step, with
+    CMI's own credits rather than an invented number."""
+    serve_cmi()
+    try:
+        snap, _overrides, gone = cache_from_before_cmi_moved_toc()
+        # The dropped course is ON the timetable: the ghost case, where it
+        # renders from a stub with no name and no times of its own.
+        app.boot("/", selection=["TOC", gone], raw_snapshot=snap)
+        app.xpath("//button[normalize-space()='Sync now']").click()
+        app.wait_toast("Timetable updated")
+        app.xpath("//button[normalize-space()='See what changed']").click()
+        dialog = app.wait_css(".dialog")
+        item = next(i for i in dialog.find_elements(By.CSS_SELECTOR, ".diff-item")
+                    if gone in i.text)
+        item.find_element(By.CSS_SELECTOR, "button.chip").click()
+        popup = app.wait_css(".dialog")
+        WebDriverWait(app.d, 10).until(
+            lambda d: "No longer on CMI's timetable" in app.css(".dialog").text)
+        app.dismiss_toasts()   # a sync's toasts cover the dialog's footer
+        popup.find_element(
+            By.XPATH, ".//button[normalize-space()='Keep this as my own course']").click()
+        app.wait_toast(f"{gone} is your own course now")
+        # It goes back to the digest — not a dead end — and the row it came
+        # from is still there, now describing a course that is yours.
+        WebDriverWait(app.d, 10).until(
+            lambda d: "What changed since last sync" in app.css(".dialog").text)
+        app.d.find_element(By.CSS_SELECTOR, "body").send_keys(Keys.ESCAPE)
+        app.wait_gone(".dialog")
+        # The ghost is a real course now: badge flipped, name and instructor
+        # back, and the times CMI last published on the week.
+        app.open_tab("My courses")
+        section = app.wait_css("section[aria-label='My courses']")
+        assert "Quantum Computing" in section.text, section.text
+        assert "Bijita Sarma" in section.text, section.text
+        assert "No longer on CMI's timetable" not in section.text, section.text
+        card = next(c for c in app.css_all("section[aria-label='My courses'] .card")
+                    if gone in c.text)
+        assert card.find_element(By.CSS_SELECTOR, ".badge.custom").text == "Added by you"
+        # CMI never stated this course's credits, so the app must go on
+        # calling its number a guess — keeping must not promote 4 to a fact.
+        assert "4 cr*" in card.text, card.text
+        # Listed as one of your own changes, like any course you added.
+        app.open_tab("My timetable")
+        app.xpath("//button[contains(.,'1 change')]").click()  # the ✎ pill
+        changes = app.wait_css(".dialog")
+        # The group heading renders uppercase, so compare lowercased (t41).
+        assert "course you added" in changes.text.lower(), changes.text
+        assert gone in changes.text, changes.text
+        app.d.find_element(By.CSS_SELECTOR, "body").send_keys(Keys.ESCAPE)
+        app.wait_gone(".dialog")
+        # ONE undoable step, both ways. (Before the reload: the undo history
+        # lives in memory, so a refresh is where undoing stops being an
+        # option — which is exactly why keeping had to write to storage.)
+        app.d.execute_script("window.scrollTo(0, 0);")
+        app.dismiss_toasts()
+        app.xpath("//button[@aria-label='Undo']").click()
+        app.wait_toast("Undid")
+        app.open_tab("My courses")
+        section = app.wait_css("section[aria-label='My courses']")
+        assert "No longer on CMI's timetable" in section.text, \
+            "undo must put the ghost back exactly as it was"
+        app.open_tab("My timetable")
+        app.d.execute_script("window.scrollTo(0, 0);")
+        app.dismiss_toasts()
+        app.xpath("//button[@aria-label='Redo']").click()
+        app.wait_toast("Redid")
+        # It survives the update message being dismissed AND a reload: this
+        # is the whole point — the record was memory-only until now.
+        app.d.refresh()
+        app.open_tab("My courses")
+        section = app.wait_css("section[aria-label='My courses']")
+        assert "Quantum Computing" in section.text, section.text
+        assert "No longer on CMI's timetable" not in section.text, section.text
+        assert app.d.execute_script(
+            "return JSON.parse(localStorage.getItem('cmitt.v1.custom'))"
+            ".courses.map(c => c.code);").count(gone) == 1
+    finally:
+        stop_serving_cmi()
+
+
+def t88_keeping_a_dropped_course_keeps_your_own_times(app):
+    """A dropped course holds its place on the timetable through the user's
+    own overrides — and saving a course of theirs purges those. So keeping
+    one must fold what is on the week INTO the definition: the class the
+    student moved themselves must not snap back to CMI's old time."""
+    serve_cmi()
+    try:
+        snap, _overrides, gone = cache_from_before_cmi_moved_toc()
+        # A meeting the student placed on the ghost themselves: Wed 17:00.
+        mine = {"next_id": 1, "credits": [], "items": [{
+            "id": 0, "course": gone,
+            "base": None,
+            "to": {"day": "Wed", "slot": {"start_min": 1020, "end_min": 1095},
+                   "hall": "Seminar Hall", "temp_booking": False},
+            "created_at": 1754000000000.0}]}
+        app.boot("/", selection=["TOC", gone], raw_snapshot=snap, overrides=mine)
+        app.xpath("//button[normalize-space()='Sync now']").click()
+        app.wait_toast("Timetable updated")
+        app.xpath("//button[normalize-space()='See what changed']").click()
+        dialog = app.wait_css(".dialog")
+        item = next(i for i in dialog.find_elements(By.CSS_SELECTOR, ".diff-item")
+                    if gone in i.text)
+        item.find_element(By.CSS_SELECTOR, "button.chip").click()
+        popup = app.wait_css(".dialog")
+        WebDriverWait(app.d, 10).until(
+            lambda d: "No longer on CMI's timetable" in app.css(".dialog").text)
+        app.dismiss_toasts()   # a sync's toasts cover the dialog's footer
+        popup.find_element(
+            By.XPATH, ".//button[normalize-space()='Keep this as my own course']").click()
+        app.wait_toast(f"{gone} is your own course now")
+        app.d.find_element(By.CSS_SELECTOR, "body").send_keys(Keys.ESCAPE)
+        app.wait_gone(".dialog")
+        # The student's Wednesday class is still on Wednesday…
+        app.open_tab("My timetable")
+        app.wait_css(f"td[data-day='2'][data-slot='1020'] button.chip[aria-label^='{gone},']")
+        # …and CMI's old Tuesday time was NOT added back beside it.
+        assert not app.chips(gone, "td[data-day='1'][data-slot='930']"), \
+            "keeping must not put CMI's old time back on the week as a second class"
+        saved = app.d.execute_script(
+            "return JSON.parse(localStorage.getItem('cmitt.v1.custom')).courses"
+            ".find(c => c.code === arguments[0]).meetings;", gone)
+        assert len(saved) == 1, saved
+        assert saved[0]["day"] == "Wed" and saved[0]["hall"] == "Seminar Hall", saved
+        # The override that carried it is gone — a course of your own keeps
+        # its times in its own definition, never as a change layered on top.
+        assert app.d.execute_script(
+            "return JSON.parse(localStorage.getItem('cmitt.v1.overrides')).items"
+            ".filter(o => o.course === arguments[0]).length;", gone) == 0, \
+            "keeping must leave no override behind"
     finally:
         stop_serving_cmi()
 
@@ -4239,6 +4420,8 @@ TESTS = [
     t84_editing_a_dropped_course_invents_no_credit_change,
     t85_a_course_hidden_by_filters_is_not_offered_as_new,
     t86_seg_groups_are_radio_groups_with_arrow_keys,
+    t87_a_dropped_course_can_be_kept_as_your_own,
+    t88_keeping_a_dropped_course_keeps_your_own_times,
 ]
 
 

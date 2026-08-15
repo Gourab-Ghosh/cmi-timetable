@@ -74,7 +74,9 @@ any hour of the week.
 - Courses already in your timetable carry a **✓ mark and an accent ring** —
   never colour alone.
 - Courses that **would clash** with your current selection carry a **⚠**.
-- **ⓘ** opens the full details of any course.
+- **ⓘ** opens the full details of any course — and answers the ⚠ rather than
+  just repeating it: for a course you haven't picked, it names which of *your*
+  courses it would run into, and at what times.
 - Click a course to add or remove it. With *Edit layout* on, you can drag a
   course you haven't picked straight onto a slot — that adds it and places it
   in one gesture.
@@ -377,7 +379,9 @@ The header always says **when it last synced** and by which route, counting up
 on its own as time passes — "just now", "12 min ago", "2 days ago" — and
 turning a warning colour once the data is two days old. CMI edits its
 timetable all semester, and a planner that can't tell you how old it is isn't
-worth much.
+worth much. Each successful sync says where it came from as it happens —
+*"Timetable updated (through the helper site corsproxy.io)."* or
+*"…(directly from cmi.ac.in)."* — so the route is never a mystery.
 
 ### Where the data comes from
 
@@ -438,13 +442,27 @@ timetable.
 - **Opening a share link in a fresh browser never invents a conflict.** A
   browser that has never synced has no history to compare, so the first sync
   asks nothing — the link's changes simply apply.
+- **What changed leads with your own week.** The banner says what happened to
+  *your* courses first, by name — "CMI changed 2 of your courses — TOC,
+  QCOM" — and keeps the campus-wide count as a tail. When none of the change
+  was yours it says exactly that, so you needn't open anything to find out.
 - **What changed keeps what a dropped course was** — name, instructor, and when
   it met — so the digest can tell you what you lost, even though the fresh
   timetable no longer knows it. The list stays one line per course; clicking
   the code opens the record as its own pop-up, laid out like a course's
   details page (instructor row, aligned day/time/hall meeting rows), with
-  **Back to What changed** returning to the digest. That record lives only
-  in the digest; dismiss it and it is gone.
+  **Back to What changed** returning to the digest.
+- **You can keep a dropped course.** That record is the last copy in
+  existence — nothing about a dropped course is saved anywhere — so the
+  pop-up offers **Keep this as my own course**: it becomes one of your own
+  courses, with CMI's name, instructor, times and credits, and survives the
+  message being dismissed, a reload and a share link. One undoable step. If
+  the course was on your timetable and you had moved a class yourself, your
+  time is what gets kept — CMI's old one is never put back beside it. The
+  credits stay exactly what the app was already counting, guess and all, so
+  keeping never quietly moves your total. When there is nothing to keep
+  (it's already one of your own courses, or CMI has listed it again) the
+  pop-up says so instead of offering a button that would do nothing.
 - **Courses CMI drops** stay visible with a badge, and anything you had placed
   for them stays on your week.
 - **Changes that no longer apply** are announced rather than silently

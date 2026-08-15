@@ -412,7 +412,15 @@ pub fn adopt(app: &App, new_snapshot: Snapshot, announce: bool, from: Adoption) 
         app.dialog.set(Some(crate::state::Dialog::Conflicts));
     }
     if announce {
-        app.toast("Timetable updated.");
+        // Name the route it actually came through. `announce` is only set
+        // for a live fetch, so this is always one of the two real ones —
+        // "directly from cmi.ac.in" or "through the helper site {name}" —
+        // and a student who wants to know where their timetable came from
+        // can read it without opening My data.
+        app.toast(format!(
+            "Timetable updated ({}).",
+            new_snapshot.source.label()
+        ));
     }
 }
 

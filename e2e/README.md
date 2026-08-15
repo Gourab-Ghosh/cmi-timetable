@@ -23,7 +23,7 @@ Environment knobs: `CHROME_BIN` (default `/usr/bin/chromium`), `DIST_DIR`,
 `PORT`, `CARGO_TARGET_DIR` (for the seed generator; defaults to
 `~/.rust-target-e2e`).
 
-Covered flows (86 tests): Sync-now header + hidden developer mode (URL
+Covered flows (88 tests): Sync-now header + hidden developer mode (URL
 endpoint only), `?c=` selection + clash badges/panel (any casing), unknown-
 code warning, credits defaulting to 4 and per-course credit overwrites,
 master-grid ⚠ would-clash markers and clash toast on add, the ⓘ details
@@ -104,8 +104,10 @@ leaks into the other; undo restores the right set), a share link opened in a
 never-synced browser raising ZERO conflicts on its first sync while a real
 conflict deferred with "Decide later" survives a reload, the What-changed
 digest carrying what a dropped course WAS — one line per course, the record
-opening as its own popup from the code, Back returning to the digest (and
-that course haunting nothing else), seventy active-filter chips collapsing behind "+N more" with every
+opening as its own popup from the code, Back returning to the digest, and
+that record being keepable as a course of your own (permanent through a
+reload, one undoable step, credits still a guess, and the times YOU placed
+winning over CMI's old ones) (and that course haunting nothing else), seventy active-filter chips collapsing behind "+N more" with every
 chip still removable when expanded, the two JSON exports parsing and the
 whole-planner backup restoring EVERYTHING through a wiped browser — the
 selection, the custom move and the full catalog, with the pill saying
