@@ -2,6 +2,9 @@
 /app/dist
 /app/dist-e2e
 /app/dist-deploy
+# .workagents/deploy-parity.py builds here: the deploy artifact, with the
+# real /cmi-timetable/ public URL, for the pre-deploy sub-path check.
+/app/dist-subpath
 /.build-cache
 
 # Python tooling (e2e)

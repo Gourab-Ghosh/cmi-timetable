@@ -232,9 +232,8 @@ fn grid_cell(
             data-slot=start.to_string()
             class:extra=extra
             class:drop-ok=move || {
-                app.drag.with(|d| {
-                    d.as_ref().is_some_and(|d| d.started && d.over == Some((day, start)))
-                })
+                app.drop_target
+                    .with(|t| t.as_ref().is_some_and(|(td, ts, _)| *td == day && *ts == start))
             }
             class:kbd-cursor=move || {
                 app.move_mode.with(|m| m.as_ref().is_some_and(|m| m.cursor == (day, start)))
@@ -292,11 +291,13 @@ fn my_timetable(app: App) -> impl IntoView {
         }
     });
 
-    // The week's own columns and days, worked out once each: both walk the
-    // selection (and `grid_days` the whole catalog), and they were read in
-    // the header, in every row, in every cell and again below the table.
+    // The week's own columns, worked out once: they walk the selection, and
+    // they were read in the header, in every row, in every cell and again
+    // below the table. The days come from the app-wide memo (app.rs), which
+    // answers the day strip, the master grid and the Halls tab from the same
+    // single walk of the catalog.
     let columns = Memo::new(move |_| app.display_slot_grid());
-    let days = Memo::new(move |_| app.grid_days());
+    let days = app.grid_days_memo;
 
     // Every chip on the week, filed under the cell that draws it — one pass
     // instead of one per cell. (Same shape as the master grid's `placed`.)
@@ -428,7 +429,7 @@ fn my_timetable(app: App) -> impl IntoView {
                         "Week"
                     </button>
                     {move || {
-                        app.grid_days()
+                        days.get()
                             .into_iter()
                             .map(|d| {
                                 view! {
@@ -601,12 +602,12 @@ fn my_timetable(app: App) -> impl IntoView {
                                                             data-day=day.index().to_string()
                                                             data-slot=start.to_string()
                                                             class:drop-ok=move || {
-                                                                app.drag
-                                                                    .with(|d| {
-                                                                        d.as_ref()
-                                                                            .is_some_and(|d| {
-                                                                                d.started
-                                                                                    && d.over == Some((day, start))
+                                                                app.drop_target
+                                                                    .with(|t| {
+                                                                        t.as_ref()
+                                                                            .is_some_and(|(td, ts, _)| {
+                                                                                *td == day
+                                                                                    && *ts == start
                                                                             })
                                                                     })
                                                             }
@@ -1643,12 +1644,12 @@ fn master_grid(app: App) -> impl IntoView {
     // The columns, worked out once for the whole table rather than in the
     // header, in every row, and again in the note underneath.
     let columns = Memo::new(move |_| app.master_slot_grid());
-    // Memoised for a second reason: `grid_days` walks every course in the
-    // catalog, and read raw in the table body it made the body depend on the
+    // The days come from the app-wide memo (app.rs). Read raw, `grid_days`
+    // walks every course in the catalog AND made this body depend on the
     // selection — so picking one course tore down and rebuilt every row and
-    // every cell. As a memo the body rebuilds only when the DAYS change, and
-    // a click repaints the cells it actually touched.
-    let days = Memo::new(move |_| app.grid_days());
+    // every cell. Through the memo the body rebuilds only when the DAYS
+    // change, and a click repaints the cells it actually touched.
+    let days = app.grid_days_memo;
 
     // Every chip this grid will draw, filed under the cell that draws it —
     // worked out ONCE per change instead of once per cell.
@@ -2009,7 +2010,7 @@ fn catalog(app: App) -> impl IntoView {
                 filtered
                     .with(|c| c.is_empty())
                     .then(|| {
-                        let search = app.filters().text.trim().to_string();
+                        let search = app.with_filters(|f| f.text.trim().to_string());
                         let needle = search.to_lowercase();
                         let mine = (!needle.is_empty())
                             .then(|| {
@@ -2044,21 +2045,39 @@ fn catalog(app: App) -> impl IntoView {
                         // earlier (maybe weeks ago — filters persist) is
                         // hiding. The text-only probe uses the search box's
                         // own matching, so anything it finds was excluded by
-                        // the other facets. The courses are cloned out of the
-                        // snapshot first: course_matches may reach the
-                        // snapshot itself.
+                        // the other facets. It walks the snapshot BORROWED:
+                        // `course_matches` only reaches the snapshot through
+                        // "fits my schedule" (§4), and a text-only Filters
+                        // never turns that on — so the whole catalog no
+                        // longer has to be cloned to name one course.
                         let filtered_out = (!needle.is_empty())
                             .then(|| {
                                 let text_only = crate::state::Filters {
                                     text: search.clone(),
                                     ..Default::default()
                                 };
-                                let courses = app.snapshot.with(|s| s.courses.clone());
-                                courses
-                                    .into_iter()
-                                    .filter(|c| !app.is_custom(&c.code))
-                                    .find(|c| crate::state::course_matches(&app, c, &text_only, &app.overrides.get()))
-                                    .map(|c| (c.code.clone(), c.name.clone()))
+                                // The borrow below is only safe while this
+                                // holds — enforced, not argued.
+                                debug_assert!(!text_only.fits);
+                                // ONE read of the override store for the
+                                // whole pass: it used to be cloned inside
+                                // the closure, once per course tried.
+                                let ovs = app.overrides.get();
+                                app.snapshot
+                                    .with(|s| {
+                                        s.courses
+                                            .iter()
+                                            .filter(|c| !app.is_custom(&c.code))
+                                            .find(|&c| {
+                                                crate::state::course_matches(
+                                                    &app,
+                                                    c,
+                                                    &text_only,
+                                                    &ovs,
+                                                )
+                                            })
+                                            .map(|c| (c.code.clone(), c.name.clone()))
+                                    })
                             })
                             .flatten();
                         view! {
@@ -2374,7 +2393,11 @@ enum BookingCell {
 #[allow(clippy::too_many_arguments)]
 fn hall_booking_state(
     app: App,
-    snapshot: &Snapshot,
+    // CMI's catalog by code, built once for the whole table: this is asked
+    // about every code of every booking, and `Snapshot::course` walks the
+    // entire catalog for each one. Same matching as that walk — exact and
+    // case-sensitive — so nothing resolves differently here.
+    catalog: &HashMap<&str, &Course>,
     columns: &[Slot],
     code: &str,
     day: Day,
@@ -2403,7 +2426,7 @@ fn hall_booking_state(
     if app.is_custom(code) && taking_their_own {
         return BookingCell::Gone;
     }
-    let Some(course) = snapshot.course(code) else {
+    let Some(course) = catalog.get(code).copied() else {
         return BookingCell::Reference;
     };
     // The official meeting this booking represents — matched on the override
@@ -2604,6 +2627,13 @@ fn bookings_by_cell<'a>(
     snapshot: &'a Snapshot,
     cols: &[Slot],
 ) -> HashMap<&'a str, CellBookings<'a>> {
+    // The catalog by code, once for the whole table. `entry`/`or_insert`,
+    // not `insert`: `Snapshot::course` answers with the FIRST course carrying
+    // a code, and an imported backup can carry one twice.
+    let mut catalog: HashMap<&str, &Course> = HashMap::with_capacity(snapshot.courses.len());
+    for c in &snapshot.courses {
+        catalog.entry(c.code.as_str()).or_insert(c);
+    }
     let mut by_hall: HashMap<&str, CellBookings> = HashMap::new();
     for b in &snapshot.hall_bookings {
         // The same column rule the table draws with — a booking that starts
@@ -2624,7 +2654,7 @@ fn bookings_by_cell<'a>(
             .iter()
             .map(|code| {
                 let state = hall_booking_state(
-                    app, snapshot, cols, code, b.day, b.slot, column, b.temp, &b.hall,
+                    app, &catalog, cols, code, b.day, b.slot, column, b.temp, &b.hall,
                 );
                 (code.clone(), state)
             })
@@ -2786,12 +2816,12 @@ fn hall_row(
                             data-hall=hall.clone()
                             class:extra=extra
                             class:drop-ok=move || {
-                                app.drag
-                                    .with(|d| {
-                                        d.as_ref()
-                                            .is_some_and(|d| {
-                                                d.started && d.over == Some((day, slot.start_min))
-                                                    && d.over_hall.as_deref() == Some(hall_hl.as_str())
+                                app.drop_target
+                                    .with(|t| {
+                                        t.as_ref()
+                                            .is_some_and(|(td, ts, th)| {
+                                                *td == day && *ts == slot.start_min
+                                                    && th.as_deref() == Some(hall_hl.as_str())
                                             })
                                     })
                             }

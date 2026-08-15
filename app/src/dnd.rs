@@ -218,16 +218,34 @@ pub fn perform_drop(
 }
 
 fn on_pointer_move(app: App, ev: &web_sys::PointerEvent) {
-    let Some(mut d) = app.drag.get_untracked() else {
+    // Peek at the scalars; don't copy the state. `get_untracked()` cloned the
+    // whole DragState — the spec's code, label and hall Strings included — on
+    // every one of the sixty pointermoves a second the browser delivers, and
+    // the `set` at the bottom wrote that copy back over the original. Nothing
+    // below this line needs the spec, so the update at the end edits the live
+    // value in place instead.
+    let Some((pointer_id, awaiting_longpress, started, start_x, start_y)) =
+        app.drag.with_untracked(|d| {
+            d.as_ref().map(|d| {
+                (
+                    d.pointer_id,
+                    d.awaiting_longpress,
+                    d.started,
+                    d.start_x,
+                    d.start_y,
+                )
+            })
+        })
+    else {
         return;
     };
-    if ev.pointer_id() != d.pointer_id {
+    if ev.pointer_id() != pointer_id {
         return;
     }
     let (x, y) = (ev.client_x() as f64, ev.client_y() as f64);
-    let moved = ((x - d.start_x).powi(2) + (y - d.start_y).powi(2)).sqrt();
+    let moved = ((x - start_x).powi(2) + (y - start_y).powi(2)).sqrt();
 
-    if d.awaiting_longpress {
+    if awaiting_longpress {
         // Touch: moving before the long-press fires means scrolling, not
         // dragging.
         if moved > MOVE_THRESHOLD_PX {
@@ -236,28 +254,33 @@ fn on_pointer_move(app: App, ev: &web_sys::PointerEvent) {
         }
         return;
     }
-    if !d.started {
-        if moved > MOVE_THRESHOLD_PX {
-            d.started = true;
-        } else {
-            return;
-        }
+    if !started && moved <= MOVE_THRESHOLD_PX {
+        return;
     }
     ev.prevent_default();
-    d.x = x;
-    d.y = y;
-    match cell_under_point(x, y) {
-        Some((day, start, hall)) => {
-            d.over = Some((day, start));
-            d.over_hall = hall;
-        }
-        None => {
-            d.over = None;
-            d.over_hall = None;
-        }
-    }
+    // Both of these touch the DOM — a hit test and a scroll — so they run
+    // BEFORE the update, never inside it: nothing may reach back into
+    // `app.drag` while it is borrowed for writing.
+    let under = cell_under_point(x, y);
     edge_autoscroll(x, y);
-    app.drag.set(Some(d));
+    app.drag.update(|d| {
+        if let Some(d) = d {
+            // Crossing the threshold IS the lift-off; past it this is a no-op.
+            d.started = true;
+            d.x = x;
+            d.y = y;
+            match under {
+                Some((day, start, hall)) => {
+                    d.over = Some((day, start));
+                    d.over_hall = hall;
+                }
+                None => {
+                    d.over = None;
+                    d.over_hall = None;
+                }
+            }
+        }
+    });
 }
 
 fn on_pointer_up(app: App, ev: &web_sys::PointerEvent) {

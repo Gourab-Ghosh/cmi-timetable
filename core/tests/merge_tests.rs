@@ -271,7 +271,7 @@ fn meeting_deleted_upstream() {
     assert!(r.conflicts[0].theirs.is_empty());
 
     // "Keep mine" then turns it into a user-created meeting.
-    let mut kept = r.overrides.clone();
+    let mut kept = r.overrides;
     resolve_conflict(&mut kept, &r.conflicts[0], true);
     assert_eq!(kept.items[0].base, None);
 }
@@ -356,6 +356,11 @@ fn removal_conflicts_when_cmi_moves_the_meeting() {
     let r2 = merge_overrides(&new, &new, &[], &kept);
     assert!(r2.conflicts.is_empty(), "keep-mine must not re-conflict");
 
+    // Both resolutions start from the SAME store, not one from what the
+    // other left: `kept` above cloned, and this one says so too. The move
+    // the lint asks for would compile only because this happens to be the
+    // last branch — a third answer would have to put the clone back.
+    #[allow(clippy::redundant_clone)]
     let mut dropped = r.overrides.clone();
     resolve_conflict(&mut dropped, &r.conflicts[0], false);
     assert!(dropped.items.is_empty(), "use-CMI's restores the meeting");
@@ -487,7 +492,7 @@ fn fresh_boot_added_meeting_raises_no_conflict() {
     let cmi = mtg(Day::Tue, 630, 705, "Lecture Hall 2");
     let old = snap(vec![]); // never synced: placeholder with no courses
     let new = snap(vec![course("RFLR", vec![cmi])]);
-    let store = store_with("RFLR", None, mine.clone());
+    let store = store_with("RFLR", None, mine);
     let r = merge_overrides(&old, &new, &[], &store);
     assert!(r.conflicts.is_empty(), "{:#?}", r.conflicts);
     assert!(r.dropped_matching.is_empty());
@@ -546,7 +551,7 @@ fn added_meeting_cmi_now_runs_is_dropped() {
     let other = mtg(Day::Tue, 630, 705, "Lecture Hall 2");
     // With history…
     let old = snap(vec![course("RFLR", vec![other.clone()])]);
-    let new = snap(vec![course("RFLR", vec![other.clone(), mine.clone()])]);
+    let new = snap(vec![course("RFLR", vec![other, mine.clone()])]);
     let store = store_with("RFLR", None, mine.clone());
     let r = merge_overrides(&old, &new, &[], &store);
     assert!(r.conflicts.is_empty());
@@ -609,7 +614,7 @@ fn convergence_boundaries() {
     // Y: convergence beats positional pairing (which could pair X→W2 and
     // ask a question with a wrong candidate). Dropped, no conflict.
     let old = snap(vec![course("MFD", vec![x.clone(), w.clone()])]);
-    let new = snap(vec![course("MFD", vec![w2.clone(), y.clone()])]);
+    let new = snap(vec![course("MFD", vec![w2, y.clone()])]);
     let r = merge_overrides(
         &old,
         &new,
@@ -622,7 +627,7 @@ fn convergence_boundaries() {
     // Row 12/14 — fresh boot, base in NEITHER snapshot: the change lapses on
     // the FIRST sync (announced), instead of surviving one sync as a zombie.
     let old = snap(vec![]);
-    let new = snap(vec![course("MFD", vec![w.clone()])]);
+    let new = snap(vec![course("MFD", vec![w])]);
     let r = merge_overrides(
         &old,
         &new,
@@ -656,10 +661,10 @@ fn convergence_boundaries() {
     // drawn twice forever.
     let typed = Meeting {
         hall: Some("  lecture hall 6 ".to_string()),
-        ..y.clone()
+        ..y
     };
-    let new = snap(vec![course("MFD", vec![y.clone()])]);
-    let r = merge_overrides(&old, &new, &[], &store_with("MFD", Some(x.clone()), typed));
+    let new = snap(vec![course("MFD", vec![y])]);
+    let r = merge_overrides(&old, &new, &[], &store_with("MFD", Some(x), typed));
     assert_eq!(
         r.dropped_matching.len(),
         1,
@@ -679,7 +684,7 @@ fn convergence_boundaries() {
     let r = merge_overrides(&unscheduled_then, &scheduled_now, &[], &store);
     assert_eq!(r.conflicts.len(), 1);
     assert_eq!(r.conflicts[0].theirs.len(), 2);
-    let mut kept = r.overrides.clone();
+    let mut kept = r.overrides;
     resolve_conflict(&mut kept, &r.conflicts[0], true);
     assert_eq!(
         kept.items[0].base, None,

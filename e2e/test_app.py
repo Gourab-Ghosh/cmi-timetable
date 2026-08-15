@@ -488,6 +488,32 @@ class App:
         )
         time.sleep(0.5)  # let the click-suppression window lapse
 
+    def drag_hover(self, elem, target):
+        """The first half of `drag`: hold the pointer over `target` without
+        releasing, so what the page shows MID-drag can be asserted. Finish
+        with `drop()` — an unreleased button leaks into the next action."""
+        (
+            ActionChains(self.d)
+            .click_and_hold(elem)
+            .move_by_offset(12, 0)  # pass the drag threshold
+            .move_to_element(target)
+            .pause(0.15)
+            .perform()
+        )
+
+    def drop(self):
+        ActionChains(self.d).release().perform()
+        time.sleep(0.5)  # let the click-suppression window lapse
+
+    def lit_cell(self):
+        """The one cell highlighted as the drop target, or a failure naming
+        how many there were. The highlight is derived state (`App::drop_target`)
+        recomputed on every pointermove, so 'exactly one' is the assertion
+        that matters — two would mean a stale cell never cleared."""
+        lit = self.css_all("td.drop-ok")
+        assert len(lit) == 1, f"exactly one cell should be lit, got {len(lit)}"
+        return lit[0]
+
 
 # ---------------------------------------------------------------------------
 # Tests
@@ -648,8 +674,16 @@ def t09_drag_requires_edit_mode(app):
 
     # Turn on edit mode and drag for real.
     app.xpath("//button[contains(.,'Edit layout')]").click()
-    app.drag(app.chip("TOC", "td[data-day='1'][data-slot='550']"), target)
+    # Mid-drag, the cell under the pointer — and only that cell — lights up.
+    # The whole grid carries a drop-ok binding, so this also proves the other
+    # ~30 cells stayed dark.
+    app.drag_hover(app.chip("TOC", "td[data-day='1'][data-slot='550']"), target)
+    lit = app.lit_cell()
+    assert (lit.get_attribute("data-day"), lit.get_attribute("data-slot")) == ("2", "1020"), \
+        "the lit cell must be the one under the pointer"
+    app.drop()
     app.wait_toast("Moved TOC")
+    assert not app.css_all("td.drop-ok"), "the highlight must clear on drop"
     moved = app.chip("TOC", "td[data-day='2'][data-slot='1020']")
     assert "overridden" in moved.get_attribute("class"), \
         "moved chip should render as overridden"
@@ -960,7 +994,15 @@ def t21_halls_drag_moves_hall_and_slot(app):
     assert not app.chips("TOC", dst_cell)
 
     section.find_element(By.XPATH, ".//button[contains(.,'Edit layout')]").click()
-    app.drag(app.chip("TOC", src_cell), app.css(dst_cell))
+    # Mid-drag: exactly one cell lights up, and here the hall is part of the
+    # answer — several halls share this column, and the match on the hall name
+    # is byte-exact. A hall row lighting up at the same time as another would
+    # mean the drop target had stopped distinguishing rooms.
+    app.drag_hover(app.chip("TOC", src_cell), app.css(dst_cell))
+    lit = app.lit_cell()
+    assert (lit.get_attribute("data-hall"), lit.get_attribute("data-slot")) \
+        == ("Seminar Hall", "840"), "the lit cell must be the hall under the pointer"
+    app.drop()
     app.wait_toast("Moved TOC to Tue 14:00–15:15 · Seminar Hall")
     # THE regression: the halls grid itself must update — the chip renders in
     # its new cell (dashed = customised) and leaves the official one.
@@ -1135,6 +1177,13 @@ def t27_filters_undo_redo(app):
     WebDriverWait(app.d, 10).until(
         lambda d: len(app.css_all(".filterchip")) == 2
     )
+    # Typed filters reach localStorage SYNCHRONOUSLY — read with no reload and
+    # no sleep. A trailing-timer "optimisation" here would race every reload
+    # in this suite and, worse, land on top of the three code paths that clear
+    # this key and reload; this line is the fence that keeps it out.
+    assert '"text":"toc"' in app.d.execute_script(
+        "return localStorage.getItem('cmitt.v1.prefs');"
+    ), "a keystroke must be persisted before the next statement runs"
     app.xpath("//button[@aria-label='Undo']").click()
     WebDriverWait(app.d, 10).until(
         lambda d: search.get_attribute("value") == ""
@@ -4410,6 +4459,53 @@ def t86_seg_groups_are_radio_groups_with_arrow_keys(app):
     app.wait_gone(".dialog")
 
 
+def t90_a_grid_chip_shows_the_tick_without_being_rebuilt(app):
+    """Clicking a chip in the Master grid marks it — on the chip that is
+    already there, not a replacement for it.
+
+    The grid feeds its cells from a memo keyed on what it draws, so a click
+    that adds no ⚠ anywhere leaves every chip mounted: the ✓, the ring and
+    the aria hint can only come from the chip's own selection state. Filter
+    the grid to a single course and there is nothing else to change, so
+    holding the element handle across the click proves both halves — the
+    mark appeared, and the node was never replaced. t23 cannot see this: it
+    boots with the selection already in the URL."""
+    app.boot("/")
+    app.open_tab("Master grid")
+    app.wait_css("section[aria-label='Master grid'] table.tt")
+    # The filter bar's own box, by its aria-label: every facet menu carries a
+    # search input of its own, so `.filterbar input[type=search]` is eight
+    # elements. And the needle is the NAME, not the code — "TOC" also matches
+    # S-toc-hastic Processes.
+    search = app.css("section[aria-label='Master grid'] input[aria-label='Search courses']")
+    search.send_keys("Theory of Comp")
+
+    def only_toc_is_drawn(_):
+        chips = app.css_all("section[aria-label='Master grid'] button.chip")
+        return bool(chips) and all(
+            c.get_attribute("aria-label").startswith("TOC,") for c in chips
+        )
+
+    # One course, though it may hold several classes in the week — what
+    # matters is that no OTHER course is on the grid to gain or lose a ⚠,
+    # which is what would rebuild the table and hide the thing being tested.
+    WebDriverWait(app.d, 10).until(
+        only_toc_is_drawn, message="the search should leave only TOC on the grid"
+    )
+    chip = app.css("section[aria-label='Master grid'] button.chip")
+    assert not chip.find_elements(By.CSS_SELECTOR, ".sel-mark")
+    chip.click()
+    app.wait_toast("Added TOC")
+    # Same handle: a StaleElementReferenceException here would mean the cell
+    # was torn down and rebuilt, and this assertion would be testing nothing.
+    WebDriverWait(app.d, 5).until(
+        lambda d: "selected" in chip.get_attribute("class"),
+        message="the ring must appear on the chip that was clicked",
+    )
+    assert chip.find_elements(By.CSS_SELECTOR, ".sel-mark"), "the ✓ must appear too"
+    assert "in your timetable" in chip.get_attribute("aria-label")
+
+
 TESTS = [
     t01_header_sync_button_and_hidden_dev,
     t02_developer_endpoint_only,
@@ -4500,6 +4596,7 @@ TESTS = [
     t87_a_dropped_course_can_be_kept_as_your_own,
     t88_keeping_a_dropped_course_keeps_your_own_times,
     t89_the_digest_narrows_to_the_readers_own_courses,
+    t90_a_grid_chip_shows_the_tick_without_being_rebuilt,
 ]
 
 

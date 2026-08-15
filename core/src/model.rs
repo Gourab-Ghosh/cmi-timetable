@@ -511,7 +511,12 @@ pub struct Snapshot {
     pub source: SourceTier,
     pub parser_version: u32,
     pub branches: Vec<Branch>,
-    /// Sorted by code.
+    /// The catalog. NOT in `Course::code` order, and in no guaranteed order
+    /// at all: the parser builds it from a map keyed on the UPPERCASED code
+    /// (`join::fold`) while each course keeps CMI's own casing, and a
+    /// snapshot restored from an imported backup file is deserialized in
+    /// whatever order that file had. Look codes up with [`Snapshot::course`],
+    /// or build a map — never binary search.
     pub courses: Vec<Course>,
     /// In hall-grid order.
     pub halls: Vec<String>,
@@ -547,6 +552,11 @@ impl Snapshot {
         !self.courses.is_empty()
     }
 
+    /// Exact, case-sensitive match on the code as stored — nothing trimmed,
+    /// nothing folded — answering with the FIRST course that carries it.
+    /// Linear, and deliberately so: [`Snapshot::courses`] has no order to
+    /// exploit. Anything resolving a whole LIST of codes should build a map
+    /// once and reuse it rather than call this per code.
     pub fn course(&self, code: &str) -> Option<&Course> {
         self.courses.iter().find(|c| c.code == code)
     }

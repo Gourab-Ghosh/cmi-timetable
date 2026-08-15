@@ -73,11 +73,14 @@ impl ChipProps {
 
 pub fn chip(app: App, p: ChipProps) -> impl IntoView {
     // Identity — name, hue, whether this is one of the user's own courses —
-    // is a memo for the same reason selection and clash are (below): in the
-    // catalog's keyed <For> a chip outlives the render that built it, and
-    // deleting a custom that shadowed a CMI code (or undoing that) changes
-    // customs without touching the snapshot, so a frozen copy would keep
-    // showing the deleted course's name and colour until a remount.
+    // is a memo for the same reason selection and clash are (below): a chip
+    // outlives the render that built it, and deleting a custom that shadowed
+    // a CMI code (or undoing that) changes customs without touching the
+    // snapshot, so a frozen copy would keep showing the deleted course's
+    // name and colour until a remount. Not only in the catalog's keyed <For>:
+    // the grids' `placed` memos (views.rs) are built from SNAPSHOT courses,
+    // so that same delete leaves them PartialEq-equal and every grid chip
+    // stays mounted too.
     // The user's own courses resolve first (same precedence as everywhere
     // else); their chips take a per-code hashed hue so two customs stay
     // tellable apart — violet is the badge's job, not the chip's.
@@ -103,13 +106,31 @@ pub fn chip(app: App, p: ChipProps) -> impl IntoView {
         })
     };
 
-    // Selection and clash state are memos, not values: in keyed lists (the
-    // catalog's <For>) a chip outlives the render that built it, so anything
-    // frozen here would go stale until a remount. Grid chips are rebuilt on
-    // every change anyway; there the memos are just a cheap indirection.
-    let selected = {
+    // Selection and clash in ONE memo, not two, and not values: in keyed
+    // lists (the catalog's <For>) a chip outlives the render that built it,
+    // so anything frozen here would go stale until a remount — and the grids
+    // are no safer. Their `placed` memos (views.rs) are PartialEq-gated on
+    // {code, eff, warn_wont_fit}, so selecting a course that flips no ⚠
+    // (filter the grid down to one course and click it) leaves every chip
+    // mounted, and the ✓, the ring and the aria hint have to come from here.
+    // Clash is `selected && …` anyway, so the pair recomputes together and
+    // costs one reactive node per chip instead of two — the master grid
+    // draws them in the hundreds. Fields: (selected, clash).
+    let sel_clash = {
         let code = p.code.clone();
-        Memo::new(move |_| app.is_selected(&code))
+        let meeting = p.eff.as_ref().map(|e| e.meeting.clone());
+        Memo::new(move |_| {
+            let selected = app.is_selected(&code);
+            // Short-circuit on purpose: an unselected chip never reaches
+            // `selected_courses()`, so it subscribes to the selection alone
+            // and a moved meeting does not wake all 400 of them.
+            let clash = selected
+                && match &meeting {
+                    Some(m) => app.meeting_has_clash(&code, m),
+                    None => app.course_has_clash(&code),
+                };
+            (selected, clash)
+        })
     };
 
     let (overridden, user_created, aria_when, hall_text, temp) = match &p.eff {
@@ -129,18 +150,6 @@ pub fn chip(app: App, p: ChipProps) -> impl IntoView {
             )
         }
         None => (false, false, String::new(), String::new(), false),
-    };
-
-    let clash = {
-        let code = p.code.clone();
-        let meeting = p.eff.as_ref().map(|e| e.meeting.clone());
-        Memo::new(move |_| {
-            selected.get()
-                && match &meeting {
-                    Some(m) => app.meeting_has_clash(&code, m),
-                    None => app.course_has_clash(&code),
-                }
-        })
     };
 
     // Aria prefix (facts about this chip's meeting). The name is filled in
@@ -176,12 +185,15 @@ pub fn chip(app: App, p: ChipProps) -> impl IntoView {
         let code = p.code.clone();
         let warn_wont_fit = p.warn_wont_fit;
         Memo::new(move |_| {
+            // One read of the pair, copied straight out: (bool, bool) is
+            // Copy, so no signal is read inside another signal's `with`.
+            let (selected, clash) = sel_clash.get();
             let name = identity.with(|(n, _, _)| n.clone());
             let mut aria = format!("{code}, {name}{aria_when}{aria_pre}");
-            if selected.get() {
+            if selected {
                 aria.push_str(", in your timetable");
             }
-            if clash.get() {
+            if clash {
                 // Distinct partners: two shared meetings = two ClashPairs,
                 // but "clashes with ISS, ISS" helps nobody.
                 let mut clash_with: Vec<String> = Vec::new();
@@ -239,9 +251,11 @@ pub fn chip(app: App, p: ChipProps) -> impl IntoView {
     view! {
         <button
             class="chip"
-            class:clash=move || clash.get()
+            class:clash=move || sel_clash.get().1
             class:overridden=overridden
-            class:selected=move || selected.get() && from_master
+            // `from_master` first: a chip that can never show the ✓ then
+            // never subscribes to the pair at all.
+            class:selected=move || from_master && sel_clash.get().0
             class:neutral=move || identity.with(|(_, _, n)| *n)
             style=move || format!("--hue:{}", identity.with(|(_, h, _)| *h))
             class:draggable=move || draggable && app.edit_mode.get()
@@ -273,7 +287,7 @@ pub fn chip(app: App, p: ChipProps) -> impl IntoView {
             }
         >
             {move || {
-                (selected.get() && from_master)
+                (from_master && sel_clash.get().0)
                     .then(|| view! { <span class="sel-mark" aria-hidden="true">"✓"</span> })
             }}
             {p.warn_wont_fit
@@ -863,12 +877,16 @@ fn facet_checkbox(
     toggle: fn(&mut Filters, &str, bool),
 ) -> impl IntoView {
     let node = NodeRef::<leptos::html::Input>::new();
-    let initial = untrack(|| is_checked(&app.filters_in(scope.mine()), &key));
+    let initial = untrack(|| app.with_filters_in(scope.mine(), |f| is_checked(f, &key)));
     let key_eff = key.clone();
     Effect::new(move |_| {
-        let f = app.filters_in(scope.mine());
+        // The filters read is HOISTED above `node.get()`: NodeRef is itself
+        // a signal, and the borrow on `prefs` has no business being open
+        // while a second signal is read. Same two subscriptions, same
+        // order, as before.
+        let checked = app.with_filters_in(scope.mine(), |f| is_checked(f, &key_eff));
         if let Some(input) = node.get() {
-            input.set_checked(is_checked(&f, &key_eff));
+            input.set_checked(checked);
         }
     });
     let undo_label = format!("the {label} filter{}", scope.undo_suffix());
@@ -1144,10 +1162,16 @@ pub fn filter_bar(app: App, scope: FilterScope, result_count: Signal<usize>) -> 
             // The snapshot is read and released before `effective_meetings`
             // goes near the override store (§4).
             let all = app.snapshot.with(|s| s.courses.clone());
+            // The store is taken ONCE, after the snapshot read has been
+            // released (§4). `is_hidden` and `effective_meetings` were each
+            // borrowing the signal per course — two reads per course in the
+            // catalog, every time this recomputed.
+            let ovs = app.overrides.get();
             all.into_iter()
-                .filter(|c| !app.is_hidden(&c.code))
+                .filter(|c| !ovs.is_hidden(&c.code))
                 .filter(|c| {
-                    scope == FilterScope::Everything || !app.effective_meetings(c).is_empty()
+                    scope == FilterScope::Everything
+                        || !crate::state::effective_meetings(c, &ovs).is_empty()
                 })
                 .collect::<Vec<_>>()
         }
@@ -1158,12 +1182,56 @@ pub fn filter_bar(app: App, scope: FilterScope, result_count: Signal<usize>) -> 
     // are applied — the day, time and hall facets all match on effective
     // meetings, so their options have to come from the same place.
     let meetings = Memo::new(move |_| {
-        courses
-            .get()
-            .iter()
-            .flat_map(|c| app.effective_meetings(c))
-            .map(|e| e.meeting)
-            .collect::<Vec<Meeting>>()
+        // The store is taken ONCE and BEFORE the course list is borrowed:
+        // `courses` reads the override store itself, so borrowing the store
+        // AROUND a read of `courses` would nest two reads of the SAME signal
+        // (§4). `.get()` here clones a user-sized store, not the catalog.
+        let ovs = app.overrides.get();
+        courses.with(|cs| {
+            cs.iter()
+                .flat_map(|c| crate::state::effective_meetings(c, &ovs))
+                .map(|e| e.meeting)
+                .collect::<Vec<Meeting>>()
+        })
+    });
+
+    // One memo per facet, over that facet's OWN picked values. `with_picked`
+    // is the only thing the option lists need the filters FOR, and reading
+    // the whole `Filters` for it made every list a subscriber of the search
+    // box: one keystroke marked all eight dirty and each rebuilt itself over
+    // the whole catalog before finding it had produced the same list. A
+    // `Memo<Vec<String>>` over ONE field absorbs that — the text changes, the
+    // picked list does not, and the option lists stay clean. Ticking a box
+    // still invalidates the one facet it belongs to, which `with_picked`
+    // needs.
+    let branch_picked =
+        Memo::new(move |_| app.with_filters_in(scope.mine(), |f| f.branches.clone()));
+    let instructor_picked =
+        Memo::new(move |_| app.with_filters_in(scope.mine(), |f| f.instructors.clone()));
+    let hall_picked = Memo::new(move |_| app.with_filters_in(scope.mine(), |f| f.halls.clone()));
+    let credit_picked =
+        Memo::new(move |_| app.with_filters_in(scope.mine(), |f| f.credits.clone()));
+    let course_picked =
+        Memo::new(move |_| app.with_filters_in(scope.mine(), |f| f.courses.clone()));
+    let flag_picked = Memo::new(move |_| app.with_filters_in(scope.mine(), |f| f.flags.clone()));
+    // Day and Time slot read the SHARED set, not `scope.mine()`. That is what
+    // this code already did and it is kept verbatim so this change moves no
+    // pixel — it is also wrong on My courses, and is written up on its own.
+    let day_picked = Memo::new(move |_| {
+        app.with_filters(|f| {
+            f.days
+                .iter()
+                .map(|d| d.index().to_string())
+                .collect::<Vec<String>>()
+        })
+    });
+    let slot_picked = Memo::new(move |_| {
+        app.with_filters(|f| {
+            f.slot_starts
+                .iter()
+                .map(|s| s.to_string())
+                .collect::<Vec<String>>()
+        })
     });
 
     let branch_opts = Memo::new(move |_| {
@@ -1190,7 +1258,7 @@ pub fn filter_bar(app: App, scope: FilterScope, result_count: Signal<usize>) -> 
                 (code, label)
             })
             .collect::<Vec<_>>();
-        with_picked(opts, app.filters_in(scope.mine()).branches)
+        with_picked(opts, branch_picked.get())
     });
 
     let instructor_opts = Memo::new(move |_| {
@@ -1202,58 +1270,57 @@ pub fn filter_bar(app: App, scope: FilterScope, result_count: Signal<usize>) -> 
             .into_iter()
             .map(|n| (n.clone(), n))
             .collect::<Vec<_>>();
-        with_picked(opts, app.filters_in(scope.mine()).instructors)
+        with_picked(opts, instructor_picked.get())
     });
 
     let day_opts = Memo::new(move |_| {
-        let ms = meetings.get();
-        let opts = Day::ALL
-            .iter()
-            .filter(|d| ms.iter().any(|m| m.day == **d))
-            .map(|d| (d.index().to_string(), d.full().to_string()))
-            .collect::<Vec<_>>();
-        let picked = app
-            .filters()
-            .days
-            .iter()
-            .map(|d| d.index().to_string())
-            .collect();
-        with_picked(opts, picked)
+        let opts = meetings.with(|ms| {
+            Day::ALL
+                .iter()
+                .filter(|d| ms.iter().any(|m| m.day == **d))
+                .map(|d| (d.index().to_string(), d.full().to_string()))
+                .collect::<Vec<_>>()
+        });
+        with_picked(opts, day_picked.get())
     });
 
     let slot_opts = Memo::new(move |_| {
-        let ms = meetings.get();
-        let mut slots: Vec<Slot> = ms.iter().map(|m| m.slot).collect();
+        let mut slots: Vec<Slot> = meetings.with(|ms| ms.iter().map(|m| m.slot).collect());
         slots.sort_by_key(|s| s.start_min);
         slots.dedup_by_key(|s| s.start_min);
         let opts = slots
             .into_iter()
             .map(|s| (s.start_min.to_string(), s.label()))
             .collect::<Vec<_>>();
-        let picked = app
-            .filters()
-            .slot_starts
-            .iter()
-            .map(|s| s.to_string())
-            .collect();
-        with_picked(opts, picked)
+        with_picked(opts, slot_picked.get())
     });
 
     let hall_opts = Memo::new(move |_| {
-        let ms = meetings.get();
-        let mut halls: Vec<String> = ms.iter().filter_map(|m| m.hall.clone()).collect();
+        let mut halls: Vec<String> =
+            meetings.with(|ms| ms.iter().filter_map(|m| m.hall.clone()).collect());
         halls.sort();
         halls.dedup();
         let opts = halls
             .into_iter()
             .map(|h| (h.clone(), h))
             .collect::<Vec<_>>();
-        with_picked(opts, app.filters_in(scope.mine()).halls)
+        with_picked(opts, hall_picked.get())
     });
 
     let credit_opts = Memo::new(move |_| {
-        let cs = courses.get();
-        let mut values: Vec<u8> = cs.iter().map(|c| app.course_credits(c)).collect();
+        // The store carries the user's own credit values; taken once, above
+        // the course list, so the per-course lookup is not a signal read (§4).
+        // Same rule as `App::course_credits`: your value, else CMI's, else the
+        // duration-aware assumption.
+        let ovs = app.overrides.get();
+        let mut values: Vec<u8> = courses.with(|cs| {
+            cs.iter()
+                .map(|c| {
+                    ovs.credits_for(&c.code)
+                        .unwrap_or_else(|| c.effective_credits())
+                })
+                .collect()
+        });
         values.sort_unstable();
         values.dedup();
         let opts = values
@@ -1263,7 +1330,7 @@ pub fn filter_bar(app: App, scope: FilterScope, result_count: Signal<usize>) -> 
                 (n.to_string(), label)
             })
             .collect::<Vec<_>>();
-        with_picked(opts, app.filters_in(scope.mine()).credits)
+        with_picked(opts, credit_picked.get())
     });
 
     let course_opts = Memo::new(move |_| {
@@ -1272,30 +1339,38 @@ pub fn filter_bar(app: App, scope: FilterScope, result_count: Signal<usize>) -> 
                 .map(|c| (c.code.clone(), format!("{} — {}", c.code, c.name)))
                 .collect::<Vec<_>>()
         });
-        with_picked(opts, app.filters_in(scope.mine()).courses)
+        with_picked(opts, course_picked.get())
     });
 
     // The same three flags as before, but only the ones something in scope
     // actually carries. Each test mirrors `state::course_matches` exactly.
     let flag_opts = Memo::new(move |_| {
-        let cs = courses.get();
-        let mut out: Vec<(String, String)> = Vec::new();
-        if cs.iter().any(|c| c.optional_flag) {
-            out.push(("optional".to_string(), "Optional (+)".to_string()));
-        }
-        if cs
-            .iter()
-            .any(|c| c.status == ScheduleStatus::UnscheduledListed)
-        {
-            out.push(("unscheduled".to_string(), "Unscheduled".to_string()));
-        }
-        if cs.iter().any(|c| {
-            let eff = app.effective_meetings(c);
-            (!eff.is_empty() && eff.iter().any(|e| e.overridden)) || app.is_custom(&c.code)
-        }) {
-            out.push(("custom".to_string(), "Has custom time".to_string()));
-        }
-        with_picked(out, app.filters_in(scope.mine()).flags)
+        // The store is taken once, above the course list: `effective_meetings`
+        // was borrowing it per course (§4).
+        let ovs = app.overrides.get();
+        let out: Vec<(String, String)> = courses.with(|cs| {
+            let mut out: Vec<(String, String)> = Vec::new();
+            if cs.iter().any(|c| c.optional_flag) {
+                out.push(("optional".to_string(), "Optional (+)".to_string()));
+            }
+            if cs
+                .iter()
+                .any(|c| c.status == ScheduleStatus::UnscheduledListed)
+            {
+                out.push(("unscheduled".to_string(), "Unscheduled".to_string()));
+            }
+            // `is_custom` reads a DIFFERENT signal (customs) from inside this
+            // borrow, which the nesting rule allows; only the SAME signal may
+            // not nest (§4).
+            if cs.iter().any(|c| {
+                let eff = crate::state::effective_meetings(c, &ovs);
+                (!eff.is_empty() && eff.iter().any(|e| e.overridden)) || app.is_custom(&c.code)
+            }) {
+                out.push(("custom".to_string(), "Has custom time".to_string()));
+            }
+            out
+        });
+        with_picked(out, flag_picked.get())
     });
 
     view! {
@@ -1304,7 +1379,7 @@ pub fn filter_bar(app: App, scope: FilterScope, result_count: Signal<usize>) -> 
                 type="search"
                 placeholder="Search by code, name or instructor"
                 aria-label="Search courses"
-                prop:value=move || app.filters_in(scope.mine()).text
+                prop:value=move || app.with_filters_in(scope.mine(), |f| f.text.clone())
                 on:input=move |ev| {
                     let text = event_target_value(&ev);
                     // Coalesced: one undo step per burst of typing.
@@ -1330,7 +1405,7 @@ pub fn filter_bar(app: App, scope: FilterScope, result_count: Signal<usize>) -> 
                             app,
                             scope,
                             "Branch",
-                            move || app.filters_in(scope.mine()).branches.len(),
+                            move || app.with_filters_in(scope.mine(), |f| f.branches.len()),
                             std::sync::Arc::new(move || branch_opts.get()),
                             |f, k| f.branches.iter().any(|x| x == k),
                             |f, k, on| toggle_vec(&mut f.branches, k.to_string(), on),
@@ -1344,7 +1419,7 @@ pub fn filter_bar(app: App, scope: FilterScope, result_count: Signal<usize>) -> 
                             app,
                             scope,
                             "Instructor",
-                            move || app.filters_in(scope.mine()).instructors.len(),
+                            move || app.with_filters_in(scope.mine(), |f| f.instructors.len()),
                             std::sync::Arc::new(move || instructor_opts.get()),
                             |f, k| f.instructors.iter().any(|x| x == k),
                             |f, k, on| toggle_vec(&mut f.instructors, k.to_string(), on),
@@ -1358,7 +1433,7 @@ pub fn filter_bar(app: App, scope: FilterScope, result_count: Signal<usize>) -> 
                             app,
                             scope,
                             "Day",
-                            move || app.filters_in(scope.mine()).days.len(),
+                            move || app.with_filters_in(scope.mine(), |f| f.days.len()),
                             std::sync::Arc::new(move || day_opts.get()),
                             |f, k| f.days.iter().any(|d| d.index().to_string() == k),
                             |f, k, on| {
@@ -1377,7 +1452,7 @@ pub fn filter_bar(app: App, scope: FilterScope, result_count: Signal<usize>) -> 
                             app,
                             scope,
                             "Time slot",
-                            move || app.filters_in(scope.mine()).slot_starts.len(),
+                            move || app.with_filters_in(scope.mine(), |f| f.slot_starts.len()),
                             std::sync::Arc::new(move || slot_opts.get()),
                             |f, k| f.slot_starts.iter().any(|s| s.to_string() == k),
                             |f, k, on| {
@@ -1395,7 +1470,7 @@ pub fn filter_bar(app: App, scope: FilterScope, result_count: Signal<usize>) -> 
                             app,
                             scope,
                             "Hall",
-                            move || app.filters_in(scope.mine()).halls.len(),
+                            move || app.with_filters_in(scope.mine(), |f| f.halls.len()),
                             std::sync::Arc::new(move || hall_opts.get()),
                             |f, k| f.halls.iter().any(|x| x == k),
                             |f, k, on| toggle_vec(&mut f.halls, k.to_string(), on),
@@ -1409,7 +1484,7 @@ pub fn filter_bar(app: App, scope: FilterScope, result_count: Signal<usize>) -> 
                             app,
                             scope,
                             "Credits",
-                            move || app.filters_in(scope.mine()).credits.len(),
+                            move || app.with_filters_in(scope.mine(), |f| f.credits.len()),
                             std::sync::Arc::new(move || credit_opts.get()),
                             |f, k| f.credits.iter().any(|x| x == k),
                             |f, k, on| toggle_vec(&mut f.credits, k.to_string(), on),
@@ -1423,7 +1498,7 @@ pub fn filter_bar(app: App, scope: FilterScope, result_count: Signal<usize>) -> 
                             app,
                             scope,
                             "Course",
-                            move || app.filters_in(scope.mine()).courses.len(),
+                            move || app.with_filters_in(scope.mine(), |f| f.courses.len()),
                             std::sync::Arc::new(move || course_opts.get()),
                             |f, k| f.courses.iter().any(|x| x == k),
                             |f, k, on| toggle_vec(&mut f.courses, k.to_string(), on),
@@ -1437,7 +1512,7 @@ pub fn filter_bar(app: App, scope: FilterScope, result_count: Signal<usize>) -> 
                             app,
                             scope,
                             "Status",
-                            move || app.filters_in(scope.mine()).flags.len(),
+                            move || app.with_filters_in(scope.mine(), |f| f.flags.len()),
                             std::sync::Arc::new(move || flag_opts.get()),
                             |f, k| f.flags.iter().any(|x| x == k),
                             |f, k, on| toggle_vec(&mut f.flags, k.to_string(), on),
@@ -1458,7 +1533,7 @@ pub fn filter_bar(app: App, scope: FilterScope, result_count: Signal<usize>) -> 
                         >
                             <input
                                 type="checkbox"
-                                prop:checked=move || app.filters_in(scope.mine()).fits
+                                prop:checked=move || app.with_filters_in(scope.mine(), |f| f.fits)
                                 on:change=move |ev| {
                                     let on = event_target_checked(&ev);
                                     app.act_filters(
@@ -1488,11 +1563,10 @@ pub fn filter_bar(app: App, scope: FilterScope, result_count: Signal<usize>) -> 
                 // Counted the way this bar behaves: "Fits my schedule" is not
                 // shown here and cannot act here, so it must not be the reason
                 // a Clear-all button appears over an empty chip line.
-                let f = app.filters_in(scope.mine());
-                let active = match scope {
+                let active = app.with_filters_in(scope.mine(), |f| match scope {
                     FilterScope::Everything | FilterScope::OnTheGrid => f.active_count(),
                     FilterScope::MySelection => f.active_count() - usize::from(f.fits),
-                };
+                });
                 (active > 0)
                     .then(|| {
                         view! {

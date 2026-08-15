@@ -13,6 +13,20 @@ public_url = "/"
 # comments — worth keeping in the source, not worth sending to every
 # visitor before the first paint.
 minify = "on_release"
+# Known, diagnosed and accepted: release builds print
+#   WARN Failed to minify JS: RequiredTokenNotFound(Identifier) [token=Some(KeywordDefault)]
+# and ship the wasm-bindgen glue unminified (~68 KB raw, ~10.6 KB gzipped).
+# Trunk v0.21.14 minifies JS with minify-js 0.5.6 / parse-js 0.17.0, whose
+# export-clause parser demands an Identifier token after `as`. The last line
+# of every `wasm-bindgen --target web` glue file is
+#     export { initSync, __wbg_init as default };
+# which is legal ES2015 (`default` is an IdentifierName there) and which
+# parse-js rejects. Nothing in this repo emits that line and no flag turns
+# it off. The CSS still minifies (77 KB -> 44 KB), which is the win that
+# mattered.
+# Do NOT "fix" this with a post_build hook that rewrites the staged .js:
+# Trunk stamps Subresource Integrity into index.html BEFORE post_build hooks
+# run, so a rewritten file fails SRI and the app never boots.
 
 # Offline support: after the build lands in the staging dir, write sw.js —
 # a service worker precaching this exact build. Debug builds get a stub

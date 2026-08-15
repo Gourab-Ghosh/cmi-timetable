@@ -3,7 +3,7 @@
 
 use crate::model::{Course, Meeting, Snapshot};
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 /// What sort of change a line describes. Kept apart from the values so the
 /// UI can put the KIND where the eye lands first — a column of "moved",
@@ -85,7 +85,13 @@ impl SnapshotDiff {
     }
 }
 
-fn meetings_set(course: &Course) -> BTreeSet<(usize, u16, u16, Option<String>)> {
+/// The two sets are only ever compared with each other, on the spot, so
+/// they borrow their hall names. `Option<&str>` orders exactly as
+/// `Option<String>` does — `None` first, then byte-lexicographic — so the
+/// set's contents, its ordering and the `!=` at the call site are
+/// unchanged; this only stops allocating a String per meeting per course on
+/// every sync.
+fn meetings_set(course: &Course) -> BTreeSet<(usize, u16, u16, Option<&str>)> {
     course
         .meetings
         .iter()
@@ -94,7 +100,7 @@ fn meetings_set(course: &Course) -> BTreeSet<(usize, u16, u16, Option<String>)> 
                 m.day.index(),
                 m.slot.start_min,
                 m.slot.end_min,
-                m.hall.clone(),
+                m.hall.as_deref(),
             )
         })
         .collect()
@@ -194,8 +200,25 @@ fn describe_course_change(old: &Course, new: &Course) -> Vec<ChangeLine> {
 pub fn diff_snapshots(old: &Snapshot, new: &Snapshot) -> SnapshotDiff {
     let mut diff = SnapshotDiff::default();
 
+    // Both passes below used to ask `Snapshot::course`, which is a linear
+    // scan (model.rs): 2 x n x n code comparisons on every sync — 80,000 at
+    // CMI's ~200 courses, nearly all of it spent confirming that nothing
+    // changed. Two lookup tables, one pass each, say the same thing.
+    // `or_insert` keeps FIRST-wins, which is exactly what `iter().find()`
+    // answered. (A snapshot `join_pages` built has no duplicate codes at
+    // all — it comes out of a BTreeMap keyed on the folded code — but a
+    // deserialized or hand-built one is not the parser's to promise.)
+    let mut old_by_code: HashMap<&str, &Course> = HashMap::with_capacity(old.courses.len());
+    for c in &old.courses {
+        old_by_code.entry(c.code.as_str()).or_insert(c);
+    }
+    let new_codes: HashSet<&str> = new.courses.iter().map(|c| c.code.as_str()).collect();
+
+    // The push order below IS the output order the digest reads back:
+    // `added` and `changed` follow `new.courses`, `removed` follows
+    // `old.courses`. Only the lookup changed; the walks are untouched.
     for course in &new.courses {
-        match old.course(&course.code) {
+        match old_by_code.get(course.code.as_str()).copied() {
             None => diff.added.push(course.code.clone()),
             Some(prev) => {
                 let summary = describe_course_change(prev, course);
@@ -211,7 +234,7 @@ pub fn diff_snapshots(old: &Snapshot, new: &Snapshot) -> SnapshotDiff {
         }
     }
     for course in &old.courses {
-        if new.course(&course.code).is_none() {
+        if !new_codes.contains(course.code.as_str()) {
             diff.removed.push(course.clone());
         }
     }

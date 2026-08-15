@@ -610,7 +610,7 @@ FEATURES.md  the user-facing feature list (written R39). README is the
 ## 5. Build & test commands (exact)
 
 ```sh
-# native tests (94; the html feature comes from core's self dev-dependency)
+# native tests (114; the html feature comes from core's self dev-dependency)
 CARGO_TARGET_DIR=~/.rust-target-e2e RUSTFLAGS="" cargo test --workspace
 # app build for e2e (never plain dist while trunk serve runs).
 # RUSTFLAGS="" on purpose: a global ~/.cargo/config.toml carrying
@@ -619,7 +619,7 @@ CARGO_TARGET_DIR=~/.rust-target-e2e RUSTFLAGS="" cargo test --workspace
 # `__wbindgen_externref_table_alloc`. Emptying it for this build restores
 # the wasm defaults without touching anything outside the repo.
 cd app && RUSTFLAGS="" CARGO_TARGET_DIR=~/.rust-target-e2e trunk build --release --dist dist-e2e
-# e2e (61 tests; self-generates seed via core example, needs cargo on PATH)
+# e2e (90 tests; self-generates seed via core example, needs cargo on PATH)
 cd e2e && DIST_DIR=../app/dist-e2e .venv/bin/python test_app.py
 # ...or just a few, by name fragment
 cd e2e && DIST_DIR=../app/dist-e2e .venv/bin/python test_app.py t44 t45
@@ -651,7 +651,7 @@ regenerates the .ics golden.
   selected course with no time is part of the timetable, not a footnote.
 - "Your changes" groups are headed by `.cg-head` (colour rail + small caps
   + count), coloured by `OwnChange::tone()`. See §4.
-- Tests: 114 native + 86/86 e2e green (as of R49). Meeting removals: `MeetingOverride.to`
+- Tests: 114 native + 90/90 e2e green (as of R58). Meeting removals: `MeetingOverride.to`
   is `Option<Meeting>` (None = removed; legacy JSON/share payloads still
   load — present meeting ⇒ Some). Out-of-grid times: **all three tables grow
   synthetic `.extra` columns**, each from its own source, all built by the
@@ -3226,6 +3226,122 @@ and meeting lists on every keystroke; `diff_snapshots` is O(courses²); a
 search keystroke serialises and writes all preferences. None of them is a
 tab-switch cost, which is why they waited.
 
+### R58 — the rest of the optimization list, and what measuring it proved
+
+User: "Tell me what optimizations are left to do", then "Fix all of these",
+in a round that began as a final pre-deploy test.
+
+Ten items, scouted in parallel (11 read-only agents,
+`.workagents/r58-optimization-scouts.json`) and applied in one synthesised
+order because six of them collide in `state.rs`, `ui.rs` and `views.rs`.
+
+**Landed.**
+
+- `App::with_filters_in` / `with_filters` — a BORROWING read of a filter set.
+  `filters()`/`filters_in()` still exist and are now one-liners over it, for
+  the four callers that genuinely need an owned `Filters` (the chip list
+  moves its eight Vecs out field by field; the three view filter memos hold
+  it across a `course_matches` loop that reaches four other signals). ~22
+  read-only call sites converted.
+- Eight per-facet `*_picked` memos. Every option list used to end in a read
+  of the whole `Filters`, so ONE keystroke in the search box marked all eight
+  dirty and each rebuilt itself over the whole catalog before `PartialEq`
+  found it unchanged. NOTE, unfixed on purpose: the Day and Time-slot facets
+  read the SHARED set while their count badges read the scoped one — visible
+  on My courses, reproduced verbatim here, and written up as §8.18.
+- The override store is now taken ONCE at the top of `courses`, `meetings`,
+  `credit_opts` and `flag_opts` instead of being borrowed per course.
+- `course_matches` uses the store it was already handed (`is_hidden`,
+  `credits_for`) instead of reaching back through the signal per course.
+- The "No courses match" probe walks the snapshot BORROWED instead of cloning
+  every course to name one, with a `debug_assert!(!text_only.fits)` enforcing
+  the reason that is safe rather than arguing it in a comment.
+- `persist_prefs` borrows with `with_untracked` instead of deep-cloning all
+  of `Prefs` per keystroke. The DEBOUNCE this item asked for was REJECTED:
+  t89 and the new t27 assertion read `cmitt.v1.prefs` with no navigation and
+  no sleep, and the three "clear storage and reload" paths would have a
+  pending write land on top of them. The fence comment says so in place.
+- `App::drop_target`: a `Memo<Option<(Day, u16, Option<String>)>>` derived
+  from `drag` at the root. `drag` fires on every pointermove (the ghost
+  follows the pointer); this changes only when the pointer crosses a cell
+  boundary, and 420 halls cells now subscribe to it instead. `on_pointer_move`
+  peeks at five scalars and does ONE `update` instead of `get_untracked` +
+  `set` (two whole DragState clones per move).
+- `App::grid_days_memo` — one app-wide memo for a walk of the entire catalog
+  that returns at most seven `Day`s. Field, not context: `dnd.rs` runs in
+  document handlers with no reactive owner, where `use_context` finds nothing.
+- `App::course_index` (`Arc<HashMap<String, usize>>`) so `selected_courses`
+  stops resolving each selected code by linear scan; a local
+  `HashMap<&str, &Course>` does the same for every hall booking.
+- `diff_snapshots` was O(n·m) — two linear `Snapshot::course` scans, ~80,000
+  comparisons per sync at CMI's ~200 courses. Now two maps, one pass each,
+  with `or_insert` preserving first-wins and the push order (which IS the
+  digest's display order) untouched. `meetings_set` borrows its hall names.
+- The service worker precached `./` AND `./index.html` — the same document,
+  twice, on every install. `./index.html` is the half that survives.
+- The clippy gate CONTEXT claimed was green was NOT: eight `redundant_clone`
+  findings. Seven were dead clones; the eighth is load-bearing (the twin
+  resolutions in `removal_conflicts_when_cmi_moves_the_meeting` must start
+  from the same store) and carries an `#[allow]` and the reason.
+- Chip: `selected` + `clash` merged into one `Memo<(bool, bool)>` (clash is
+  `selected && …` anyway). The comment claiming grid chips are rebuilt on
+  every change was WRONG since R57 and is corrected — the grids' `placed`
+  memos are PartialEq-gated, so a click that flips no ⚠ leaves every chip
+  mounted and the ✓ comes from this memo alone. t90 pins exactly that.
+
+**Rejected, with evidence, so they are not re-filed.** The JS-minify warning:
+trunk 0.21.14's parse-js rejects `export { initSync, __wbg_init as default }`,
+which wasm-bindgen always emits; the obvious fix (a post_build hook) is
+blocked because trunk stamps SRI into index.html BEFORE hooks run, so a
+rewritten file fails integrity and the app never boots. Accepted and
+documented in `Trunk.toml`. wasm-opt: already `-Oz` and at fixpoint (0.09%
+recoverable). A `[tools] wasm_opt` pin would change artifact bytes per host —
+a build-policy call, not an optimisation.
+
+**What measuring proved — the honest part.** Same discipline as R57 (fresh
+page, CPU throttled 4×, baseline built from a worktree at the previous
+commit), plus a new `.workagents/perf-interact.py` that measures the two
+things R58 actually touched. Tab first-click, 15 samples, order reversed:
+My timetable 11→14, My courses 30→29, Catalog 68→70, Master grid 76→73,
+Halls 96→94 — all noise, node counts byte-identical. Per keystroke: 6.37 ms
+→ 6.52 ms of CPU. Per pointermove during a drag: 0.27 ms → 0.25 ms.
+
+So: **no user-visible speed-up**. The keystroke is dominated by the
+`filtered` memo re-running `course_matches` over the catalog and by the
+`<For>` diff, not by what was removed; and a scout predicted the drag result
+exactly ("the Memo does not take the fan-out to zero — `mark_check` still
+propagates to all ~490 cell effects; what goes is the 490 closure bodies").
+What the round did buy is real but not a stopwatch number: an O(n) diff, a
+gate that is green again, one fewer full document fetch per install, far less
+allocation, and coverage where there was none.
+
+Two harness bugs were found by disbelieving the first numbers, and both are
+worth remembering: a double-rAF timer reported ~23 ms for a keystroke on BOTH
+builds (that is the rAF floor this file already warns about — the instrument
+is now CDP `Performance.getMetrics`), and a pointermove burst aimed at an
+arbitrary cell measured an early return, because the app's edge-autoscroll
+slides the table under a fixed pointer until the sticky gutter is beneath it.
+`perf-interact.py` now asserts the work happened before reporting a cost.
+
+**New tests.** `drop-ok` had ZERO coverage before this round — the drag tests
+only ever asserted where a chip LANDED — so the mechanism R58 rewrote could
+have broken silently. t09 and t21 now assert mid-drag that exactly one cell
+is lit and which one (t21's is the case-sensitive hall match); t27 asserts a
+keystroke reaches localStorage synchronously; t90 holds a chip's element
+handle across a click to prove the ✓ appears without the grid remounting.
+90/90 e2e, 114 native, clippy clean on both targets with
+`-W clippy::redundant_clone -D warnings`.
+
+**Pre-deploy artifact check.** `.workagents/deploy-parity.py` builds with the
+real `--public-url /cmi-timetable/`, serves it from that sub-path ONLY (a
+request to the origin root 404s, as on Pages) and drives it: 18 checks —
+assets resolve, the pre-paint theme script survived minification, SRI is
+present, the worker registers relatively and scopes to the sub-path, the
+build precaches once with no duplicate, and the site still boots with the
+server switched off, including a deep link. The whole 91-test suite serves
+from a root, so nothing else in this repo would have caught a sub-path
+mistake, which is the one class of bug that only appears once deployed.
+
 ## 8. Open bugs — found, confirmed, NOT fixed (do not delete)
 
 Rules for this section: entries stay until the bug is actually fixed and a
@@ -3240,7 +3356,29 @@ audit added (8.14–8.17) were fixed in R41 — same place, same rule. The seven
 the R37 audit added (8.7–8.13), deliberately deferred because each was a
 change of behaviour big enough to want its own look, were all fixed in R48 —
 R48's §7 entry says what each was, how it was fixed, and which test now
-fails without the fix. 8.6 below is not a bug and never leaves.
+fails without the fix. 8.6 below is not a bug and never leaves. 8.18 was
+found by the R58 scouts and is open.
+
+### 8.18 The Day and Time-slot facets read the WRONG filter set on My courses
+
+Found by two independent R58 scouts reading the same lines, and confirmed
+against the code: in `filter_bar` (app/src/ui.rs) every facet reads its
+picked values with `filters_in(scope.mine())` EXCEPT Day and Time slot,
+which call `filters()` — always the shared Catalog/Master-grid set. Their
+count badges, a few lines below, correctly read the scoped set.
+
+So on My courses, whose filters are its own (t75), the Day and Time-slot
+menus show ticks belonging to the Catalog's filters, and a day ticked on My
+courses shows in the badge but not in the menu. R58 reproduced it verbatim —
+both the picked memos and the badge closures — because it was carrying ten
+other changes and this one changes what a student sees.
+
+Fixing it is one word in each of two places (`filters()` →
+`filters_in(scope.mine())`, keeping the `.days`/`.slot_starts` mapping), but
+it needs its own test: extend t75 to tick a day on My courses, switch to
+Catalog, and assert the Day menu there is untouched — and the reverse. Check
+`with_picked`'s callers at the same time, since the badge and the menu
+disagreeing is the symptom that would remain if only one side were changed.
 
 ### 8.6 Deliberate non-bug — do not "fix" this
 

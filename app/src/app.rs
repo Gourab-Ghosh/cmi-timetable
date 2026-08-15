@@ -7,7 +7,7 @@
 //! GitHub Pages (no server rewrites), so this app uses a minimal hash router
 //! instead — two routes, `#/` and `#/developer`. See README for details.
 
-use crate::state::{App, Route, SyncMeta};
+use crate::state::{App, DragState, Route, SyncMeta};
 use crate::{dev, dnd, domx, fetch, storage, ui, views};
 use leptos::prelude::*;
 use std::collections::HashMap;
@@ -56,14 +56,37 @@ fn init_app() -> (App, bool) {
         snapshot = Snapshot::placeholder();
     }
 
+    let sync = SyncMeta {
+        fetched_at: snapshot.fetched_at,
+        source: snapshot.source.clone(),
+        updating: false,
+        progress: String::new(),
+    };
+    let snapshot = RwSignal::new(snapshot);
+    // Where every course sits in the catalog, by code. `Snapshot::course`
+    // walks the whole list, and `selected_courses` — which every clash
+    // check, grid and facet asks for, once per chip — walked it once per
+    // selected code. A memo, so it is rebuilt when a sync lands rather than
+    // on every read. `entry`/`or_insert` keeps FIRST-wins and the key is the
+    // code verbatim, so it answers exactly what that walk answers (an
+    // imported backup may carry the same code twice).
+    let course_index = Memo::new(move |_| {
+        snapshot.with(|s| {
+            let mut by_code: HashMap<String, usize> = HashMap::with_capacity(s.courses.len());
+            for (i, c) in s.courses.iter().enumerate() {
+                by_code.entry(c.code.clone()).or_insert(i);
+            }
+            Arc::new(by_code)
+        })
+    });
+    // Hoisted out of the struct literal so the drop-target memo below can be
+    // derived from it in the same breath. See `App::drop_target`.
+    let drag = RwSignal::new(None::<DragState>);
+
     let app = App {
-        sync: RwSignal::new(SyncMeta {
-            fetched_at: snapshot.fetched_at,
-            source: snapshot.source.clone(),
-            updating: false,
-            progress: String::new(),
-        }),
-        snapshot: RwSignal::new(snapshot),
+        sync: RwSignal::new(sync),
+        snapshot,
+        course_index,
         selection: RwSignal::new(selection),
         overrides: RwSignal::new(overrides),
         customs: RwSignal::new(customs),
@@ -81,11 +104,34 @@ fn init_app() -> (App, bool) {
         route: RwSignal::new(Route::Planner),
         dialog: RwSignal::new(None),
         dialog_dirty: RwSignal::new(false),
-        drag: RwSignal::new(None),
+        drag,
+        // Derived here, at the root, for the same reason as CourseIndex
+        // below: it outlives every cell that reads it. `drag` fires on every
+        // pointermove — the ghost chip has to follow the pointer — and the
+        // Halls table alone hangs a `drop-ok` closure on several hundred
+        // <td>s. Those cells subscribe to THIS instead, and a Memo whose
+        // recomputed value compares equal never wakes them.
+        drop_target: Memo::new(move |_| {
+            drag.with(|d| {
+                d.as_ref()
+                    .filter(|d| d.started)
+                    .and_then(|d| d.over.map(|(day, start)| (day, start, d.over_hall.clone())))
+            })
+        }),
         move_mode: RwSignal::new(None),
         force_tier: RwSignal::new(None),
         announce: RwSignal::new(String::new()),
         edit_mode: RwSignal::new(false),
+        // The day rows, once for the session. The closure names the app
+        // through context instead of capturing it — the value being built
+        // here IS the app — and that is safe because a `Memo` is lazy: the
+        // body does not run until something reads it, which is long after
+        // the `provide_context` on the next line. Built here, under the
+        // root owner, so it outlives every view that reads it (same reason
+        // as `CourseIndex` below). Keep the `provide_context` immediately
+        // after this literal: anything that reads `grid_days` in between
+        // would look the app up before it was there.
+        grid_days_memo: Memo::new(|_| App::use_ctx().compute_grid_days()),
     };
     provide_context(app);
     // One index for every chip on the page: name, hue and "CMI lists no

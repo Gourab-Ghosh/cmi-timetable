@@ -4,6 +4,8 @@
 use crate::{domx, storage};
 use leptos::prelude::*;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::sync::Arc;
 use ttcore::diff::SnapshotDiff;
 use ttcore::merge::Conflict;
 use ttcore::model::{
@@ -279,6 +281,13 @@ pub struct DragState {
     pub awaiting_longpress: bool,
 }
 
+/// What a drop-target cell needs from a live drag: the cell under the
+/// pointer as `(day, column start, hall)` — the hall only in the Halls
+/// view, whose cells carry `data-hall`. `None` while nothing is being
+/// dragged, before a touch drag has lifted off, and whenever the pointer
+/// is off the grid.
+pub type DropTarget = Option<(Day, u16, Option<String>)>;
+
 #[derive(Clone, PartialEq)]
 pub struct DragSpec {
     pub code: String,
@@ -379,9 +388,21 @@ pub struct ClashPair {
 // The App handle
 // ---------------------------------------------------------------------------
 
+/// Where each catalog course sits in `Snapshot::courses`, by the code
+/// exactly as the catalog spells it — the same match `Snapshot::course`
+/// makes (exact, case-sensitive, first wins), so a lookup through this
+/// answers precisely what that walk would answer. `Arc`, not `Rc`: signal
+/// storage has to be `Send + Sync`.
+pub type CodeIndex = Arc<HashMap<String, usize>>;
+
 #[derive(Clone, Copy)]
 pub struct App {
     pub snapshot: RwSignal<Snapshot>,
+    /// The catalog's positions, rebuilt only when a sync lands (built at the
+    /// root, app.rs). Read it BEFORE borrowing `snapshot`: it is a memo OVER
+    /// that signal, so a read inside `snapshot.with(…)` reaches the same
+    /// signal twice the moment the memo is stale (§4, rule 1).
+    pub course_index: Memo<CodeIndex>,
     pub sync: RwSignal<SyncMeta>,
     pub selection: RwSignal<Vec<String>>,
     pub overrides: RwSignal<OverridesStore>,
@@ -412,6 +433,15 @@ pub struct App {
     /// dismissals ask first. Cleared whenever the dialog changes.
     pub dialog_dirty: RwSignal<bool>,
     pub drag: RwSignal<Option<DragState>>,
+    /// The cell under the pointer, for the drop-target highlight. Derived
+    /// from `drag` at the root (see `app.rs`) and deliberately NOT read off
+    /// `drag` directly: `drag` changes on every single pointermove, because
+    /// the ghost chip follows the pointer, while this changes only when the
+    /// pointer crosses into another cell. The Halls table hangs a `drop-ok`
+    /// closure on several hundred cells; a Memo's PartialEq dedupe is what
+    /// stops all of them re-running sixty times a second for a value that
+    /// changed a few dozen times in the whole gesture.
+    pub drop_target: Memo<DropTarget>,
     pub move_mode: RwSignal<Option<MoveMode>>,
     /// Developer-mode simulator: force a specific tier on the next update.
     pub force_tier: RwSignal<Option<String>>,
@@ -420,6 +450,15 @@ pub struct App {
     /// Drag & drop (pointer and keyboard move mode) only works while edit
     /// mode is on — toggled per session from the grid toolbars.
     pub edit_mode: RwSignal<bool>,
+    /// The grid's day rows, worked out ONCE per change for the whole
+    /// session. Read it through `grid_days()`, never directly: the method is
+    /// the name everything else uses, and this is only how it is paid for.
+    /// Built in `app.rs::init_app` under the root owner (same reason as
+    /// `CourseIndex`, so it outlives every view that reads it) — and a FIELD
+    /// rather than a context, because `App` is copied into the document-level
+    /// pointer and key handlers in `dnd.rs`, which the browser calls with no
+    /// reactive owner: a context lookup there would find nothing and panic.
+    pub grid_days_memo: Memo<Vec<Day>>,
 }
 
 impl App {
@@ -570,7 +609,25 @@ impl App {
     pub fn persist_prefs(&self) {
         // Preferences are re-derivable and re-chosen in a second; a failure
         // here is not worth a banner that would then hide a real one.
-        let _ = storage::save(storage::KEY_PREFS, &self.prefs.get_untracked());
+        //
+        // Borrowed with `with_untracked`, never taken with `get_untracked`:
+        // this runs on EVERY keystroke in a filter search box, and taking
+        // the value out cloned the whole of `Prefs` — both filter sets, so
+        // sixteen `Vec`s plus every ticked branch, instructor, hall and
+        // course code, deep-cloned and dropped again — purely to hand serde
+        // a reference. Borrowing writes the same bytes with no allocation.
+        //
+        // The write stays synchronous and immediate, and must: t89 reads
+        // `cmitt.v1.prefs` straight out of localStorage with no navigation
+        // and no delay after ticking the digest's box, and t49 refreshes the
+        // page a moment after a Halls day click. There is also no safe place
+        // to flush a deferred write from — the backup import, "Delete
+        // everything" and the storage inspector all rewrite or clear this
+        // key and then reload, so anything still pending would land on top
+        // of them with the stale in-memory value.
+        let _ = self
+            .prefs
+            .with_untracked(|p| storage::save(storage::KEY_PREFS, p));
     }
 
     /// Keep `?c=` canonical on every selection change (replaceState). Any
@@ -1613,6 +1670,11 @@ impl App {
     }
 
     pub fn selected_courses(&self) -> Vec<Course> {
+        // The catalog's index FIRST, before the snapshot is borrowed below:
+        // it is a memo over that same signal, so reading it inside the `with`
+        // would reach the snapshot twice the moment a sync had left it stale
+        // (§4, rule 1). Taking it costs one `Arc` clone.
+        let by_code = self.course_index.get();
         // `with`, not `get`: this runs per clash/fit check, and cloning the
         // whole snapshot (raw gzipped pages included) each time is real cost.
         // Custom courses resolve FIRST: if a later sync brings an official
@@ -1626,7 +1688,20 @@ impl App {
                         .map(|code| {
                             customs
                                 .get(code)
-                                .or_else(|| snapshot.course(code))
+                                .or_else(|| {
+                                    // What `Snapshot::course` would find,
+                                    // without the walk: exact, case-sensitive,
+                                    // first wins. The position is checked
+                                    // against the course it points at, so a
+                                    // stale index can never put somebody
+                                    // else's course on the timetable — a miss
+                                    // only draws the stub an unknown code
+                                    // already draws.
+                                    by_code
+                                        .get(code.as_str())
+                                        .and_then(|i| snapshot.courses.get(*i))
+                                        .filter(|c| c.code == *code)
+                                })
                                 .cloned()
                                 .unwrap_or_else(|| removed_stub(code))
                         })
@@ -1828,6 +1903,14 @@ impl App {
     /// invisible). One list for every grid AND for drag/keyboard-move
     /// targets, so a row that exists on screen is always reachable.
     pub fn grid_days(&self) -> Vec<Day> {
+        self.grid_days_memo.get()
+    }
+
+    /// The body behind `grid_days`, run ONLY by the memo built in
+    /// `app.rs::init_app`. It walks all ~200 catalog courses and allocates a
+    /// `Vec<EffMeeting>` per course (two `Meeting` clones apiece) to collect
+    /// at most seven `Day`s, so every reader has to share one answer.
+    pub(crate) fn compute_grid_days(&self) -> Vec<Day> {
         let mut days = vec![Day::Mon, Day::Tue, Day::Wed, Day::Thu, Day::Fri];
         // `with`, not `get`, for BOTH stores: this runs for every grid body,
         // day strip and facet, and `get` would deep-clone the whole Snapshot
@@ -2082,21 +2165,51 @@ impl App {
         self.act_filters_in(false, label, coalesce, f);
     }
 
-    /// The filter set the Catalog and the Master grid share.
-    pub fn filters(&self) -> Filters {
-        self.prefs.with(|p| p.filters.clone())
-    }
-
-    /// One of the two filter sets, picked the same way `act_filters_in`
-    /// picks the one it edits.
-    pub fn filters_in(&self, mine: bool) -> Filters {
+    /// One of the two filter sets, BORROWED — picked the same way
+    /// `act_filters_in` picks the one it edits. Tracked, exactly as
+    /// `filters_in` is, so a reader still re-runs when the set changes.
+    ///
+    /// Almost every reader wants a length, a flag or one field, and paying
+    /// a deep copy of eight Vecs and a String for that is real cost where
+    /// it lands: each of the ~300 rows of the Course facet carries an
+    /// Effect that asks whether ITS key is ticked, and every one of them
+    /// was cloning the whole set — the ticked course list included — on
+    /// every keystroke in the search box.
+    ///
+    /// The closure runs while `prefs` is borrowed, so it must not read
+    /// `prefs` AGAIN (§4's "never nest two reads of the SAME signal"):
+    /// that rules out `filters`, `filters_in`, `with_filters`,
+    /// `with_filters_in`, and any bare `app.prefs.with(…)` for
+    /// tab/theme/density. Reads of OTHER signals are allowed by the same
+    /// rule, but hoist them above the call anyway — keep the borrow short
+    /// and obviously pure.
+    pub fn with_filters_in<R>(&self, mine: bool, f: impl FnOnce(&Filters) -> R) -> R {
         self.prefs.with(|p| {
             if mine {
-                p.my_filters.clone()
+                f(&p.my_filters)
             } else {
-                p.filters.clone()
+                f(&p.filters)
             }
         })
+    }
+
+    /// The set the Catalog and the Master grid share, borrowed —
+    /// `with_filters_in(false, …)`.
+    pub fn with_filters<R>(&self, f: impl FnOnce(&Filters) -> R) -> R {
+        self.with_filters_in(false, f)
+    }
+
+    /// The filter set the Catalog and the Master grid share, owned. For the
+    /// callers that genuinely need the value to outlive the read — see
+    /// `with_filters` for everything else.
+    pub fn filters(&self) -> Filters {
+        self.with_filters(Clone::clone)
+    }
+
+    /// One of the two filter sets, owned, picked the same way
+    /// `act_filters_in` picks the one it edits. See `with_filters_in`.
+    pub fn filters_in(&self, mine: bool) -> Filters {
+        self.with_filters_in(mine, Clone::clone)
     }
 
     /// False until the first gate-passed sync: the app ships no timetable
@@ -2224,12 +2337,15 @@ pub fn effective_meetings(course: &Course, overrides: &OverridesStore) -> Vec<Ef
 /// Facet matching: OR within a facet, AND across facets.
 /// `overrides` is passed in, not read here: this runs once per course in a
 /// filter pass, and cloning the whole override store per course made the
-/// search box quadratic in what the user had customised.
+/// search box quadratic in what the user had customised. `app` is still
+/// needed for the two things the override store does not hold — the user's
+/// own courses (`is_custom`) and the "fits my schedule" walk, which reaches
+/// the snapshot and so must not run inside a read of it (§4).
 pub fn course_matches(app: &App, course: &Course, f: &Filters, overrides: &OverridesStore) -> bool {
     // A course the user deleted is out of the catalog and the master grid
     // entirely. It comes first because no filter should be able to bring
     // one back — restoring it is a decision, made in "Your changes".
-    if app.is_hidden(&course.code) {
+    if overrides.is_hidden(&course.code) {
         return false;
     }
     if !f.branches.is_empty() && !course.branches.iter().any(|b| f.branches.contains(b)) {
@@ -2265,7 +2381,12 @@ pub fn course_matches(app: &App, course: &Course, f: &Filters, overrides: &Overr
     }
     if !f.credits.is_empty() {
         // Facet matches what the user sees — custom credit values included.
-        let cr = app.course_credits(course).to_string();
+        // Read out of the store in hand, not back through the signal:
+        // this is `App::course_credits` inlined.
+        let cr = overrides
+            .credits_for(&course.code)
+            .unwrap_or_else(|| course.effective_credits())
+            .to_string();
         if !f.credits.contains(&cr) {
             return false;
         }
