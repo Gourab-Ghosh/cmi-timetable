@@ -388,6 +388,40 @@ pub fn edit_toggle(app: App) -> impl IntoView {
 // Header, tabs, toasts, banner
 // ---------------------------------------------------------------------------
 
+/// The app's mark: a week grid with one class placed on it — which is the
+/// whole app in one glyph, and the same thing the grid on screen shows.
+///
+/// Drawn, not decorated: the tile's gradient and ink stay in CSS (`.logo`),
+/// so both themes are handled where every other colour is, and the SVG
+/// carries only geometry — exact at 30 px in the header and at 46 px on the
+/// welcome card, where the old stack of background gradients had squares
+/// landing on fractions of a pixel and drifting off-centre as it grew.
+pub fn logo(class: &'static str) -> impl IntoView {
+    view! {
+        <svg class=class viewBox="0 0 32 32" aria-hidden="true" focusable="false">
+            // The week: a frame with two dividers each way, i.e. days across
+            // and slots down. Thin, because it is the paper, not the writing.
+            <rect
+                x="7"
+                y="7"
+                width="18"
+                height="18"
+                rx="3.4"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.4"
+                opacity="0.9"
+            />
+            <g stroke="currentColor" stroke-width="1" opacity="0.45">
+                <path d="M13 7.7v16.6M19 7.7v16.6M7.7 13h16.6M7.7 19h16.6" />
+            </g>
+            // The one class on it — solid, off-centre, so the mark reads as a
+            // timetable with something ON it rather than as empty ruling.
+            <rect x="19.7" y="13.7" width="4.6" height="4.6" rx="1.2" fill="currentColor" />
+        </svg>
+    }
+}
+
 #[component]
 pub fn Header() -> impl IntoView {
     let app = App::use_ctx();
@@ -457,7 +491,7 @@ pub fn Header() -> impl IntoView {
 
     view! {
         <header class="header">
-            <span class="logo" aria-hidden="true"></span>
+            {logo("logo")}
             <div class="brand">
                 <h1>"CMI Timetable"</h1>
                 <span class="semester">
@@ -495,10 +529,12 @@ pub fn Header() -> impl IntoView {
                     }
                 }}
             </button>
-            // Visible on every page: the data is only as fresh as the last
-            // sync, and CMI edits its timetable all semester long.
+            // Visible on every page. It used to ask the reader to sync every
+            // few days — a chore the app had already taken off them: it
+            // re-checks by itself. So the line now says who is doing the
+            // work, and leaves the button as the impatient option it is.
             <span class="sync-hint">
-                "CMI keeps editing the timetable — sync every few days to stay up to date."
+                "The app checks CMI on its own, up to twice a day. Sync now for the latest."
             </span>
             <div class="spacer"></div>
             <button
@@ -3123,9 +3159,10 @@ fn my_data_dialog(app: App) -> impl IntoView {
                     }}
                 </p>
                 <p class="muted small">
-                    "CMI keeps editing its timetable through the semester — sync every \
-                     few days to stay up to date. The app also re-checks on its own, \
-                     at most twice a day."
+                    "CMI keeps editing its timetable through the semester, so the app \
+                     checks for changes on its own — at most twice a day, and only \
+                     while you have it open — and tells you what changed. Sync now \
+                     fetches CMI's pages immediately, for when you'd rather not wait."
                 </p>
             </section>
 

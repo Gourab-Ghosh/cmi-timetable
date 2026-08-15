@@ -213,26 +213,19 @@ button {
 }
 
 /* Brand mark: a tiny four-cell timetable, drawn in CSS. */
+/* The brand mark. The tile — gradient, corners, ring — is CSS; the week
+   drawn on it is the SVG's geometry (see `ui::logo`), inheriting `color`.
+   Both themes therefore need one rule, not two: --grad and --accent-ink
+   already flip, and the mark reads light-on-violet or ink-on-lilac by
+   itself. */
 .logo {
   width: 30px;
   height: 30px;
   flex: none;
+  display: block;
   border-radius: 9px;
-  background:
-    linear-gradient(var(--accent-ink), var(--accent-ink)) 31% 31% / 8px 8px no-repeat,
-    linear-gradient(var(--accent-ink), var(--accent-ink)) 88% 31% / 8px 8px no-repeat,
-    linear-gradient(var(--accent-ink), var(--accent-ink)) 31% 88% / 8px 8px no-repeat,
-    linear-gradient(rgba(255, 255, 255, 0.45), rgba(255, 255, 255, 0.45)) 88% 88% / 8px 8px no-repeat,
-    linear-gradient(135deg, var(--accent), var(--accent2));
-  box-shadow: var(--shadow-sm), 0 0 0 4px var(--accent-wash);
-}
-:root[data-theme="dark"] .logo {
-  background:
-    linear-gradient(var(--accent-ink), var(--accent-ink)) 31% 31% / 8px 8px no-repeat,
-    linear-gradient(var(--accent-ink), var(--accent-ink)) 88% 31% / 8px 8px no-repeat,
-    linear-gradient(var(--accent-ink), var(--accent-ink)) 31% 88% / 8px 8px no-repeat,
-    linear-gradient(rgba(14, 18, 32, 0.5), rgba(14, 18, 32, 0.5)) 88% 88% / 8px 8px no-repeat,
-    linear-gradient(135deg, var(--accent), var(--accent2));
+  background: var(--grad);
+  color: var(--accent-ink);
   box-shadow: var(--shadow-sm), 0 0 0 4px var(--accent-wash);
 }
 
@@ -1868,7 +1861,7 @@ pre.devpre {
   height: 4px;
   background: var(--grad);
 }
-.welcome-logo { display: inline-block; width: 46px; height: 46px; border-radius: 13px; }
+.welcome-logo { display: inline-block; width: 46px; height: 46px; border-radius: 14px; }
 .welcome-card h2 {
   background: var(--grad);
   -webkit-background-clip: text;

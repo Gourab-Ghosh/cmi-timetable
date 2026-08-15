@@ -48,7 +48,7 @@ fn welcome(app: App) -> impl IntoView {
     view! {
         <section class="welcome" aria-label="Welcome">
             <div class="welcome-card">
-                <span class="logo welcome-logo" aria-hidden="true"></span>
+                {crate::ui::logo("logo welcome-logo")}
                 <p class="welcome-eyebrow">"CMI Timetable Planner"</p>
                 <h2>"Plan your semester in minutes"</h2>
                 <p class="welcome-sub">
@@ -86,8 +86,9 @@ fn welcome(app: App) -> impl IntoView {
                 <p class="welcome-note muted small">
                     "The app has no timetable of its own — it fetches CMI's pages \
                      from cmi.ac.in. CMI keeps editing them through the semester, so \
-                     sync every few days. The app also re-checks on its own, at most \
-                     twice a day, and tells you what changed."
+                     after this first fetch the app keeps checking on its own — at \
+                     most twice a day, whenever you open it — and tells you what \
+                     changed. This is the only fetch it will ever ask you for."
                 </p>
                 <p class="welcome-note muted small">
                     "Got an “Export everything” file — your own from another device, \

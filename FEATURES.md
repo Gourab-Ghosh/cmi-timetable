@@ -373,7 +373,9 @@ A proper poster sheet, not a screenshot of a web page:
 
 The app ships **no timetable data at all**. On first load it asks for one
 sync; after that everything works offline, and it re-checks on its own at most
-twice a day.
+twice a day, whenever you have it open. That first fetch is the only one it
+ever asks you for — **Sync now** is there for when you'd rather not wait, not
+as a chore to remember. The header says so in as many words.
 
 The header always says **when it last synced** and by which route, counting up
 on its own as time passes — "just now", "12 min ago", "2 days ago" — and

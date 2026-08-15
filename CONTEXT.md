@@ -3108,6 +3108,46 @@ Pinned by `t89_the_digest_narrows_to_the_readers_own_courses`. Screenshots
 in `e2e/shots/wc-before-*.png` and `wc-after-*.png`, from
 `.workagents/banner-shots.py` (see R54 for how it stages a sync).
 
+### R56 — a mark that means timetable, and a line that stops nagging
+
+Two asks in one round: replace the logo ("looks really ugly"), and rewrite
+the header's sync nudge, since the app already re-checks by itself.
+
+**The mark.** Was: a 30 px tile with four background-gradient squares at 31%
+and 88%, three in ink and one half-transparent. At that size the percentage
+positions land on fractions of a pixel and the squares drift as the tile
+grows (the 46 px welcome copy was visibly off-centre) — it read as a broken
+window, not a timetable. Now `ui::logo(class)` returns an inline SVG on a
+32-unit grid: a rounded frame with two dividers each way (days across, slots
+down) and one solid cell, off-centre, so the mark reads as a week with
+something ON it. Chosen from twelve drafts rendered side by side at 16/30/46/
+88 px in both themes (`.workagents/logo-lab*.html`); the runners-up failed at
+30 px — full-bleed grid lines read as a hash "#", chips-without-grid read as
+a settings icon, bars read as a chart.
+
+Two things worth keeping about the implementation:
+
+- The tile (gradient, corner radius, ring) stays in CSS on `.logo`, and the
+  SVG paints with `currentColor`. So both themes need ONE rule where there
+  used to be two hand-maintained gradient stacks, and the mark inherits
+  `--grad`/`--accent-ink` like everything else. No `<defs>`, no gradient id
+   — which also means no duplicate-id problem when the header and the
+  welcome card both render the mark.
+- The favicon in `app/index.html` is the same mark, simplified to a 2×2
+  ruling: at 16 px the 3×3 closes up into a smudge. It is a data URI, so its
+  colours are hardcoded (`#3f5bd9`→`#8a46c8`) — if the brand palette ever
+  changes, that string does not follow it.
+
+**The copy.** Three strings told the reader to "sync every few days to stay
+up to date", which is a chore the app had already taken off them. Now:
+header, "The app checks CMI on its own, up to twice a day. Sync now for the
+latest."; My data, the same fact plus the honest limit ("only while you have
+it open") and what the button is for; the welcome note ends "This is the only
+fetch it will ever ask you for." The honest limit matters — the 12 h throttle
+only fires while the page is open, so "checks twice a day" flat would be a
+promise the app cannot keep in a closed tab. t25's pin moved from "sync every
+few days" to "twice a day".
+
 ## 8. Open bugs — found, confirmed, NOT fixed (do not delete)
 
 Rules for this section: entries stay until the bug is actually fixed and a

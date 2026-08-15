@@ -1073,7 +1073,9 @@ def t25_first_run_prompt_when_empty(app):
     app.boot("/", seed=False)
     welcome = app.wait_css(".welcome-card")
     assert "Plan your semester" in welcome.text, welcome.text
-    assert "sync every few days" in welcome.text, welcome.text
+    # The welcome note promises the app will keep checking by itself — the
+    # first fetch is the only one it ever asks the reader for.
+    assert "twice a day" in welcome.text, welcome.text
     assert not app.css_all(".tabs .tab"), "no tabs before the first sync"
     assert "Not synced yet" in app.css(".sync-pill").text or \
         app.css_all(".sync-pill .spinner"), "pill must show the unsynced state"
