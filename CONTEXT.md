@@ -3054,6 +3054,60 @@ data), not the banner.
   Never point that build at `app/dist-e2e` or `app/dist`: leaving a patched
   build in either is how a later e2e run tests code that no longer exists.
 
+### R55 — one box: the digest narrows to the reader's own week
+
+User asked for a checkbox in the What-changed digest that shows only the
+changes to courses on their timetable, in their own words "Changes related
+to my timetable", explicitly leaving the wording and placement to judgement;
+plus more ideas if any earned their place, and before/after screenshots.
+
+**What shipped.** `Prefs.changes_mine_only` (a stored preference, not
+dialog-local state — someone who only wants their own week wants that at
+every sync) and a `label.opt.diff-filter` row directly under the digest's
+lede: a checkbox reading "Only my courses" with a right-aligned tally,
+"3 of 30 changes". Ticked, the row wears `--accent-wash` — the same "this is
+yours" signal as the badges below it.
+
+Four decisions worth keeping:
+
+- **The box is offered only when it can act.** `mine_count` is counted
+  before anything renders; at zero there is no checkbox and a line takes its
+  place ("None of this touches the courses you've picked — it's all
+  elsewhere on campus."). That is also what makes the filtered digest
+  provably non-empty: the stored preference is ANDed with `mine_count > 0`,
+  so a reader who ticked it last week cannot open a dialog that hides
+  everything and explains nothing. The test seeds `changes_mine_only: true`
+  and boots a reader none of the update touches, precisely to pin that the
+  guard lives in the dialog and not in what was saved.
+- **The list is a `move ||` closure; the checkbox is not.** A tracked read
+  in the dialog body would rebuild the input under the finger that just
+  pressed it (and drop a keyboard user back onto the page). Only the
+  sections re-render on toggle.
+- **Auto-focus now honours `.nofocus`** (ui.rs, the dialog-open Timeout).
+  The digest is something you READ, and its one field decides what is in it,
+  so the same Space press that scrolls a tall dialog would have hidden most
+  of the list. Same reasoning as the course editor's credits toggle two
+  rounds earlier; the class is the general opt-out for it.
+- **Under the filter the "in your timetable" badges retire.** Every line is
+  the reader's by then, so the badge repeats what the ticked box said. The
+  dropped-course "still in your timetable" warning is a different message
+  and stays.
+
+Deliberately NOT undoable: it changes what the dialog shows, never what the
+timetable holds, and an "Undid…" toast for reading a list would be noise
+beside the real ones.
+
+Ideas weighed and not built, so a later round doesn't re-litigate them: a
+digest that survives Dismiss and reload (still the one real gap — see R54;
+it needs `what_changed` persisted AND cleared on every successful sync, or
+a stale digest outlives the sync that disproved it); "hide the campus count
+in the banner" (the count is the honest part); a per-section filter (three
+controls for one question); making the filter an undo step (above).
+
+Pinned by `t89_the_digest_narrows_to_the_readers_own_courses`. Screenshots
+in `e2e/shots/wc-before-*.png` and `wc-after-*.png`, from
+`.workagents/banner-shots.py` (see R54 for how it stages a sync).
+
 ## 8. Open bugs — found, confirmed, NOT fixed (do not delete)
 
 Rules for this section: entries stay until the bug is actually fixed and a

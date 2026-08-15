@@ -3903,6 +3903,74 @@ def t88_keeping_a_dropped_course_keeps_your_own_times(app):
         stop_serving_cmi()
 
 
+def t89_the_digest_narrows_to_the_readers_own_courses(app):
+    """A sync brings CMI's whole campus into the digest; one box narrows it
+    to the reader's own week. The box is offered only when it can act — a
+    sync that misses their courses entirely explains itself instead of
+    handing over a control that could only empty the dialog — and the choice
+    is a stored preference, so the next sync opens the way they left it."""
+    serve_cmi()
+    try:
+        snap, _overrides, gone = cache_from_before_cmi_moved_toc()
+        app.boot("/", selection=["TOC"], raw_snapshot=snap)
+        app.xpath("//button[normalize-space()='Sync now']").click()
+        app.wait_toast("Timetable updated")
+        app.dismiss_toasts()
+        app.xpath("//button[normalize-space()='See what changed']").click()
+        dialog = app.wait_css(".dialog")
+        # Wide open: CMI's new course, its dropped one, and the reader's TOC.
+        assert "New courses" in dialog.text and gone in dialog.text, dialog.text
+        everything = dialog.find_elements(By.CSS_SELECTOR, ".diff-item")
+        assert len(everything) > 1, dialog.text
+        box = dialog.find_element(
+            By.CSS_SELECTOR, ".diff-filter input[type='checkbox']")
+        assert not box.is_selected(), "the digest opens wide; the filter is opt-in"
+        # A dialog you READ must not open with focus on the control that
+        # decides what is in it — Space is how a tall list gets scrolled.
+        assert app.d.switch_to.active_element != box, \
+            "opening the digest must not land focus on the filter"
+        box.click()
+        WebDriverWait(app.d, 10).until(
+            lambda d: len(d.find_elements(By.CSS_SELECTOR, ".diff-item"))
+            < len(everything),
+            message="ticking the box must drop what is not the reader's",
+        )
+        rows = app.css_all(".diff-item")
+        assert rows and all("TOC" in r.text for r in rows), [r.text for r in rows]
+        assert gone not in app.css(".dialog").text, \
+            "a course nobody picked must go, dropped by CMI or not"
+        # Every line left IS theirs, so the badge repeating that on each one
+        # retires — the ticked box has said it once, at the top.
+        assert "in your timetable" not in app.css(".dialog").text
+        prefs = app.d.execute_script("return localStorage.getItem('cmitt.v1.prefs');")
+        assert '"changes_mine_only":true' in prefs, prefs
+
+        # Same update, a reader none of it touches: no box, and a line
+        # saying why. The stored preference must NOT blank this digest —
+        # the guard is in the dialog, not in what was saved.
+        app.boot("/", selection=["MFD"], raw_snapshot=snap)
+        app.d.execute_script(
+            "const p = JSON.parse(localStorage.getItem('cmitt.v1.prefs'));"
+            "p.changes_mine_only = true;"
+            "localStorage.setItem('cmitt.v1.prefs', JSON.stringify(p));"
+        )
+        app.d.refresh()
+        app.wait_css(".header h1")
+        app.xpath("//button[normalize-space()='Sync now']").click()
+        app.wait_toast("Timetable updated")
+        app.dismiss_toasts()
+        app.xpath("//button[normalize-space()='See what changed']").click()
+        dialog = app.wait_css(".dialog")
+        assert not dialog.find_elements(By.CSS_SELECTOR, ".diff-filter"), \
+            "a box whose only result is an empty dialog must not be offered"
+        assert "None of this touches the courses you've picked" in dialog.text, \
+            dialog.text
+        assert "TOC" in dialog.text, \
+            "with nothing of theirs to narrow to, the digest stays whole"
+    finally:
+        stop_serving_cmi()
+
+
 def t78_many_filter_chips_collapse_behind_more(app):
     """Selecting every course in the catalog is legitimate; seventy chips
     drowning the page is not the UI for it. Past a line's worth the chips
@@ -4422,6 +4490,7 @@ TESTS = [
     t86_seg_groups_are_radio_groups_with_arrow_keys,
     t87_a_dropped_course_can_be_kept_as_your_own,
     t88_keeping_a_dropped_course_keeps_your_own_times,
+    t89_the_digest_narrows_to_the_readers_own_courses,
 ]
 
 

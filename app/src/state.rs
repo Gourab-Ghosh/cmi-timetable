@@ -132,6 +132,14 @@ pub struct Prefs {
     /// writes a value here — so the choice, once made, survives every reload.
     #[serde(default)]
     pub halls_view: Option<HallsView>,
+    /// Whether the "what changed" digest is narrowed to the reader's own
+    /// courses. A stored preference rather than state that dies with the
+    /// dialog: someone who only wants to hear about their own week wants
+    /// that at every sync, and re-ticking a box each time is a tax on the
+    /// one reader the digest is trying to help. Never applied when none of
+    /// the changes are theirs — see `what_changed_dialog`.
+    #[serde(default)]
+    pub changes_mine_only: bool,
 }
 
 /// The Halls tab's day selection.
@@ -154,6 +162,7 @@ impl Default for Prefs {
             tab: Tab::default(),
             halls_day: Day::Mon,
             halls_view: None,
+            changes_mine_only: false,
         }
     }
 }
@@ -1997,6 +2006,15 @@ impl App {
         // handlers live on a page with nothing highlighted.
         self.move_mode.set(None);
         self.prefs.update(|p| p.tab = tab);
+        self.persist_prefs();
+    }
+
+    /// Narrow the "what changed" digest to the reader's own courses, or
+    /// widen it back. Deliberately NOT an undo step: it changes what the
+    /// dialog shows, never what the timetable holds, and an "Undid…" toast
+    /// for reading a list would be noise beside the real ones.
+    pub fn set_changes_mine_only(&self, on: bool) {
+        self.prefs.update(|p| p.changes_mine_only = on);
         self.persist_prefs();
     }
 

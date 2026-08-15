@@ -446,6 +446,15 @@ timetable.
   *your* courses first, by name — "CMI changed 2 of your courses — TOC,
   QCOM" — and keeps the campus-wide count as a tail. When none of the change
   was yours it says exactly that, so you needn't open anything to find out.
+- **Only my courses.** The digest lists everything CMI touched, on the whole
+  campus — a rollover can be two hundred lines of courses you will never take.
+  One box at the top of it, **Only my courses**, narrows the list to the
+  courses you've picked, and the tally beside it ("3 of 30 changes") says how
+  much you are choosing not to read. It stays how you leave it, so a reader
+  who only cares about their own week ticks it once, ever. It is offered only
+  when it can act: when none of the update touches your courses, the digest
+  says that in a line instead — and when it is ticked, the per-line "in your
+  timetable" badges retire, since by then every line is yours.
 - **What changed keeps what a dropped course was** — name, instructor, and when
   it met — so the digest can tell you what you lost, even though the fresh
   timetable no longer knows it. The list stays one line per course; clicking

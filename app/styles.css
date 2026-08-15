@@ -1755,6 +1755,29 @@ details.facet .menu .menu-empty { margin: 0.2rem 0 0; }
 /* The one-line hint under "No longer listed" — the record itself opens as
    a popup from the code, so the list stays one line per course. */
 .diff-hint { margin: 0.3rem 0 0.1rem; }
+/* The digest's only control: "Only my courses". A framed row directly under
+   the lede, so it reads as part of the introduction to the list rather than
+   as the first item in it. The tally goes to the far end — the label says
+   what the box does, the number says what it would cost you. */
+.dialog .diff-filter {
+  margin: 0.75rem 0 0.1rem;
+  padding: 0.5rem 0.7rem;
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: var(--surface-2);
+  cursor: pointer;
+}
+.dialog .diff-filter:hover { border-color: var(--line-strong); }
+/* Ticked, the row wears the app's "this is yours" wash — the same signal the
+   "in your timetable" badges below it use (which is also why those badges
+   stand down while it is on: the row is saying it for all of them). */
+.dialog .diff-filter.on {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
+  background: var(--accent-wash);
+}
+.dialog .diff-filter .tally { margin-left: auto; white-space: nowrap; }
+/* Same slot as the filter row, for the sync where nothing is the reader's. */
+.diff-filter-note { margin: 0.75rem 0 0.1rem; }
 /* The line that either invites "Keep this as my own course" or says why
    there is nothing to keep. It belongs to the footer below it, not to the
    meetings above, so it sits close to the buttons and clear of the list. */

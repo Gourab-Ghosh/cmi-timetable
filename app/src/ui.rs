@@ -1641,9 +1641,15 @@ pub fn DialogHost() -> impl IntoView {
                 // at all — no name, no code, no row — so the credits "0"
                 // would be the first button on screen, and it is now an
                 // ordinary thing to open that form just to set the credits.
+                //
+                // `.nofocus` opts a field out. The what-changed digest is
+                // something you READ, and its one field decides what is in
+                // the list — landing there would turn the same scrolling
+                // Space press into "hide most of this". Tab still reaches
+                // it first; nothing lands on it uninvited.
                 let doc = domx::document();
                 if let Some(el) = doc
-                    .query_selector(".dialog input, .dialog select, .dialog textarea")
+                    .query_selector(".dialog input:not(.nofocus), .dialog select, .dialog textarea")
                     .ok()
                     .flatten()
                     .or_else(|| {
@@ -5036,48 +5042,82 @@ fn what_changed_dialog(app: App) -> impl IntoView {
     let diff = app.what_changed.get().unwrap_or_default();
     let snapshot = app.snapshot.get();
     let selection = app.selection.get();
-    let mine = move |code: &str| selection.iter().any(|c| c == code);
 
-    // Courses in the user's own timetable always come first.
-    let mut added = diff.added.clone();
-    added.sort_by_key(|c| (!mine(c), c.clone()));
-    let mut removed = diff.removed.clone();
-    removed.sort_by_key(|c| (!mine(&c.code), c.code.clone()));
-    let mut changed = diff.changed.clone();
-    changed.sort_by_key(|c| (!mine(&c.code), c.code.clone()));
+    // How much of this update is the reader's own week. It decides whether
+    // the filter is offered at all: a box whose only possible result is an
+    // empty dialog is not a control, so a sync that misses their courses
+    // entirely gets a sentence saying so instead.
+    let mine_here = |code: &str| selection.iter().any(|c| c == code);
+    let mine_count = diff.added.iter().filter(|c| mine_here(c)).count()
+        + diff.removed.iter().filter(|r| mine_here(&r.code)).count()
+        + diff.changed.iter().filter(|c| mine_here(&c.code)).count();
+    let total = diff.added.len() + diff.removed.len() + diff.changed.len();
 
-    let course_name = move |code: &str| {
-        snapshot
-            .course(code)
-            .map(|c| c.name.clone())
-            .unwrap_or_default()
-    };
+    // The list re-renders on its own when the box is ticked; the box itself
+    // is built once and keeps its focus. (A tracked read up in the dialog
+    // body would rebuild the checkbox under the finger that just pressed
+    // it, and a keyboard user would land back on the page.)
+    let sections = move || {
+        let selection = selection.clone();
+        let snapshot = snapshot.clone();
+        let mine = move |code: &str| selection.iter().any(|c| c == code);
+        let only_mine = mine_count > 0 && app.prefs.with(|p| p.changes_mine_only);
+        let keep = |is_mine: bool| !only_mine || is_mine;
 
-    let mine_badge = |is_mine: bool| {
-        is_mine.then(|| view! { <span class="badge accent">"in your timetable"</span> })
-    };
+        // Courses in the user's own timetable always come first.
+        let mut added: Vec<String> = diff
+            .added
+            .iter()
+            .filter(|c| keep(mine(c)))
+            .cloned()
+            .collect();
+        added.sort_by_key(|c| (!mine(c), c.clone()));
+        let mut removed: Vec<Course> = diff
+            .removed
+            .iter()
+            .filter(|r| keep(mine(&r.code)))
+            .cloned()
+            .collect();
+        removed.sort_by_key(|c| (!mine(&c.code), c.code.clone()));
+        let mut changed: Vec<ttcore::diff::CourseChange> = diff
+            .changed
+            .iter()
+            .filter(|c| keep(mine(&c.code)))
+            .cloned()
+            .collect();
+        changed.sort_by_key(|c| (!mine(&c.code), c.code.clone()));
 
-    let section = |title: &'static str, count: usize, body: AnyView| {
-        (count > 0).then(move || {
-            view! {
-                <div class="diff-section">
-                    <h3>
-                        {title}
-                        <span class="diff-count">{count.to_string()}</span>
-                    </h3>
-                    {body}
-                </div>
-            }
-        })
-    };
+        let course_name = move |code: &str| {
+            snapshot
+                .course(code)
+                .map(|c| c.name.clone())
+                .unwrap_or_default()
+        };
 
-    view! {
-        <div>
-            <h2>"What changed since last sync"</h2>
-            <p class="muted small">
-                "This is what CMI changed on its pages since your last sync. Your \
-                 courses and your custom changes are untouched."
-            </p>
+        // Under the filter every line IS one of the reader's courses, so a
+        // badge repeating that on each of them is noise — the ticked box
+        // above has already said it once. (The dropped-course warning is a
+        // different message and stays.)
+        let mine_badge = move |is_mine: bool| {
+            (is_mine && !only_mine)
+                .then(|| view! { <span class="badge accent">"in your timetable"</span> })
+        };
+
+        let section = |title: &'static str, count: usize, body: AnyView| {
+            (count > 0).then(move || {
+                view! {
+                    <div class="diff-section">
+                        <h3>
+                            {title}
+                            <span class="diff-count">{count.to_string()}</span>
+                        </h3>
+                        {body}
+                    </div>
+                }
+            })
+        };
+
+        view! {
             {section(
                 "New courses",
                 added.len(),
@@ -5192,7 +5232,57 @@ fn what_changed_dialog(app: App) -> impl IntoView {
             // `what_changed` holds a non-empty diff, and the sync sets it
             // only when the diff is non-empty (fetch.rs). The paragraph that
             // used to sit here could not be reached from anywhere in the app
-            // — text nobody would ever read, quietly claiming otherwise.
+            // — text nobody would ever read, quietly claiming otherwise. The
+            // filter cannot reach it either: the box is offered only when at
+            // least one of these changes is the reader's own.
+        }
+    };
+
+    view! {
+        <div>
+            <h2>"What changed since last sync"</h2>
+            <p class="muted small">
+                "This is what CMI changed on its pages since your last sync. Your \
+                 courses and your custom changes are untouched."
+            </p>
+            // The one control in the digest, and it belongs up here with the
+            // lede: it decides what you are about to read, not what you do
+            // when you have finished reading it.
+            {if mine_count > 0 {
+                view! {
+                    <label
+                        class="opt diff-filter"
+                        class:on=move || app.prefs.with(|p| p.changes_mine_only)
+                        title="Hides changes to courses you haven't picked"
+                    >
+                        <input
+                            class="nofocus"
+                            type="checkbox"
+                            prop:checked=move || app.prefs.with(|p| p.changes_mine_only)
+                            on:change=move |ev| {
+                                app.set_changes_mine_only(event_target_checked(&ev));
+                            }
+                        />
+                        <span>"Only my courses"</span>
+                        <span class="tally muted small">
+                            {format!(
+                                "{mine_count} of {total} change{}",
+                                if total == 1 { "" } else { "s" },
+                            )}
+                        </span>
+                    </label>
+                }
+                    .into_any()
+            } else {
+                view! {
+                    <p class="muted small diff-filter-note">
+                        "None of this touches the courses you've picked — it's all \
+                         elsewhere on campus."
+                    </p>
+                }
+                    .into_any()
+            }}
+            {sections}
             <div class="actions">{close_button(app)}</div>
         </div>
     }
