@@ -66,6 +66,20 @@ CHROME_BIN = os.environ.get("CHROME_BIN", "/usr/bin/chromium")
 FIXTURES = os.path.join(REPO, "core", "fixtures")
 DOWNLOADS = tempfile.mkdtemp(prefix="cmitt-e2e-dl-")
 
+
+def newest_download(prefix, suffix=".json"):
+    """The file the browser has just written, by modification time.
+
+    NOT by name: two exports on the same day want the same filename, and
+    Chrome disambiguates the second as "… (1).json" — which sorts BEFORE
+    "….json", because a space beats a dot. Sorting by name hands a test the
+    stale file and every assertion after it becomes a lie about the wrong
+    week."""
+    files = [os.path.join(DOWNLOADS, f) for f in os.listdir(DOWNLOADS)
+             if f.startswith(prefix) and f.endswith(suffix)]
+    assert files, f"no {prefix}*{suffix} in {os.listdir(DOWNLOADS)}"
+    return max(files, key=os.path.getmtime)
+
 # TOC's official Tue meeting moved by the user to Wed 17:00, plus a credit
 # change — the canonical "user customised things" seed.
 TOC_OVR = {
@@ -4177,19 +4191,17 @@ def t78_many_filter_chips_collapse_behind_more(app):
 
 def t79_json_exports_parse_and_the_backup_restores_everything(app):
     """Export the timetable as JSON (machine-first: stable keys, effective
-    meetings, credit provenance), export the whole planner as one backup
-    file, wipe the browser, import the backup — the selection, the custom
-    move AND the catalog are all back, and the pill honestly says
-    'imported' with the ORIGINAL fetch date's age."""
+    meetings, credit provenance, and a `my_changes` half a program can read
+    without knowing this app), export the whole planner as one backup file,
+    wipe the browser, import the backup — the selection, the custom move AND
+    the catalog are all back, and the pill honestly says 'imported' with the
+    ORIGINAL fetch date's age."""
     app.boot("/", selection=["TOC", "RDBM"], overrides=TOC_OVR)
-    app.xpath("//button[normalize-space()='My data']").click()
+    app.xpath("//button[normalize-space()='Share']").click()
     dialog = app.wait_css(".dialog")
     dialog.find_element(By.XPATH, ".//button[normalize-space()='Export my courses']").click()
     time.sleep(1.0)
-    tt_files = [f for f in os.listdir(DOWNLOADS) if f.startswith("cmi-timetable-")
-                and f.endswith(".json")]
-    assert tt_files, os.listdir(DOWNLOADS)
-    with open(os.path.join(DOWNLOADS, sorted(tt_files)[-1]), encoding="utf-8") as f:
+    with open(newest_download("cmi-timetable-"), encoding="utf-8") as f:
         tt = json.load(f)
     assert tt["format"] == "cmi-timetable-export"
     assert tt["format_version"].startswith("1.")
@@ -4201,6 +4213,33 @@ def t79_json_exports_parse_and_the_backup_restores_everything(app):
     assert moved[0]["day"] == "Wed" and moved[0]["start"]["hhmm"] == "17:00"
     assert toc["credits"]["source"] in ("assumed", "user", "cmi")
 
+    # The changes half, read the way another program would: every list
+    # present, every change saying in a word what kind it is, every time
+    # giving both the number to compute with and the string to read.
+    changes = tt["my_changes"]
+    for key in ("meeting_changes", "credit_changes", "my_own_courses"):
+        assert isinstance(changes[key], list), f"{key} is always a list"
+    move = next(c for c in changes["meeting_changes"] if c["course"] == "TOC")
+    assert move["kind"] == "moved", move
+    assert move["from"]["day"] == "Tue" and move["from"]["iso_weekday"] == 2
+    assert move["to"]["start"]["minutes"] == 1020
+    assert move["to"]["start"]["hhmm"] == "17:00"
+    assert move["made_at"].endswith("Z") and isinstance(move["made_at_ms"], (int, float))
+    assert changes["credit_changes"][0] == {
+        "course": "TOC", "credits": 3,
+        "made_at": "2025-07-31T22:13:20Z", "made_at_ms": 1754000000000.0,
+    }, changes["credit_changes"]
+    # A whole day's timetable, computed from the file alone — the shape has
+    # to support arithmetic, not just display.
+    wednesday = sorted(
+        (m["start"]["minutes"], c["code"])
+        for c in tt["courses"] for m in c["meetings"] if m["iso_weekday"] == 3)
+    assert (1020, "TOC") in wednesday, wednesday
+
+    app.d.find_element(By.TAG_NAME, "body").send_keys(Keys.ESCAPE)
+    app.wait_gone(".dialog")
+    app.xpath("//button[normalize-space()='My data']").click()
+    dialog = app.wait_css(".dialog")
     # The section lives low in the dialog, beneath the sticky footer at this
     # scroll position — bring it to the middle first, like a reader would.
     everything = dialog.find_element(
@@ -4209,9 +4248,7 @@ def t79_json_exports_parse_and_the_backup_restores_everything(app):
         "arguments[0].scrollIntoView({block: 'center'});", everything)
     everything.click()
     time.sleep(1.0)
-    bak_files = [f for f in os.listdir(DOWNLOADS) if f.startswith("cmi-planner-")]
-    assert bak_files, os.listdir(DOWNLOADS)
-    bak_path = os.path.join(DOWNLOADS, sorted(bak_files)[-1])
+    bak_path = newest_download("cmi-planner-")
     with open(bak_path, encoding="utf-8") as f:
         envelope = json.load(f)
     assert envelope["format"] == "cmi-planner-backup"
@@ -4259,11 +4296,12 @@ def t79_json_exports_parse_and_the_backup_restores_everything(app):
 
 
 def t81_importing_courses_asks_replace_or_add(app):
-    """'Import my courses' on Course selection reads the codes out of a
-    timetable export and asks — in whole sentences — whether they replace
-    the current courses or join them. Codes the catalog doesn't know are
-    named and left out; an empty timetable skips the question (nothing to
-    replace); and either answer is one undoable step."""
+    """'Import my courses…' under Share reads a timetable file and asks — in
+    whole sentences — whether it joins the current timetable or replaces it.
+    A file from before changes travelled (format 1.0.0, no `my_changes`)
+    still imports as the course list it always was. Codes the catalog
+    doesn't know are named and left out; an empty timetable skips the
+    question; and either answer is one undoable step."""
     crafted = os.path.join(DOWNLOADS, "crafted-import.json")
     with open(crafted, "w", encoding="utf-8") as f:
         # " BOGUS9" (leading space) after "BOGUS9" pins the parser's dedup:
@@ -4274,56 +4312,59 @@ def t81_importing_courses_asks_replace_or_add(app):
                                {"code": "BOGUS9"}, {"code": " BOGUS9"}]}, f)
 
     app.boot("/", selection=["TOC", "QCOM"])
-    app.xpath("//button[normalize-space()='My data']").click()
-    dialog = app.wait_css(".dialog")
 
     def send_import():
+        app.xpath("//button[normalize-space()='Share']").click()
+        dialog = app.wait_css(".dialog")
         dialog.find_element(
             By.XPATH, ".//button[normalize-space()='Import my courses…']").click()
         file_input = WebDriverWait(app.d, 10).until(
             lambda d: d.find_element(By.CSS_SELECTOR, "#cmitt-import-input"))
         file_input.send_keys(crafted)
 
-    # Keep both: MFD joins, TOC is recognised as already there, BOGUS9 is
-    # named and left out.
+    def wait_ask():
+        return WebDriverWait(app.d, 10).until(
+            lambda d: app.css(".dialog") if "A timetable from a file"
+            in app.css(".dialog").text else None)
+
+    # Add it: MFD joins, TOC is recognised as already there, BOGUS9 is named
+    # and left out. A file with no changes says so by not mentioning any.
     send_import()
-    ask = WebDriverWait(app.d, 10).until(
-        lambda d: app.css(".dialog") if "Courses from a file"
-        in app.css(".dialog").text else None)
+    ask = wait_ask()
     assert "2 courses from this semester" in ask.text, ask.text
     assert "Left out: BOGUS9" in ask.text, ask.text
     assert ask.text.count("BOGUS9") == 1, \
         f"a whitespace-variant duplicate must be deduped, not named twice: {ask.text}"
+    assert "moved, added or struck out" not in ask.text, \
+        f"a course-list file must not claim changes it doesn't carry: {ask.text}"
     ask.find_element(
-        By.XPATH, ".//button[contains(.,'Keep my courses and add')]").click()
+        By.XPATH, ".//button[contains(.,'Add it to my timetable')]").click()
     app.wait_toast("Added 1 course from the file")
     for code in ("TOC", "QCOM", "MFD"):
         app.wait_css(f"button.chip[aria-label^='{code},']")
 
-    # Replace: the selection becomes exactly the file's two.
-    app.xpath("//button[normalize-space()='My data']").click()
-    dialog = app.wait_css(".dialog")
+    # Replace: the timetable becomes exactly the file's two.
     send_import()
-    ask = WebDriverWait(app.d, 10).until(
-        lambda d: app.css(".dialog") if "Courses from a file"
-        in app.css(".dialog").text else None)
-    ask.find_element(
-        By.XPATH, ".//button[contains(.,'Replace my courses')]").click()
+    wait_ask().find_element(
+        By.XPATH, ".//button[contains(.,'Replace my timetable with it')]").click()
     app.wait_toast("Your timetable now has exactly the 2 courses from that file.")
     app.d.find_element(By.TAG_NAME, "body").send_keys(Keys.ESCAPE)
     WebDriverWait(app.d, 10).until(
         lambda d: not app.css_all("button.chip[aria-label^='QCOM,']"),
         message="QCOM must be gone after Replace")
 
-    # An empty timetable skips the question — there is nothing to replace.
+    # An empty timetable with nothing of its own skips the question — there
+    # is nothing to replace, and joining an empty week is the same act.
     app.xpath("//button[normalize-space()='My data']").click()
     dialog = app.wait_css(".dialog")
     dialog.find_element(
         By.XPATH, ".//button[normalize-space()='Clear selection']").click()
     app.wait_toast("Your timetable is empty now")
+    app.d.find_element(By.TAG_NAME, "body").send_keys(Keys.ESCAPE)
+    app.wait_gone(".dialog")
     send_import()
     app.wait_toast("Added 2 courses from the file.")
-    assert "Courses from a file" not in app.css(".dialog").text, \
+    assert "A timetable from a file" not in app.css("body").text, \
         "an empty selection must not be asked what to replace"
 
     # Importing the same file AGAIN changes nothing — and must say so
@@ -4331,11 +4372,8 @@ def t81_importing_courses_asks_replace_or_add(app):
     # above (the chips leave), not a phantom "nothing" step that would have
     # eaten the redo history.
     send_import()
-    ask = WebDriverWait(app.d, 10).until(
-        lambda d: app.css(".dialog") if "Courses from a file"
-        in app.css(".dialog").text else None)
-    ask.find_element(
-        By.XPATH, ".//button[contains(.,'Keep my courses and add')]").click()
+    wait_ask().find_element(
+        By.XPATH, ".//button[contains(.,'Add it to my timetable')]").click()
     app.wait_toast("nothing changed")
     app.d.find_element(By.TAG_NAME, "body").send_keys(Keys.ESCAPE)
     app.wait_gone(".dialog")
@@ -4689,6 +4727,133 @@ def t90_a_grid_chip_shows_the_tick_without_being_rebuilt(app):
     assert "in your timetable" in chip.get_attribute("aria-label")
 
 
+def t95_two_students_combine_their_timetables(app):
+    """The point of the file: one student exports their week — courses, a
+    moved class, a credit correction and a course CMI never listed — and
+    another adds it to theirs in one step. Nothing of the reader's is lost,
+    everything of the sender's that this browser can take arrives, and the
+    sentence afterwards says how much came with it."""
+    sender_file = os.path.join(DOWNLOADS, "sender-week.json")
+
+    # --- the sender's browser -------------------------------------------
+    app.boot("/", selection=["TOC", "RDBM", "GERMAN"],
+             overrides=TOC_OVR, customs=HALL_CUSTOM)
+    app.xpath("//button[normalize-space()='Share']").click()
+    dialog = app.wait_css(".dialog")
+    assert "the classes you moved" in dialog.text, \
+        f"Share must say what the file carries: {dialog.text}"
+    dialog.find_element(
+        By.XPATH, ".//button[normalize-space()='Export my courses']").click()
+    app.wait_toast("your changes included")
+    time.sleep(1.0)
+    os.rename(newest_download("cmi-timetable-"), sender_file)
+
+    # --- the reader's browser, with a week of its own -------------------
+    app.boot("/", selection=["QCOM"])
+    app.xpath("//button[normalize-space()='Share']").click()
+    app.wait_css(".dialog").find_element(
+        By.XPATH, ".//button[normalize-space()='Import my courses…']").click()
+    WebDriverWait(app.d, 10).until(
+        lambda d: d.find_element(By.CSS_SELECTOR, "#cmitt-import-input")
+    ).send_keys(sender_file)
+
+    ask = WebDriverWait(app.d, 10).until(
+        lambda d: app.css(".dialog") if "A timetable from a file"
+        in app.css(".dialog").text else None)
+    # The bill of contents is counted before anything is decided.
+    assert "3 courses from this semester" in ask.text, ask.text
+    assert "1 class moved, added or struck out" in ask.text, ask.text
+    assert "1 credit correction" in ask.text, ask.text
+    assert "1 course they made themselves" in ask.text, ask.text
+    ask.find_element(
+        By.XPATH, ".//button[contains(.,'Add it to my timetable')]").click()
+    app.wait_toast("2 changes came with them")
+
+    # The reader keeps their own course, gains the sender's three, and the
+    # sender's move arrives with them: TOC sits on Wednesday 17:00, where
+    # the sender put it — not on CMI's Tuesday.
+    for code in ("QCOM", "TOC", "RDBM", "GERMAN"):
+        app.wait_css(f"button.chip[aria-label^='{code},']")
+    app.wait_css("td[data-day='2'][data-slot='1020'] button.chip[aria-label^='TOC,']")
+    # A course CMI never listed came over whole — name and times, not a code.
+    app.open_tab("My courses")
+    section = app.wait_css("section[aria-label='My courses']")
+    assert "German A1" in section.text, section.text
+
+    # And it is ONE undo step: Ctrl+Z puts the reader's week back exactly.
+    app.d.find_element(By.CSS_SELECTOR, "body").send_keys(Keys.CONTROL, "z")
+    WebDriverWait(app.d, 10).until(
+        lambda d: not app.css_all("button.chip[aria-label^='TOC,']"),
+        message="one Ctrl+Z must undo the whole import")
+    app.wait_css("button.chip[aria-label^='QCOM,']")
+
+
+def t96_a_disagreement_over_one_class_keeps_your_own(app):
+    """Two people moved the SAME class to different times. A class cannot be
+    in two places at once, so the reader's own stays and the file's loss is
+    named. Replacing instead takes the file's version whole."""
+    sender_file = os.path.join(DOWNLOADS, "contested-week.json")
+    # The sender moved TOC's Tuesday class to Wednesday 17:00 (TOC_OVR).
+    app.boot("/", selection=["TOC"], overrides=TOC_OVR)
+    app.xpath("//button[normalize-space()='Share']").click()
+    app.wait_css(".dialog").find_element(
+        By.XPATH, ".//button[normalize-space()='Export my courses']").click()
+    time.sleep(1.0)
+    os.rename(newest_download("cmi-timetable-"), sender_file)
+
+    # The reader moved the same Tuesday class to Friday 15:30 instead. (Not
+    # to a slot TOC already meets in — TOC officially meets Tue AND Thu, and
+    # a target that lands on its own second class would prove nothing.)
+    mine = json.loads(json.dumps(TOC_OVR))
+    mine["items"][0]["to"] = {"day": "Fri",
+                              "slot": {"start_min": 930, "end_min": 1005},
+                              "hall": "Lecture Hall 803", "temp_booking": False}
+    mine["credits"] = []
+    app.boot("/", selection=["TOC"], overrides=mine)
+
+    def import_file():
+        app.xpath("//button[normalize-space()='Share']").click()
+        app.wait_css(".dialog").find_element(
+            By.XPATH, ".//button[normalize-space()='Import my courses…']").click()
+        WebDriverWait(app.d, 10).until(
+            lambda d: d.find_element(By.CSS_SELECTOR, "#cmitt-import-input")
+        ).send_keys(sender_file)
+        return WebDriverWait(app.d, 10).until(
+            lambda d: app.css(".dialog") if "A timetable from a file"
+            in app.css(".dialog").text else None)
+
+    # TOC's own weekly classes, as the reader's week already draws them —
+    # the number that must not grow. A losing move kept "as well" would add
+    # a class to the week, which is the failure this test exists for.
+    app.wait_css("td[data-day='4'][data-slot='930'] button.chip[aria-label^='TOC,']")
+    before = len(app.css_all(".week-grid button.chip[aria-label^='TOC,']"))
+
+    import_file().find_element(
+        By.XPATH, ".//button[contains(.,'Add it to my timetable')]").click()
+    # The credit correction had nowhere to lose, so it lands; the move meets
+    # the reader's own and is refused BY NAME.
+    app.wait_toast("You had already changed TOC")
+    app.d.find_element(By.TAG_NAME, "body").send_keys(Keys.ESCAPE)
+    # Friday, the reader's choice — and not a class more than before.
+    app.wait_css("td[data-day='4'][data-slot='930'] button.chip[aria-label^='TOC,']")
+    assert not app.css_all(
+        "td[data-day='2'][data-slot='1020'] button.chip[aria-label^='TOC,']"), \
+        "the file's losing move must not appear as a second class"
+    assert len(app.css_all(".week-grid button.chip[aria-label^='TOC,']")) == before
+
+    # Replace takes the file's week whole: TOC goes back to the sender's
+    # Wednesday, and the reader's Friday is gone.
+    import_file().find_element(
+        By.XPATH, ".//button[contains(.,'Replace my timetable with it')]").click()
+    app.wait_toast("Your timetable now has exactly the 1 course from that file.")
+    app.d.find_element(By.TAG_NAME, "body").send_keys(Keys.ESCAPE)
+    app.wait_css("td[data-day='2'][data-slot='1020'] button.chip[aria-label^='TOC,']")
+    WebDriverWait(app.d, 10).until(
+        lambda d: not app.css_all(
+            "td[data-day='4'][data-slot='930'] button.chip[aria-label^='TOC,']"),
+        message="Replace must drop the reader's competing move")
+
+
 TESTS = [
     t01_header_sync_button_and_hidden_dev,
     t02_developer_endpoint_only,
@@ -4784,6 +4949,8 @@ TESTS = [
     t90_a_grid_chip_shows_the_tick_without_being_rebuilt,
     t93_the_grid_picks_its_row_height_from_the_screen,
     t94_a_chosen_row_height_is_never_overruled,
+    t95_two_students_combine_their_timetables,
+    t96_a_disagreement_over_one_class_keeps_your_own,
 ]
 
 

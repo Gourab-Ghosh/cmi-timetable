@@ -1,11 +1,28 @@
 //! The two JSON file formats the app writes (and reads back):
 //!
-//! - `cmi-timetable-export` — the student's own week, for programmatic
-//!   merging and analysis. Written in full, read back only for its course
-//!   CODES (the "Import from JSON" on Course selection); it owes nothing to
-//!   the internal serde shapes and can afford to be explicit (minutes AND
-//!   "HH:MM", short day AND ISO weekday). Built in /app, which owns course
-//!   resolution; this module only supplies the shared pieces.
+//! - `cmi-timetable-export` — the student's own week, to hand to another
+//!   browser (their next one, or a friend's) and for programmatic analysis.
+//!   It has two halves. `courses` is the readable one: every course as it is
+//!   actually attended, explicit about everything (minutes AND "HH:MM",
+//!   short day AND ISO weekday), owing nothing to the internal serde shapes.
+//!   `my_changes` is the exact one: the classes moved, added or struck out,
+//!   the credit corrections and the courses the student wrote themselves —
+//!   so an import can put a week back the way it was instead of guessing it
+//!   back from the readable half. It is written in the same explicit style,
+//!   NOT in the app's storage shapes: a program reading the file should
+//!   never have to know what this app calls things internally.
+//!
+//!   Both halves are always written, and both are read forgivingly: the
+//!   decoration ("HH:MM" beside the minutes, the ISO weekday beside the day
+//!   name, `kind` beside the two meetings it describes) is for whoever opens
+//!   the file, and a program writing one can leave all of it out. Only what
+//!   carries meaning is required. The readable half is built in /app, which
+//!   owns course resolution; the round-trip half is defined and read HERE.
+//!
+//!   The two halves overlap on purpose. A file with only `courses` (this
+//!   app's own, before the round-trip half existed, and anything another
+//!   program writes) still imports — as the course codes it lists, which is
+//!   all it ever meant.
 //! - `cmi-planner-backup` — the WHOLE planner in one file: the downloaded
 //!   timetable (the internal `Snapshot` serde JSON), the course selection,
 //!   every override, the student's own courses, preferences and any
@@ -20,14 +37,21 @@
 //! the file actually was.
 
 use crate::date::CivilDate;
-use crate::model::Snapshot;
+use crate::model::{
+    Course, CreditOverride, Day, Meeting, MeetingOverride, OverridesStore, ScheduleStatus, Slot,
+    Snapshot,
+};
 use serde::{Deserialize, Serialize};
 
 /// The version of the two formats this build writes. Semver: additions are
 /// minor bumps, breaking changes major — and import accepts any major-1
 /// file, ignoring keys it doesn't know (serde's default), so newer minor
 /// files still load.
-pub const FORMAT_VERSION: &str = "1.0.0";
+///
+/// 1.1.0 added `my_changes` to `cmi-timetable-export`. Nothing was removed
+/// or renamed, so 1.0.0 files import exactly as they always did and 1.1.0
+/// files open in a build that predates the section.
+pub const FORMAT_VERSION: &str = "1.1.0";
 
 /// Epoch milliseconds → ISO 8601 UTC ("2026-08-14T13:02:05Z"). Pure civil
 /// arithmetic on top of `date.rs`; no locale, no timezone surprises — file
@@ -75,6 +99,421 @@ pub fn json_filename(kind: &str, semester_label: &str, date: CivilDate) -> Strin
         Some(slug) => format!("cmi-{kind}-{slug}-{}.json", date.to_iso()),
         None => format!("cmi-{kind}-{}.json", date.to_iso()),
     }
+}
+
+// ---------------------------------------------------------------------------
+// `cmi-timetable-export`: the round-trip half
+// ---------------------------------------------------------------------------
+
+/// A time of day, both ways at once: `minutes` since midnight is the number
+/// to compute with, `hhmm` the string to read. Reading trusts `minutes`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TimeJson {
+    pub minutes: u16,
+    /// Written always; ignored on the way back in, so a program producing a
+    /// file need only fill in `minutes`.
+    #[serde(default)]
+    pub hhmm: String,
+}
+
+impl TimeJson {
+    fn new(minutes: u16) -> TimeJson {
+        TimeJson {
+            minutes,
+            hhmm: format!("{:02}:{:02}", minutes / 60, minutes % 60),
+        }
+    }
+}
+
+/// One weekly class. Every key is always written — a field that appears only
+/// sometimes is a field every reader has to write a branch for.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MeetingJson {
+    /// "Mon" … "Sun". The truth on the way in; `iso_weekday` covers for it
+    /// when a file leaves it out.
+    #[serde(default)]
+    pub day: String,
+    /// 1 = Monday … 7 = Sunday, as ISO 8601 numbers them. Either this or
+    /// `day` has to say which day it is; both is how this app writes it.
+    #[serde(default)]
+    pub iso_weekday: u8,
+    pub start: TimeJson,
+    pub end: TimeJson,
+    /// `null` when CMI hasn't said where the class meets.
+    #[serde(default)]
+    pub hall: Option<String>,
+    /// CMI marks some bookings TMP*; those are provisional rooms.
+    #[serde(default)]
+    pub temporary_booking: bool,
+}
+
+impl MeetingJson {
+    pub fn from_meeting(m: &Meeting) -> MeetingJson {
+        MeetingJson {
+            day: m.day.short().to_string(),
+            iso_weekday: m.day.index() as u8 + 1,
+            start: TimeJson::new(m.slot.start_min),
+            end: TimeJson::new(m.slot.end_min),
+            hall: m.hall.clone(),
+            temporary_booking: m.temp_booking,
+        }
+    }
+
+    fn to_meeting(&self) -> Option<Meeting> {
+        let day = Day::from_short(&self.day).or_else(|| {
+            Day::ALL
+                .get(self.iso_weekday.checked_sub(1)? as usize)
+                .copied()
+        })?;
+        if self.start.minutes >= self.end.minutes || self.end.minutes > 1440 {
+            return None;
+        }
+        Some(Meeting {
+            day,
+            slot: Slot::new(self.start.minutes, self.end.minutes),
+            hall: self.hall.clone(),
+            temp_booking: self.temporary_booking,
+        })
+    }
+}
+
+/// "(starts 12 Aug)", split so nobody has to parse the sentence back.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StartsJson {
+    pub day: u8,
+    /// Three-letter month, as CMI writes it: "Aug".
+    pub month: String,
+}
+
+/// A course the student wrote themselves, in full — the recipient's browser
+/// has never heard of it, so a bare code would mean nothing there.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CourseJson {
+    pub code: String,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub instructors: Vec<String>,
+    #[serde(default)]
+    pub branches: Vec<String>,
+    /// `null` when no credit count was stated (the app then assumes one).
+    #[serde(default)]
+    pub credits: Option<u8>,
+    #[serde(default)]
+    pub starts: Option<StartsJson>,
+    /// "Oct-Nov" for a course that runs across part of the semester.
+    #[serde(default)]
+    pub part_of_semester: Option<String>,
+    #[serde(default)]
+    pub optional_flag: bool,
+    /// "scheduled", "unscheduled_listed" or "scheduled_no_branch". Anything
+    /// else (or nothing) reads as "scheduled" — it decides how the app
+    /// groups the course, never where its classes are.
+    #[serde(default)]
+    pub status: String,
+    #[serde(default)]
+    pub meetings: Vec<MeetingJson>,
+}
+
+impl CourseJson {
+    pub fn from_course(c: &Course) -> CourseJson {
+        CourseJson {
+            code: c.code.clone(),
+            name: c.name.clone(),
+            instructors: c.instructors.clone(),
+            branches: c.branches.clone(),
+            credits: c.credits,
+            starts: c.starts.as_ref().map(|(day, month)| StartsJson {
+                day: *day,
+                month: month.clone(),
+            }),
+            part_of_semester: c.part_of_semester.clone(),
+            optional_flag: c.optional_flag,
+            status: match c.status {
+                ScheduleStatus::Scheduled => "scheduled",
+                ScheduleStatus::UnscheduledListed => "unscheduled_listed",
+                ScheduleStatus::ScheduledNoBranch => "scheduled_no_branch",
+            }
+            .to_string(),
+            meetings: c.meetings.iter().map(MeetingJson::from_meeting).collect(),
+        }
+    }
+
+    fn to_course(&self) -> Option<Course> {
+        let code = self.code.trim();
+        if code.is_empty() {
+            return None;
+        }
+        let mut meetings: Vec<Meeting> = Vec::with_capacity(self.meetings.len());
+        for m in &self.meetings {
+            meetings.push(m.to_meeting()?);
+        }
+        meetings.sort_by_key(|m| (m.day.index(), m.slot.start_min));
+        Some(Course {
+            code: code.to_string(),
+            name: self.name.clone(),
+            instructors: self.instructors.clone(),
+            branches: self.branches.clone(),
+            credits: self.credits,
+            starts: self.starts.as_ref().map(|s| (s.day, s.month.clone())),
+            part_of_semester: self.part_of_semester.clone(),
+            optional_flag: self.optional_flag,
+            status: match self.status.as_str() {
+                "unscheduled_listed" => ScheduleStatus::UnscheduledListed,
+                "scheduled_no_branch" => ScheduleStatus::ScheduledNoBranch,
+                _ => ScheduleStatus::Scheduled,
+            },
+            meetings,
+        })
+    }
+}
+
+/// One edit to one class. `kind` says in a word what `from` and `to` say in
+/// full — filtering a file for every class somebody struck out should not
+/// require reasoning about which field is null. Reading trusts `from`/`to`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MeetingChangeJson {
+    pub course: String,
+    /// "moved" (CMI's class, elsewhere), "added" (a class CMI never listed)
+    /// or "removed" (CMI's class, struck off this timetable).
+    #[serde(default)]
+    pub kind: String,
+    /// The CMI class this replaces, as it stood when the change was made.
+    /// `null` for an added class.
+    #[serde(default)]
+    pub from: Option<MeetingJson>,
+    /// Where it goes. `null` means struck out. At least one of `from` and
+    /// `to` has to be a class, or the entry changes nothing.
+    #[serde(default)]
+    pub to: Option<MeetingJson>,
+    /// When the student made the change. `made_at_ms` is epoch
+    /// milliseconds; `made_at` is the same instant as ISO 8601 UTC.
+    #[serde(default)]
+    pub made_at: String,
+    #[serde(default)]
+    pub made_at_ms: f64,
+}
+
+/// A course whose credit count the student corrected.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CreditChangeJson {
+    pub course: String,
+    pub credits: u8,
+    #[serde(default)]
+    pub made_at: String,
+    #[serde(default)]
+    pub made_at_ms: f64,
+}
+
+/// Everything about a week that CMI's catalog cannot supply — the part of a
+/// timetable that belongs to the student rather than to the campus.
+///
+/// Written in this format's own explicit style, not the app's internal
+/// storage shapes: a program reading it should never have to know how this
+/// app happens to store an "override". Every list is always present, so
+/// `len(file["my_changes"]["meeting_changes"])` is safe on any file this
+/// build writes.
+///
+/// Deletions of whole courses are deliberately absent — see
+/// [`crate::combine`].
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct MyChanges {
+    /// Classes moved, created or struck out.
+    #[serde(default)]
+    pub meeting_changes: Vec<MeetingChangeJson>,
+    #[serde(default)]
+    pub credit_changes: Vec<CreditChangeJson>,
+    /// Courses the student wrote themselves — a reading group, a seminar, a
+    /// class at another institute.
+    #[serde(default)]
+    pub my_own_courses: Vec<CourseJson>,
+}
+
+impl MyChanges {
+    /// Build the section from the app's stores.
+    pub fn build(
+        meetings: &[MeetingOverride],
+        credits: &[CreditOverride],
+        customs: &[Course],
+    ) -> MyChanges {
+        MyChanges {
+            meeting_changes: meetings
+                .iter()
+                .map(|o| MeetingChangeJson {
+                    course: o.course.clone(),
+                    kind: match (&o.base, &o.to) {
+                        (None, _) => "added",
+                        (Some(_), None) => "removed",
+                        (Some(_), Some(_)) => "moved",
+                    }
+                    .to_string(),
+                    from: o.base.as_ref().map(MeetingJson::from_meeting),
+                    to: o.to.as_ref().map(MeetingJson::from_meeting),
+                    made_at: iso_utc(o.created_at),
+                    made_at_ms: o.created_at,
+                })
+                .collect(),
+            credit_changes: credits
+                .iter()
+                .map(|c| CreditChangeJson {
+                    course: c.course.clone(),
+                    credits: c.credits,
+                    made_at: iso_utc(c.created_at),
+                    made_at_ms: c.created_at,
+                })
+                .collect(),
+            my_own_courses: customs.iter().map(CourseJson::from_course).collect(),
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.meeting_changes.is_empty()
+            && self.credit_changes.is_empty()
+            && self.my_own_courses.is_empty()
+    }
+
+    /// Back into the app's stores. `None` when a change names a day that
+    /// isn't a day, a class that ends before it starts, or a course with no
+    /// code — load-bearing data that cannot be guessed at. The decoration
+    /// (`hhmm`, `iso_weekday` beside a good `day`, `kind`, `made_at`,
+    /// `status`) is never fatal.
+    fn into_stores(self) -> Option<(Vec<MeetingOverride>, Vec<CreditOverride>, Vec<Course>)> {
+        let mut items: Vec<MeetingOverride> = Vec::with_capacity(self.meeting_changes.len());
+        for (i, c) in self.meeting_changes.iter().enumerate() {
+            let course = c.course.trim();
+            if course.is_empty() {
+                return None;
+            }
+            // Neither a class to change nor a class to put in its place:
+            // an entry that says nothing at all, which is a damaged file
+            // rather than a change worth applying.
+            if c.from.is_none() && c.to.is_none() {
+                return None;
+            }
+            let convert = |m: &Option<MeetingJson>| match m {
+                None => Some(None),
+                Some(m) => m.to_meeting().map(Some),
+            };
+            items.push(MeetingOverride {
+                // Renumbered at the door: two browsers both number from
+                // zero, and `effective_meetings` tells one change from
+                // another by id.
+                id: i as u64,
+                course: course.to_string(),
+                base: convert(&c.from)?,
+                to: convert(&c.to)?,
+                created_at: c.made_at_ms,
+            });
+        }
+        let mut credits: Vec<CreditOverride> = Vec::with_capacity(self.credit_changes.len());
+        for c in &self.credit_changes {
+            let course = c.course.trim();
+            if course.is_empty() {
+                return None;
+            }
+            credits.push(CreditOverride {
+                course: course.to_string(),
+                credits: c.credits,
+                created_at: c.made_at_ms,
+            });
+        }
+        let mut customs: Vec<Course> = Vec::with_capacity(self.my_own_courses.len());
+        for c in &self.my_own_courses {
+            customs.push(c.to_course()?);
+        }
+        Some((items, credits, customs))
+    }
+}
+
+/// A `cmi-timetable-export` file, read back: the course codes it lists, the
+/// student's changes to them, and the courses they made themselves.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct TimetablePlan {
+    /// Course codes, trimmed, deduped case-insensitively, file order kept.
+    pub codes: Vec<String>,
+    /// Renumbered from zero — the ids in a file are the sender's, and mean
+    /// nothing in the store that receives them.
+    pub overrides: OverridesStore,
+    pub customs: Vec<Course>,
+}
+
+impl TimetablePlan {
+    /// Did this file carry anything beyond the bare course list?
+    pub fn has_changes(&self) -> bool {
+        !self.overrides.is_empty() || !self.customs.is_empty()
+    }
+}
+
+/// Read a `cmi-timetable-export` file. Lenient about everything it doesn't
+/// need — extra keys, missing prose, another program's additions — and
+/// fail-closed about everything it does: a file whose `my_changes` won't
+/// parse is refused whole rather than imported as "the courses only", which
+/// would quietly drop the half the student cared about.
+///
+/// The error is the exact student-facing sentence.
+pub fn parse_timetable_export(text: &str) -> Result<TimetablePlan, String> {
+    let value: serde_json::Value = serde_json::from_str(text).map_err(|_| {
+        "That file couldn't be read — it may be damaged, or it may not be a \
+         file this app made."
+            .to_string()
+    })?;
+    let format = value.get("format").and_then(|f| f.as_str()).unwrap_or("");
+    if format == "cmi-planner-backup" {
+        return Err("That's an “Export everything” file, not a timetable — use \
+             “Import everything…” under “Everything in one file” in My data \
+             to load it."
+            .to_string());
+    }
+    if format != "cmi-timetable-export" {
+        return Err(
+            "That file doesn't look like one this app made — nothing in it \
+             says it came from “Export my courses”."
+                .to_string(),
+        );
+    }
+    let Some(courses) = value.get("courses").and_then(|c| c.as_array()) else {
+        return Err("That file has no course list inside it.".to_string());
+    };
+    let mut codes: Vec<String> = Vec::new();
+    for course in courses {
+        // Trim BEFORE the duplicate check: the list stores trimmed codes,
+        // so comparing an untrimmed candidate would let " TOC" slip past a
+        // stored "TOC" and the same code would be reported twice.
+        if let Some(code) = course.get("code").and_then(|c| c.as_str()).map(str::trim)
+            && !code.is_empty()
+            && !codes.iter().any(|c| c.eq_ignore_ascii_case(code))
+        {
+            codes.push(code.to_string());
+        }
+    }
+    if codes.is_empty() {
+        return Err("That file lists no courses at all.".to_string());
+    }
+
+    // Absent (a 1.0.0 file, or another program's) means "no changes", which
+    // is different from "changes this app can't read".
+    let bad_changes = || {
+        "That file says it carries your changes, but they aren't the shape \
+         this app can read — it may be damaged, or edited by hand. Nothing \
+         was changed."
+            .to_string()
+    };
+    let changes: MyChanges = match value.get("my_changes") {
+        None | Some(serde_json::Value::Null) => MyChanges::default(),
+        Some(v) => serde_json::from_value(v.clone()).map_err(|_| bad_changes())?,
+    };
+    let (items, credits, customs) = changes.into_stores().ok_or_else(bad_changes)?;
+
+    Ok(TimetablePlan {
+        overrides: OverridesStore {
+            next_id: items.len() as u64,
+            items,
+            credits,
+            hidden: Vec::new(),
+        },
+        customs,
+        codes,
+    })
 }
 
 /// The `cmi-planner-backup` envelope, as read. (Writing goes through
@@ -183,8 +622,9 @@ impl ImportError {
                     .to_string()
             }
             ImportError::WrongFormat(found) if found == "cmi-timetable-export" => {
-                "That file lists courses only — it isn't a whole planner. Use \
-                 “Import my courses…” under Course selection to load it."
+                "That file holds a timetable — the courses and the changes to \
+                 them — but not a whole planner. Use “Import my courses…” \
+                 under Share to load it."
                     .to_string()
             }
             ImportError::WrongFormat(_) => {

@@ -12,43 +12,74 @@ use crate::domx;
 use crate::state::App;
 use leptos::prelude::*;
 use serde_json::json;
-use ttcore::model::{CreditAssumption, Meeting, SourceTier};
+use ttcore::model::{Course, CreditAssumption, Meeting, SourceTier};
 
-fn time_obj(minutes: u16, label: String) -> serde_json::Value {
-    json!({ "minutes": minutes, "hhmm": label })
-}
-
-fn meeting_common(m: &Meeting) -> Vec<(&'static str, serde_json::Value)> {
-    vec![
-        ("day", json!(m.day.short())),
-        ("iso_weekday", json!(m.day.index() + 1)),
-        ("start", time_obj(m.slot.start_min, m.slot.start_label())),
-        ("end", time_obj(m.slot.end_min, m.slot.end_label())),
-        ("hall", json!(m.hall)),
-    ]
+/// One class, in the file's shape — the SAME shape the changes half uses,
+/// defined once in core. A reader that can decode a class in one half of the
+/// file can decode it in the other.
+fn meeting_obj(m: &Meeting) -> serde_json::Map<String, serde_json::Value> {
+    match serde_json::to_value(ttcore::export::MeetingJson::from_meeting(m)) {
+        Ok(serde_json::Value::Object(obj)) => obj,
+        // A struct of plain scalars; unreachable, and an empty object is a
+        // better answer than a panic in a download handler.
+        _ => serde_json::Map::new(),
+    }
 }
 
 fn meeting_json(m: &Meeting, origin: &str, cmi_original: Option<&Meeting>) -> serde_json::Value {
-    let mut obj = serde_json::Map::new();
-    for (k, v) in meeting_common(m) {
-        obj.insert(k.to_string(), v);
-    }
-    if m.temp_booking {
-        obj.insert("temporary_booking".to_string(), json!(true));
-    }
+    let mut obj = meeting_obj(m);
     obj.insert("origin".to_string(), json!(origin));
     if let Some(base) = cmi_original {
-        let mut b = serde_json::Map::new();
-        for (k, v) in meeting_common(base) {
-            b.insert(k.to_string(), v);
-        }
-        obj.insert("cmi_original".to_string(), serde_json::Value::Object(b));
+        obj.insert(
+            "cmi_original".to_string(),
+            serde_json::Value::Object(meeting_obj(base)),
+        );
     }
     serde_json::Value::Object(obj)
 }
 
-/// The student's week as `cmi-timetable-export` v1 — machine-first: stable
-/// keys, deterministic order, no prose.
+/// The half of the file that carries the student's own work back out whole:
+/// the classes they moved, added or struck out, their credit corrections and
+/// the courses they wrote themselves.
+///
+/// Scoped to the timetable, because that is what the file is. A change to a
+/// course the student is not taking would arrive in the reader's browser
+/// aimed at a course that isn't there; "Export everything" is the tool for
+/// carrying a whole browser, and it carries these too.
+fn my_changes(app: &App) -> ttcore::export::MyChanges {
+    let selection = app.selection.get_untracked();
+    let in_scope = |code: &str| selection.iter().any(|c| c.eq_ignore_ascii_case(code));
+    let (meetings, credits) = app.overrides.with_untracked(|o| {
+        (
+            o.items
+                .iter()
+                .filter(|i| in_scope(&i.course))
+                .cloned()
+                .collect::<Vec<_>>(),
+            o.credits
+                .iter()
+                .filter(|c| in_scope(&c.course))
+                .cloned()
+                .collect::<Vec<_>>(),
+        )
+    });
+    // A course of the student's own means nothing to another browser as a
+    // bare code, so it travels in full or the file is a lie about what it
+    // contains.
+    let customs: Vec<Course> = app.customs.with_untracked(|cs| {
+        selection
+            .iter()
+            .filter_map(|code| cs.get(code).cloned())
+            .collect()
+    });
+    ttcore::export::MyChanges::build(&meetings, &credits, &customs)
+}
+
+/// The student's week as `cmi-timetable-export` — machine-first: stable
+/// keys, deterministic order, no prose. Two halves, both always written:
+/// `courses` is every course as it is actually attended (readable by
+/// anything), `my_changes` is the exact record an import needs to put the
+/// same week back somewhere else.
 pub fn timetable_export_json(app: &App) -> String {
     let snapshot = app.snapshot.get_untracked();
     let mut codes = app.selection.get_untracked();
@@ -176,6 +207,7 @@ pub fn timetable_export_json(app: &App) -> String {
         },
         "source": serde_json::Value::Object(source),
         "courses": courses,
+        "my_changes": my_changes(app),
     }))
     .unwrap_or_default()
 }
@@ -186,7 +218,15 @@ pub fn download_timetable_export(app: &App) {
     let label = app.snapshot.with_untracked(|s| s.semester_label.clone());
     let name = ttcore::export::json_filename("timetable", &label, domx::today_local());
     domx::download_text(&name, "application/json", &timetable_export_json(app));
-    app.toast("Your courses were saved to a file — check your downloads.");
+    // What went in the file, not just that a file happened: the whole point
+    // of handing it to someone is that it carries more than a course list.
+    let extras = my_changes(app);
+    app.toast(if extras.is_empty() {
+        "Your timetable was saved to a file — check your downloads."
+    } else {
+        "Your timetable was saved to a file, your changes included — check \
+         your downloads."
+    });
 }
 
 /// The whole planner as one `cmi-planner-backup` file: the downloaded
@@ -349,72 +389,74 @@ pub fn import_planner_backup_text(app: App, text: &str) {
     let _ = domx::window().location().reload();
 }
 
-/// Read just the course CODES back out of a `cmi-timetable-export` file, for
-/// "Import from JSON" on Course selection. Lenient about everything except
-/// what it needs: the format name and a list of course codes.
-pub fn parse_timetable_export_codes(text: &str) -> Result<Vec<String>, String> {
-    let value: serde_json::Value = serde_json::from_str(text).map_err(|_| {
-        "That file couldn't be read — it may be damaged, or it may not be a \
-         file this app made."
-            .to_string()
-    })?;
-    let format = value.get("format").and_then(|f| f.as_str()).unwrap_or("");
-    if format == "cmi-planner-backup" {
-        return Err(
-            "That's an “Export everything” file, not a course list — use \
-             “Import everything…” under “Everything in one file” to load it."
-                .to_string(),
-        );
-    }
-    if format != "cmi-timetable-export" {
-        return Err(
-            "That file doesn't look like one this app made — nothing in it \
-             says it came from “Export my courses”."
-                .to_string(),
-        );
-    }
-    let Some(courses) = value.get("courses").and_then(|c| c.as_array()) else {
-        return Err("That file has no course list inside it.".to_string());
-    };
-    let mut codes: Vec<String> = Vec::new();
-    for course in courses {
-        // Trim BEFORE the duplicate check: the list stores trimmed codes,
-        // so comparing an untrimmed candidate would let " TOC" slip past a
-        // stored "TOC" and the same code would be reported twice.
-        if let Some(code) = course.get("code").and_then(|c| c.as_str()).map(str::trim)
-            && !code.is_empty()
-            && !codes.iter().any(|c| c.eq_ignore_ascii_case(code))
-        {
-            codes.push(code.to_string());
-        }
-    }
-    if codes.is_empty() {
-        return Err("That file lists no courses at all.".to_string());
-    }
-    Ok(codes)
-}
-
-/// "Import from JSON" on Course selection: read the codes, sort them into
-/// ones this catalog knows and ones it doesn't, and ask — replace or add —
+/// "Import my courses…": read the file, work out which of its courses this
+/// browser can actually put on a timetable, and ask — join or replace —
 /// through the import dialog. Nothing changes until the user picks.
-pub fn import_selection_text(app: App, text: &str) {
-    let codes = match parse_timetable_export_codes(text) {
-        Ok(c) => c,
+pub fn import_courses_text(app: App, text: &str) {
+    let plan = match ttcore::export::parse_timetable_export(text) {
+        Ok(p) => p,
         Err(msg) => {
             app.toast(msg);
             return;
         }
     };
-    // Resolved the way share links resolve codes: the student's own courses
-    // first, then CMI's catalog with its own casing.
-    let snapshot = app.snapshot.get_untracked();
+
+    // Courses the sender wrote themselves, sorted into the ones this browser
+    // can take and the ones it can't:
+    //
+    // - a code that already names a course of the READER's own keeps the
+    //   reader's version (theirs is the one thing no sync can bring back),
+    // - a code CMI uses would shadow the catalog course everywhere, so the
+    //   file's version stays out and the catalog's stands.
+    //
+    // Both are announced by the dialog; neither is silent.
+    let mut customs: Vec<Course> = Vec::new();
+    let mut kept_yours: Vec<String> = Vec::new();
+    let mut shadowed: Vec<String> = Vec::new();
+    for course in plan.customs {
+        match app
+            .customs
+            .with_untracked(|cs| cs.get(&course.code).cloned())
+        {
+            Some(mine) => {
+                if mine != course {
+                    kept_yours.push(mine.code);
+                }
+                continue;
+            }
+            None => {
+                if app
+                    .snapshot
+                    .with_untracked(|s| s.course_ci(&course.code).is_some())
+                {
+                    shadowed.push(course.code);
+                    continue;
+                }
+            }
+        }
+        customs.push(course);
+    }
+
+    // Codes resolve the way share links resolve them — the reader's own
+    // courses first, then the ones riding in this file, then CMI's catalog
+    // with its own casing. The middle step is what lets a friend's seminar
+    // land on a timetable CMI has never heard of.
     let mut known: Vec<String> = Vec::new();
     let mut unknown: Vec<String> = Vec::new();
-    for code in codes {
+    for code in plan.codes {
         let resolved = app
             .customs
             .with_untracked(|cs| cs.get(&code).map(|c| c.code.clone()))
-            .or_else(|| snapshot.course_ci(&code).map(|c| c.code.clone()));
+            .or_else(|| {
+                customs
+                    .iter()
+                    .find(|c| c.code.eq_ignore_ascii_case(&code))
+                    .map(|c| c.code.clone())
+            })
+            .or_else(|| {
+                app.snapshot
+                    .with_untracked(|s| s.course_ci(&code).map(|c| c.code.clone()))
+            });
         match resolved {
             Some(canonical) => {
                 if !known.contains(&canonical) {
@@ -431,29 +473,33 @@ pub fn import_selection_text(app: App, text: &str) {
         );
         return;
     }
-    // An empty timetable has nothing to replace or keep — the question
-    // would answer itself, so don't ask it.
-    if app.selection.with_untracked(|s| s.is_empty()) {
-        app.import_selection(&known, false);
-        if !unknown.is_empty() {
-            app.toast(format!(
-                "Left out: {} — {} in CMI's catalog this semester, so the app \
-                 can't add {}.",
-                unknown.join(", "),
-                if unknown.len() == 1 {
-                    "it isn't"
-                } else {
-                    "they aren't"
-                },
-                if unknown.len() == 1 { "it" } else { "them" },
-            ));
-        }
-        return;
-    }
-    app.dialog.set(Some(crate::state::Dialog::ImportSelection {
+
+    let incoming = crate::state::IncomingPlan {
         known,
         unknown,
-    }));
+        overrides: plan.overrides,
+        customs,
+        kept_yours,
+        shadowed,
+    };
+    // A browser with nothing on its timetable and nothing of its own to lose
+    // would be answering a question that has one answer: joining an empty
+    // week and replacing it are the same act.
+    if app.selection.with_untracked(|s| s.is_empty())
+        && app
+            .overrides
+            .with_untracked(|o| o.items.is_empty() && o.credits.is_empty())
+    {
+        // The work is done, so the dialog it was started from gets out of
+        // the way — the same courtesy the asked-about path gets when an
+        // answer is pressed. Leaving Share open would hide the timetable
+        // that just changed behind the door it changed from.
+        app.dialog.set(None);
+        app.import_plan(&incoming, false);
+        return;
+    }
+    app.dialog
+        .set(Some(crate::state::Dialog::ImportCourses(incoming)));
 }
 
 /// Open a file picker for the whole-planner backup.
@@ -461,9 +507,9 @@ pub fn pick_and_import_backup(app: App) {
     pick_json_file(app, import_planner_backup_text);
 }
 
-/// Open a file picker for "Import from JSON" on Course selection.
-pub fn pick_and_import_selection(app: App) {
-    pick_json_file(app, import_selection_text);
+/// Open a file picker for "Import my courses…" under Share.
+pub fn pick_and_import_courses(app: App) {
+    pick_json_file(app, import_courses_text);
 }
 
 /// Open a file picker and hand the file's text to `on_text`. One hidden

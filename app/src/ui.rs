@@ -1861,8 +1861,8 @@ pub fn DialogHost() -> impl IntoView {
                         Dialog::EditCourse { code, prefill } => {
                             course_editor_dialog(app, code, prefill).into_any()
                         }
-                        Dialog::ImportSelection { known, unknown } => {
-                            import_selection_dialog(app, known, unknown).into_any()
+                        Dialog::ImportCourses(plan) => {
+                            import_courses_dialog(app, plan).into_any()
                         }
                     };
                     view! {
@@ -2990,83 +2990,158 @@ pub fn overrides_list(app: App) -> impl IntoView {
 // "My data" — everything saved in the browser, with removal options
 // ---------------------------------------------------------------------------
 
-/// "Import my courses…" found courses in the file — ask what they should do
-/// to the selection. Two whole-sentence choices instead of a yes/no: the
-/// difference between replacing and joining is the entire decision, so each
-/// button says its consequence. Nothing changes until one is pressed, and
-/// either answer is one Ctrl+Z from undone.
-fn import_selection_dialog(app: App, known: Vec<String>, unknown: Vec<String>) -> impl IntoView {
-    let n = known.len();
-    let plural = |n: usize| if n == 1 { "course" } else { "courses" };
-    let lede = format!(
-        "This file lists {n} {} from this semester. Should {} replace the \
-         courses already on your timetable, or be added to them?",
-        plural(n),
-        if n == 1 { "it" } else { "they" },
-    );
-    let left_out = (!unknown.is_empty()).then(|| {
-        format!(
+/// "Import my courses…" read a file — show what is in it, then ask what it
+/// should do. Two whole-sentence choices instead of a yes/no: the difference
+/// between joining and replacing is the entire decision, so each button says
+/// its consequence. Nothing changes until one is pressed, and either answer
+/// is one Ctrl+Z from undone.
+///
+/// The count of everything the file carries goes ABOVE the choice, because
+/// "does this bring their changes too?" is the question a reader has before
+/// either button means anything.
+fn import_courses_dialog(app: App, plan: crate::state::IncomingPlan) -> impl IntoView {
+    let n = plan.known.len();
+    let plural = |n: usize, one: &'static str, many: &'static str| if n == 1 { one } else { many };
+    let moves = plan.overrides.items.len();
+    let credits = plan.overrides.credits.len();
+    let own = plan.customs.len();
+
+    // The bill of contents, one line per kind of thing, and only for the
+    // kinds this file actually has.
+    let mut bill: Vec<String> = vec![format!(
+        "{n} {} from this semester",
+        plural(n, "course", "courses")
+    )];
+    if moves > 0 {
+        bill.push(format!(
+            "{moves} {} moved, added or struck out",
+            plural(moves, "class", "classes")
+        ));
+    }
+    if credits > 0 {
+        bill.push(format!(
+            "{credits} credit {}",
+            plural(credits, "correction", "corrections")
+        ));
+    }
+    if own > 0 {
+        bill.push(format!(
+            "{own} {} they made themselves",
+            plural(own, "course", "courses")
+        ));
+    }
+
+    // Everything the file carries that this browser will not take, said
+    // before the choice rather than in a toast after it.
+    let mut notes: Vec<String> = Vec::new();
+    if !plan.unknown.is_empty() {
+        notes.push(format!(
             "Left out: {} — {} in CMI's catalog this semester, so the app \
              can't add {}.",
-            unknown.join(", "),
-            if unknown.len() == 1 {
-                "it isn't"
-            } else {
-                "they aren't"
-            },
-            if unknown.len() == 1 { "it" } else { "them" },
-        )
-    });
-    let codes = known.clone();
-    let known_add = known.clone();
+            plan.unknown.join(", "),
+            plural(plan.unknown.len(), "it isn't", "they aren't"),
+            plural(plan.unknown.len(), "it", "them"),
+        ));
+    }
+    if !plan.kept_yours.is_empty() {
+        notes.push(format!(
+            "{} {} already {} of your own, so yours {} kept and the file's \
+             version is left out.",
+            plan.kept_yours.join(", "),
+            plural(plan.kept_yours.len(), "is", "are"),
+            plural(plan.kept_yours.len(), "a course", "courses"),
+            plural(plan.kept_yours.len(), "is", "are"),
+        ));
+    }
+    if !plan.shadowed.is_empty() {
+        notes.push(format!(
+            "CMI already lists {}, so the file's own version of {} left out — \
+             the catalog's course stands.",
+            plan.shadowed.join(", "),
+            plural(plan.shadowed.len(), "it is", "them is"),
+        ));
+    }
+
+    let extras = plan.extras() > 0;
+    let join_note = if extras {
+        "Everything in the file joins what you already have. Nothing of yours \
+         is taken away — where a change of theirs meets a change of yours on \
+         the same class, yours stays."
+            .to_string()
+    } else {
+        "The file's courses join what's already on your timetable — nothing \
+         is taken away."
+            .to_string()
+    };
     let replace_note = format!(
-        "Your timetable becomes exactly {} {}. Only the courses on it change — \
-         the times you set and your own courses stay saved.",
-        if n == 1 { "this" } else { "these" },
-        plural(n),
+        "Your timetable becomes exactly {} {}{}. Your own courses stay saved, \
+         and so does everything you changed about other courses.",
+        plural(n, "this", "these"),
+        plural(n, "course", "courses"),
+        if extras {
+            ", with the file's changes to them"
+        } else {
+            ""
+        },
     );
+
+    let codes = plan.known.clone();
+    // Both closures below are FnMut (a click handler can fire twice), so
+    // each needs its own copy of the plan to hand to `import_plan`.
+    let join_plan = plan.clone();
+    let replace_plan = plan;
     view! {
         <div>
-            <h2>"Courses from a file"</h2>
-            <p class="muted small">{lede}</p>
-            <div class="chipline">
-                {known
-                    .iter()
-                    .map(|code| view! { <span class="badge import-code">{code.clone()}</span> })
-                    .collect_view()}
+            <h2>"A timetable from a file"</h2>
+            <p class="muted small dialog-lede">
+                "Here is what the file holds. Nothing has changed yet."
+            </p>
+            <div class="file-bill">
+                <ul>
+                    {bill
+                        .into_iter()
+                        .map(|line| view! { <li>{line}</li> })
+                        .collect_view()}
+                </ul>
+                <div class="chipline">
+                    {codes
+                        .iter()
+                        .map(|code| view! { <span class="badge import-code">{code.clone()}</span> })
+                        .collect_view()}
+                </div>
             </div>
-            {left_out.map(|text| view! { <p class="muted small">{text}</p> })}
+            {notes
+                .into_iter()
+                .map(|text| view! { <p class="muted small">{text}</p> })
+                .collect_view()}
             <div class="choice-list">
+                // The additive answer comes first and is the one styled as
+                // the recommendation: it is what "combine our timetables"
+                // means, and it is the answer that cannot lose anything.
                 <button
-                    class="choice-btn"
+                    class="choice-btn primary"
                     on:click=move |_| {
-                        app.import_selection(&codes, true);
+                        app.import_plan(&join_plan, false);
                         app.dialog.set(None);
                     }
                 >
-                    <strong>"Replace my courses with the file's"</strong>
-                    <span class="muted small">{replace_note}</span>
+                    <strong>"Add it to my timetable"</strong>
+                    <span class="muted small">{join_note}</span>
                 </button>
                 <button
                     class="choice-btn"
                     on:click=move |_| {
-                        app.import_selection(&known_add, false);
+                        app.import_plan(&replace_plan, true);
                         app.dialog.set(None);
                     }
                 >
-                    <strong>"Keep my courses and add the file's"</strong>
-                    <span class="muted small">
-                        "The file's courses join what's already on your timetable — \
-                         nothing is taken away."
-                    </span>
+                    <strong>"Replace my timetable with it"</strong>
+                    <span class="muted small">{replace_note}</span>
                 </button>
             </div>
             <div class="actions">
                 <div class="grow"></div>
-                <button
-                    class="btn"
-                    on:click=move |_| app.dialog.set(Some(Dialog::MyData))
-                >
+                <button class="btn" on:click=move |_| app.dialog.set(Some(Dialog::Share))>
                     "Cancel"
                 </button>
             </div>
@@ -3151,52 +3226,13 @@ fn my_data_dialog(app: App) -> impl IntoView {
             </section>
 
             <section class="data-section">
-                // The pair that reads and writes the same file sits together;
-                // the destructive Clear keeps its distance on the far right.
+                // Saving these courses to a file, and taking someone else's
+                // in, both moved to Share: they are two halves of handing a
+                // timetable to another browser, and filing one of them under
+                // "Course selection" here made it read as a backup chore.
+                // The destructive Clear keeps its distance on the far right.
                 <header>
                     <h3>"Course selection"</h3>
-                    <div class="btn-pair">
-                        {move || {
-                            (!app.selection.with(|s| s.is_empty()))
-                                .then(|| {
-                                    view! {
-                                        <button
-                                            class="btn small"
-                                            title="Saves the courses on your timetable to \
-                                                   a file — every course and meeting as \
-                                                   you actually attend them. Use “Import \
-                                                   my courses…” to load them in another \
-                                                   browser."
-                                            on:click=move |_| {
-                                                crate::export::download_timetable_export(&app)
-                                            }
-                                        >
-                                            "Export my courses"
-                                        </button>
-                                    }
-                                })
-                        }}
-                        {move || {
-                            app.has_data()
-                                .then(|| {
-                                    view! {
-                                        <button
-                                            class="btn small"
-                                            title="Opens a file you saved with “Export my \
-                                                   courses” and asks whether its courses \
-                                                   should replace the courses on your \
-                                                   timetable or be added to them. Nothing \
-                                                   changes until you choose."
-                                            on:click=move |_| {
-                                                crate::export::pick_and_import_selection(app)
-                                            }
-                                        >
-                                            "Import my courses…"
-                                        </button>
-                                    }
-                                })
-                        }}
-                    </div>
                     <div class="grow"></div>
                     {move || {
                         (!app.selection.with(|s| s.is_empty()))
@@ -3247,6 +3283,19 @@ fn my_data_dialog(app: App) -> impl IntoView {
                     }
                         .into_any()
                 }}
+                // One line, and a way to get there — a reader who came here
+                // looking for "Export my courses" should not have to hunt.
+                <p class="muted small">
+                    "Saving this timetable to a file, or adding someone else's to it, \
+                     lives under Share — the file carries your changes and your own \
+                     courses too."
+                    <button
+                        class="linkish"
+                        on:click=move |_| app.dialog.set(Some(Dialog::Share))
+                    >
+                        "Open Share"
+                    </button>
+                </p>
             </section>
 
             // Your own courses are NOT a section of their own: they are the
@@ -5124,80 +5173,159 @@ fn share_dialog(app: App) -> impl IntoView {
     let plain2 = plain.clone();
     let with2 = with_times.clone();
 
+    // The file half reads and writes the same thing the link half does, so
+    // it lives here rather than in My data, where it was filed under
+    // "Course selection" and read as a backup chore. Two people combining
+    // their weeks is the whole point of it, and this is the door marked
+    // Share.
+    let empty = selection.is_empty();
+
     view! {
-        <div>
-            <h2>"Share your timetable"</h2>
-            <p class="muted small">
-                "Anyone who opens the link sees the same courses you have. The link \
-                 itself carries the course codes — nothing is uploaded anywhere, and \
-                 your copy stays in this browser."
+        <div class="share-dialog">
+            <h2>"Share or combine timetables"</h2>
+            <p class="muted small dialog-lede">
+                "Hand your week to someone else, or take theirs into yours. Nothing \
+                 is uploaded anywhere."
             </p>
-            {(!custom_codes.is_empty())
-                .then(|| {
-                    view! {
-                        <p class="muted small">
-                            {format!(
-                                "{} {} you made yourself. Only “Copy link with custom \
-                                 changes” carries {}. The “Courses only” link carries \
-                                 just the code{}, which {} nothing in someone else's \
-                                 browser.",
-                                custom_codes.join(", "),
-                                if custom_codes.len() == 1 {
-                                    "is a course"
-                                } else {
-                                    "are courses"
-                                },
-                                if custom_codes.len() == 1 {
-                                    "its name and times"
-                                } else {
-                                    "their names and times"
-                                },
-                                if custom_codes.len() == 1 { "" } else { "s" },
-                                if custom_codes.len() == 1 { "means" } else { "mean" },
-                            )}
-                        </p>
-                    }
-                })}
-            <div class="fieldrow">
-                <span class="muted small">"Courses only"</span>
-                <input type="text" readonly prop:value=plain style="flex:1" aria-label="Share link" />
-                <button
-                    class="btn"
-                    on:click=move |_| {
-                        domx::copy_to_clipboard(plain2.clone(), |_| {});
-                        app.toast("Link copied.");
-                    }
-                >
-                    "Copy link"
-                </button>
-            </div>
-            <div class="fieldrow">
-                <span class="muted small">"Courses and your changes"</span>
-                <input
-                    type="text"
-                    readonly
-                    prop:value=with_times
-                    style="flex:1"
-                    aria-label="Share link with courses and your changes"
-                />
-                <button
-                    class="btn"
-                    disabled=!has_extras
-                    title=if has_extras {
-                        "Includes the meetings you moved or added, your credit \
-                         changes and your own courses"
-                    } else {
-                        "You have no custom changes yet"
-                    }
-                    on:click=move |_| {
-                        let url = with2.clone();
-                        domx::copy_to_clipboard(url, |_| {});
-                        app.toast("Link with your custom changes copied.");
-                    }
-                >
-                    "Copy link with custom changes"
-                </button>
-            </div>
+
+            <section class="data-section">
+                <header>
+                    <h3>"As a link"</h3>
+                </header>
+                // Kept to one sentence: on a phone every line here is a line
+                // between the reader and the file buttons below, which are
+                // the half of this dialog that can't be done any other way.
+                <p class="muted small">
+                    "Whoever opens it gets your courses in place of theirs — better \
+                     for sending a copy of your week than for merging two."
+                </p>
+                {(!custom_codes.is_empty())
+                    .then(|| {
+                        view! {
+                            // Names the ROW, not the button: both buttons say
+                            // "Copy link" now, and the row label is what
+                            // tells the two links apart on screen.
+                            <p class="muted small">
+                                {format!(
+                                    "{} {} you made yourself, so only the “Courses and \
+                                     your changes” link carries {}. “Courses only” \
+                                     carries the code{} alone, which {} nothing in \
+                                     someone else's browser.",
+                                    custom_codes.join(", "),
+                                    if custom_codes.len() == 1 {
+                                        "is a course"
+                                    } else {
+                                        "are courses"
+                                    },
+                                    if custom_codes.len() == 1 {
+                                        "its name and times"
+                                    } else {
+                                        "their names and times"
+                                    },
+                                    if custom_codes.len() == 1 { "" } else { "s" },
+                                    if custom_codes.len() == 1 { "means" } else { "mean" },
+                                )}
+                            </p>
+                        }
+                    })}
+                // Both rows are label · box · button, in that order, at every
+                // width, and share ONE grid so the boxes line up under each
+                // other. They used to differ twice over: the second button's
+                // long label pushed it onto a line of its own, and each row
+                // sized its own label column, so two controls doing the same
+                // job looked like two different things.
+                <div class="share-links">
+                <div class="fieldrow">
+                    <span class="muted small">"Courses only"</span>
+                    <input type="text" readonly prop:value=plain aria-label="Share link" />
+                    <button
+                        class="btn"
+                        title="The course codes alone — the shortest link, and all \
+                               anyone needs to see the same courses"
+                        on:click=move |_| {
+                            domx::copy_to_clipboard(plain2.clone(), |_| {});
+                            app.toast("Link copied.");
+                        }
+                    >
+                        "Copy link"
+                    </button>
+                </div>
+                <div class="fieldrow">
+                    <span class="muted small">"Courses and your changes"</span>
+                    <input
+                        type="text"
+                        readonly
+                        prop:value=with_times
+                        aria-label="Share link with courses and your changes"
+                    />
+                    <button
+                        class="btn"
+                        disabled=!has_extras
+                        aria-label="Copy link with courses and your changes"
+                        title=if has_extras {
+                            "Includes the meetings you moved or added, your credit \
+                             changes and your own courses"
+                        } else {
+                            "You have no custom changes yet"
+                        }
+                        on:click=move |_| {
+                            let url = with2.clone();
+                            domx::copy_to_clipboard(url, |_| {});
+                            app.toast("Link with your custom changes copied.");
+                        }
+                    >
+                        "Copy link"
+                    </button>
+                </div>
+                </div>
+            </section>
+
+            <section class="data-section">
+                <header>
+                    <h3>"As a file"</h3>
+                    <div class="btn-pair">
+                        <button
+                            class="btn small"
+                            disabled=empty
+                            title=if empty {
+                                "Add a course first — there is nothing to save yet."
+                            } else {
+                                "Saves your whole timetable to a file: the courses, \
+                                 the classes you moved, added or struck out, your \
+                                 credit changes and the courses you made yourself."
+                            }
+                            on:click=move |_| crate::export::download_timetable_export(&app)
+                        >
+                            "Export my courses"
+                        </button>
+                        <button
+                            class="btn small"
+                            title="Opens a timetable file — yours from another device, \
+                                   or a friend's — and asks whether it should join your \
+                                   timetable or replace it. Nothing changes until you \
+                                   choose."
+                            on:click=move |_| crate::export::pick_and_import_courses(app)
+                        >
+                            "Import my courses…"
+                        </button>
+                    </div>
+                </header>
+                // The sentence that answers the question everyone actually
+                // has about these two buttons: does it carry my changes?
+                <p class="muted small">
+                    "The file holds everything about your week, not just a list of \
+                     codes: the courses on your timetable, the classes you moved, \
+                     added or struck out, the credits you corrected, and any course \
+                     you wrote yourself."
+                </p>
+                <p class="muted small">
+                    "Importing one can either join it to your timetable or replace \
+                     yours with it — so two people can put their weeks together by \
+                     sending one file. Where a change of theirs meets a change of \
+                     yours on the same class, yours stays, and the app says so."
+                </p>
+            </section>
+
             <div class="actions">{close_button(app)}</div>
         </div>
     }

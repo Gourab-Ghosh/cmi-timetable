@@ -95,10 +95,20 @@ prompts, no reload loops.
 
 `core/src/export.rs` owns the file formats (versioned, semver'd, natively
 tested); `app/src/export.rs` builds them from the app's own course
-resolution and stores. `cmi-timetable-export` describes the student's week
-(stable keys, effective meetings, credit provenance); the app also reads
-its course CODES back for "Import my courses" on Course selection, which
-asks replace-or-add through a dialog. `cmi-planner-backup` carries the
+resolution and stores. `cmi-timetable-export` (1.1.0) describes the
+student's week in two halves: `courses` — stable keys, effective meetings,
+credit provenance — and `my_changes`, which round-trips the parts a catalog
+cannot supply (classes moved/added/struck out, credit corrections, the
+student's own courses). Both are written in the format's own explicit style
+rather than the app's storage shapes, with every list always present and
+each value stated both ways (minutes beside "HH:MM", ISO weekday beside
+"Mon", ISO 8601 beside epoch ms); reading defaults the decoration, so
+another program can write one of these files from the load-bearing fields
+alone. "Import my courses…" (Share → As a file) reads it back and asks
+join-or-replace through a dialog; `core/src/combine.rs` owns the merge
+rules — identical changes collapse, a contested class keeps the reader's,
+invented classes are additive, deletions never travel — and is where the
+native tests for combining two students' weeks live. `cmi-planner-backup` carries the
 WHOLE planner — the internal `Snapshot` serde JSON plus selection,
 overrides, custom courses, prefs and postponed conflicts — and importing it
 (welcome screen, or My data → "Everything in one file") replaces the saved

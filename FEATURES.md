@@ -326,20 +326,46 @@ with an explanation of why that happens and what still worked.
 
 ### JSON, for your own tools
 
-- **Export my courses** (My data → Course selection) writes your week as a
-  machine-readable file: every selected course with its credits — and where
-  each number came from: CMI, the app's guess and why, or you — plus the
-  meetings you actually attend, each marked as CMI's own, moved by you, or
-  added by you (moved ones carry the CMI original alongside). Stable keys and
-  deterministic order, so scripts can merge two timetables or analyse one
-  without scraping anything.
-- **Import my courses** sits right beside it and reads the courses back out
-  of such a file. If your timetable already has courses, a dialog asks — in
-  whole sentences — whether the file's courses should **replace** yours or
-  **be added** to them; nothing changes until you pick, and either answer is one
-  Ctrl+Z from undone. Codes this semester's catalog doesn't know are named
-  and left out; an empty timetable is never asked (there is nothing to
-  replace).
+- **Export my courses** (Share → As a file) writes your whole week as one
+  machine-readable file — not a list of codes. It has two halves. `courses`
+  is the readable one: every course you have picked, with its credits and
+  where each number came from (CMI, the app's guess and why, or you), plus
+  the meetings you actually attend, each marked as CMI's own, moved by you,
+  or added by you (moved ones carry the CMI original alongside).
+  `my_changes` is the exact one, and it is what lets the file be loaded back
+  somewhere else: every class you moved, added or struck out (each labelled
+  `moved`, `added` or `removed`, with the CMI class it replaces beside where
+  you put it), every credit you corrected, and every course you wrote
+  yourself, in full.
+- Both halves are written for a program to read, not just for this app to
+  re-read: stable keys, deterministic order, every list always present, and
+  every value said twice where that helps — minutes to compute with beside
+  "HH:MM" to read, an ISO weekday beside "Mon", an ISO 8601 timestamp beside
+  epoch milliseconds. Reading is forgiving in the other direction, so a
+  program can *write* one of these files with only the parts that carry
+  meaning and this app will load it.
+- **Import my courses** sits right beside it and takes such a file back in —
+  yours from another device, or a friend's. A dialog first says what the
+  file holds (how many courses, how many classes moved, how many credit
+  corrections, how many courses they made themselves) and then asks, in
+  whole sentences, whether it should **join** your timetable or **replace**
+  it. Nothing changes until you pick, and either answer is one Ctrl+Z from
+  undone.
+- Joining is how two people put their weeks together. Everything of yours
+  stays; everything of theirs that this browser can take arrives. The same
+  change made on both sides counts once. Where a change of theirs meets a
+  change of yours **on the same class** — a class cannot be in two places at
+  once — yours stays and the app names the course it did that for. Classes
+  either of you invented are additions, so both survive.
+- Nothing is ever dropped quietly. Codes this semester's catalog doesn't
+  know are named and left out; a course of theirs whose code is already one
+  of yours keeps yours; a course of theirs whose code CMI uses stays out, so
+  a private course can't hide a real one. All of it is said before you
+  choose, and again in the sentence afterwards.
+- Whole courses you **deleted** are the one thing the file does not carry: a
+  deleted course is off your timetable by definition, and importing someone
+  else's deletions would take courses out of your catalog. Use **Export
+  everything** to move a whole browser, deletions included.
 - **Export everything** (My data → Everything in one file) writes the whole
   planner as one JSON backup: the timetable downloaded from CMI — the whole
   catalog, halls and slots — plus your selected courses, every change you
@@ -605,6 +631,7 @@ Being clear about these is part of the design:
 *This file is part of the app, not a brochure: it is updated in the same
 change that adds, renames or removes a feature, so what it describes is what
 you will find. If you spot a difference, the app is right and this is a bug.*
+
 - **Two tabs of the same browser share one timetable.** That is how browser
   storage works: every tab reads and writes the same saved data. Sync with
   CMI in one tab and the other picks the new timetable up on its own — the

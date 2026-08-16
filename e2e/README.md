@@ -23,7 +23,7 @@ Environment knobs: `CHROME_BIN` (default `/usr/bin/chromium`), `DIST_DIR`,
 `PORT`, `CARGO_TARGET_DIR` (for the seed generator; defaults to
 `~/.rust-target-e2e`).
 
-Covered flows (94 tests): Sync-now header + hidden developer mode (URL
+Covered flows (96 tests): Sync-now header + hidden developer mode (URL
 endpoint only), `?c=` selection + clash badges/panel (any casing), unknown-
 code warning, credits defaulting to 4 and per-course credit overwrites,
 master-grid ⚠ would-clash markers and clash toast on add, the ⓘ details
@@ -115,8 +115,8 @@ chip still removable when expanded, the two JSON exports parsing and the
 whole-planner backup restoring EVERYTHING through a wiped browser — the
 selection, the custom move and the full catalog, with the pill saying
 "imported" (R46 reshaped this: the backup file replaced the old
-snapshot-only export, and "Import my courses" on Course selection asks
-replace-or-add through a dialog, names the codes it must leave out, and
+snapshot-only export, and "Import my courses" — moved to Share in R60 —
+asks join-or-replace through a dialog, names the codes it must leave out, and
 skips the question when the timetable is empty; R47's pre-deploy audit
 added pins for the honest edges: an import that adds nothing spends no
 undo step, a whitespace-variant duplicate code is named once, a code with
@@ -134,7 +134,13 @@ hidden by filters is named with "Clear filters to show it" instead of a
 duplicate-minting create offer, the day pickers and credits row are
 arrow-key radio groups, and every badge/credits explanation is visible
 text or a button to the details dialog rather than a hover title), and a
-creditless seminar counting 0 with the note saying why; and the order
+creditless seminar counting 0 with the note saying why; two students
+combining timetables through one file (the sender's moved class, credit
+correction and own course all arriving in the reader's week, counted in the
+dialog before anything is decided, and undone by one Ctrl+Z) with the two
+people who moved the SAME class settled without a second copy of it
+appearing — the reader's own kept, named in the sentence afterwards, and
+overridden only by Replace; and the order
 of the source chain, which
 exists for a reason a browser enforces: on CMI's own network cmi.ac.in is a
 LOCAL address, so a direct fetch makes the browser ask whether the page may

@@ -270,14 +270,38 @@ pub enum Dialog {
         code: Option<String>,
         prefill: Option<String>,
     },
-    /// "Import from JSON" on Course selection found these codes in the file:
-    /// `known` are in this catalog (or the student's own), `unknown` aren't
-    /// and will be left out. The dialog asks replace-or-add; nothing changes
-    /// until the user picks.
-    ImportSelection {
-        known: Vec<String>,
-        unknown: Vec<String>,
-    },
+    /// "Import my courses…" read a timetable file. The dialog shows what is
+    /// in it and asks join-or-replace; nothing changes until the user picks.
+    ImportCourses(IncomingPlan),
+}
+
+/// A timetable file, resolved against this browser and ready to apply — the
+/// whole answer to "what would importing this do?", worked out once, before
+/// anything is asked and long before anything is changed.
+#[derive(Clone, PartialEq)]
+pub struct IncomingPlan {
+    /// Codes this browser can put on a timetable, in the catalog's casing.
+    pub known: Vec<String>,
+    /// Codes it can't — CMI doesn't list them and the file didn't bring
+    /// them. Named in the dialog, then left out.
+    pub unknown: Vec<String>,
+    /// The file's changes, ids already renumbered from zero by the parser.
+    pub overrides: OverridesStore,
+    /// Courses the sender made themselves that this browser can take.
+    pub customs: Vec<Course>,
+    /// Codes where the sender's own course lost to one the reader had
+    /// already written under the same code.
+    pub kept_yours: Vec<String>,
+    /// Codes where the sender's own course lost to CMI's catalog — adding it
+    /// would hide a real course behind a private one.
+    pub shadowed: Vec<String>,
+}
+
+impl IncomingPlan {
+    /// Changes and own courses — everything beyond the bare course list.
+    pub fn extras(&self) -> usize {
+        self.overrides.items.len() + self.overrides.credits.len() + self.customs.len()
+    }
 }
 
 /// An in-flight pointer drag.
@@ -844,53 +868,99 @@ impl App {
         }
     }
 
-    /// The import dialog's two answers, one undoable step either way:
-    /// `replace` makes the file's courses the whole selection; otherwise
-    /// they join what's already there. Restoring a deleted course on the
-    /// way in mirrors `add_course` — on your timetable and deleted at once
-    /// is not a state.
-    pub fn import_selection(&self, codes: &[String], replace: bool) {
-        let n = codes.len();
-        let already: usize = self
-            .selection
-            .with_untracked(|sel| codes.iter().filter(|c| sel.contains(c)).count());
-        let label = if replace {
-            "replace my courses with the ones from a file"
-        } else {
-            "add a file's courses"
-        };
-        // Nothing to add means nothing on the undo stack: an act here would
-        // wipe the redo history and hand Ctrl+Z a step that restores an
-        // identical state, while the toast says "nothing changed". (Unhide
-        // can't be the difference — a selected course is never hidden.)
-        if !replace && already == n {
-            self.toast(
-                "Every course in that file was already on your timetable — \
-                 nothing changed.",
-            );
+    /// The import dialog's two answers, one undoable step either way.
+    ///
+    /// `replace` makes the file's courses the whole timetable and lets its
+    /// changes stand where the reader had changes of their own; otherwise
+    /// everything joins what is already here, and the reader's own work wins
+    /// any straight disagreement (see [`ttcore::combine`]). Restoring a
+    /// deleted course on the way in mirrors `add_course` — on your timetable
+    /// and deleted at once is not a state.
+    ///
+    /// The whole result is worked out on copies first. Nothing goes on the
+    /// undo stack unless something actually changed: importing the same file
+    /// twice must not hand Ctrl+Z a step that restores an identical state
+    /// while the toast says nothing happened.
+    pub fn import_plan(&self, plan: &IncomingPlan, replace: bool) {
+        let mut selection = self.selection.get_untracked();
+        let mut overrides = self.overrides.get_untracked();
+        let mut customs = self.customs.get_untracked();
+        let before = (selection.clone(), overrides.clone(), customs.clone());
+
+        let already = plan.known.iter().filter(|c| selection.contains(c)).count();
+        for course in &plan.customs {
+            customs.upsert(course.clone());
+        }
+        if replace {
+            selection.clear();
+            // Clear the way only across the courses this file is about —
+            // work on the rest of the week is not what was replaced.
+            ttcore::combine::clear_for_courses(&mut overrides, &plan.known);
+        }
+        for code in &plan.known {
+            if !selection.contains(code) {
+                selection.push(code.clone());
+            }
+            overrides.unhide(code);
+        }
+        let stats = ttcore::combine::merge_overrides(&mut overrides, &plan.overrides);
+        // A change aimed at a code that names one of the reader's own
+        // courses would render as a class belonging to nothing.
+        ttcore::combine::purge_custom_overrides(&customs, &mut overrides);
+
+        if (&selection, &overrides, &customs) == (&before.0, &before.1, &before.2) {
+            self.toast(self.import_nothing_changed(plan));
             return;
         }
-        let codes = codes.to_vec();
-        self.act(label, move |sel, ovs| {
+        self.act_customs(
             if replace {
-                sel.clear();
-            }
-            for code in &codes {
-                if !sel.contains(code) {
-                    sel.push(code.clone());
-                }
-                ovs.unhide(code);
-            }
-        });
+                "replace my timetable with a file's"
+            } else {
+                "add a file's timetable to mine"
+            },
+            move |cs, sel, ovs| {
+                *cs = customs;
+                *sel = selection;
+                *ovs = overrides;
+            },
+        );
+        self.toast_undo(self.import_summary(plan, replace, already, &stats));
+    }
+
+    /// The file did nothing — which is a normal outcome (the same file
+    /// imported twice), so it says which kind of nothing it was.
+    fn import_nothing_changed(&self, plan: &IncomingPlan) -> String {
+        if plan.extras() > 0 {
+            "Everything in that file was already on your timetable — the \
+             courses and the changes both. Nothing changed."
+                .to_string()
+        } else {
+            "Every course in that file was already on your timetable — \
+             nothing changed."
+                .to_string()
+        }
+    }
+
+    /// One sentence for the courses, then a sentence for anything else worth
+    /// saying. Every part of the file that did NOT make it in is named here:
+    /// a silent drop is the one outcome an import must never have.
+    fn import_summary(
+        &self,
+        plan: &IncomingPlan,
+        replace: bool,
+        already: usize,
+        stats: &ttcore::combine::CombineStats,
+    ) -> String {
         let plural = |n: usize| if n == 1 { "course" } else { "courses" };
-        if replace {
-            self.toast_undo(format!(
+        let n = plan.known.len();
+        let mut out = if replace {
+            format!(
                 "Your timetable now has exactly the {n} {} from that file.",
                 plural(n)
-            ));
+            )
         } else {
             let added = n - already;
-            self.toast_undo(format!(
+            format!(
                 "Added {added} {} from the file{}.",
                 plural(added),
                 if already > 0 {
@@ -898,8 +968,56 @@ impl App {
                 } else {
                     ""
                 },
+            )
+        };
+        let changes = stats.changes_added();
+        if changes > 0 {
+            out.push_str(&format!(
+                " {changes} change{} came with {}.",
+                if changes == 1 { "" } else { "s" },
+                if changes == 1 { "it" } else { "them" },
             ));
         }
+        if !stats.kept_yours.is_empty() {
+            out.push_str(&format!(
+                " You had already changed {}, so your version stayed.",
+                stats.kept_yours.join(", "),
+            ));
+        }
+        if !plan.kept_yours.is_empty() {
+            out.push_str(&format!(
+                " {} {} yours — the file's version was left out.",
+                plan.kept_yours.join(", "),
+                if plan.kept_yours.len() == 1 {
+                    "is already a course of"
+                } else {
+                    "are already courses of"
+                },
+            ));
+        }
+        if !plan.shadowed.is_empty() {
+            out.push_str(&format!(
+                " CMI already lists {}, so the file's own version of {} left out.",
+                plan.shadowed.join(", "),
+                if plan.shadowed.len() == 1 {
+                    "it was"
+                } else {
+                    "them was"
+                },
+            ));
+        }
+        if !plan.unknown.is_empty() {
+            out.push_str(&format!(
+                " Left out: {} — {} in CMI's catalog this semester.",
+                plan.unknown.join(", "),
+                if plan.unknown.len() == 1 {
+                    "it isn't"
+                } else {
+                    "they aren't"
+                },
+            ));
+        }
+        out
     }
 
     /// Distinct courses this (selected) course clashes with, with day/time.

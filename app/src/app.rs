@@ -210,15 +210,7 @@ fn offline_note(app: App) {
     });
 }
 
-/// A custom course's definition IS its schedule — it never carries
-/// overrides. A shared store is written wholesale, so anything it aims at
-/// one of the user's own codes (the sender had CMI's course under that
-/// code; the recipient has their own) is dropped rather than left to
-/// render as a phantom meeting.
-fn purge_custom_overrides(customs: &CustomStore, ovs: &mut OverridesStore) {
-    ovs.items.retain(|o| customs.get(&o.course).is_none());
-    ovs.credits.retain(|c| customs.get(&c.course).is_none());
-}
+use ttcore::combine::purge_custom_overrides;
 
 /// Apply `?c=` / `&s=` from the address bar (s wins). Unknown codes become
 /// dismissible warning chips instead of breaking anything.

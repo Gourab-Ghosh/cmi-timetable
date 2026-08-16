@@ -94,8 +94,12 @@ and no committed mirror (fixtures exist only for tests/e2e seed).
 
 ```text
 /core   parsers, model, validate (gate), merge (3-way), diff, ics, share,
-        date, export (JSON file formats: cmi-timetable-export /
-        cmi-planner-backup envelope + import validation, iso_utc, filenames);
+        date, export (JSON file formats: cmi-timetable-export — both its
+        halves, including the explicit `my_changes` shapes and their
+        to/from conversions — and the cmi-planner-backup envelope + import
+        validation, iso_utc, filenames), combine (one student's timetable
+        file folded into another's: dedupe, contested-class rules,
+        scoped clear, purge_custom_overrides);
         feature `html` = native scraper path (tests + e2e seed).
         core/examples/snapshot_json.rs → fixtures → snapshot JSON (e2e
         seed; test tooling only, nothing ships it).
@@ -111,7 +115,7 @@ and no committed mirror (fixtures exist only for tests/e2e seed).
         post_build hook writing the offline service worker into every build
         (debug builds get a self-cleaning no-cache stub);
         index.html registers ./sw.js on window load.
-/e2e    test_app.py — 80 Selenium tests, self-seeding (see §5); shoot.py —
+/e2e    test_app.py — 96 Selenium tests, self-seeding (see §5); shoot.py —
         design-review screenshots + print PDFs.
 /githooks  pre-push — builds+publishes via deploy.sh when main is pushed
         (activate per clone: `git config core.hooksPath githooks`; skip
@@ -651,7 +655,7 @@ regenerates the .ics golden.
   selected course with no time is part of the timetable, not a footnote.
 - "Your changes" groups are headed by `.cg-head` (colour rail + small caps
   + count), coloured by `OwnChange::tone()`. See §4.
-- Tests: 114 native + 90/90 e2e green (as of R58). Meeting removals: `MeetingOverride.to`
+- Tests: 127 native + 96/96 e2e green (as of R60). Meeting removals: `MeetingOverride.to`
   is `Option<Meeting>` (None = removed; legacy JSON/share payloads still
   load — present meeting ⇒ Some). Out-of-grid times: **all three tables grow
   synthetic `.extra` columns**, each from its own source, all built by the
@@ -3478,6 +3482,111 @@ the clock with t39's existing `Date.now` seam — no test waits a cadence.
 t93 boots the same build at 430×900 and at 1500×1000. t94 proves a pressed
 button beats the device on both, and that Reset stores nothing. 94/94 e2e,
 114 native, clippy clean on both targets.
+
+### R60 — one file, two students, one week
+
+User, over four messages in one round: "Import my courses"/"Export my
+courses" should carry the **overrides** and the **user's own courses**, not
+just codes; move the two buttons wherever makes more sense; say in the UI
+that the file carries the changes; keep the replace-or-merge question on
+import; merging overrides should keep one of two identical changes and both
+of two different ones ("I don't think there would be any conflict"); the
+whole point is **two people merging their timetables into one**; make it
+beautiful. Then: prompt on export for courses-only vs courses-plus-changes,
+skipping the prompt when there is nothing extra — **and then, two messages
+later, withdrawn**: no prompt, always export everything. Then twice: the
+JSON must be **easy to use and analyse from a programming language**.
+
+**What the file now is.** `cmi-timetable-export` gained a `my_changes`
+section (format 1.1.0; additive, so 1.0.0 files still import and 1.1.0
+files open in older builds). It carries every meeting override, every
+credit override and every custom course **scoped to the selection** — the
+file describes a timetable, so a change to a course the sender is not
+taking would arrive aimed at nothing. `courses` is unchanged in meaning and
+still the readable half.
+
+**Why `my_changes` is not the serde shapes.** The obvious implementation —
+`#[derive(Serialize)]` on `MeetingOverride`/`Course` — would have leaked
+`{"base": …, "to": …, "id": 7, "created_at": 1.75e12}` and `Slot
+{start_min}` into a public file, i.e. asked every reader to learn this
+app's internal vocabulary. The user asked twice for the file to be easy to
+work with from a program, so core defines its own shapes: `MeetingJson`
+(`day` "Mon" AND `iso_weekday` 2; `start`/`end` as `{minutes, hhmm}`),
+`MeetingChangeJson` (a `kind` of "moved"/"added"/"removed" beside the
+`from`/`to` that imply it), `CreditChangeJson` and `CourseJson`
+(`status` as "scheduled", `starts` as `{day, month}` instead of a 2-tuple),
+each with a `to_*` back-conversion. `MeetingJson` is now used by the
+`courses` half too, so one class has ONE shape across the whole file.
+
+Writing is exhaustive; reading is forgiving in exactly one direction. Every
+list is always present and every value stated both ways, so a reader never
+branches on a missing key. On the way back in, the decoration is
+`#[serde(default)]` — `hhmm`, `iso_weekday` beside a good `day`, `kind`,
+`made_at`, `status`, and most of `CourseJson` — so another program can
+write a file from the load-bearing fields alone (pinned by
+`a_minimal_hand_written_file_loads`). What cannot be guessed at is fatal: a
+day that is neither a name nor 1–7, a class ending before it starts, a
+course with no code, an entry with neither `from` nor `to`. A file whose
+`my_changes` won't parse is refused **whole** — importing "the courses
+only" would silently drop the half that was the reason for sending it.
+
+**Ids are given up at the door.** Two browsers both number overrides from
+zero, and `effective_meetings` tells one override from another by id. The
+parser renumbers from zero and `merge_overrides` renumbers again into the
+receiving store's sequence.
+
+**The merge rules** live in the new `core/src/combine.rs`, native-tested:
+identical change (course case-insensitive, same base, same target) → one
+change; a change to a class the reader already changed → **the reader's
+stays**, counted by name in `CombineStats::kept_yours`; anything else →
+taken. The user's "keep both" is honoured for everything additive (two
+invented classes are two classes) but NOT for a contested official class:
+`effective_meetings` gives the base to the first override by id and renders
+the loser as an extra meeting, so "keep both" there would put one class in
+two places. That is the one place the implementation departs from the
+user's sketch, and the toast says so out loud. Whole-course deletions
+(`OverridesStore::hidden`) are not in the file at all: a deleted course is
+off the timetable by definition, and importing a friend's deletions would
+prune the reader's catalog. `purge_custom_overrides` moved here from
+app.rs, so the share-link path and the file path share one definition.
+
+**Where the buttons went.** Out of My data → "Course selection" (where
+"Export my courses" read as a backup chore) and into the **Share** dialog,
+renamed "Share or combine timetables" and split into `.data-section`s "As a
+link" and "As a file" — the same section furniture My data uses, so the two
+dialogs that both hand data around look alike. My data keeps a one-line
+pointer with an "Open Share" `.linkish` button. `ImportError::WrongFormat`
+copy and README/FEATURES all follow the move.
+
+**The import dialog** shows a `.file-bill` (counts + code chips) BEFORE the
+question, because "does this bring their changes too?" is what a reader
+needs answered before either button means anything. The additive answer is
+first and wears `.choice-btn.primary` (accent wash, not a filled button —
+both answers are legitimate). Everything the browser will not take is named
+there and again in the toast: unknown codes, a custom course whose code is
+already the reader's own, a custom course whose code CMI uses (kept out, so
+a private course cannot shadow a real one).
+
+**Two smaller decisions.** `import_plan` computes the whole result on
+copies and compares before acting, so importing the same file twice spends
+no undo step (the old code special-cased "all codes already selected",
+which changes carried in would have made wrong). And the direct-apply path
+(empty timetable, nothing of one's own) now closes the Share dialog — it
+used to leave the modal over the timetable that had just changed, which is
+also what made t81 fail with an intercepted click.
+
+**Tests.** t95 is the headline: the sender exports a week with a moved
+class, a credit correction and a course CMI never listed; the reader adds
+it to their own; every one of the sender's arrives, the reader keeps
+theirs, and one Ctrl+Z undoes the lot. t96 pins the contested class — the
+reader's Friday stays, the file's Wednesday does not appear as a second
+class, and Replace then takes the file's version whole. t79 gained the
+"read it like a program would" half (every list present, `kind`, both time
+forms, and a Wednesday computed from the file alone). Both new tests hunt
+downloads by **mtime**, not name: two exports on one day want the same
+filename and Chrome disambiguates the second as "… (1).json", which sorts
+BEFORE "….json" — that fed t95/t96 the previous test's file and cost two
+debugging rounds. 96/96 e2e, 127 native, clippy clean on both targets.
 
 ## 8. Open bugs — found, confirmed, NOT fixed (do not delete)
 
