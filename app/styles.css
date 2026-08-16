@@ -1551,6 +1551,10 @@ details.facet .menu .menu-empty { margin: 0.2rem 0 0; }
 .dialog .fieldrow > select,
 .dialog .fieldrow .hall-pick > select { min-width: 12rem; }
 .dialog .dialog-lede { margin: -0.25rem 0 0.9rem; }
+/* The body of a dialog whose first button acts (the import question) takes
+   focus itself so Space scrolls instead of answering. It is not a control,
+   so it draws no focus ring — the ring belongs on whatever Tab reaches. */
+.dialog [data-autofocus]:focus { outline: none; }
 /* Free-hall answer: the count leads, then the rooms as a scannable list.
    A sentence of fifteen comma-separated room names is not readable. */
 .finder-result { margin-top: 0.85rem; }

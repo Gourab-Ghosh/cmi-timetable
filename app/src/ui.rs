@@ -612,8 +612,17 @@ pub fn Header() -> impl IntoView {
                 "↷"
                 <span class="btn-word">"Redo"</span>
             </button>
-            <button class="btn" on:click=move |_| app.dialog.set(Some(Dialog::Share))>
-                "Share"
+            // Named for both directions. It opened as "Share" while sharing
+            // was all it did; it now also takes a timetable file in and a
+            // whole backup back, and a door labelled only with the way out
+            // is a door nobody tries when they are carrying something.
+            <button
+                class="btn"
+                title="Links, timetable files and full backups — everything that leaves \
+                       this browser or arrives in it"
+                on:click=move |_| app.dialog.set(Some(Dialog::Share))
+            >
+                "Share or import"
             </button>
             <button
                 class="btn"
@@ -828,18 +837,18 @@ pub fn BannerView() -> impl IntoView {
                                 <p class="banner-note muted small">
                                     {if one {
                                         "It may be from an earlier semester, or it may be a \
-                                         course someone built for themselves. Courses people \
-                                         build only travel in the full share link — the one \
-                                         made “with custom changes” — so ask whoever sent \
-                                         this to send that link instead. Everything else in \
+                                         course added by hand rather than published by CMI. \
+                                         A course added by hand travels only in the full \
+                                         share link — the one made “with custom changes” — \
+                                         so ask for that link instead. Everything else in \
                                          the link opened as usual."
                                     } else {
                                         "They may be from an earlier semester, or they may be \
-                                         courses someone built for themselves. Courses people \
-                                         build only travel in the full share link — the one \
-                                         made “with custom changes” — so ask whoever sent \
-                                         this to send that link instead. Everything else in \
-                                         the link opened as usual."
+                                         courses added by hand rather than published by CMI. \
+                                         Courses added by hand travel only in the full share \
+                                         link — the one made “with custom changes” — so ask \
+                                         for that link instead. Everything else in the link \
+                                         opened as usual."
                                     }}
                                 </p>
                             </div>
@@ -1815,9 +1824,19 @@ pub fn DialogHost() -> impl IntoView {
                 // the list — landing there would turn the same scrolling
                 // Space press into "hide most of this". Tab still reaches
                 // it first; nothing lands on it uninvited.
+                //
+                // `[data-autofocus]` is the same opt-out from the other end:
+                // a dialog whose first button DOES something on the way in
+                // (the import question's "Add it to my timetable") names the
+                // element to land on instead — its own body, which takes
+                // focus without being a control, so Space scrolls and Tab
+                // still reaches the answers in order.
                 let doc = domx::document();
                 if let Some(el) = doc
-                    .query_selector(".dialog input:not(.nofocus), .dialog select, .dialog textarea")
+                    .query_selector(
+                        ".dialog [data-autofocus], .dialog input:not(.nofocus), \
+                         .dialog select, .dialog textarea",
+                    )
                     .ok()
                     .flatten()
                     .or_else(|| {
@@ -3008,8 +3027,12 @@ fn import_courses_dialog(app: App, plan: crate::state::IncomingPlan) -> impl Int
 
     // The bill of contents, one line per kind of thing, and only for the
     // kinds this file actually has.
+    // "…from this semester" counted the courses added by hand along with
+    // CMI's, two lines above a line saying those very courses are not from
+    // CMI's catalog. The first line counts what would land; the last says
+    // how many of them CMI never listed.
     let mut bill: Vec<String> = vec![format!(
-        "{n} {} from this semester",
+        "{n} {} on that timetable",
         plural(n, "course", "courses")
     )];
     if moves > 0 {
@@ -3025,10 +3048,14 @@ fn import_courses_dialog(app: App, plan: crate::state::IncomingPlan) -> impl Int
         ));
     }
     if own > 0 {
-        bill.push(format!(
-            "{own} {} they made themselves",
-            plural(own, "course", "courses")
-        ));
+        bill.push(if own == n {
+            format!(
+                "{}, not from CMI's catalog",
+                plural(n, "added by hand", "all added by hand")
+            )
+        } else {
+            format!("{own} of them added by hand, not from CMI's catalog")
+        });
     }
 
     // Everything the file carries that this browser will not take, said
@@ -3061,20 +3088,67 @@ fn import_courses_dialog(app: App, plan: crate::state::IncomingPlan) -> impl Int
             plural(plan.shadowed.len(), "it is", "them is"),
         ));
     }
+    if !plan.dropped_for_own_course.is_empty() {
+        notes.push(format!(
+            "The file's changes to {} are left out: {} added by hand here, \
+             and a course added by hand carries its own times.",
+            plan.dropped_for_own_course.join(", "),
+            plural(
+                plan.dropped_for_own_course.len(),
+                "that code names a course",
+                "those codes name courses",
+            ),
+        ));
+    }
 
+    if !plan.takes_changes_here.is_empty() {
+        notes.push(format!(
+            "You have changes saved under {}, and the file brings {} of that \
+             name added by hand. A course added by hand carries its own \
+             times, so those saved changes go — whichever answer you pick.",
+            plan.takes_changes_here.join(", "),
+            plural(plan.takes_changes_here.len(), "a course", "courses"),
+        ));
+    }
+    if !plan.restores_deleted.is_empty() {
+        notes.push(format!(
+            "You deleted {}. The file brings {} back, along with any times \
+             you had set for {} — a course can't be on your timetable and \
+             deleted at the same time.",
+            plan.restores_deleted.join(", "),
+            plural(plan.restores_deleted.len(), "it", "them"),
+            plural(plan.restores_deleted.len(), "it", "them"),
+        ));
+    }
+
+    // Anything either answer takes from the reader, gathered once: the join
+    // note's promise is made only when this is empty.
+    let takes_something = !plan.takes_changes_here.is_empty() || !plan.restores_deleted.is_empty();
     let extras = plan.extras() > 0;
-    let join_note = if extras {
-        "Everything in the file joins what you already have. Nothing of yours \
-         is taken away — where a change of theirs meets a change of yours on \
-         the same class, yours stays."
-            .to_string()
-    } else {
-        "The file's courses join what's already on your timetable — nothing \
-         is taken away."
-            .to_string()
+    // "Nothing of yours is taken away" is a promise, so it is made only
+    // where it holds. The two things joining CAN take — changes a course
+    // added by hand claims, and a deletion an arriving course undoes — are
+    // named right above this button, and the sentence sends the reader
+    // there instead of claiming the opposite.
+    let join_note = match (extras, takes_something) {
+        (true, false) => "Everything in the file joins what you already have. Nothing of \
+                          yours is taken away — where a change in the file meets a change \
+                          of yours on the same class, yours stays."
+            .to_string(),
+        (true, true) => "Everything in the file joins what you already have. Where a change \
+                         in the file meets a change of yours on the same class, yours stays \
+                         — apart from what is named above, which goes either way."
+            .to_string(),
+        (false, false) => "The file's courses join what's already on your timetable — \
+                           nothing is taken away."
+            .to_string(),
+        (false, true) => "The file's courses join what's already on your timetable, apart \
+                          from what is named above."
+            .to_string(),
     };
     let replace_note = format!(
-        "Your timetable becomes exactly {} {}{}. Your own courses stay saved, \
+        "Your timetable becomes exactly {} {}{}. Anything else comes off the \
+         timetable without being deleted — courses of your own stay saved, \
          and so does everything you changed about other courses.",
         plural(n, "this", "these"),
         plural(n, "course", "courses"),
@@ -3091,7 +3165,11 @@ fn import_courses_dialog(app: App, plan: crate::state::IncomingPlan) -> impl Int
     let join_plan = plan.clone();
     let replace_plan = plan;
     view! {
-        <div>
+        // Focus lands HERE, not on the first answer. Both answers change the
+        // timetable, and this dialog can outgrow a phone screen — bill,
+        // chips, notes, two two-line buttons — so the Space press that
+        // scrolls a long question would otherwise answer it.
+        <div data-autofocus tabindex="-1">
             <h2>"A timetable from a file"</h2>
             <p class="muted small dialog-lede">
                 "Here is what the file holds. Nothing has changed yet."
@@ -3202,7 +3280,10 @@ fn my_data_dialog(app: App) -> impl IntoView {
             for (key, _) in storage::all_entries() {
                 storage::remove(&key);
             }
-            let _ = domx::window().location().reload();
+            // "The page reloads empty" — which it does not if the address
+            // bar still says `?c=TOC,RDBM`: the boot path would read that
+            // and put the selection straight back, saved again.
+            domx::reload_without_query();
         }
     };
 
@@ -3382,13 +3463,13 @@ fn my_data_dialog(app: App) -> impl IntoView {
                         class="btn small"
                         on:click=move |_| app.dialog.set(Some(Dialog::Share))
                     >
-                        "Open Share"
+                        "Open Share or import"
                     </button>
                 </header>
                 <p class="muted small">
-                    "Saving your timetable to a file, opening one somebody sent you, \
-                     backing up this whole browser, or sharing your week as a link — \
-                     all of it lives under Share."
+                    "Saving your timetable to a file, opening one that arrived from \
+                     another browser, backing up this whole browser, or sharing your \
+                     week as a link — all of it lives under “Share or import”."
                 </p>
             </section>
 
@@ -5156,8 +5237,9 @@ fn share_dialog(app: App) -> impl IntoView {
             // name in one pass.
             <h2>"Share or import a timetable"</h2>
             <p class="muted small dialog-lede">
-                "Everything here stays on your device. A link carries your timetable \
-                 inside the address itself; a file carries it as a file."
+                "Everything here happens on this device — nothing is uploaded. A link \
+                 carries your timetable inside the web address; a file carries it as a \
+                 download to keep or pass on."
             </p>
 
             <section class="data-section">
@@ -5168,8 +5250,8 @@ fn share_dialog(app: App) -> impl IntoView {
                 // between the reader and the file buttons below, which are
                 // the half of this dialog that can't be done any other way.
                 <p class="muted small">
-                    "Whoever opens it gets your courses in place of theirs — best for \
-                     sending someone a copy of your week."
+                    "Opening the link puts your courses in place of whatever that \
+                     browser had — the quickest way to pass your week on."
                 </p>
                 {(!custom_codes.is_empty())
                     .then(|| {
@@ -5182,7 +5264,7 @@ fn share_dialog(app: App) -> impl IntoView {
                                     "{} {} you made yourself, so only the “Courses and \
                                      your changes” link carries {}. “Courses only” \
                                      carries the code{} alone, which {} nothing in \
-                                     someone else's browser.",
+                                     another browser.",
                                     custom_codes.join(", "),
                                     if custom_codes.len() == 1 {
                                         "is a course"
@@ -5212,8 +5294,8 @@ fn share_dialog(app: App) -> impl IntoView {
                     <input type="text" readonly prop:value=plain aria-label="Share link" />
                     <button
                         class="btn"
-                        title="The course codes alone — the shortest link, and all \
-                               anyone needs to see the same courses"
+                        title="The course codes alone — the shortest link, and enough \
+                               to open the same courses in any browser"
                         on:click=move |_| {
                             domx::copy_to_clipboard(plain2.clone(), |_| {});
                             app.toast("Link copied.");
@@ -5272,10 +5354,10 @@ fn share_dialog(app: App) -> impl IntoView {
                         </button>
                         <button
                             class="btn small"
-                            title="Opens a timetable file — yours from another device, \
-                                   or a friend's — and asks whether it should join your \
-                                   timetable or replace it. Nothing changes until you \
-                                   choose."
+                            title="Opens a timetable file — one saved from another \
+                                   device, or one that was shared — and asks whether it \
+                                   should join your timetable or replace it. Nothing \
+                                   changes until you choose."
                             on:click=move |_| crate::export::pick_and_import_courses(app)
                         >
                             "Import my courses…"
@@ -5287,12 +5369,17 @@ fn share_dialog(app: App) -> impl IntoView {
                 // what happens when I open one — and stops. The detail
                 // (which change wins, what is being left out) belongs in
                 // the dialog that asks, at the moment it decides something.
+                // Three sentences, and every clause of them checkable against
+                // what the import actually does. "Merge the two and keep
+                // everything from both" was neither: a class both sides moved
+                // keeps ONE of the two, and a timetable with nothing on it yet
+                // is never asked the question at all.
                 <p class="muted small">
-                    "Holds your whole week, not just a list of codes: the courses on \
-                     your timetable, the classes you moved, added or struck out, the \
-                     credits you corrected, and any course you wrote yourself. \
-                     Opening one asks whether to replace your timetable with it, or \
-                     merge the two and keep everything from both."
+                    "Holds your whole week: the courses, the classes you moved, added \
+                     or struck out, the credits you corrected, and any course you wrote \
+                     yourself. Opening one asks whether to replace your timetable or \
+                     merge the two — where both changed the same class, yours stays. An \
+                     empty timetable is asked nothing."
                 </p>
             </section>
 
@@ -5331,11 +5418,10 @@ fn share_dialog(app: App) -> impl IntoView {
                     </div>
                 </header>
                 <p class="muted small">
-                    "A complete copy of this browser — the downloaded timetable, your \
-                     courses, your changes and your settings — so the planner opens \
-                     exactly like this one, years from now. There is no merging: a \
-                     backup replaces everything in the browser that opens it. For a \
-                     new device, or a copy kept safe."
+                    "A complete copy of this browser — the timetable, your courses, \
+                     your changes and your settings — for a new device or a copy kept \
+                     safe. There is no merging: it replaces everything in the browser \
+                     that opens it."
                 </p>
             </section>
 

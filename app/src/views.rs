@@ -94,8 +94,8 @@ fn welcome(app: App) -> impl IntoView {
                      changed. This is the only fetch it will ever ask you for."
                 </p>
                 <p class="welcome-note muted small">
-                    "Got an “Export everything” file — your own from another device, \
-                     or another student's? "
+                    "Got an “Export everything” file — saved from another device, or \
+                     shared from another browser? "
                     <button
                         class="linklike"
                         on:click=move |_| crate::export::pick_and_import_backup(app)

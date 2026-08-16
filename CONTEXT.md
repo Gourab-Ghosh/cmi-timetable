@@ -605,6 +605,43 @@ FEATURES.md  the user-facing feature list (written R39). README is the
   from `OwnChange::tone()`: violet added, red taken away, blue altered.
   Because they are `text-transform: uppercase`, Selenium's `.text` returns
   UPPER CASE; assert with `.lower()` or read `textContent`.
+- **A merge decides against the store as it stood BEFORE the import.**
+  `combine::merge_overrides` snapshots `mine.items.len()`/`credits.len()`
+  and compares every incoming change against that prefix only. Compare
+  against the growing store and the FILE argues with itself: a file holding
+  two changes to one class (real — data written before a0e2f29 stopped the
+  master grid making them) reads as a disagreement with the reader, and the
+  reader, who changed nothing, is told a change of theirs was kept. Within
+  the file itself only `same_change` de-duplicates; `contests_same_class` is
+  a question about two people and must never be asked of one file (R63).
+- **Never `location.reload()` after replacing or clearing storage.** Every
+  selection change writes `?c=…` into the address bar (`App::sync_url`), and
+  the boot path reads that as somebody asking for those courses — so a plain
+  reload puts the OLD selection back over what was just written. The backup
+  import undid itself this way, and "Delete all app data … the page reloads
+  empty" was false. Use `domx::reload_without_query()`, which
+  `location.replace()`s path+hash so the old address does not survive in
+  history either (R63).
+- **Two different "is there anything to lose?" questions.**
+  `planner_is_untouched()` = no selection, no overrides (items, credits AND
+  deletions), no courses of the user's own — the gate for a TIMETABLE file,
+  which can only overwrite a timetable. `nothing_saved_to_lose()` adds the
+  preferences somebody has to press something to set (theme, density,
+  halls view, both filter sets, the digest's own-courses box) — the gate for
+  a whole BACKUP, which replaces those too. Neither is `has_data()`: the
+  downloaded timetable is a cache and a sync fetches it again. Preferences
+  are compared field by field, never against `Prefs::default()`, because
+  `Prefs` also carries `last_update_attempt` and the current tab — a browser
+  that has merely synced once would never match, and the skip would be dead
+  code (R62, R63).
+- **A promise in the UI is a promise.** "Nothing of yours is taken away" is
+  printed only when nothing is: joining can still claim changes saved here
+  under a code a hand-written course from the file takes over
+  (`takes_changes_here`) and can still undo a deletion (`restores_deleted`),
+  and both are named ABOVE the question as well as in the sentence after it.
+  Same rule for counts: what the merge reports must be what survived every
+  later pass, which is why the file's changes to hand-added courses are
+  dropped when the PLAN is built rather than after the count (R63).
 - e2e Chrome flags: `--force-prefers-reduced-motion` (dialog animations),
   `--host-resolver-rules=MAP www.cmi.ac.in 127.0.0.1:$CMI_PORT, MAP *
   ~NOTFOUND, EXCLUDE 127.0.0.1` and `--ignore-certificate-errors`. Nothing
@@ -623,7 +660,7 @@ FEATURES.md  the user-facing feature list (written R39). README is the
 ## 5. Build & test commands (exact)
 
 ```sh
-# native tests (114; the html feature comes from core's self dev-dependency)
+# native tests (132; the html feature comes from core's self dev-dependency)
 CARGO_TARGET_DIR=~/.rust-target-e2e RUSTFLAGS="" cargo test --workspace
 # app build for e2e (never plain dist while trunk serve runs).
 # RUSTFLAGS="" on purpose: a global ~/.cargo/config.toml carrying
@@ -632,7 +669,7 @@ CARGO_TARGET_DIR=~/.rust-target-e2e RUSTFLAGS="" cargo test --workspace
 # `__wbindgen_externref_table_alloc`. Emptying it for this build restores
 # the wasm defaults without touching anything outside the repo.
 cd app && RUSTFLAGS="" CARGO_TARGET_DIR=~/.rust-target-e2e trunk build --release --dist dist-e2e
-# e2e (90 tests; self-generates seed via core example, needs cargo on PATH)
+# e2e (101 tests; self-generates seed via core example, needs cargo on PATH)
 cd e2e && DIST_DIR=../app/dist-e2e .venv/bin/python test_app.py
 # ...or just a few, by name fragment
 cd e2e && DIST_DIR=../app/dist-e2e .venv/bin/python test_app.py t44 t45
@@ -664,7 +701,7 @@ regenerates the .ics golden.
   selected course with no time is part of the timetable, not a footnote.
 - "Your changes" groups are headed by `.cg-head` (colour rail + small caps
   + count), coloured by `OwnChange::tone()`. See §4.
-- Tests: 128 native + 97/97 e2e green (as of R62). Meeting removals: `MeetingOverride.to`
+- Tests: 132 native + 101/101 e2e green (as of R63). Meeting removals: `MeetingOverride.to`
   is `Option<Meeting>` (None = removed; legacy JSON/share payloads still
   load — present meeting ⇒ Some). Out-of-grid times: **all three tables grow
   synthetic `.extra` columns**, each from its own source, all built by the
@@ -3737,6 +3774,109 @@ same two imports DO ask once a single course is selected.
 Gates: fmt + clippy clean on both targets, 128 native, 97/97 e2e, and the
 whole pre-deploy battery re-run (deploy-parity 18/18, upgrade-path 13/13,
 cross-version 14/14, export-consumer 17/17, dialog-a11y 26/26).
+
+### R63 — a file that argued with itself, and eight other things said wrongly
+
+User, with a real bug report and a file attached: importing that
+`cmi-timetable-export` into a share link said *"you have already modified
+AML, so yours stays"* — and the link carried **no changes at all**. Plus:
+rename the Share button now that it imports too; put the copy that names a
+person into passive voice; and, twice over, make sure nothing shown to the
+reader claims something that did not happen. Test hard for that whole class.
+
+**The reported bug.** The link decodes (proved, not guessed — `decode_share`
+on the exact `s=` from the report) to seven codes, one custom course and an
+**empty** override store. The file, however, held TWO changes to one AML
+class: data written before a0e2f29 (2026-08-09) stopped the master grid
+making them, and the timestamps in the file are 23 seconds apart on that
+very day. `merge_overrides` compared each incoming change against
+`mine.items` *as it grew* — so the file's second AML change met the file's
+own first one, was read as a disagreement with the reader, and printed a
+sentence about a change the reader never made. Fixed by deciding everything
+against the store as it stood BEFORE the import (`held`/`priced` prefixes),
+and de-duplicating the file against itself only by exact `same_change` —
+never by `contests_same_class`, which is a question about two people.
+A file that says the same thing twice still says it once; a file that says
+two different things about one class now lands both, faithfully, because
+that is what the sender sees on their own screen.
+
+**Eight more, found by a five-lens sweep with adversarial verification (21
+agents; every confirmed finding is fixed here).** In rough order of harm:
+
+1. `import_planner_backup_text` and "Delete all app data" both reloaded with
+   `?c=…` still in the address bar — and `sync_url` puts it there on every
+   selection change. The boot path reads that as somebody asking for those
+   courses, so **the reload undid the import it had just confirmed**, and
+   "the page reloads empty" was false. `domx::reload_without_query()`.
+2. `purge_custom_overrides` ran AFTER `merge_overrides` had counted, so
+   changes deleted again before anything was saved were still counted ("3
+   changes came with it" over a file that landed one) — and the bumped
+   `next_id` alone defeated the no-op guard, buying an undo step for
+   nothing. The file's such changes are now dropped when the PLAN is built,
+   before the bill of contents counts anything; the second pass is only for
+   the reader's own, which is a different sentence.
+3. The file's whole override store was adopted even for codes the import had
+   just refused — orphan changes under codes the catalog has never heard of,
+   counted in the same toast that said those courses were left out. Scoped
+   to `plan.known`, and each adopted change is rewritten to this browser's
+   casing for its code.
+4. "Replace" clears the file's courses and re-takes the file's copies of
+   them, so the SAME file imported twice differed only in ids — a real undo
+   step that undoes nothing visible, a wiped redo stack, and a toast
+   counting changes that were already there. `combine::same_work()` compares
+   what a store holds, not the numbers it holds it under.
+5. `planner_is_untouched()` ignored preferences, and a backup replaces those
+   too — so a browser with a chosen theme, chosen row height and two full
+   filter bars had them replaced with no confirm, under a button promising
+   it "asks first if there is anything to lose". Split: the timetable file
+   still asks only about a timetable (`planner_is_untouched`), the whole
+   backup asks about everything (`nothing_saved_to_lose`, which adds the
+   preferences somebody has to press something to set — compared field by
+   field, because `Prefs` also carries `last_update_attempt` and the current
+   tab, which nobody chose).
+6. An import silently un-deleted a course the reader had deleted, under a
+   button reading "Nothing of yours is taken away". Now collected
+   (`restores_deleted` before the question, `restored` in the sentence
+   after), and the promise is only made when there is nothing to take —
+   same carve-out as `takes_changes_here`, which covers the other direction
+   (changes saved here that a course the file wrote by hand will claim).
+7. A `format_version` that is not a number — `"v1.1.0"` is the obvious one —
+   was reported as "made by a newer version of this app … reload this page",
+   sending somebody round a loop that cannot succeed. Only a major above 1
+   is newer now; anything else unreadable is `BadEnvelope`.
+8. Focus landed on **"Add it to my timetable"**, so the Space press that
+   scrolls a long question answered it. `[data-autofocus]` on the dialog
+   body, checked before the button fallback (the same guard the credits
+   toggle already had, from the other end).
+
+Smaller, same class: `import_nothing_changed` claimed the file's changes
+were "already on your timetable" when they had in fact been refused;
+"N changes came with them" keyed its pronoun off the change count instead of
+the course count; the bill counted courses added by hand as being "from this
+semester" two lines above saying they were not; a custom course whose
+credits were the app's own assumption exported as `"source": "user"`; a
+course identical apart from meeting ORDER was announced as a course of the
+reader's being kept over the file's; and `import_plan` compared codes
+case-sensitively, which could put one course on the timetable twice under
+two spellings.
+
+**The button.** "Share" → **"Share or import"**, matching the dialog it
+opens. A door labelled only with the way out is a door nobody tries when
+they are carrying something in.
+
+**Voice.** Only the copy that named a PERSON changed, per the user's own
+clarification mid-round ("change only those texts … where you need to use
+'user', 'they', or any kind of pronouns like that"): "a course somebody
+wrote themselves" → "a course added by hand", "whoever opens it gets your
+courses in place of theirs" → "opening the link puts your courses in place
+of whatever that browser had", "another student's" → "shared from another
+browser", and so on. Second person ("your timetable") was left alone, on
+purpose — it addresses the reader rather than describing a third party.
+
+Gates: fmt + clippy clean on both targets (`-W clippy::redundant_clone -D
+warnings`), **132 native**, **101/101 e2e** (t98–t101 new), deploy-parity
+18/18, upgrade-path 17/17, cross-version 14/14, export-consumer 17/17,
+dialog-a11y 26/26, 50 shots + 3 print PDFs regenerated and reviewed.
 
 ## 8. Open bugs — found, confirmed, NOT fixed (do not delete)
 

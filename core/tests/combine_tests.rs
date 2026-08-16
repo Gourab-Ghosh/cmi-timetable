@@ -1,7 +1,9 @@
 //! Two students combining timetables: the merge rules, and the file half
 //! that carries a week from one browser to another.
 
-use cmi_timetable_core::combine::{clear_for_courses, merge_overrides, purge_custom_overrides};
+use cmi_timetable_core::combine::{
+    clear_for_courses, merge_overrides, purge_custom_overrides, same_work,
+};
 use cmi_timetable_core::export::{MyChanges, parse_timetable_export};
 use cmi_timetable_core::model::{
     Course, CreditOverride, CustomStore, Day, Meeting, MeetingOverride, OverridesStore,
@@ -160,6 +162,93 @@ fn a_contested_class_keeps_the_readers_own() {
     assert_eq!(mine.credits_for("TOC"), Some(3));
 }
 
+/// A file is never in competition with ITSELF. Two changes to one class in
+/// the same file is a real shape — data written before the master grid
+/// stopped making them still holds it — and a reader who has changed nothing
+/// must be told nothing was kept, because nothing of theirs was.
+#[test]
+fn a_file_that_disagrees_with_itself_never_blames_the_reader() {
+    let base = Some(meeting(Day::Mon, 840, "804"));
+    let mut mine = OverridesStore::default();
+    let theirs = store(
+        vec![
+            ovr(0, "AML", base.clone(), Some(meeting(Day::Wed, 1230, "3"))),
+            ovr(1, "AML", base, Some(meeting(Day::Tue, 1230, "802"))),
+        ],
+        vec![],
+    );
+
+    let stats = merge_overrides(&mut mine, &theirs);
+
+    assert!(
+        stats.kept_yours.is_empty(),
+        "an empty planner has nothing of its own to keep: {stats:?}"
+    );
+    assert_eq!(stats.meetings_added, 2, "neither change is dropped");
+    assert_eq!(mine.items.len(), 2);
+    assert_eq!(mine.items.iter().map(|o| o.id).collect::<Vec<_>>(), [0, 1]);
+}
+
+/// The same self-disagreement, arriving at a planner that HAS changed that
+/// class: now there is something to keep, it is kept, and it is named once.
+#[test]
+fn a_file_that_disagrees_with_itself_still_loses_to_a_real_change() {
+    let base = Some(meeting(Day::Mon, 840, "804"));
+    let mut mine = store(
+        vec![ovr(
+            0,
+            "AML",
+            base.clone(),
+            Some(meeting(Day::Sat, 600, "804")),
+        )],
+        vec![],
+    );
+    let theirs = store(
+        vec![
+            ovr(0, "AML", base.clone(), Some(meeting(Day::Wed, 1230, "3"))),
+            ovr(1, "AML", base, Some(meeting(Day::Tue, 1230, "802"))),
+        ],
+        vec![],
+    );
+
+    let stats = merge_overrides(&mut mine, &theirs);
+
+    assert_eq!(stats.kept_yours, vec!["AML".to_string()], "named once");
+    assert_eq!(stats.meetings_added, 0);
+    assert_eq!(mine.items.len(), 1);
+    assert_eq!(mine.items[0].to, Some(meeting(Day::Sat, 600, "804")));
+}
+
+/// A file saying the same thing twice says it once: the duplicate is not a
+/// second class, and not a disagreement to report either.
+#[test]
+fn a_file_repeating_one_change_is_read_once() {
+    let base = Some(meeting(Day::Mon, 840, "804"));
+    let to = Some(meeting(Day::Wed, 1230, "3"));
+    let mut mine = OverridesStore::default();
+    let theirs = store(
+        vec![
+            ovr(0, "AML", base.clone(), to.clone()),
+            ovr(1, "aml", base, to.clone()),
+        ],
+        vec![credit("AML", 6), credit("aml", 8)],
+    );
+
+    let stats = merge_overrides(&mut mine, &theirs);
+
+    assert!(stats.kept_yours.is_empty(), "{stats:?}");
+    assert_eq!(stats.meetings_added, 1);
+    assert_eq!(mine.items.len(), 1);
+    assert_eq!(mine.items[0].to, to);
+    assert_eq!(stats.credits_added, 1);
+    assert_eq!(
+        mine.credits.len(),
+        1,
+        "one credit correction per course, whatever the file says"
+    );
+    assert_eq!(mine.credits_for("AML"), Some(6), "the file's first word");
+}
+
 /// Classes one side created out of nothing are additions, not competitors:
 /// two different ones are two classes, two identical ones are one.
 #[test]
@@ -197,6 +286,39 @@ fn a_struck_out_class_travels() {
 
     assert_eq!(stats.meetings_added, 1);
     assert!(mine.items[0].is_removal());
+}
+
+/// The same file imported twice with "Replace" clears the changes and takes
+/// the file's copies of them back: identical work under new numbers. Judged
+/// by `==` that reads as a change; judged by what it holds, it is not.
+#[test]
+fn the_same_work_under_new_numbers_is_the_same_work() {
+    let base = Some(meeting(Day::Tue, 550, "803"));
+    let to = Some(meeting(Day::Wed, 1020, "803"));
+    let incoming = store(vec![ovr(0, "TOC", base, to)], vec![credit("TOC", 3)]);
+
+    let mut first = OverridesStore::default();
+    merge_overrides(&mut first, &incoming);
+    let mut second = first.clone();
+    clear_for_courses(&mut second, &["TOC".to_string()]);
+    merge_overrides(&mut second, &incoming);
+
+    assert_ne!(first, second, "the ids really do move");
+    assert!(
+        same_work(&first, &second),
+        "and none of the work does: {first:?} vs {second:?}"
+    );
+
+    // It is not blind, though: a different target is different work.
+    let mut third = second.clone();
+    third.items[0].to = Some(meeting(Day::Fri, 700, "803"));
+    assert!(!same_work(&second, &third));
+    let mut fourth = second.clone();
+    fourth.credits.clear();
+    assert!(!same_work(&second, &fourth));
+    let mut fifth = second.clone();
+    fifth.hide("QCOM", true, NOW);
+    assert!(!same_work(&second, &fifth));
 }
 
 /// Whole-course deletions are not this module's business — merging never

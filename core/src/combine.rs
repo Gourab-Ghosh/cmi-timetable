@@ -24,7 +24,7 @@
 //! Incoming ids are meaningless — both stores number from zero — so every
 //! adopted change is renumbered into the receiving store's sequence.
 
-use crate::model::{CustomStore, Meeting, MeetingOverride, OverridesStore};
+use crate::model::{CreditOverride, CustomStore, Meeting, MeetingOverride, OverridesStore};
 
 /// What an import actually did, for the sentence the student is shown.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -98,13 +98,32 @@ fn note_kept(stats: &mut CombineStats, code: &str) {
 pub fn merge_overrides(mine: &mut OverridesStore, theirs: &OverridesStore) -> CombineStats {
     let mut stats = CombineStats::default();
 
+    // EVERY decision below is made against the store as it stood before this
+    // import — `held`/`priced` mark where it ended. Changes taken from the
+    // file join `mine` as they are adopted, and letting a later entry be
+    // measured against an earlier one from the SAME file would have the file
+    // argue with itself: two changes to one class (a real shape — a file
+    // written by an older build can hold one) would be read as a
+    // disagreement, the second dropped, and the reader — who had changed
+    // nothing — told that a change of their own had been kept instead.
+    let held = mine.items.len();
+    let priced = mine.credits.len();
+
     for incoming in &theirs.items {
-        if mine.items.iter().any(|m| same_change(m, incoming)) {
-            // Both of us moved the same class the same way. One change.
+        if mine.items[..held].iter().any(|m| same_change(m, incoming)) {
+            // Both sides moved the same class the same way. One change.
             continue;
         }
-        if mine.items.iter().any(|m| contests_same_class(m, incoming)) {
+        if mine.items[..held]
+            .iter()
+            .any(|m| contests_same_class(m, incoming))
+        {
             note_kept(&mut stats, &incoming.course);
+            continue;
+        }
+        if mine.items[held..].iter().any(|m| same_change(m, incoming)) {
+            // The file says the same thing twice. Still one change, and
+            // still nothing to report: nothing was lost saying it once.
             continue;
         }
         let id = mine.next_id;
@@ -117,10 +136,13 @@ pub fn merge_overrides(mine: &mut OverridesStore, theirs: &OverridesStore) -> Co
     }
 
     for incoming in &theirs.credits {
-        match mine.credits_for(&incoming.course) {
+        match credits_in(&mine.credits[..priced], &incoming.course) {
             // Same number on both sides — nothing to decide, nothing to say.
             Some(existing) if existing == incoming.credits => {}
             Some(_) => note_kept(&mut stats, &incoming.course),
+            // A store holds at most one credit correction per course, so a
+            // file naming one course twice is answered by its first word.
+            None if credits_in(&mine.credits[priced..], &incoming.course).is_some() => {}
             None => {
                 mine.credits.push(incoming.clone());
                 stats.credits_added += 1;
@@ -129,6 +151,31 @@ pub fn merge_overrides(mine: &mut OverridesStore, theirs: &OverridesStore) -> Co
     }
 
     stats
+}
+
+fn credits_in(credits: &[CreditOverride], course: &str) -> Option<u8> {
+    credits
+        .iter()
+        .find(|c| c.course.eq_ignore_ascii_case(course))
+        .map(|c| c.credits)
+}
+
+/// Two stores holding the same work, whatever the bookkeeping numbers say.
+///
+/// Ids and `next_id` are a store's private sequence, not part of what a
+/// student did: "replace my timetable with this file" clears the changes for
+/// the file's courses and takes the file's copies of them, so importing the
+/// SAME file twice leaves an identical week under numbers one higher. Judged
+/// by `==` that is a change — which bought an undo step that undoes nothing
+/// visible, wiped the redo stack, and printed "1 change came with it" about
+/// a change that was already there.
+pub fn same_work(a: &OverridesStore, b: &OverridesStore) -> bool {
+    a.credits == b.credits
+        && a.hidden == b.hidden
+        && a.items.len() == b.items.len()
+        && a.items.iter().zip(b.items.iter()).all(|(x, y)| {
+            x.course == y.course && x.base == y.base && x.to == y.to && x.created_at == y.created_at
+        })
 }
 
 /// Forget every change aimed at these courses — the first half of "replace

@@ -131,6 +131,21 @@ fn backup_refusals() {
         parse_planner_backup(&v.to_string(), NOW).unwrap_err(),
         ImportError::BadEnvelope
     );
+
+    // And when it is a string that says nothing this build can compare. A
+    // git-style "v1.1.0" is not a newer app, so "reload the page to get the
+    // newest version" would send somebody to fix a version that is fine.
+    for stamp in ["v1.1.0", "one.1.0", ""] {
+        let mut v: serde_json::Value = serde_json::from_str(&backup_text()).unwrap();
+        v["format_version"] = json!(stamp);
+        let err = parse_planner_backup(&v.to_string(), NOW).unwrap_err();
+        assert_eq!(err, ImportError::BadEnvelope, "stamp {stamp:?}");
+        assert!(
+            !err.message().contains("newer version"),
+            "stamp {stamp:?} must not be blamed on an out-of-date app: {}",
+            err.message()
+        );
+    }
 }
 
 /// A minor-version bump from a future build still loads (unknown keys are

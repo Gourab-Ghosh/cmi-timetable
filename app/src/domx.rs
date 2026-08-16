@@ -433,6 +433,24 @@ pub fn replace_query(query: &str) {
     }
 }
 
+/// Reload with the query string dropped, and without leaving the old address
+/// behind in history.
+///
+/// A plain reload keeps `?c=…`, and the boot path reads that as somebody
+/// asking for those courses — so it writes them back over whatever storage
+/// now holds. Every selection change replaces the query (`App::sync_url`),
+/// so the parameter is almost always there. Reloading after replacing
+/// storage wholesale (a backup import) or emptying it (delete everything)
+/// therefore undid the very thing it was confirming.
+pub fn reload_without_query() {
+    let location = window().location();
+    let path = location.pathname().unwrap_or_else(|_| "/".to_string());
+    let hash = location.hash().unwrap_or_default();
+    if location.replace(&format!("{path}{hash}")).is_err() {
+        let _ = location.reload();
+    }
+}
+
 pub fn current_hash() -> String {
     window().location().hash().unwrap_or_default()
 }

@@ -100,9 +100,16 @@ pub fn timetable_export_json(app: &App) -> String {
 
             let credits = {
                 let value = app.course_credits(&course);
-                if own {
+                // A course added by hand states its own credits — unless it
+                // doesn't. One kept from a course CMI dropped carries
+                // `credits: None` on purpose, and the number below is then
+                // the app's own assumption, exactly as it is for a CMI
+                // course that states none. Calling it "user" said a number
+                // had been chosen that nobody chose — and the changes half
+                // of the same file writes `credits: null` for it.
+                if own && !course.credits_assumed() {
                     json!({ "value": value, "source": "user" })
-                } else if app.credits_custom(code).is_some() {
+                } else if !own && app.credits_custom(code).is_some() {
                     json!({
                         "value": value,
                         "source": "user",
@@ -315,12 +322,14 @@ pub fn import_planner_backup_text(app: App, text: &str) {
 
     // Asked only when there is something to lose. A browser holding nothing
     // but a downloaded copy of CMI's timetable — a first visit, or a fresh
-    // device being set up from a backup — has no courses, no changes and no
-    // courses of its own for this file to replace, and stopping to ask
-    // "shall I replace nothing?" is a chore invented for its own sake. The
-    // cached timetable is not an answer to that question: a sync fetches it
-    // again, and the pill says the data now came from a file either way.
-    if !app.planner_is_untouched() {
+    // device being set up from a backup — has no courses, no changes, no
+    // courses of its own and no settings chosen by hand for this file to
+    // replace, and stopping to ask "shall I replace nothing?" is a chore
+    // invented for its own sake. The cached timetable is not an answer to
+    // that question: a sync fetches it again, and the pill says the data now
+    // came from a file either way. Settings ARE part of the question — this
+    // file replaces the theme, the row height and both filter bars too.
+    if !app.nothing_saved_to_lose() {
         let made = domx::fmt_local_date(backup.snapshot.fetched_at);
         let ok = domx::window()
             .confirm_with_message(&format!(
@@ -392,8 +401,37 @@ pub fn import_planner_backup_text(app: App, text: &str) {
         return;
     }
     // Boot from the imported state through the one code path every start
-    // uses — no hand-rebuilt signal state to drift.
-    let _ = domx::window().location().reload();
+    // uses — no hand-rebuilt signal state to drift. Without the query: the
+    // address bar still carries the courses THIS browser had, and a plain
+    // reload would hand them straight back to the boot path, which would
+    // write them over the selection the file just delivered.
+    domx::reload_without_query();
+}
+
+/// The same course, however its classes happen to be ordered.
+///
+/// A file writes a course's classes in the order they fall in the week; a
+/// store written before that ordering existed can hold them in any order at
+/// all. Compared field for field, one of those is "a different course of the
+/// same name" — so re-reading a file this very browser wrote announced that
+/// the reader's own course had been kept and the file's version left out,
+/// about two courses that are the same course.
+fn same_course(a: &Course, b: &Course) -> bool {
+    let ordered = |c: &Course| {
+        let mut m = c.meetings.clone();
+        m.sort_by_key(|x| (x.day.index(), x.slot.start_min, x.slot.end_min));
+        m
+    };
+    a.code == b.code
+        && a.name == b.name
+        && a.instructors == b.instructors
+        && a.branches == b.branches
+        && a.credits == b.credits
+        && a.starts == b.starts
+        && a.part_of_semester == b.part_of_semester
+        && a.optional_flag == b.optional_flag
+        && a.status == b.status
+        && ordered(a) == ordered(b)
 }
 
 /// "Import my courses…": read the file, work out which of its courses this
@@ -426,7 +464,7 @@ pub fn import_courses_text(app: App, text: &str) {
             .with_untracked(|cs| cs.get(&course.code).cloned())
         {
             Some(mine) => {
-                if mine != course {
+                if !same_course(&mine, &course) {
                     kept_yours.push(mine.code);
                 }
                 continue;
@@ -481,13 +519,90 @@ pub fn import_courses_text(app: App, text: &str) {
         return;
     }
 
+    // Changes travel only for the courses that travel. A file's change to a
+    // code this browser has no course for went in anyway and was counted in
+    // "N changes came with them" — a change to nothing, sitting in Your
+    // changes under a code the catalog has never heard of, while the note
+    // above the choice said that code was being left out. The codes that DO
+    // land are rewritten to the casing this browser uses for them, so the
+    // change and the course it belongs to are filed under one spelling.
+    let mut overrides = plan.overrides;
+    let canonical = |course: &str| {
+        known
+            .iter()
+            .find(|k| k.eq_ignore_ascii_case(course))
+            .cloned()
+    };
+    overrides.items.retain_mut(|o| match canonical(&o.course) {
+        Some(code) => {
+            o.course = code;
+            true
+        }
+        None => false,
+    });
+    overrides
+        .credits
+        .retain_mut(|c| match canonical(&c.course) {
+            Some(code) => {
+                c.course = code;
+                true
+            }
+            None => false,
+        });
+
+    // And changes to a code that names a course added by hand can never land
+    // either — such a course IS its own schedule. Dropped here, before the
+    // bill of contents is drawn, so the count above the question is a count
+    // of what would actually arrive rather than of what the file happens to
+    // contain.
+    let effective_customs = app.customs.with_untracked(|cs| {
+        let mut cs = cs.clone();
+        for course in &customs {
+            cs.upsert(course.clone());
+        }
+        cs
+    });
+    let dropped_for_own_course =
+        ttcore::combine::purge_custom_overrides(&effective_customs, &mut overrides);
+
+    // The rarer direction, worked out before the question rather than named
+    // in the toast after it: a course the file wrote by hand can arrive
+    // under a code THIS browser has changes saved for — a course CMI
+    // dropped, whose classes live on as those changes. They go, whichever
+    // answer is pressed, so the answer that promises "nothing of yours is
+    // taken away" must know about them before it says it.
+    let arriving = {
+        let mut store = ttcore::model::CustomStore::default();
+        for course in &customs {
+            store.upsert(course.clone());
+        }
+        store
+    };
+    let takes_changes_here =
+        ttcore::combine::purge_custom_overrides(&arriving, &mut app.overrides.get_untracked());
+
+    // Courses deleted from this planner that the file puts back. On the
+    // timetable and deleted at once is not a state, so an import that brings
+    // one has to undo the deletion — which is work somebody did, so the
+    // answer that promises to take nothing away has to know about it first.
+    let restores_deleted: Vec<String> = app.overrides.with_untracked(|o| {
+        known
+            .iter()
+            .filter(|code| o.is_hidden(code))
+            .cloned()
+            .collect()
+    });
+
     let incoming = crate::state::IncomingPlan {
         known,
         unknown,
-        overrides: plan.overrides,
+        overrides,
         customs,
         kept_yours,
         shadowed,
+        dropped_for_own_course,
+        takes_changes_here,
+        restores_deleted,
     };
     // A browser with nothing of its own to lose would be answering a
     // question that has one answer: joining an empty week and replacing it

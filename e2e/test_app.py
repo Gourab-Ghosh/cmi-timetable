@@ -1253,7 +1253,7 @@ def t29_share_link_carries_custom_changes(app):
     """The 'incl. my custom changes' share URL reproduces the selection,
     the moved meeting AND the credit change on a fresh browser."""
     app.boot("/", selection=["TOC"], overrides=TOC_OVR)
-    app.xpath("//button[normalize-space()='Share']").click()
+    app.xpath("//button[normalize-space()='Share or import']").click()
     app.wait_css(".dialog")
     url = app.css(
         "input[aria-label='Share link with courses and your changes']"
@@ -2046,7 +2046,7 @@ def t41_custom_course_edit_park_share_delete(app):
     app.wait_gone(".dialog")
 
     # The full share link reproduces the course on a fresh browser.
-    app.xpath("//button[normalize-space()='Share']").click()
+    app.xpath("//button[normalize-space()='Share or import']").click()
     dialog = app.wait_css(".dialog")
     assert "GYM" in dialog.text, dialog.text  # the travels-only-with hint
     url = app.css(
@@ -4197,7 +4197,7 @@ def t79_json_exports_parse_and_the_backup_restores_everything(app):
     the catalog are all back, and the pill honestly says 'imported' with the
     ORIGINAL fetch date's age."""
     app.boot("/", selection=["TOC", "RDBM"], overrides=TOC_OVR)
-    app.xpath("//button[normalize-space()='Share']").click()
+    app.xpath("//button[normalize-space()='Share or import']").click()
     dialog = app.wait_css(".dialog")
     dialog.find_element(By.XPATH, ".//button[normalize-space()='Export my courses']").click()
     time.sleep(1.0)
@@ -4311,7 +4311,7 @@ def t81_importing_courses_asks_replace_or_add(app):
     app.boot("/", selection=["TOC", "QCOM"])
 
     def send_import():
-        app.xpath("//button[normalize-space()='Share']").click()
+        app.xpath("//button[normalize-space()='Share or import']").click()
         dialog = app.wait_css(".dialog")
         dialog.find_element(
             By.XPATH, ".//button[normalize-space()='Import my courses…']").click()
@@ -4328,7 +4328,7 @@ def t81_importing_courses_asks_replace_or_add(app):
     # and left out. A file with no changes says so by not mentioning any.
     send_import()
     ask = wait_ask()
-    assert "2 courses from this semester" in ask.text, ask.text
+    assert "2 courses on that timetable" in ask.text, ask.text
     assert "Left out: BOGUS9" in ask.text, ask.text
     assert ask.text.count("BOGUS9") == 1, \
         f"a whitespace-variant duplicate must be deduped, not named twice: {ask.text}"
@@ -4744,7 +4744,7 @@ def t97_a_planner_with_nothing_in_it_is_never_asked_what_to_replace(app):
 
     # --- make both kinds of file, from a browser that HAS set things up ---
     app.boot("/", selection=["TOC", "RDBM"], overrides=TOC_OVR)
-    app.xpath("//button[normalize-space()='Share']").click()
+    app.xpath("//button[normalize-space()='Share or import']").click()
     dialog = app.wait_css(".dialog")
     dialog.find_element(
         By.XPATH, ".//button[normalize-space()='Export my courses']").click()
@@ -4760,7 +4760,7 @@ def t97_a_planner_with_nothing_in_it_is_never_asked_what_to_replace(app):
     os.rename(newest_download("cmi-planner-"), backup_file)
 
     def open_share_and_import(label, path):
-        app.xpath("//button[normalize-space()='Share']").click()
+        app.xpath("//button[normalize-space()='Share or import']").click()
         app.wait_css(".dialog").find_element(
             By.XPATH, f".//button[normalize-space()='{label}']").click()
         WebDriverWait(app.d, 10).until(
@@ -4817,7 +4817,7 @@ def t95_two_students_combine_their_timetables(app):
     # --- the sender's browser -------------------------------------------
     app.boot("/", selection=["TOC", "RDBM", "GERMAN"],
              overrides=TOC_OVR, customs=HALL_CUSTOM)
-    app.xpath("//button[normalize-space()='Share']").click()
+    app.xpath("//button[normalize-space()='Share or import']").click()
     dialog = app.wait_css(".dialog")
     assert "the classes you moved" in dialog.text, \
         f"Share must say what the file carries: {dialog.text}"
@@ -4829,7 +4829,7 @@ def t95_two_students_combine_their_timetables(app):
 
     # --- the reader's browser, with a week of its own -------------------
     app.boot("/", selection=["QCOM"])
-    app.xpath("//button[normalize-space()='Share']").click()
+    app.xpath("//button[normalize-space()='Share or import']").click()
     app.wait_css(".dialog").find_element(
         By.XPATH, ".//button[normalize-space()='Import my courses…']").click()
     WebDriverWait(app.d, 10).until(
@@ -4840,10 +4840,10 @@ def t95_two_students_combine_their_timetables(app):
         lambda d: app.css(".dialog") if "A timetable from a file"
         in app.css(".dialog").text else None)
     # The bill of contents is counted before anything is decided.
-    assert "3 courses from this semester" in ask.text, ask.text
+    assert "3 courses on that timetable" in ask.text, ask.text
     assert "1 class moved, added or struck out" in ask.text, ask.text
     assert "1 credit correction" in ask.text, ask.text
-    assert "1 course they made themselves" in ask.text, ask.text
+    assert "1 of them added by hand, not from CMI's catalog" in ask.text, ask.text
     ask.find_element(
         By.XPATH, ".//button[contains(.,'Add it to my timetable')]").click()
     app.wait_toast("2 changes came with them")
@@ -4874,7 +4874,7 @@ def t96_a_disagreement_over_one_class_keeps_your_own(app):
     sender_file = os.path.join(DOWNLOADS, "contested-week.json")
     # The sender moved TOC's Tuesday class to Wednesday 17:00 (TOC_OVR).
     app.boot("/", selection=["TOC"], overrides=TOC_OVR)
-    app.xpath("//button[normalize-space()='Share']").click()
+    app.xpath("//button[normalize-space()='Share or import']").click()
     app.wait_css(".dialog").find_element(
         By.XPATH, ".//button[normalize-space()='Export my courses']").click()
     time.sleep(1.0)
@@ -4891,7 +4891,7 @@ def t96_a_disagreement_over_one_class_keeps_your_own(app):
     app.boot("/", selection=["TOC"], overrides=mine)
 
     def import_file():
-        app.xpath("//button[normalize-space()='Share']").click()
+        app.xpath("//button[normalize-space()='Share or import']").click()
         app.wait_css(".dialog").find_element(
             By.XPATH, ".//button[normalize-space()='Import my courses…']").click()
         WebDriverWait(app.d, 10).until(
@@ -4931,6 +4931,182 @@ def t96_a_disagreement_over_one_class_keeps_your_own(app):
         lambda d: not app.css_all(
             "td[data-day='4'][data-slot='930'] button.chip[aria-label^='TOC,']"),
         message="Replace must drop the reader's competing move")
+
+
+def t98_a_file_never_argues_with_itself(app):
+    """The reported bug, end to end. A file can hold two changes to ONE class
+    — data written before the master grid stopped making them still does —
+    and reading it must not be read as the READER disagreeing with it. The
+    reader here has an empty override store (a share link's selection and one
+    course of its own, nothing moved), so any sentence claiming a change of
+    theirs was kept is a claim about something that never happened."""
+    sender_file = os.path.join(DOWNLOADS, "self-disagreeing-week.json")
+
+    # The sender's browser: one class, moved twice, both changes still
+    # standing against the same official meeting.
+    twice = json.loads(json.dumps(TOC_OVR))
+    twice["items"].append({
+        "id": 1, "course": "TOC",
+        "base": twice["items"][0]["base"],
+        "to": {"day": "Sat", "slot": {"start_min": 550, "end_min": 625},
+               "hall": "Lecture Hall 803", "temp_booking": False},
+        "created_at": 1754000023000.0})
+    twice["next_id"] = 2
+    app.boot("/", selection=["TOC"], overrides=twice)
+    app.xpath("//button[normalize-space()='Share or import']").click()
+    app.wait_css(".dialog").find_element(
+        By.XPATH, ".//button[normalize-space()='Export my courses']").click()
+    time.sleep(1.0)
+    os.rename(newest_download("cmi-timetable-"), sender_file)
+
+    # The reader's browser: courses and a course of its own, but nothing
+    # moved, added, struck out or re-credited anywhere.
+    app.boot("/", selection=["QCOM", "GERMAN"], customs=HALL_CUSTOM)
+    app.xpath("//button[normalize-space()='Share or import']").click()
+    app.wait_css(".dialog").find_element(
+        By.XPATH, ".//button[normalize-space()='Import my courses…']").click()
+    WebDriverWait(app.d, 10).until(
+        lambda d: d.find_element(By.CSS_SELECTOR, "#cmitt-import-input")
+    ).send_keys(sender_file)
+    ask = WebDriverWait(app.d, 10).until(
+        lambda d: app.css(".dialog") if "A timetable from a file"
+        in app.css(".dialog").text else None)
+    ask.find_element(
+        By.XPATH, ".//button[contains(.,'Add it to my timetable')]").click()
+
+    app.wait_toast("Added 1 course from the file")
+    toast = app.toasts_text()
+    assert "already changed" not in toast, \
+        f"nothing of the reader's was changed, so nothing of theirs was kept: {toast}"
+    assert "3 changes came with it" in toast, \
+        f"both moves and the credit correction travel: {toast}"
+    # Both of the sender's placements arrive; neither is dropped as a
+    # "disagreement" with the other.
+    app.d.find_element(By.TAG_NAME, "body").send_keys(Keys.ESCAPE)
+    app.wait_css("td[data-day='2'][data-slot='1020'] button.chip[aria-label^='TOC,']")
+    app.wait_css("td[data-day='5'][data-slot='550'] button.chip[aria-label^='TOC,']")
+
+
+def t99_the_same_file_twice_says_what_it_refused(app):
+    """"Nothing changed" and "it was all already here" are different
+    outcomes. A file whose courses are all present and whose only change
+    loses to a change of the reader's own leaves the state untouched — and
+    must not report that the changes were already here. They were refused."""
+    sender_file = os.path.join(DOWNLOADS, "refused-week.json")
+    app.boot("/", selection=["TOC"], overrides=TOC_OVR)
+    app.xpath("//button[normalize-space()='Share or import']").click()
+    app.wait_css(".dialog").find_element(
+        By.XPATH, ".//button[normalize-space()='Export my courses']").click()
+    time.sleep(1.0)
+    os.rename(newest_download("cmi-timetable-"), sender_file)
+
+    # Same course, same credit correction, the class moved somewhere else.
+    mine = json.loads(json.dumps(TOC_OVR))
+    mine["items"][0]["to"] = {"day": "Fri",
+                              "slot": {"start_min": 930, "end_min": 1005},
+                              "hall": "Lecture Hall 803", "temp_booking": False}
+    app.boot("/", selection=["TOC"], overrides=mine)
+    app.xpath("//button[normalize-space()='Share or import']").click()
+    app.wait_css(".dialog").find_element(
+        By.XPATH, ".//button[normalize-space()='Import my courses…']").click()
+    WebDriverWait(app.d, 10).until(
+        lambda d: d.find_element(By.CSS_SELECTOR, "#cmitt-import-input")
+    ).send_keys(sender_file)
+    ask = WebDriverWait(app.d, 10).until(
+        lambda d: app.css(".dialog") if "A timetable from a file"
+        in app.css(".dialog").text else None)
+    ask.find_element(
+        By.XPATH, ".//button[contains(.,'Add it to my timetable')]").click()
+
+    app.wait_toast("nothing changed")
+    toast = app.toasts_text()
+    assert "the courses and the changes both" not in toast, \
+        f"the file's change was refused, not already here: {toast}"
+    assert "TOC" in toast and "yours stayed" in toast, toast
+
+
+def t100_replacing_twice_with_one_file_is_one_change(app):
+    """"Replace" clears the file's courses and takes the file's copies back,
+    so the second run of the same file leaves an identical week under ids one
+    higher. That is not a change: no undo step is spent on it, and the
+    sentence must not count changes that were already here."""
+    sender_file = os.path.join(DOWNLOADS, "replace-twice.json")
+    app.boot("/", selection=["TOC"], overrides=TOC_OVR)
+    app.xpath("//button[normalize-space()='Share or import']").click()
+    app.wait_css(".dialog").find_element(
+        By.XPATH, ".//button[normalize-space()='Export my courses']").click()
+    time.sleep(1.0)
+    os.rename(newest_download("cmi-timetable-"), sender_file)
+
+    app.boot("/", selection=["QCOM"])
+
+    def replace_with_file():
+        app.xpath("//button[normalize-space()='Share or import']").click()
+        app.wait_css(".dialog").find_element(
+            By.XPATH, ".//button[normalize-space()='Import my courses…']").click()
+        WebDriverWait(app.d, 10).until(
+            lambda d: d.find_element(By.CSS_SELECTOR, "#cmitt-import-input")
+        ).send_keys(sender_file)
+        WebDriverWait(app.d, 10).until(
+            lambda d: app.css(".dialog") if "A timetable from a file"
+            in app.css(".dialog").text else None).find_element(
+            By.XPATH, ".//button[contains(.,'Replace my timetable with it')]").click()
+
+    replace_with_file()
+    app.wait_toast("2 changes came with it")
+    app.dismiss_toasts()
+    undos_before = len(app.css_all("button[aria-label='Undo']"))
+
+    replace_with_file()
+    app.wait_toast("so nothing changed")
+    toast = app.toasts_text()
+    assert "came with it" not in toast, \
+        f"the second run brought nothing, so it counts nothing: {toast}"
+    # And it spent no undo step: one Ctrl+Z is still the pre-import week.
+    app.dismiss_toasts()
+    assert len(app.css_all("button[aria-label='Undo']")) == undos_before
+    app.d.find_element(By.TAG_NAME, "body").send_keys(Keys.CONTROL, "z")
+    app.wait_css("button.chip[aria-label^='QCOM,']")
+
+
+def t101_an_import_that_undeletes_a_course_says_so(app):
+    """A course deleted from this planner cannot be on the timetable and
+    deleted at once, so a file bringing it back undoes the deletion. That is
+    the reader's own work being reversed: it is named before the question and
+    again in the sentence after it, and the answer promising to take nothing
+    away stops promising."""
+    sender_file = os.path.join(DOWNLOADS, "brings-back-mfd.json")
+    app.boot("/", selection=["MFD"])
+    app.xpath("//button[normalize-space()='Share or import']").click()
+    app.wait_css(".dialog").find_element(
+        By.XPATH, ".//button[normalize-space()='Export my courses']").click()
+    time.sleep(1.0)
+    os.rename(newest_download("cmi-timetable-"), sender_file)
+
+    app.boot("/", selection=["QCOM"], overrides={
+        "next_id": 0, "items": [], "credits": [],
+        "hidden": [{"course": "MFD", "created_at": 1754000000000.0,
+                    "was_selected": True}]})
+    app.xpath("//button[normalize-space()='Share or import']").click()
+    app.wait_css(".dialog").find_element(
+        By.XPATH, ".//button[normalize-space()='Import my courses…']").click()
+    WebDriverWait(app.d, 10).until(
+        lambda d: d.find_element(By.CSS_SELECTOR, "#cmitt-import-input")
+    ).send_keys(sender_file)
+    ask = WebDriverWait(app.d, 10).until(
+        lambda d: app.css(".dialog") if "A timetable from a file"
+        in app.css(".dialog").text else None)
+    assert "You deleted MFD" in ask.text, \
+        f"the reversal is named before it happens: {ask.text}"
+    join = ask.find_element(
+        By.XPATH, ".//button[contains(.,'Add it to my timetable')]")
+    assert "Nothing of yours is taken away" not in join.text, \
+        f"it does take something: {join.text}"
+    join.click()
+
+    app.wait_toast("MFD was deleted here, and the file put it back")
+    app.d.find_element(By.TAG_NAME, "body").send_keys(Keys.ESCAPE)
+    app.wait_css("button.chip[aria-label^='MFD,']")
 
 
 TESTS = [
@@ -5031,6 +5207,10 @@ TESTS = [
     t95_two_students_combine_their_timetables,
     t97_a_planner_with_nothing_in_it_is_never_asked_what_to_replace,
     t96_a_disagreement_over_one_class_keeps_your_own,
+    t98_a_file_never_argues_with_itself,
+    t99_the_same_file_twice_says_what_it_refused,
+    t100_replacing_twice_with_one_file_is_one_change,
+    t101_an_import_that_undeletes_a_course_says_so,
 ]
 
 

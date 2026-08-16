@@ -295,6 +295,18 @@ pub struct IncomingPlan {
     /// Codes where the sender's own course lost to CMI's catalog — adding it
     /// would hide a real course behind a private one.
     pub shadowed: Vec<String>,
+    /// Codes whose changes were dropped before anything was counted: the
+    /// code names a course added by hand, and such a course carries its own
+    /// times rather than changes to a published one.
+    pub dropped_for_own_course: Vec<String>,
+    /// Codes where the loss runs the other way — changes saved in THIS
+    /// browser that a course the file wrote by hand is about to claim. They
+    /// go whichever answer is pressed, so they are said before the question.
+    pub takes_changes_here: Vec<String>,
+    /// Courses deleted from this planner that the file brings back. Either
+    /// answer restores them — a course cannot be on the timetable and
+    /// deleted at once — so this too is said before the question.
+    pub restores_deleted: Vec<String>,
 }
 
 impl IncomingPlan {
@@ -883,6 +895,34 @@ impl App {
             && self.customs.with_untracked(|c| c.is_empty())
     }
 
+    /// Nothing saved here that anybody chose — the question the WHOLE-FILE
+    /// import has to ask, because it replaces more than a timetable.
+    ///
+    /// A timetable file can only overwrite a timetable, so an empty one is
+    /// enough for it to land unasked. A backup also carries the theme, the
+    /// row height, the Halls day and both filter bars, and a browser with no
+    /// courses on it can still have every one of those set by hand. Skipping
+    /// the confirm there would replace work that was never asked about — and
+    /// the button promising it "asks first if there is anything to lose"
+    /// would be saying something untrue.
+    ///
+    /// Preferences are compared field by field rather than against
+    /// `Prefs::default()`: the struct also carries bookkeeping nobody chose
+    /// — the timestamp of the last sync attempt, the tab in front — so a
+    /// browser that has merely synced once would never match the default
+    /// again, and the skip would be dead code.
+    pub fn nothing_saved_to_lose(&self) -> bool {
+        self.planner_is_untouched()
+            && self.prefs.with_untracked(|p| {
+                p.theme == ThemePref::default()
+                    && p.density.is_none()
+                    && p.halls_view.is_none()
+                    && !p.changes_mine_only
+                    && p.filters.is_empty()
+                    && p.my_filters.is_empty()
+            })
+    }
+
     /// The import dialog's two answers, one undoable step either way.
     ///
     /// `replace` makes the file's courses the whole timetable and lets its
@@ -902,7 +942,14 @@ impl App {
         let mut customs = self.customs.get_untracked();
         let before = (selection.clone(), overrides.clone(), customs.clone());
 
-        let already = plan.known.iter().filter(|c| selection.contains(c)).count();
+        // Case-insensitively, like every other comparison between a code from
+        // outside and a code already here: a selection can still hold the
+        // casing a link was typed in (a browser that opened one before its
+        // first sync), and matching letter-for-letter would both miscount
+        // what was already on the timetable and put the same course on it
+        // twice under two spellings.
+        let here = |sel: &[String], code: &str| sel.iter().any(|c| c.eq_ignore_ascii_case(code));
+        let already = plan.known.iter().filter(|c| here(&selection, c)).count();
         for course in &plan.customs {
             customs.upsert(course.clone());
         }
@@ -912,25 +959,43 @@ impl App {
             // work on the rest of the week is not what was replaced.
             ttcore::combine::clear_for_courses(&mut overrides, &plan.known);
         }
+        // Deleting a course is work somebody did, and putting one back is
+        // undoing it — so the codes this actually restores are collected and
+        // said out loud, rather than being the one thing an import changes
+        // in silence under a button promising it takes nothing away.
+        let mut restored: Vec<String> = Vec::new();
         for code in &plan.known {
-            if !selection.contains(code) {
+            if !here(&selection, code) {
                 selection.push(code.clone());
             }
-            overrides.unhide(code);
+            if overrides.unhide(code) {
+                restored.push(code.clone());
+            }
         }
+        // A change aimed at a code that names a course added by hand would
+        // render as a class belonging to nothing. The FILE's such changes are
+        // already gone — dropped when the plan was built, before the bill of
+        // contents counted anything — so what the merge counts here is what
+        // actually lands.
         let mut stats = ttcore::combine::merge_overrides(&mut overrides, &plan.overrides);
-        // A change aimed at a code that names one of the reader's own
-        // courses would render as a class belonging to nothing. Nearly
-        // always that drops changes the file itself brought; once in a very
-        // long while it drops the reader's, when the file's own course
-        // arrives under a code they had saved changes for. Either way it is
-        // said out loud rather than done quietly.
-        for code in ttcore::combine::purge_custom_overrides(&customs, &mut overrides) {
-            stats.dropped_for_own_course.push(code);
-        }
+        // What is left to purge is the rarer direction, and a different
+        // sentence: the file's own course arriving under a code the READER
+        // had saved changes for (a course CMI dropped, living on as their
+        // overrides). Their work goes, which is right — the code now carries
+        // its own times — but not quietly.
+        stats.dropped_for_own_course =
+            ttcore::combine::purge_custom_overrides(&customs, &mut overrides);
 
-        if (&selection, &overrides, &customs) == (&before.0, &before.1, &before.2) {
-            self.toast(self.import_nothing_changed(plan));
+        // Compared by what it holds, not by the numbers it holds it under:
+        // "Replace" clears the file's courses and re-takes the file's copies
+        // of the same changes, so the same file imported twice differs only
+        // in ids — an undo step for nothing, and a sentence counting changes
+        // that were already here.
+        if selection == before.0
+            && customs == before.2
+            && ttcore::combine::same_work(&overrides, &before.1)
+        {
+            self.toast(self.import_nothing_changed(plan, &stats));
             return;
         }
         self.act_customs(
@@ -945,21 +1010,67 @@ impl App {
                 *ovs = overrides;
             },
         );
-        self.toast_undo(self.import_summary(plan, replace, already, &stats));
+        self.toast_undo(self.import_summary(plan, replace, already, &restored, &stats));
     }
 
     /// The file did nothing — which is a normal outcome (the same file
     /// imported twice), so it says which kind of nothing it was.
-    fn import_nothing_changed(&self, plan: &IncomingPlan) -> String {
-        if plan.extras() > 0 {
+    ///
+    /// "Nothing changed" and "it was all already here" are NOT the same
+    /// sentence, and this is where they part. A file whose courses were all
+    /// on the timetable already and whose every change lost to a change of
+    /// the reader's own also leaves the state untouched — and telling that
+    /// reader their file "was already on your timetable, the changes and the
+    /// courses both" would be a claim about changes that were in fact turned
+    /// away. What was refused is named, exactly as it is named when the
+    /// import does go through.
+    fn import_nothing_changed(
+        &self,
+        plan: &IncomingPlan,
+        stats: &ttcore::combine::CombineStats,
+    ) -> String {
+        let mut out = if plan.extras() > 0 && stats.is_empty() {
             "Everything in that file was already on your timetable — the \
              courses and the changes both. Nothing changed."
                 .to_string()
         } else {
-            "Every course in that file was already on your timetable — \
+            "Every course in that file was already on your timetable, so \
              nothing changed."
                 .to_string()
+        };
+        if !stats.kept_yours.is_empty() {
+            out.push_str(&format!(
+                " Its changes to {} met changes of your own on the same \
+                 classes, so yours stayed.",
+                stats.kept_yours.join(", "),
+            ));
         }
+        if !plan.dropped_for_own_course.is_empty() {
+            out.push_str(&format!(
+                " Its changes to {} were left out: {}.",
+                plan.dropped_for_own_course.join(", "),
+                if plan.dropped_for_own_course.len() == 1 {
+                    "that code names a course added by hand, which carries \
+                     its own times"
+                } else {
+                    "those codes name courses added by hand, which carry \
+                     their own times"
+                },
+            ));
+        }
+        if !stats.dropped_for_own_course.is_empty() {
+            out.push_str(&format!(
+                " {} now {} a course added by hand, so the changes saved here \
+                 under that code went.",
+                stats.dropped_for_own_course.join(", "),
+                if stats.dropped_for_own_course.len() == 1 {
+                    "names"
+                } else {
+                    "name"
+                },
+            ));
+        }
+        out
     }
 
     /// One sentence for the courses, then a sentence for anything else worth
@@ -970,6 +1081,7 @@ impl App {
         plan: &IncomingPlan,
         replace: bool,
         already: usize,
+        restored: &[String],
         stats: &ttcore::combine::CombineStats,
     ) -> String {
         let plural = |n: usize| if n == 1 { "course" } else { "courses" };
@@ -993,10 +1105,24 @@ impl App {
         };
         let changes = stats.changes_added();
         if changes > 0 {
+            // "came with THEM" points at the courses in the sentence before,
+            // so it counts courses. Keyed off the change count it produced
+            // "3 changes came with them" over a single course, and "1 change
+            // came with it" over five.
             out.push_str(&format!(
                 " {changes} change{} came with {}.",
                 if changes == 1 { "" } else { "s" },
-                if changes == 1 { "it" } else { "them" },
+                if n == 1 { "it" } else { "them" },
+            ));
+        }
+        if !restored.is_empty() {
+            out.push_str(&format!(
+                " {} {} deleted here, and the file put {} back — with any \
+                 times you had set for {}.",
+                restored.join(", "),
+                if restored.len() == 1 { "was" } else { "were" },
+                if restored.len() == 1 { "it" } else { "them" },
+                if restored.len() == 1 { "it" } else { "them" },
             ));
         }
         if !stats.kept_yours.is_empty() {
@@ -1005,10 +1131,27 @@ impl App {
                 stats.kept_yours.join(", "),
             ));
         }
+        // Two different losses, and they are not the same sentence. The
+        // first is the file's changes going; the second is changes saved in
+        // THIS browser going, because a course the file brought has taken
+        // over the code they were filed under.
+        if !plan.dropped_for_own_course.is_empty() {
+            out.push_str(&format!(
+                " Its changes to {} were left out: {}.",
+                plan.dropped_for_own_course.join(", "),
+                if plan.dropped_for_own_course.len() == 1 {
+                    "that code names a course added by hand, which carries \
+                     its own times"
+                } else {
+                    "those codes name courses added by hand, which carry \
+                     their own times"
+                },
+            ));
+        }
         if !stats.dropped_for_own_course.is_empty() {
             out.push_str(&format!(
-                " {} now {} a course somebody wrote themselves, which carries \
-                 its own times, so the saved changes under that code went.",
+                " {} now {} a course added by hand, which carries its own \
+                 times, so the changes saved here under that code went.",
                 stats.dropped_for_own_course.join(", "),
                 if stats.dropped_for_own_course.len() == 1 {
                     "names"
@@ -1513,9 +1656,14 @@ impl App {
         let course = course.to_string();
         let now = domx::now_ms();
         self.act(label, |_, ovs| {
+            // Case-insensitively, as everywhere else in the store: a code can
+            // reach here in CMI's casing while the change already saved for
+            // it carries the casing a share link was typed in, and comparing
+            // the two letter-for-letter would file a SECOND change against
+            // the same class — one meeting drawn twice.
             let existing = ovs.items.iter_mut().find(|o| match ov_id {
                 Some(id) => o.id == id,
-                None => o.course == course && o.base == base,
+                None => o.course.eq_ignore_ascii_case(&course) && o.base == base,
             });
             match existing {
                 Some(o) => o.to = Some(to.clone()),

@@ -327,10 +327,13 @@ with an explanation of why that happens and what still worked.
 ### JSON, for your own tools
 
 Every way a timetable comes in or goes out lives in one place — the
-**Share** button in the header — as three sections: *As a link*, *As a
-timetable file* and *As a full backup*.
+**Share or import** button in the header — as three sections: *As a link*,
+*As a timetable file* and *As a full backup*. (It was called "Share" while
+sharing was all it did; the name now says both directions, because a door
+labelled only with the way out is one nobody tries when carrying something
+in.)
 
-- **Export my courses** (Share → As a timetable file) writes your whole week as one
+- **Export my courses** (Share or import → As a timetable file) writes your whole week as one
   machine-readable file — not a list of codes. It has two halves. `courses`
   is the readable one: every course you have picked, with its credits and
   where each number came from (CMI, the app's guess and why, or you), plus
@@ -349,41 +352,50 @@ timetable file* and *As a full backup*.
   program can *write* one of these files with only the parts that carry
   meaning and this app will load it.
 - **Import my courses** sits right beside it and takes such a file back in —
-  yours from another device, or a friend's. A dialog first says what the
-  file holds (how many courses, how many classes moved, how many credit
-  corrections, how many courses they made themselves) and then asks, in
-  whole sentences, whether it should **join** your timetable or **replace**
-  it. Nothing changes until you pick, and either answer is one Ctrl+Z from
-  undone.
+  one saved from another device, or one that was shared. A dialog first says
+  what the file holds (how many courses, how many classes moved, how many
+  credit corrections, how many of the courses were added by hand) and then
+  asks, in whole sentences, whether it should **join** your timetable or
+  **replace** it. Nothing changes until you pick, and either answer is one
+  Ctrl+Z from undone. Focus lands on the dialog itself rather than on an
+  answer, so the Space press that scrolls a long question cannot answer it.
 - **A browser with nothing in it is never asked.** If you have picked no
   courses, changed nothing and written no course of your own, an import has
   nothing to replace — so the file simply loads, with no question in the
-  way. That holds for the whole backup too. The question comes back the
-  moment there is something to lose. (The timetable downloaded from CMI
-  does not count as something to lose: a sync fetches it again.)
-- **Merging keeps everything from both.** Everything already on your
-  timetable stays; everything in the file that this browser can take
-  arrives. A change made on both sides counts once. Where a change in the
-  file meets a change of yours **on the same class** — a class cannot be in
-  two places at once — yours stays and the app names the course it did that
-  for. Classes invented on either side are additions, so both survive.
+  way. The question comes back the moment there is something to lose. (The
+  timetable downloaded from CMI does not count as something to lose: a sync
+  fetches it again.) The whole backup skips its confirm on the same terms,
+  plus one more: it also replaces your settings, so a chosen theme, row
+  height or filter set is enough to bring the question back.
+- **Merging keeps everything from both, apart from one kind of collision.**
+  Everything already on your timetable stays; everything in the file that
+  this browser can take arrives. A change made on both sides counts once.
+  Where a change in the file meets a change of yours **on the same class** —
+  a class cannot be in two places at once — yours stays and the app names
+  the course it did that for. Classes invented on either side are additions,
+  so both survive. A file is never treated as disagreeing with *itself*: if
+  it holds two changes to one class, both arrive, and nothing is blamed on a
+  timetable that never made a change at all.
 - Nothing is ever dropped quietly. Codes this semester's catalog doesn't
   know are named and left out; a course of theirs whose code is already one
   of yours keeps yours; a course of theirs whose code CMI uses stays out, so
   a private course can't hide a real one. All of it is said before you
   choose, and again in the sentence afterwards. In the rare case where a
   course they wrote themselves arrives under a code you had saved changes
-  for, those changes go — a course somebody wrote carries its own times —
-  and the app names the course rather than letting it happen in silence.
+  for, those changes go — a course added by hand carries its own times —
+  and the app names the course before you choose, not after. The same goes
+  for a course you had **deleted** that the file brings back: it is named in
+  the dialog, and the answer that would otherwise promise to take nothing
+  away stops promising.
 - Whole courses you **deleted** are the one thing the file does not carry: a
   deleted course is off your timetable by definition, and importing someone
   else's deletions would take courses out of your catalog. Use **Export
   everything** to move a whole browser, deletions included.
-- **Export everything** (Share → As a full backup) writes the whole
+- **Export everything** (Share or import → As a full backup) writes the whole
   planner as one JSON backup: the timetable downloaded from CMI — the whole
   catalog, halls and slots — plus your selected courses, every change you
   made, your own courses, your settings and any conflicts you postponed.
-  **Import everything** loads such a file back, from Share or from the
+  **Import everything** loads such a file back, from Share or import or from the
   welcome screen, and the planner then looks exactly like the one that made the
   file — even years later, even if CMI's site has changed or gone. It
   replaces what the browser has saved (it asks first when there is anything

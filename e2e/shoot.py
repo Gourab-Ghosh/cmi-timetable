@@ -408,7 +408,7 @@ shot("29-light-halls-own-place")
 for theme, tag in (("Light", "light"), ("Dark", "dark")):
     boot(theme, "MyTimetable", selection=["TOC", "QCOM", "GERMAN"],
          customs=CUSTOMS)
-    d.find_element(By.XPATH, "//button[normalize-space()='Share']").click()
+    d.find_element(By.XPATH, "//button[normalize-space()='Share or import']").click()
     time.sleep(0.5)
     shot(f"39-{tag}-share-dialog")
     # Export, then hand the same file straight back: the fastest way to the

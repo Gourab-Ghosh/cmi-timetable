@@ -461,7 +461,8 @@ pub fn parse_timetable_export(text: &str) -> Result<TimetablePlan, String> {
     if format == "cmi-planner-backup" {
         return Err(
             "That's an “Export everything” file — a whole backup, not a \
-             timetable. Use “Import everything…” under Share to load it."
+             timetable. Use “Import everything…” under “Share or import” to \
+             load it."
                 .to_string(),
         );
     }
@@ -625,7 +626,7 @@ impl ImportError {
             ImportError::WrongFormat(found) if found == "cmi-timetable-export" => {
                 "That file holds a timetable — the courses and the changes to \
                  them — but not a whole planner. Use “Import my courses…” \
-                 under Share to load it."
+                 under “Share or import” to load it."
                     .to_string()
             }
             ImportError::WrongFormat(_) => {
@@ -686,13 +687,22 @@ pub fn parse_planner_backup(text: &str, now_ms: f64) -> Result<ParsedBackup, Imp
     if envelope.format != "cmi-planner-backup" {
         return Err(ImportError::WrongFormat(envelope.format));
     }
-    let major = envelope
+    // "Newer" is a claim about the file, and it earns it by carrying a
+    // version number this build can read AND compare. A stamp that is not a
+    // number at all ("v1.1.0", "", "beta") says nothing about which app made
+    // it, so answering "made by a newer version — reload the page" would
+    // send somebody to reload a page that was never behind.
+    match envelope
         .format_version
         .split('.')
         .next()
-        .and_then(|n| n.parse::<u32>().ok());
-    if major != Some(1) {
-        return Err(ImportError::NewerFormat);
+        .and_then(|n| n.parse::<u32>().ok())
+    {
+        Some(1) => {}
+        Some(n) if n > 1 => return Err(ImportError::NewerFormat),
+        // A stamp that parses but says 0 was never written by any build of
+        // this app either, so it lands with the damaged-or-hand-edited ones.
+        _ => return Err(ImportError::BadEnvelope),
     }
     for (value, name) in [
         (&envelope.snapshot, "timetable"),
