@@ -4034,6 +4034,54 @@ placeholder-contrast 9/9, cold-start medians 10–84 ms at 4× CPU throttle.
 All 47 shots and 3 PDFs regenerated; 01, 07b, 18, 19, 21 and 33 re-read by
 eye against the exact claims that were made about them.
 
+### R66 — "push and deploy."
+
+The standing hold was lifted, so the eight waiting commits (`0c7ef75` …
+`b29f854`) went out. No code changed this round. Plain `git push` was
+enough: `core.hooksPath githooks` is set in this clone, so the `pre-push`
+hook ran `./deploy.sh --no-verify` and only let the push through once the
+site had published — code on GitHub and the live page cannot drift apart.
+
+What the release did, in order: built inside a throwaway `rust:1`
+container; ran `cargo test --workspace` → **132 passed / 0 failed**, the
+same count as the host, so the suite depends on nothing local to this
+machine; built the release bundle with Trunk in 48.59s at public URL
+`/cmi-timetable/`; `gen-sw.sh` precached 5 files as
+`cmitt-sw-4a0b7187564cd1a3`; published the dist as a single orphan commit
+on `gh-pages`; then `8c0b5d9..b29f854 main -> main`.
+
+**The hook passes `--no-verify`, so the script does NOT wait for Pages to
+serve the build.** Verified by hand afterwards, and this is the check worth
+repeating: polled `sw.js` until its cache name matched the one the build
+had just printed, then fetched every asset the live `index.html` names and
+**recomputed each SRI hash from the returned bytes** — css, js and the
+1.86 MB wasm all matched the integrity attributes exactly. That is a
+stronger statement than "the assets 200", because it proves the bytes being
+executed are the bytes that were built.
+
+Then checked the round's own fixes in the SHIPPED artifact rather than the
+repo: `::placeholder,textarea::placeholder{color:var(--muted);opacity:1}`
+in the live CSS, and "rather than the app's guess" / "in place of CMI's
+where CMI lists them" / "the button beside it says what it goes back to" in
+the live wasm, with the retired "put any one of them back to CMI's version"
+absent.
+
+One self-correction recorded because it is an easy trap: grepping a wasm
+for a Rust *source* literal fails, because the trailing `"` is not in the
+string table. That first made "The total above uses your number, not CMI's"
+look deleted when it is still there **and must be** — it is the true
+sentence for a course CMI does publish credits for. R65 made that arm
+conditional, it did not remove it.
+
+Two build warnings, both benign and pre-existing: `proc-macro-error2`
+future-incompat (a transitive macro dependency, not our code) and trunk's
+JS minifier declining one file — the one R58 investigated and REJECTED
+fixing (§7 R58).
+
+`--sync` was NOT passed, so the mirror still carries its existing snapshot.
+That tier is last-resort only (CMI direct → relay → mirror), so it costs
+nothing while CMI is reachable; refresh it with `./deploy.sh --sync`.
+
 ## 8. Open bugs — found, confirmed, NOT fixed (do not delete)
 
 Rules for this section: entries stay until the bug is actually fixed and a
