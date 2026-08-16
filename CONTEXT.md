@@ -142,6 +142,15 @@ FEATURES.md  the user-facing feature list (written R39). README is the
 - **Build isolation:** `trunk serve` (bg task) races other builds via the
   shared target dir. ALL manual builds/tests use
   `CARGO_TARGET_DIR=~/.rust-target-e2e`, app builds to `--dist dist-e2e`.
+  **Never build a `git worktree` into that same target dir.** The worktree
+  is the same workspace under a different absolute path, so its
+  `cmi-timetable-core` lands on the SAME artifact filenames and clobbers
+  the main tree's. The symptom is a source file that plainly contains
+  `pub mod combine;` while the app insists `could not find combine in
+  ttcore` — and `cargo clean -p cmi-timetable-core`, with or without
+  `--target`, does not fix it. Only `rm -rf ~/.rust-target-e2e` does.
+  A worktree baseline (the perf method, R58/R61) must therefore use its
+  OWN target dir: `CARGO_TARGET_DIR=~/.rust-target-base`.
 - **Edition 2024** (workspace-wide, `resolver = "3"`). Its one real trap:
   an `impl Trait` return now captures every lifetime in scope, so a view
   helper taking `&str`/`&Course` and returning `impl IntoView` must say
@@ -3661,13 +3670,25 @@ Share dialog's two link rows became ONE grid (`display: contents` on each
 row), because each row sizing its own label column left the two boxes not
 lining up.
 
-**Perf, measured honestly.** Same-session baseline from a `git worktree` at
-`0c7ef75`, fresh page per sample, CPU throttled 4×, 15 samples: My
+**Perf, measured honestly — and the trap it set.** Same-session baseline
+from a `git worktree` at `0c7ef75`, fresh page per sample, CPU throttled
+4×, 15 samples: My
 timetable 10→8, My courses 27→25, Catalog 65→65, Master grid 67→65, Halls
 84→84 ms, node counts byte-identical. No regression. (A first 5-sample run
 read Catalog as 65→81; that was noise, and 5 samples cannot tell noise from
 a 10% regression — the 15-sample pair is the number.) The honest cost of
 R60 is artifact size: the wasm grew 1,812,569 → 1,859,807 bytes, +2.6%.
+
+The worktree was built into the SHARED `~/.rust-target-e2e`, which
+clobbered the main tree's `cmi-timetable-core` artifacts with the
+pre-R60 ones. Ten minutes later the app would not compile — `could not
+find combine in ttcore`, against a `lib.rs` that plainly declares it —
+and `cargo clean -p cmi-timetable-core` did not fix it, with or without
+`--target`. `rm -rf ~/.rust-target-e2e` did. The invariant in §4 now says
+so; a worktree baseline needs its own target dir. Everything measured and
+tested before the contamination was built from the right source (the
+artifact rebuilt from the wiped target dir is byte-for-byte the same
+size), and the whole battery was re-run from clean afterwards to prove it.
 
 ## 8. Open bugs — found, confirmed, NOT fixed (do not delete)
 
