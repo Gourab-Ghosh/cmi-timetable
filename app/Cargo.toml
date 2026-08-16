@@ -59,6 +59,7 @@ features = [
   "ScrollBehavior",
   "ScrollToOptions",
   "Storage",
+  "StorageEvent",
   "SupportedType",
   "TouchEvent",
   "Url",

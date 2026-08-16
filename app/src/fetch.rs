@@ -674,6 +674,50 @@ pub fn maybe_background_update(app: App) {
 /// Startup re-parse path: if the shipped parser is newer than the one that
 /// produced the cached snapshot, re-parse the stored raw HTML (through the
 /// same gate) without refetching.
+/// Adopt the snapshot another tab of this browser just saved.
+///
+/// The same door a live fetch uses — `adopt` — so the three-way merge, the
+/// conflict queue, the "what changed" digest and the persisted result all
+/// come out of the one code path, with no second implementation to drift.
+///
+/// Only `KEY_SNAPSHOT` is read, and the overrides are re-merged from THIS
+/// tab's own store. `adopt` writes overrides, then the snapshot, then the
+/// conflicts as three separate `storage` events with no transaction around
+/// them; re-merging locally means there is no half-applied state to read.
+/// `merge_overrides` is pure, so when both tabs hold the same user data the
+/// result is byte-identical to the one the other tab persisted — and when
+/// they don't, this keeps what THIS tab is showing.
+///
+/// `Adoption::Fetched`, and deliberately no third variant: this IS a real
+/// fetch — every difference really is CMI's doing — it simply happened in
+/// the other window.
+///
+/// Returns false when there was nothing to adopt: no stored snapshot, an
+/// empty one, or the same sync this tab already has.
+pub fn adopt_stored(app: App) -> bool {
+    // Deliberately not `load`'s corrupt arm: that one backs the blob up and
+    // REMOVES it, and quarantining the snapshot another tab wrote a
+    // millisecond ago is not this function's business. Bail instead; the
+    // next boot's corrupt-data banner is where that gets explained.
+    let storage::Loaded::Value(stored) = storage::load::<Snapshot>(storage::KEY_SNAPSHOT) else {
+        return false;
+    };
+    if !stored.has_data() {
+        return false;
+    }
+    // Nothing new: the other tab rewrote the same sync (a quota retry), or
+    // this is our own write echoing back. A re-parse keeps `fetched_at` and
+    // bumps `parser_version`, and that IS worth adopting, so both count.
+    let same = app.snapshot.with_untracked(|s| {
+        s.fetched_at == stored.fetched_at && s.parser_version == stored.parser_version
+    });
+    if same {
+        return false;
+    }
+    adopt(&app, stored, true, Adoption::Fetched);
+    true
+}
+
 pub fn reparse_stored_if_newer(app: App) {
     let (version, has_raw) = app
         .snapshot

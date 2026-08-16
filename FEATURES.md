@@ -499,7 +499,7 @@ its own, never as a change CMI made.
 | | |
 |:--|:--|
 | **Theme** | Auto (follows your system), light, or dark |
-| **Row height** | Roomy or tight |
+| **Row height** | Roomy or tight in the Master grid. Until you choose, it follows the screen you opened it on — tight on a phone, where roomy rows push most of the week off the bottom edge, and roomy on a computer. Press the button once and that is your answer everywhere, on every screen and every reload; Reset in My data hands the decision back to the device |
 | **On a phone** | The timetable opens on today's classes (the whole week is one tap away), tap targets sized for fingers, a header that packs tight, and long-press to drag |
 | **Motion** | Animations respect "reduce motion" |
 | **The wheel** | Scroll over any box with a step — credits, a meeting's start or end time, an export date, the reminder lead, or any dropdown — and it moves one step. Hovering is enough, no click first; while the wheel is over a box, the box takes the scroll and the page behind it stays put. The reminder lead nudges by single minutes on the wheel while its arrows jump by fives. A trackpad flick counts by full notches — a step or two per gesture, not ten — an empty box is never filled by a passing wheel, and the wheel never moves a value opposite to the way you scrolled |
@@ -606,8 +606,14 @@ Being clear about these is part of the design:
 change that adds, renames or removes a feature, so what it describes is what
 you will find. If you spot a difference, the app is right and this is a bug.*
 - **Two tabs of the same browser share one timetable.** That is how browser
-  storage works: every tab reads and writes the same saved data, so a change
-  in one tab shows in the other after a refresh. A durable "separate
+  storage works: every tab reads and writes the same saved data. Sync with
+  CMI in one tab and the other picks the new timetable up on its own — the
+  whole update, not just the clock on it, so what the "Synced …" pill says is
+  always true of the timetable underneath it. If that other tab is in the
+  middle of something — a course form with unsaved typing, a drag, a conflict
+  you are answering — it waits until you have finished and then catches up in
+  one step. Everything else still shows in the other tab after a refresh.
+  A durable "separate
   timetable per tab" doesn't exist in the web platform — the only per-tab
   storage a browser offers is wiped when the tab closes, which would break
   the promise that your data stays until you delete it. To compare two

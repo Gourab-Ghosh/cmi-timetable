@@ -1722,8 +1722,13 @@ def t38_duration_based_credits(app):
 def t39_sync_pill_ticks_live(app):
     """The header's 'Synced … ago' text and its stale tint keep up with the
     wall clock on their own — no reload, no new sync. The header re-renders
-    on a 30 s interval and instantly on visibilitychange, so a throttled
-    background tab catches up the moment it comes back."""
+    on a schedule that follows the words (1 s under a minute, 15 s inside the
+    hour, 15 min past it) and instantly on visibilitychange, so a throttled
+    background tab catches up the moment it comes back.
+
+    This test is also the WORDING contract: 'just now', 'N min ago',
+    'N hours ago', 'N days ago' and nothing finer. A seconds counter would
+    fail the first assertion below."""
     snap = json.loads(SEED_SNAPSHOT_JSON)
     snap["fetched_at"] = time.time() * 1000.0
     app.boot("/", raw_snapshot=json.dumps(snap))
@@ -1753,6 +1758,115 @@ def t39_sync_pill_ticks_live(app):
         and "stale" in app.css(".sync-pill").get_attribute("class"),
         message=f"pill should go stale at 49 h; got {app.css('.sync-pill').text!r}",
     )
+    app.d.execute_script("Date.now = window.__realNow; delete window.__realNow;")
+
+
+def t91_a_sync_in_one_tab_reaches_the_other(app):
+    """Two tabs, one browser. Sync in the first and the second must not go
+    on saying the timetable is twenty minutes old — it takes the whole
+    update, data and clock together, without being touched.
+
+    The probe is the point. Reading the pill after switching back would pass
+    for a fix that merely re-reads storage when a tab is shown; this captures
+    what tab two displayed while it was still in the BACKGROUND, so only a
+    real cross-tab signal satisfies it."""
+    stale = json.loads(SEED_SNAPSHOT_JSON)
+    stale["fetched_at"] = time.time() * 1000.0 - 20 * 60_000  # 20 min ago
+    stale["courses"] = [c for c in stale["courses"] if c["code"] != "TOC"]
+    app.boot("/", raw_snapshot=json.dumps(stale))
+    first = app.d.current_window_handle
+    assert "20 min ago" in app.css(".sync-pill").text, app.css(".sync-pill").text
+
+    app.d.switch_to.new_window("tab")
+    second = app.d.current_window_handle
+    app.d.get(BASE + "/")
+    app.wait_css(".header h1")
+    assert "20 min ago" in app.css(".sync-pill").text, app.css(".sync-pill").text
+    # Watch the pill from inside the background tab: every change to its text
+    # is recorded, so nothing here depends on when we look.
+    app.d.execute_script("""
+        window.__pill = [];
+        new MutationObserver(() => {
+            const t = document.querySelector('.sync-pill');
+            if (t) window.__pill.push(t.textContent.trim());
+        }).observe(document.querySelector('.header'),
+                   {subtree: true, childList: true, characterData: true});
+    """)
+
+    # Tab one syncs for real, against the stand-in CMI.
+    app.d.switch_to.window(first)
+    serve_cmi()
+    try:
+        app.xpath("//button[normalize-space()='Sync now']").click()
+        app.wait_toast("Timetable updated")
+        WebDriverWait(app.d, 20).until(
+            lambda d: "just now" in app.css(".sync-pill").text,
+            message="tab one should show its own fresh sync",
+        )
+    finally:
+        stop_serving_cmi()
+
+    # …and tab two catches up on its own, while it was never in front.
+    app.d.switch_to.window(second)
+    WebDriverWait(app.d, 20).until(
+        lambda d: "just now" in app.css(".sync-pill").text,
+        message=f"the second tab is still stale: {app.css('.sync-pill').text!r}",
+    )
+    seen = app.d.execute_script("return window.__pill || [];")
+    assert any("just now" in s for s in seen), \
+        f"the second tab must refresh in the background, not on focus; saw {seen}"
+    # The DATA came too, not just the clock: TOC was cut from the seeded
+    # snapshot and CMI's pages have it, so it can only be here via the sync.
+    app.open_tab("Master grid")
+    app.wait_css("section[aria-label='Master grid'] table.tt")
+    assert app.chips("TOC"), "the second tab must adopt the timetable, not only its timestamp"
+    app.d.close()
+    app.d.switch_to.window(first)
+
+
+def t92_the_pill_refreshes_at_the_pace_the_words_change(app):
+    """The refresh schedule follows the text: about a second while it can
+    still say 'just now', 15 s while it counts minutes, 15 min once it counts
+    hours. Read off the delays the page actually asks the browser for —
+    no other timer in the app uses any of these three numbers."""
+    snap = json.loads(SEED_SNAPSHOT_JSON)
+    snap["fetched_at"] = time.time() * 1000.0
+    app.boot("/", raw_snapshot=json.dumps(snap))
+    app.d.execute_script("""
+        window.__delays = [];
+        const real = window.setTimeout;
+        window.setTimeout = function (fn, ms) {
+            window.__delays.push(ms);
+            return real.apply(this, arguments);
+        };
+    """)
+
+    def armed():
+        return [d for d in app.d.execute_script("return window.__delays;")
+                if d in (1000, 15000, 900000)]
+
+    WebDriverWait(app.d, 10).until(lambda d: 1000 in armed(),
+                                   message=f"a fresh sync should tick every second; saw {armed()}")
+
+    def jump(minutes):
+        app.d.execute_script(
+            "window.__realNow = window.__realNow || Date.now.bind(Date);"
+            f"Date.now = () => window.__realNow() + {minutes} * 60000;"
+            "window.__delays = [];"
+        )
+
+    jump(7)          # minutes bucket — the next re-arm should be 15 s
+    WebDriverWait(app.d, 10).until(
+        lambda d: 15000 in armed(),
+        message=f"7 min old should re-arm at 15 s; saw {armed()}",
+    )
+    jump(3 * 60)     # hours bucket — 15 minutes, and never a 1 s spin again
+    WebDriverWait(app.d, 30).until(
+        lambda d: 900000 in armed(),
+        message=f"3 h old should re-arm at 15 min; saw {armed()}",
+    )
+    assert 1000 not in armed(), \
+        f"an hours-old sync must not keep waking every second; saw {armed()}"
     app.d.execute_script("Date.now = window.__realNow; delete window.__realNow;")
 
 
@@ -4459,6 +4573,75 @@ def t86_seg_groups_are_radio_groups_with_arrow_keys(app):
     app.wait_gone(".dialog")
 
 
+def t93_the_grid_picks_its_row_height_from_the_screen(app):
+    """Nobody has chosen a row height, so the screen decides: tight on a
+    phone, roomy on a computer. Same build, same storage, two window
+    sizes."""
+    app.d.set_window_size(430, 900)
+    try:
+        app.boot("/")
+        app.open_tab("Master grid")
+        app.wait_css("section[aria-label='Master grid'] table.tt")
+        assert "Rows: tight" in app.xpath("//button[contains(.,'Rows:')]").text
+        assert app.css_all("section[aria-label='Master grid'] .density-compact"), \
+            "a phone should get the compact grid"
+    finally:
+        app.d.set_window_size(1500, 1000)
+
+    app.boot("/")
+    app.open_tab("Master grid")
+    app.wait_css("section[aria-label='Master grid'] table.tt")
+    assert "Rows: roomy" in app.xpath("//button[contains(.,'Rows:')]").text
+    assert not app.css_all("section[aria-label='Master grid'] .density-compact"), \
+        "a computer should get the roomy grid"
+
+
+def t94_a_chosen_row_height_is_never_overruled(app):
+    """Once you press the button the app stops guessing — your choice holds
+    on any screen and across reloads. Reset hands the decision back."""
+    app.boot("/")
+    app.open_tab("Master grid")
+    app.wait_css("section[aria-label='Master grid'] table.tt")
+    app.xpath("//button[contains(.,'Rows:')]").click()   # roomy -> tight
+    WebDriverWait(app.d, 5).until(
+        lambda d: "Rows: tight" in app.xpath("//button[contains(.,'Rows:')]").text
+    )
+    # It survives a reload on the SAME desktop window, where the device
+    # default would say roomy.
+    app.boot("/", fresh=False)
+    app.open_tab("Master grid")
+    app.wait_css("section[aria-label='Master grid'] table.tt")
+    assert "Rows: tight" in app.xpath("//button[contains(.,'Rows:')]").text, \
+        "a chosen density must outlive a reload"
+
+    # …and the reverse choice holds on a phone, where the device would say
+    # tight. This is the half that proves the default never overrules.
+    app.xpath("//button[contains(.,'Rows:')]").click()   # tight -> roomy
+    WebDriverWait(app.d, 5).until(
+        lambda d: "Rows: roomy" in app.xpath("//button[contains(.,'Rows:')]").text
+    )
+    app.d.set_window_size(430, 900)
+    try:
+        app.boot("/", fresh=False)
+        app.open_tab("Master grid")
+        app.wait_css("section[aria-label='Master grid'] table.tt")
+        assert "Rows: roomy" in app.xpath("//button[contains(.,'Rows:')]").text, \
+            "a phone must not overrule a density the user chose"
+    finally:
+        app.d.set_window_size(1500, 1000)
+
+    # Reset gives the decision back to the device: on this desktop, roomy —
+    # and, crucially, nothing stored, so a phone would say tight again.
+    app.boot("/", fresh=False)
+    app.xpath("//button[normalize-space()='My data']").click()
+    app.wait_css(".dialog")
+    app.xpath("//div[@class='dialog']//button[normalize-space()='Reset']").click()
+    app.dismiss_toasts()
+    stored = app.d.execute_script(
+        "return JSON.parse(localStorage.getItem('cmitt.v1.prefs') || '{}').density;")
+    assert stored is None, f"Reset should forget the choice, not pin one; got {stored!r}"
+
+
 def t90_a_grid_chip_shows_the_tick_without_being_rebuilt(app):
     """Clicking a chip in the Master grid marks it — on the chip that is
     already there, not a replacement for it.
@@ -4546,6 +4729,8 @@ TESTS = [
     t37_catalog_updates_live,
     t38_duration_based_credits,
     t39_sync_pill_ticks_live,
+    t91_a_sync_in_one_tab_reaches_the_other,
+    t92_the_pill_refreshes_at_the_pace_the_words_change,
     t40_custom_course_create,
     t41_custom_course_edit_park_share_delete,
     t42_custom_course_shadowed_by_cmi,
@@ -4597,6 +4782,8 @@ TESTS = [
     t88_keeping_a_dropped_course_keeps_your_own_times,
     t89_the_digest_narrows_to_the_readers_own_courses,
     t90_a_grid_chip_shows_the_tick_without_being_rebuilt,
+    t93_the_grid_picks_its_row_height_from_the_screen,
+    t94_a_chosen_row_height_is_never_overruled,
 ]
 
 

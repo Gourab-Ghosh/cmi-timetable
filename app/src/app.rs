@@ -91,6 +91,11 @@ fn init_app() -> (App, bool) {
         overrides: RwSignal::new(overrides),
         customs: RwSignal::new(customs),
         prefs: RwSignal::new(prefs),
+        device_density: if domx::is_phone_viewport() {
+            crate::state::Density::Compact
+        } else {
+            crate::state::Density::Comfortable
+        },
         undo_stack: RwSignal::new(Default::default()),
         toasts: RwSignal::new(Vec::new()),
         toast_seq: RwSignal::new(0),
@@ -425,6 +430,53 @@ fn install_theme_listener(app: App) {
     }
 }
 
+/// Another tab of this app synced with CMI. The `storage` event fires in
+/// every OTHER tab of this origin and never in the writer, so this is how a
+/// tab that did not press Sync finds out that the saved snapshot moved on.
+///
+/// Two rules, and both are about honesty rather than freshness:
+///
+/// - The data and the timestamp move TOGETHER or not at all. `SyncMeta` is
+///   never persisted — it is rebuilt from the stored snapshot at boot (see
+///   `init_app`) and from `new_snapshot` in `fetch::adopt` — so the pill's
+///   "Synced …" is a claim about exactly one thing: the snapshot on disk.
+///   Refreshing the pill on its own would put "Synced just now" over the
+///   pre-sync grid, which is worse than the stale reading it replaced.
+/// - Nothing is adopted while this tab holds work that adopting could
+///   spoil (`App::busy_with_unsaved_work`). The flag survives, and the
+///   effect below is tracked, so the moment the editor closes, the drag
+///   ends or the conflicts are answered the tab catches up in one step.
+///
+/// A removal (`new_value() == None`) is "My data → clear the downloaded
+/// timetable" in the other tab, not a sync: nothing is adopted for it.
+fn install_cross_tab_sync(app: App) {
+    let pending = RwSignal::new(false);
+    let closure =
+        Closure::<dyn FnMut(web_sys::StorageEvent)>::new(move |ev: web_sys::StorageEvent| {
+            if ev.key().as_deref() == Some(storage::KEY_SNAPSHOT) && ev.new_value().is_some() {
+                pending.set(true);
+            }
+        });
+    let _ = domx::window()
+        .add_event_listener_with_callback("storage", closure.as_ref().unchecked_ref());
+    closure.forget();
+
+    Effect::new(move |_| {
+        // Both reads TRACKED: this is what makes a deferred adoption land
+        // when the tab goes quiet instead of waiting for the next sync.
+        if !pending.get() || app.busy_with_unsaved_work() {
+            return;
+        }
+        // Out of the effect's own run: `adopt` writes a dozen signals and
+        // may open a dialog, and none of that belongs inside the pass that
+        // decided it was safe.
+        leptos::task::spawn_local(async move {
+            fetch::adopt_stored(app);
+            pending.set(false);
+        });
+    });
+}
+
 #[component]
 pub fn Root() -> impl IntoView {
     let (app, corrupt) = init_app();
@@ -442,6 +494,9 @@ pub fn Root() -> impl IntoView {
     apply_url_state(app);
     fetch::maybe_background_update(app);
     offline_note(app);
+    // Last: everything above may itself adopt a snapshot, and the listener
+    // has nothing to say about writes this tab made.
+    install_cross_tab_sync(app);
 
     view! {
         // Before the first sync there is no tab rail, so the desktop grid

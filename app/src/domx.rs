@@ -17,6 +17,29 @@ pub fn now_ms() -> f64 {
     js_sys::Date::now()
 }
 
+/// The stylesheet's phone boundary, in CSS pixels. Below it the app stops
+/// being a desktop layout with smaller chrome and becomes a phone. Anything
+/// that asks "is this a phone?" asks it here, at the same number the
+/// stylesheet uses, or the two answers drift apart.
+pub const PHONE_MAX_PX: u32 = 640;
+
+/// Whether the viewport is phone-sized, answered by the engine that
+/// evaluates `@media (max-width: 640px)` in styles.css.
+///
+/// `match_media` rather than `inner_width()`: `innerWidth` counts a classic
+/// scrollbar that the media query need not, so the two disagree by the width
+/// of a scrollbar for exactly the windows sitting on the boundary — the grid
+/// would go tight while the phone layout stayed away. Unknowable means "not
+/// a phone": roomy rows are the safe answer when we cannot tell.
+pub fn is_phone_viewport() -> bool {
+    window()
+        .match_media(&format!("(max-width: {PHONE_MAX_PX}px)"))
+        .ok()
+        .flatten()
+        .map(|m| m.matches())
+        .unwrap_or(false)
+}
+
 /// One step up or down, done by the browser. `stepUp()` / `stepDown()` are
 /// not bound in this web-sys version, so the DOM methods are called by name.
 /// Doing the arithmetic here instead would mean teaching this file what one
@@ -494,5 +517,31 @@ pub fn rel_time(ms: f64, now: f64) -> String {
         format!("{} hours ago", (mins / 60.0) as u32)
     } else {
         format!("{} days ago", (mins / 1440.0) as u32)
+    }
+}
+
+/// How often the "Synced … ago" pill needs re-rendering, given how old the
+/// timestamp already is.
+///
+/// Deliberately next to `rel_time`: the two boundaries here ARE that
+/// function's own thresholds. Under a minute the only thing that can happen
+/// next is "just now" → "1 min ago", so a second is enough to land on it;
+/// inside the hour the words move once a minute and 15 s is four times
+/// faster than they do; past an hour they move once an hour and 15 min is
+/// still four times faster. So the ticker is never slower than the text —
+/// and never spins faster than the text can change either, which is what
+/// the old flat 30 s interval got wrong in both directions at once.
+///
+/// Clamped at zero on purpose. A tab that has never synced carries
+/// `fetched_at == 0.0`, and an imported backup may legally carry one in the
+/// FUTURE — a negative elapsed must not pin that tab to a 1 Hz wake-up.
+pub fn tick_delay_ms(elapsed_ms: f64) -> u32 {
+    let elapsed = elapsed_ms.max(0.0);
+    if elapsed < 60_000.0 {
+        1_000
+    } else if elapsed < 3_600_000.0 {
+        15_000
+    } else {
+        900_000
     }
 }

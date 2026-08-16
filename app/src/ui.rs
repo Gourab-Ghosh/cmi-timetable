@@ -445,13 +445,48 @@ pub fn Header() -> impl IntoView {
     let app = App::use_ctx();
 
     // "Synced 12 min ago" is wall-clock text: nothing reactive changes as
-    // time passes, so drive it from a ticking signal. A slow interval covers
-    // the open-tab case; the visibilitychange hook catches up instantly when
-    // a throttled background tab comes back. Header mounts once for the
-    // page's lifetime, so forgetting both handles leaks nothing that
-    // wouldn't live forever anyway.
+    // time passes, so drive it from a ticking signal — at the pace the WORDS
+    // change, not one flat pace for every age. `domx::tick_delay_ms` picks
+    // it from how old the sync already is; a flat 30 s was both too slow to
+    // catch the first minute and far too eager for a two-day-old copy.
+    //
+    // The order matters, and it is the whole point: establish WHEN the last
+    // sync was, derive the elapsed from that, and only then decide how often
+    // to say it. So the schedule hangs off `fetched_at` rather than off the
+    // clock alone — and a sync arriving from ANOTHER TAB re-arms it for
+    // free, because that path writes `app.sync` too (see app.rs).
+    //
+    // Re-arming, not waiting out: a sleep begun an hour ago is fifteen
+    // minutes long, and a sync that has already landed must not leave the
+    // pill on "just now" for a quarter of an hour before it jumps to
+    // "15 min ago". Each arming takes a number; a sleeper that wakes to find
+    // its number superseded simply stops. Leptos ownership cannot cancel a
+    // spawned task, so the number is what does the cancelling.
+    //
+    // Header is a static child of Root's view, built exactly once per page
+    // load, so this task and the visibilitychange closure below live as long
+    // as the page and leak nothing that wasn't going to live forever anyway.
     let now = RwSignal::new(domx::now_ms());
-    gloo_timers::callback::Interval::new(30_000, move || now.set(domx::now_ms())).forget();
+    // Narrowed through a memo so the progress line ticking during an update
+    // ("trying proxy 1 of 2…") doesn't re-arm the ticker three times a sync.
+    let fetched_at = Memo::new(move |_| app.sync.with(|s| s.fetched_at));
+    let arming = RwSignal::new(0u64);
+    Effect::new(move |_| {
+        let at = fetched_at.get();
+        let mine = arming.get_untracked() + 1;
+        arming.set(mine);
+        now.set(domx::now_ms());
+        leptos::task::spawn_local(async move {
+            loop {
+                let delay = domx::tick_delay_ms(domx::now_ms() - at);
+                gloo_timers::future::TimeoutFuture::new(delay).await;
+                if arming.get_untracked() != mine {
+                    return;
+                }
+                now.set(domx::now_ms());
+            }
+        });
+    });
     let refresh = Closure::<dyn FnMut()>::new(move || now.set(domx::now_ms()));
     let _ = domx::document()
         .add_event_listener_with_callback("visibilitychange", refresh.as_ref().unchecked_ref());

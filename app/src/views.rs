@@ -1775,17 +1775,22 @@ fn master_grid(app: App) -> impl IntoView {
                     class="btn small"
                     title="Switch between roomy and tight rows"
                     on:click=move |_| {
-                        app.prefs
-                            .update(|p| {
-                                p.density = match p.density {
-                                    Density::Comfortable => Density::Compact,
-                                    Density::Compact => Density::Comfortable,
-                                }
-                            });
+                        // Read the EFFECTIVE density first: `app.density()`
+                        // reads `prefs`, and the update closure runs while
+                        // `prefs` is borrowed (§4, "never nest two reads of
+                        // the SAME signal").
+                        let next = match app.density() {
+                            Density::Comfortable => Density::Compact,
+                            Density::Compact => Density::Comfortable,
+                        };
+                        // `Some` is the point of the press: from here on this
+                        // browser has an answer of its own, and no device
+                        // default ever overrides it again.
+                        app.prefs.update(|p| p.density = Some(next));
                         app.persist_prefs();
                     }
                 >
-                    {move || match app.prefs.with(|p| p.density) {
+                    {move || match app.density() {
                         Density::Comfortable => "Rows: roomy",
                         Density::Compact => "Rows: tight",
                     }}
@@ -1839,7 +1844,7 @@ fn master_grid(app: App) -> impl IntoView {
             {deleted_note(app)}
             <div
                 class="grid-scroll"
-                class:density-compact=move || app.prefs.with(|p| p.density) == Density::Compact
+                class:density-compact=move || app.density() == Density::Compact
             >
                 <table class="tt">
                     <thead>

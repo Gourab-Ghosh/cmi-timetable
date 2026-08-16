@@ -109,7 +109,21 @@ impl Filters {
 #[serde(default)]
 pub struct Prefs {
     pub theme: ThemePref,
-    pub density: Density,
+    /// Row density for the Master grid. `None` means the user has never
+    /// pressed the "Rows: …" button: the grid then follows the device —
+    /// tight on a phone, roomy on a computer — and only a real press writes
+    /// a value here, so the choice, once made, survives every reload and
+    /// every screen it is opened on. Read it through `App::density`, never
+    /// straight off this field.
+    ///
+    /// Deliberately NOT a `density_chosen: bool` beside a plain `Density`.
+    /// Stored prefs from before this change carry `"density": "Comfortable"`
+    /// unconditionally — this struct serializes every field on every save —
+    /// so a separate flag would default to false for EXISTING users and the
+    /// device default would then overwrite the tight rows someone chose on
+    /// purpose. As an `Option`, a legacy value loads as `Some(..)` and is
+    /// left alone: nobody who ever used this app sees their rows move.
+    pub density: Option<Density>,
     /// The Catalog and the Master grid share this set: both pages ask the
     /// same question ("what does CMI offer?"), so a filter set on one is
     /// meant to still be set on the other.
@@ -157,7 +171,11 @@ impl Default for Prefs {
     fn default() -> Self {
         Prefs {
             theme: ThemePref::default(),
-            density: Density::default(),
+            // No choice made — the device decides. This is also what the My
+            // data → Preferences Reset button restores (ui.rs), so Reset
+            // hands the grid back to the device rather than pinning it to a
+            // value that happens to be right on only one kind of screen.
+            density: None,
             filters: Filters::default(),
             my_filters: Filters::default(),
             last_update_attempt: 0.0,
@@ -409,6 +427,20 @@ pub struct App {
     /// Courses the user created themselves (always selected while they exist).
     pub customs: RwSignal<CustomStore>,
     pub prefs: RwSignal<Prefs>,
+    /// What the DEVICE would pick if the user never chose — decided once, at
+    /// boot, in `init_app`. Not a signal and never persisted: it is an
+    /// observation about this screen, not a preference, and the moment it
+    /// were written into `prefs` it would become indistinguishable from a
+    /// real choice all over again.
+    ///
+    /// Once, rather than on every resize: the Master grid is remounted by
+    /// the tab dispatcher, so a `matchMedia` call in the render closure
+    /// would re-answer the question whenever you left the tab and came back,
+    /// moving the rows at a moment nothing on screen explains. And a phone
+    /// in landscape is 844×390 — width alone says "computer" about the
+    /// shortest screen there is. A window dragged narrow keeps its rows
+    /// until the next reload; the toggle is one click away in the toolbar.
+    pub device_density: Density,
     pub undo_stack: RwSignal<UndoStack>,
     pub toasts: RwSignal<Vec<Toast>>,
     pub toast_seq: RwSignal<u64>,
@@ -566,6 +598,36 @@ impl App {
             return;
         }
         self.dialog.set(None);
+    }
+
+    /// Work in THIS tab that a snapshot arriving from another tab could
+    /// spoil. Every read is TRACKED on purpose: the cross-tab effect in
+    /// `app.rs` waits on this, so it has to wake when the last of them
+    /// clears — the deferred adoption lands the moment the editor closes or
+    /// the drag ends, not at the next sync.
+    ///
+    /// - `sync.updating`: this tab is fetching too. Let it finish and adopt
+    ///   its own result rather than race it.
+    /// - `dialog_dirty`: the course editor holds typing that no undo can
+    ///   reach (see `dismiss_dialog`).
+    /// - `Dialog::Conflicts`: its rows are read once at open, and Apply
+    ///   writes the UNANSWERED ones back, so a queue replaced underneath it
+    ///   would be overwritten by the old one — silently answering the
+    ///   questions the new sync just raised.
+    /// - `drag` / `move_mode`: both carry a base meeting and a grid cursor
+    ///   taken from the snapshot that is about to be replaced.
+    ///
+    /// The course editor is not listed: it is built untracked and judges
+    /// removals against the meeting it opened with, so it already survives
+    /// a sync intact (t45, t60). What must not happen is the PILL moving
+    /// while the grid behind the dialog does — the timestamp and the data
+    /// change together or not at all.
+    pub fn busy_with_unsaved_work(&self) -> bool {
+        self.sync.with(|s| s.updating)
+            || self.dialog_dirty.get()
+            || self.dialog.with(|d| matches!(d, Some(Dialog::Conflicts)))
+            || self.drag.with(|d| d.is_some())
+            || self.move_mode.with(|m| m.is_some())
     }
 
     // -- persistence + URL -------------------------------------------------
@@ -2037,6 +2099,24 @@ impl App {
         }
         out.sort();
         out
+    }
+
+    /// The row density the Master grid should use right now.
+    ///
+    /// A stored choice always wins, on every device and every reload — once
+    /// somebody presses the "Rows: …" button the app never second-guesses
+    /// them. With no stored choice the grid follows the screen: tight on a
+    /// phone, where roomy rows put most of the week off the bottom edge, and
+    /// roomy on a computer, which has the room.
+    ///
+    /// Derived on read and never written back — the same discipline as
+    /// `halls_view` below. Persisting the fallback would turn "the device
+    /// decided" back into "the user chose", and the button would stop being
+    /// able to hand the decision back.
+    pub fn density(&self) -> Density {
+        self.prefs
+            .with(|p| p.density)
+            .unwrap_or(self.device_density)
     }
 
     /// What the Halls tab should show right now.

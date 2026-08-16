@@ -3388,6 +3388,97 @@ judged with curl, because these services discriminate on Origin; drive the
 browser. (allorigins being down also means tier 1 is currently dead weight —
 worth re-checking, not worth reordering on one sample.)
 
+### R59 — the second tab, and rows that fit the screen they open on
+
+User: two tabs, sync in one, and the other goes on saying "20 min ago"
+forever; make the app establish WHEN the last sync was, then compute
+elapsed, then show it — refreshing every 1 s under a minute, every 15 s in
+minutes, every 15 min in hours — **without changing a character of the
+text**. Plus: tight rows by default on phones, roomy on computers, never
+overwriting a choice the user made.
+
+**Why the timestamp alone was the wrong fix.** `SyncMeta` is never
+persisted: it is rebuilt from the stored snapshot at boot (app.rs) and from
+`new_snapshot` in `fetch::adopt`. So the pill's "Synced …" is a claim about
+exactly one thing — the snapshot on disk. Refreshing only the clock would
+have put "Synced just now" over the pre-sync grid, while My data and the
+print header on the same screen still showed yesterday's date. Tab B now
+adopts the whole stored snapshot through the existing `adopt` door
+(`fetch::adopt_stored`), so data and clock move together or not at all.
+
+- The signal is the `storage` event, which fires in every tab EXCEPT the
+  writer — no polling, no echo. Only `KEY_SNAPSHOT` is watched, and only
+  writes: `new_value() == None` is the other tab's "clear the downloaded
+  timetable", not a sync, and adopting a placeholder would wipe a tab the
+  user never touched.
+- Only the snapshot is read, and the overrides are re-merged from THIS
+  tab's own store. `adopt` writes overrides, snapshot and conflicts as three
+  separate events with no transaction, so reading them back has a genuine
+  half-applied window; `merge_overrides` is pure, so re-merging gives the
+  identical answer when both tabs agree and keeps this tab's data when
+  they do not.
+- `App::busy_with_unsaved_work()` defers — never drops — the adoption while
+  this tab holds a dirty course form, an open conflicts dialog, a drag or a
+  keyboard move, or is mid-sync itself. Every read in it is TRACKED, so the
+  catch-up lands the moment the last of those clears.
+
+**The cadence.** `domx::tick_delay_ms` (1 s / 15 s / 15 min) sits beside
+`rel_time` because its boundaries ARE that function's thresholds. The old
+`Interval::new(30_000, …).forget()` could not be re-timed at all — fixed
+period, handle dropped — so the ticker is now a `spawn_local` +
+`TimeoutFuture` loop that re-reads elapsed each round and re-arms off a
+`Memo` on `fetched_at`, with a generation counter to stop superseded
+sleepers (Leptos ownership cannot cancel a spawned task). Re-arming is
+load-bearing, not polish: without it a sync landing mid-sleep would leave
+the pill on "just now" for fifteen minutes and then jump to "15 min ago" —
+manufacturing a fresh instance of the bug being fixed. The
+`visibilitychange` listener stays exactly as it was.
+
+**What the 1-second tier actually does, and the user was told.** `rel_time`
+returns "just now" for the entire first minute — there is no sub-minute
+wording, which is what the user asked to keep. So a 1 s tick renders the
+same string sixty times; its only observable effect is that the "just now"
+→ "1 min ago" flip lands within a second of the minute instead of up to 30 s
+late. Built as asked, because that punctuality is real and the two
+requirements meet at exactly one instant per sync. The 15-minute tier is a
+small regression the user accepted by naming it: an hourly flip, and the 48 h
+stale tint, can now arrive up to 15 minutes late instead of 30 s.
+`rel_time` itself got ZERO edits — including its ungrammatical "1 hours ago"
+and its unreachable "1 day ago", both of which are pinned by "I want the
+current exact text".
+
+**Density.** `Prefs.density` became `Option<Density>` and is read through
+`App::density()`, which falls back to `App.device_density` — decided ONCE at
+boot from `matchMedia("(max-width: 640px)")`, the same number styles.css
+uses. Never persisted: writing the fallback back would turn "the device
+decided" into "the user chose" and the button could never hand the decision
+back. Once at boot rather than reactively, because the Master grid is
+remounted by the tab dispatcher, so a render-time query would move the rows
+whenever you left the tab and came back — and a phone in landscape is
+844×390, where width alone calls the shortest screen there is a computer.
+
+Chosen over a `density_chosen: bool` deliberately: `Prefs` serialises every
+field on every save, so EVERY returning browser already carries
+`"density":"Comfortable"`, and a flag defaulting to false would have let the
+device default overwrite rows somebody chose on purpose. The cost is stated
+plainly rather than hidden: **existing installs see no change at all**,
+because "chose roomy" and "never touched it" are byte-identical on disk and
+`Prefs` has no version field to break the tie. The new default reaches fresh
+installs, and anyone who presses Reset — which now means "back to what this
+device suggests" (`Prefs::default()` is `None`), a quiet but intended change
+of meaning at ui.rs's Reset button, pinned by t94.
+
+**Tests.** t91 syncs in one tab and asserts the other catches up — with a
+MutationObserver installed while it is still in the background, so a fix
+that merely re-read storage on focus would fail it, and it checks a course
+absent from the seed appears, proving the data came and not just the clock.
+t92 spies on `window.setTimeout` and reads the delays the page asks for
+(1000 / 15000 / 900000 collide with no other timer in the app) after moving
+the clock with t39's existing `Date.now` seam — no test waits a cadence.
+t93 boots the same build at 430×900 and at 1500×1000. t94 proves a pressed
+button beats the device on both, and that Reset stores nothing. 94/94 e2e,
+114 native, clippy clean on both targets.
+
 ## 8. Open bugs — found, confirmed, NOT fixed (do not delete)
 
 Rules for this section: entries stay until the bug is actually fixed and a
