@@ -18,6 +18,7 @@ import http.server
 import json
 import os
 import subprocess
+import tempfile
 import threading
 import time
 
@@ -72,6 +73,11 @@ opts.add_argument("--window-size=1440,900")
 opts.add_argument("--hide-scrollbars")
 opts.add_argument("--force-prefers-reduced-motion")
 opts.add_argument("--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE 127.0.0.1")
+DOWNLOADS = tempfile.mkdtemp(prefix="cmitt-shots-dl-")
+opts.add_experimental_option("prefs", {
+    "download.default_directory": DOWNLOADS,
+    "download.prompt_for_download": False,
+})
 d = webdriver.Chrome(options=opts)
 wait = WebDriverWait(d, 15)
 
@@ -286,6 +292,7 @@ d.find_element(By.XPATH, "//button[normalize-space()='My data']").click()
 time.sleep(0.5)
 shot("11-light-my-data-dialog")
 
+
 boot("Light", "MyCourses")
 shot("07b-light-my-courses")
 
@@ -394,6 +401,31 @@ d.execute_script(
 )
 time.sleep(0.4)
 shot("29-light-halls-own-place")
+
+# Share: the link half and the file half, and then the question the file
+# half asks. A student with a course of their own gets the extra paragraph
+# about which link carries it, so seed one.
+for theme, tag in (("Light", "light"), ("Dark", "dark")):
+    boot(theme, "MyTimetable", selection=["TOC", "QCOM", "GERMAN"],
+         customs=CUSTOMS)
+    d.find_element(By.XPATH, "//button[normalize-space()='Share']").click()
+    time.sleep(0.5)
+    shot(f"39-{tag}-share-dialog")
+    # Export, then hand the same file straight back: the fastest way to the
+    # import question with a file that has one of everything in it.
+    d.find_element(
+        By.XPATH, "//div[contains(@class,'dialog')]"
+                  "//button[normalize-space()='Export my courses']").click()
+    time.sleep(1.2)
+    exported = max((os.path.join(DOWNLOADS, f) for f in os.listdir(DOWNLOADS)
+                    if f.endswith(".json")), key=os.path.getmtime)
+    d.find_element(
+        By.XPATH, "//div[contains(@class,'dialog')]"
+                  "//button[normalize-space()='Import my courses…']").click()
+    time.sleep(0.6)
+    d.find_element(By.CSS_SELECTOR, "#cmitt-import-input").send_keys(exported)
+    time.sleep(1.2)
+    shot(f"40-{tag}-import-question")
 
 # The foot of My courses: the create tile and the parked group (RG is in
 # the custom store but not in the selection).

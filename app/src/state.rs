@@ -903,10 +903,16 @@ impl App {
             }
             overrides.unhide(code);
         }
-        let stats = ttcore::combine::merge_overrides(&mut overrides, &plan.overrides);
+        let mut stats = ttcore::combine::merge_overrides(&mut overrides, &plan.overrides);
         // A change aimed at a code that names one of the reader's own
-        // courses would render as a class belonging to nothing.
-        ttcore::combine::purge_custom_overrides(&customs, &mut overrides);
+        // courses would render as a class belonging to nothing. Nearly
+        // always that drops changes the file itself brought; once in a very
+        // long while it drops the reader's, when the file's own course
+        // arrives under a code they had saved changes for. Either way it is
+        // said out loud rather than done quietly.
+        for code in ttcore::combine::purge_custom_overrides(&customs, &mut overrides) {
+            stats.dropped_for_own_course.push(code);
+        }
 
         if (&selection, &overrides, &customs) == (&before.0, &before.1, &before.2) {
             self.toast(self.import_nothing_changed(plan));
@@ -982,6 +988,18 @@ impl App {
             out.push_str(&format!(
                 " You had already changed {}, so your version stayed.",
                 stats.kept_yours.join(", "),
+            ));
+        }
+        if !stats.dropped_for_own_course.is_empty() {
+            out.push_str(&format!(
+                " {} now {} a course somebody wrote themselves, which carries \
+                 its own times, so the saved changes under that code went.",
+                stats.dropped_for_own_course.join(", "),
+                if stats.dropped_for_own_course.len() == 1 {
+                    "names"
+                } else {
+                    "name"
+                },
             ));
         }
         if !plan.kept_yours.is_empty() {

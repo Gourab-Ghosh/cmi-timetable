@@ -361,7 +361,10 @@ with an explanation of why that happens and what still worked.
   know are named and left out; a course of theirs whose code is already one
   of yours keeps yours; a course of theirs whose code CMI uses stays out, so
   a private course can't hide a real one. All of it is said before you
-  choose, and again in the sentence afterwards.
+  choose, and again in the sentence afterwards. In the rare case where a
+  course they wrote themselves arrives under a code you had saved changes
+  for, those changes go — a course somebody wrote carries its own times —
+  and the app names the course rather than letting it happen in silence.
 - Whole courses you **deleted** are the one thing the file does not carry: a
   deleted course is off your timetable by definition, and importing someone
   else's deletions would take courses out of your catalog. Use **Export

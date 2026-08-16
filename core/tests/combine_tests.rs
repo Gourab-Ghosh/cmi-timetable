@@ -255,12 +255,30 @@ fn changes_aimed_at_your_own_courses_are_dropped() {
         vec![credit("READ", 2), credit("TOC", 3)],
     );
 
-    purge_custom_overrides(&customs, &mut ovs);
+    let dropped = purge_custom_overrides(&customs, &mut ovs);
 
     assert_eq!(ovs.items.len(), 1);
     assert_eq!(ovs.items[0].course, "TOC");
     assert_eq!(ovs.credits.len(), 1);
     assert_eq!(ovs.credits[0].course, "TOC");
+    // Named once, in the case the code was typed in, so the caller can say
+    // out loud what it dropped rather than doing it quietly.
+    assert_eq!(dropped, vec!["read".to_string()]);
+}
+
+/// The purge with nothing to purge says nothing.
+#[test]
+fn purging_reports_nothing_when_it_drops_nothing() {
+    let customs = CustomStore {
+        courses: vec![custom("READ")],
+    };
+    let mut ovs = store(
+        vec![ovr(0, "TOC", Some(meeting(Day::Tue, 550, "803")), None)],
+        vec![],
+    );
+
+    assert!(purge_custom_overrides(&customs, &mut ovs).is_empty());
+    assert_eq!(ovs.items.len(), 1);
 }
 
 // ---------------------------------------------------------------------------

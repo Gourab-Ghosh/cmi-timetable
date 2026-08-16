@@ -1251,7 +1251,9 @@ details.facet .menu .menu-empty { margin: 0.2rem 0 0; }
 }
 .grid-legend .legend-mark { font-weight: 700; color: var(--text); }
 
-/* A button that reads as a link, for actions living inside a sentence. */
+/* A button that reads as a link, for actions living inside a sentence.
+   Callers put the word-space in the markup ({" "} or a trailing space),
+   the way they would around a real link. */
 .linklike {
   background: none;
   border: none;
@@ -1259,8 +1261,10 @@ details.facet .menu .menu-empty { margin: 0.2rem 0 0; }
   font: inherit;
   color: var(--accent);
   text-decoration: underline;
+  text-underline-offset: 2px;
   cursor: pointer;
 }
+.linklike:hover { color: var(--accent-strong); }
 .filterchip {
   display: inline-flex;
   align-items: center;
@@ -1734,21 +1738,6 @@ details.facet .menu .menu-empty { margin: 0.2rem 0 0; }
 }
 .file-bill li { font-size: 0.9rem; }
 .file-bill .chipline { margin-top: 0.5rem; }
-
-/* A button that is really a sentence's last words: no chrome, just the
-   accent and an underline, sitting on the text baseline beside them. */
-.linkish {
-  border: 0;
-  background: none;
-  padding: 0;
-  margin-left: 0.35rem;
-  font: inherit;
-  color: var(--accent);
-  text-decoration: underline;
-  text-underline-offset: 2px;
-  cursor: pointer;
-}
-.linkish:hover { color: var(--accent-strong); }
 
 /* Share: the link half and the file half are sections like My data's, so
    the two dialogs that both hand data around look like each other.

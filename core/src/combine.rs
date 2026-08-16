@@ -36,6 +36,10 @@ pub struct CombineStats {
     /// Courses where the file's change lost to one of the reader's own.
     /// Codes, deduped, in the order they were met.
     pub kept_yours: Vec<String>,
+    /// Courses whose changes were dropped because the code now names a
+    /// course somebody wrote themselves, which carries its own schedule.
+    /// Filled in by the caller from [`purge_custom_overrides`].
+    pub dropped_for_own_course: Vec<String>,
 }
 
 impl CombineStats {
@@ -44,7 +48,9 @@ impl CombineStats {
     }
 
     pub fn is_empty(&self) -> bool {
-        self.changes_added() == 0 && self.kept_yours.is_empty()
+        self.changes_added() == 0
+            && self.kept_yours.is_empty()
+            && self.dropped_for_own_course.is_empty()
     }
 }
 
@@ -140,7 +146,34 @@ pub fn clear_for_courses(store: &mut OverridesStore, codes: &[String]) {
 /// overrides. A store arriving from somewhere else (a share link, a file)
 /// may still aim changes at a code that names one of these courses here, and
 /// those would render as classes belonging to nothing. Drop them.
-pub fn purge_custom_overrides(customs: &CustomStore, ovs: &mut OverridesStore) {
-    ovs.items.retain(|o| customs.get(&o.course).is_none());
-    ovs.credits.retain(|c| customs.get(&c.course).is_none());
+///
+/// Returns the course codes it dropped changes for, deduped. Usually empty,
+/// and usually the changes were the incoming store's own — but not always:
+/// a file bringing a course of the sender's own under a code the READER had
+/// changes saved for (a course CMI dropped, whose classes live on as their
+/// overrides) loses the reader's work here. That is the right resolution —
+/// the code now names a course that carries its own schedule — but it is
+/// not something to do quietly, so the caller is told which courses.
+pub fn purge_custom_overrides(customs: &CustomStore, ovs: &mut OverridesStore) -> Vec<String> {
+    let mut dropped: Vec<String> = Vec::new();
+    let mut note = |code: &str| {
+        if !dropped.iter().any(|c| c.eq_ignore_ascii_case(code)) {
+            dropped.push(code.to_string());
+        }
+    };
+    ovs.items.retain(|o| {
+        let keep = customs.get(&o.course).is_none();
+        if !keep {
+            note(&o.course);
+        }
+        keep
+    });
+    ovs.credits.retain(|c| {
+        let keep = customs.get(&c.course).is_none();
+        if !keep {
+            note(&c.course);
+        }
+        keep
+    });
+    dropped
 }

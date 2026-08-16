@@ -655,7 +655,7 @@ regenerates the .ics golden.
   selected course with no time is part of the timetable, not a footnote.
 - "Your changes" groups are headed by `.cg-head` (colour rail + small caps
   + count), coloured by `OwnChange::tone()`. See §4.
-- Tests: 127 native + 96/96 e2e green (as of R60). Meeting removals: `MeetingOverride.to`
+- Tests: 128 native + 96/96 e2e green (as of R61). Meeting removals: `MeetingOverride.to`
   is `Option<Meeting>` (None = removed; legacy JSON/share payloads still
   load — present meeting ⇒ Some). Out-of-grid times: **all three tables grow
   synthetic `.extra` columns**, each from its own source, all built by the
@@ -3587,6 +3587,87 @@ downloads by **mtime**, not name: two exports on one day want the same
 filename and Chrome disambiguates the second as "… (1).json", which sorts
 BEFORE "….json" — that fed t95/t96 the previous test's file and cost two
 debugging rounds. 96/96 e2e, 127 native, clippy clean on both targets.
+
+### R61 — the pre-deploy sweep, and the one thing it found
+
+User: test the whole app, visually and programmatically, before they deploy.
+(They deploy; this round does not, and does not offer to.)
+
+**Gates on the shipped tree.** `cargo fmt --check` clean, clippy clean on
+BOTH targets with `-W clippy::redundant_clone -D warnings`, **128 native**
+tests, **96/96 e2e**. Then the four harnesses that exist because the suite
+cannot reach past its own origin: `deploy-parity.py` 18/18 on the real
+`--public-url /cmi-timetable/` artifact, `upgrade-path.py` 13/13 upgrading
+from the bytes actually on `gh-pages`, `live-network-check.py` — a real
+browser on the real network got a real timetable through corsproxy, no
+console errors — and `perf-cold.py`.
+
+**Two new harnesses, both saved to `.workagents/` with manifest rows.**
+
+`cross-version-files.py` (14 checks) exists because R60 changed a FILE
+FORMAT, and for a few days after a deploy a service worker can keep one
+student on yesterday's build while their friend is on today's. It serves
+the deployed bytes and the new build alternately on one origin under the
+live sub-path and drives both: the new build writes 1.1.0 with
+`my_changes`; the DEPLOYED build reads that file, reaches its own
+replace-or-add question, imports the codes, names the own course it cannot
+use, leaves the override store untouched and logs nothing; and the new
+build reads a file the deployed build actually wrote and claims no changes
+it never carried. Two traps it now fences, both of which cost a debugging
+round: Chrome's HTTP cache keeps serving the first build's index.html
+after a directory swap unless the handler sends `no-store` (the failure
+reads as a missing button in the OTHER build's UI), and a CDP
+`Page.setDownloadBehavior` override does NOT survive navigation.
+
+`export-consumer.py` (17 checks) answers the user's twice-repeated
+requirement — "the JSON should be easy to use and analyse from a
+programming language" — in the only way a Rust test cannot: an outside
+program reads a file the app just wrote and totals the credits, prints the
+week day by day, finds the gaps, filters changes by `kind`, and
+reconstructs the week from `my_changes` alone to check it agrees with the
+readable `courses` half. Every step uses only stated keys, with no
+branching on missing ones and no repair pass.
+
+`dialog-a11y.py` (26 checks) covers what screenshots cannot: focus lands
+inside each dialog, Tab cycles without escaping, every control is
+reachable, the two now-identically-labelled "Copy link" buttons have
+different accessible names, Enter applies a focused answer, Escape closes,
+and every new text/background pair clears WCAG AA in both themes (lowest
+5.01:1). Its own trap: Selenium's `send_keys` focuses what it is called
+on, so tabbing via `body` moves focus OUT of the dialog and then reports a
+focus trap that is not actually missing.
+
+**Visual.** `shoot.py` regenerated all 47 screenshots and 3 print PDFs and
+they were read, not just produced. It gained `39-*-share-dialog` and
+`40-*-import-question` in both themes — R60's two new surfaces had no
+design-review coverage at all, which is how the next round would have
+changed them blind.
+
+**The one real finding.** `purge_custom_overrides` drops every override
+aimed at a code that names a course somebody wrote themselves. Nearly
+always those are the incoming file's own; but if a file's custom course
+arrives under a code the READER had changes saved for — a course CMI
+dropped, whose classes live on as their overrides — the reader's work went
+silently. Rare (it needs a dropped course with overrides AND a friend
+inventing that exact code), and the resolution is right, but silence is
+not: it now returns the codes it dropped, `import_plan` folds them into
+`CombineStats::dropped_for_own_course`, and the sentence afterwards names
+them. Two native tests pin it, and FEATURES.md says so.
+
+**Two smaller fixes.** A `.linkish` class was introduced for something
+`.linklike` already did — folded into the existing one, with the
+word-space put in the markup the way both other callers do it. And the
+Share dialog's two link rows became ONE grid (`display: contents` on each
+row), because each row sizing its own label column left the two boxes not
+lining up.
+
+**Perf, measured honestly.** Same-session baseline from a `git worktree` at
+`0c7ef75`, fresh page per sample, CPU throttled 4×, 15 samples: My
+timetable 10→8, My courses 27→25, Catalog 65→65, Master grid 67→65, Halls
+84→84 ms, node counts byte-identical. No regression. (A first 5-sample run
+read Catalog as 65→81; that was noise, and 5 samples cannot tell noise from
+a 10% regression — the 15-sample pair is the number.) The honest cost of
+R60 is artifact size: the wasm grew 1,812,569 → 1,859,807 bytes, +2.6%.
 
 ## 8. Open bugs — found, confirmed, NOT fixed (do not delete)
 

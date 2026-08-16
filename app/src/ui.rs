@@ -3289,8 +3289,9 @@ fn my_data_dialog(app: App) -> impl IntoView {
                     "Saving this timetable to a file, or adding someone else's to it, \
                      lives under Share — the file carries your changes and your own \
                      courses too."
+                    {" "}
                     <button
-                        class="linkish"
+                        class="linklike"
                         on:click=move |_| app.dialog.set(Some(Dialog::Share))
                     >
                         "Open Share"
