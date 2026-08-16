@@ -564,15 +564,30 @@ fn my_timetable(app: App) -> impl IntoView {
                         // keyboard can read it — this used to be a tooltip
                         // on the tinted column's header.
                         {move || {
-                            columns.get()
+                            // Counted, not assumed: a week with two classes
+                            // at two odd times grows two columns, and a
+                            // sentence naming one of them said something the
+                            // reader could see was wrong.
+                            let extras = columns
+                                .get()
                                 .iter()
-                                .any(|(_, extra)| *extra)
+                                .filter(|(_, extra)| *extra)
+                                .count();
+                            (extras > 0)
                                 .then(|| {
                                     view! {
                                         <p class="muted small">
-                                            "The tinted column with the odd time is outside \
-                                             CMI's regular grid — it exists because one of \
-                                             your meetings falls at that time."
+                                            {if extras == 1 {
+                                                "The tinted column with the odd time is \
+                                                 outside CMI's regular grid — it exists \
+                                                 because one of your meetings falls at \
+                                                 that time."
+                                            } else {
+                                                "The tinted columns with the odd times are \
+                                                 outside CMI's regular grid — they exist \
+                                                 because meetings of yours fall at those \
+                                                 times."
+                                            }}
                                         </p>
                                     }
                                 })
@@ -1898,16 +1913,20 @@ fn master_grid(app: App) -> impl IntoView {
             // The tinted column, explained where everyone can read it — not
             // in a tooltip a phone never shows.
             {move || {
-                columns
-                    .get()
-                    .iter()
-                    .any(|(_, extra)| *extra)
+                let extras = columns.get().iter().filter(|(_, extra)| *extra).count();
+                (extras > 0)
                     .then(|| {
                         view! {
                             <p class="muted small">
-                                "The tinted column with the odd time is outside CMI's \
-                                 regular grid — it exists because a course meets at that \
-                                 time."
+                                {if extras == 1 {
+                                    "The tinted column with the odd time is outside CMI's \
+                                     regular grid — it exists because a course meets at \
+                                     that time."
+                                } else {
+                                    "The tinted columns with the odd times are outside \
+                                     CMI's regular grid — they exist because courses meet \
+                                     at those times."
+                                }}
                             </p>
                         }
                     })
@@ -3165,16 +3184,20 @@ fn halls_view(app: App) -> impl IntoView {
             }}
             // The tinted column, explained in visible words — not a tooltip.
             {move || {
-                hall_cols
-                    .get()
-                    .iter()
-                    .any(|(_, extra)| *extra)
+                let extras = hall_cols.get().iter().filter(|(_, extra)| *extra).count();
+                (extras > 0)
                     .then(|| {
                         view! {
                             <p class="muted small">
-                                "The tinted column with the odd time is outside CMI's \
-                                 regular grid — it exists because a meeting falls at \
-                                 that time."
+                                {if extras == 1 {
+                                    "The tinted column with the odd time is outside CMI's \
+                                     regular grid — it exists because a meeting falls at \
+                                     that time."
+                                } else {
+                                    "The tinted columns with the odd times are outside \
+                                     CMI's regular grid — they exist because meetings fall \
+                                     at those times."
+                                }}
                             </p>
                         }
                     })

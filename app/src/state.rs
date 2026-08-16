@@ -540,11 +540,21 @@ impl App {
         self.push_toast(text.into(), false);
     }
 
+    /// A toast whose id the caller keeps, so it can be taken down the moment
+    /// it stops being true. Used for the "this is happening now" message the
+    /// sync shows before a step that can make the browser ask a question:
+    /// once that step has finished, "it's asking CMI directly" describes
+    /// nothing, and it was still sitting under a banner explaining how the
+    /// attempt ENDED.
+    pub fn toast_keeping_id(&self, text: impl Into<String>) -> u64 {
+        self.push_toast(text.into(), false)
+    }
+
     pub fn toast_undo(&self, text: impl Into<String>) {
         self.push_toast(text.into(), true);
     }
 
-    fn push_toast(&self, text: String, undo: bool) {
+    fn push_toast(&self, text: String, undo: bool) -> u64 {
         let id = self.toast_seq.get_untracked() + 1;
         self.toast_seq.set(id);
         self.toasts.update(|t| t.push(Toast { id, text, undo }));
@@ -557,6 +567,7 @@ impl App {
             }
             toasts.update(|t| t.retain(|x| x.id != id));
         });
+        id
     }
 
     pub fn dismiss_toast(&self, id: u64) {

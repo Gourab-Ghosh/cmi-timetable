@@ -549,7 +549,7 @@ its own, never as a change CMI made.
 
 | | |
 |:--|:--|
-| **Theme** | Auto (follows your system), light, or dark |
+| **Theme** | Auto (follows your system), light, or dark — including the controls the browser draws for itself. Checkboxes, date and number fields and the scrollbars follow the theme too, so nothing on a dark page is left painted for a light one |
 | **Row height** | Roomy or tight in the Master grid. Until you choose, it follows the screen you opened it on — tight on a phone, where roomy rows push most of the week off the bottom edge, and roomy on a computer. Press the button once and that is your answer everywhere, on every screen and every reload; Reset in My data hands the decision back to the device |
 | **On a phone** | The timetable opens on today's classes (the whole week is one tap away), tap targets sized for fingers, a header that packs tight, and long-press to drag |
 | **Motion** | Animations respect "reduce motion" |

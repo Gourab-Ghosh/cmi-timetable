@@ -642,6 +642,20 @@ FEATURES.md  the user-facing feature list (written R39). README is the
   Same rule for counts: what the merge reports must be what survived every
   later pass, which is why the file's changes to hand-added courses are
   dropped when the PLAN is built rather than after the count (R63).
+- **`WebDriverWait.until` ignores only `NoSuchElementException`.** Anything
+  else raised INSIDE the predicate — `NoAlertPresentException` from
+  `switch_to.alert`, `StaleElementReferenceException` after a reload —
+  escapes on the FIRST poll, so the wait never waits and the test passes or
+  fails on how busy the machine is. Wrap such predicates in try/except (or
+  poll by hand) and make the failure message say what WAS on screen. Two
+  tests in t97 were flaky on exactly this (R64). Also: `message=` is built
+  eagerly, so `message=f"…{app.css('.x').text}"` can itself throw.
+- **Browser-drawn widgets do not read our CSS tokens.** Checkboxes, date and
+  number inputs and the scrollbars are painted by the browser, and follow
+  `color-scheme` — set on `:root` and on `:root[data-theme="dark"]`. Without
+  it the dark theme left the "Fits my schedule" checkbox a solid white block
+  on a near-black bar, which reads as ticked (R64). Any new native control
+  inherits the fix; do not re-solve it per control.
 - e2e Chrome flags: `--force-prefers-reduced-motion` (dialog animations),
   `--host-resolver-rules=MAP www.cmi.ac.in 127.0.0.1:$CMI_PORT, MAP *
   ~NOTFOUND, EXCLUDE 127.0.0.1` and `--ignore-certificate-errors`. Nothing
@@ -3877,6 +3891,69 @@ Gates: fmt + clippy clean on both targets (`-W clippy::redundant_clone -D
 warnings`), **132 native**, **101/101 e2e** (t98–t101 new), deploy-parity
 18/18, upgrade-path 17/17, cross-version 14/14, export-consumer 17/17,
 dialog-a11y 26/26, 50 shots + 3 print PDFs regenerated and reviewed.
+
+### R64 — the pre-deploy sweep, and what looking found that reading did not
+
+User: "run a final test on each and every functionality before I deploy …
+test for both visual and functional-related bugs". So: every gate re-run on
+the committed tree, plus a review that OPENS all 47 screenshots and 3 print
+PDFs and reads them (5 lenses, 22 agents, each finding re-opened by a second
+agent before it counted).
+
+**Two flaky tests, both harness bugs, both now impossible.** `WebDriverWait`
+ignores only `NoSuchElementException`, so anything else thrown from inside a
+predicate ends the wait on its FIRST poll instead of retrying:
+`d.switch_to.alert` raised `NoAlertPresentException` and never waited at all
+(t97's backup confirm arrives after an async `FileReader`), and
+`app.css(".sync-pill").text` raised `StaleElementReferenceException` across
+the reload the backup import performs. Both passed or failed on how busy the
+machine was. Replaced with an explicit poll and a try/except predicate, each
+saying what it DID see when it gives up. **Suite run four times end to end
+after the fix: 101/101 every time.**
+
+**Six visual/copy defects, all fixed.** None was reachable by reading code:
+
+1. The **"Fits my schedule" checkbox rendered as a solid white square** on
+   the near-black dark filter bar — an unchecked box that reads as checked.
+   Browser-drawn widgets are not styled by our tokens; `color-scheme:
+   light`/`dark` on the two `:root` blocks hands them the theme, which also
+   fixes date and number inputs and the scrollbars.
+2. **"Clashes with 1 of your course"** — the partitive keeps the plural
+   however few are picked out of it. Singular gets its own phrasing now.
+3. **"Back to CMI's credits"** on a row reading "4 (the app's guess) → 3":
+   offering to restore a figure CMI has never published. The button now says
+   whose number it goes back to, and a course CMI has dropped — where there
+   is no number to go back TO — says "Remove this change".
+4. **"CMI doesn't list credits for this course, so the app counts 4."** sat
+   beside a credits control showing 3. Phrased as the fallback now
+   ("without a number of your own the app counts 4"), which is true whatever
+   the control says.
+5. **The caption said "The tinted column"** under a grid drawing two of them.
+   Counted, in all three places that print it.
+6. **The header hint said "Sync now for the latest"** while the button beside
+   it read "⟳ Fetch the timetable" — naming a control not on the screen.
+   Switched on the same condition the button uses.
+
+Plus: the share dialog's first field opened scrolled to the middle of its
+value, so the link read "tp://127.0.0.1…" — `scroll_left(0)` after focus.
+And the "asking cmi.ac.in directly" toast is now taken down by the failure
+banner that repeats it, instead of sitting under it in the present tense
+while the banner spoke in the past. It is NOT dismissed on success: a browser
+showing the local-network prompt holds the request open behind it, and the
+sentence explaining that prompt has to outlive answering it (t73).
+
+**Investigated and NOT changed**, with the reason recorded so it is not
+re-litigated: CMI's own "Applied Algebaric Topology" and "B.S I year" are
+reproduced faithfully — this app never edits CMI's data; and the week grid's
+last day row meeting the panel's bottom edge is a scroll container at its
+fold, measured in a browser (`overflow-y: auto`, last row fully reachable
+after scrolling), not clipped content.
+
+Gates on the final tree: fmt + clippy clean on both targets, 132 native,
+101/101 e2e ×4, deploy-parity 18/18, upgrade-path 17/17, cross-version
+14/14, export-consumer 18/18, dialog-a11y 26/26, cold-start medians 10–88 ms
+at 4× CPU throttle, and the live-network check green — a real sync off the
+real deploy artifact reached CMI through corsproxy.io with no console errors.
 
 ## 8. Open bugs — found, confirmed, NOT fixed (do not delete)
 

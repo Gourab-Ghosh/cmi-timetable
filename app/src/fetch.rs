@@ -513,6 +513,9 @@ pub async fn run_update(app: App, manual: bool) {
     let mut gate_failed_any = false;
     let mut adopted = false;
     let mut direct_tried = false;
+    // The "asking cmi.ac.in directly" note, kept so the failure banner can
+    // take it down rather than repeat it underneath.
+    let mut asking_note: Option<u64> = None;
 
     // Tier 1 — public CORS relays, raced in parallel (each response
     // sanity-checked and gate-validated); the first valid one wins and the
@@ -561,13 +564,21 @@ pub async fn run_update(app: App, manual: bool) {
     if !adopted && (force.is_none() || force.as_deref() == Some("direct")) {
         direct_tried = true;
         progress(&app, "That didn't work — asking cmi.ac.in directly…");
-        app.toast(
+        // Kept by id so the failure banner below can take it down. It is
+        // the same explanation, and a failure fast enough to arrive while
+        // this is still on screen put both on the page at once — two long
+        // paragraphs saying one thing, one in the present tense ("it's
+        // asking") under one in the past ("couldn't be fetched"). It is NOT
+        // dismissed on success: a browser that raised the permission prompt
+        // holds the request open behind it, and the sentence explaining that
+        // prompt has to outlive answering it.
+        asking_note = Some(app.toast_keeping_id(
             "The app couldn't get the timetable the usual way, so it's asking CMI's \
              own website directly. Your browser may now ask whether this page can \
              reach devices on your local network — that question is about the app \
              asking cmi.ac.in for the timetable, and it's safe to allow. If you say \
              no, the app simply can't ask CMI directly. Nothing else changes.",
-        );
+        ));
         match fetch_pages_tier(
             app,
             "direct".to_string(),
@@ -605,6 +616,10 @@ pub async fn run_update(app: App, manual: bool) {
     // said no to a prompt they didn't understand should not be left guessing
     // at which of the two events caused the other.
     let lan_note = if direct_tried && online {
+        // The banner is about to say this, with the outcome attached.
+        if let Some(id) = asking_note {
+            app.dismiss_toast(id);
+        }
         " If your browser asked whether this page may reach devices on your local \
          network, that was this app getting the timetable from cmi.ac.in — on CMI's \
          own network, cmi.ac.in counts as a local address. Allowing it lets the app \

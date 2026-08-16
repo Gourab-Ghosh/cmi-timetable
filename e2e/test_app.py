@@ -635,7 +635,7 @@ def t06_master_grid_wont_fit_warning(app):
     nlp.find_element(
         By.XPATH, "./following-sibling::button[1]").click()
     dialog = app.wait_css(".dialog")
-    assert "Would clash with 1 of your course" in dialog.text, dialog.text
+    assert "Would clash with one other course of yours" in dialog.text, dialog.text
     clashes = dialog.find_element(By.CSS_SELECTOR, ".clash-list")
     assert "TOC" in clashes.text, clashes.text
     assert "Thursday" in clashes.text, clashes.text
@@ -897,7 +897,9 @@ def t17_credit_override(app):
     app.xpath("//button[contains(.,'1 change')]")  # toolbar pill
     panel.find_element(
         By.XPATH,
-        ".//li[contains(.,'TOC')]//button[normalize-space()=\"Back to CMI's credits\"]"
+        # TOC's 4 is the app's own guess, not a figure CMI publishes, so
+        # the button offers to go back to the app's number and says so.
+        ".//li[contains(.,'TOC')]//button[normalize-space()=\"Back to the app's 4\"]"
     ).click()
     app.wait_toast("Removed your credit change to TOC")
     app.wait_gone("[data-testid='your-changes']")
@@ -4742,6 +4744,24 @@ def t97_a_planner_with_nothing_in_it_is_never_asked_what_to_replace(app):
         except NoAlertPresentException:
             pass
 
+    def wait_for_confirm(seconds=10):
+        """Reading the chosen file is asynchronous (FileReader), so the
+        confirm arrives a few ms after the path is handed over.
+        `WebDriverWait.until` ignores only NoSuchElementException, so a bare
+        `switch_to.alert` inside one raises straight through on the first
+        poll and never waits at all — it passed or failed on how busy the
+        machine was. Poll it by hand, and say what DID happen when nothing
+        comes, so a missing confirm is never a mystery."""
+        deadline = time.time() + seconds
+        while time.time() < deadline:
+            try:
+                return app.d.switch_to.alert
+            except NoAlertPresentException:
+                time.sleep(0.2)
+        raise AssertionError(
+            "a browser with courses in it must be asked before a backup "
+            f"replaces them; toasts instead: {app.toasts_text()!r}")
+
     # --- make both kinds of file, from a browser that HAS set things up ---
     app.boot("/", selection=["TOC", "RDBM"], overrides=TOC_OVR)
     app.xpath("//button[normalize-space()='Share or import']").click()
@@ -4782,9 +4802,20 @@ def t97_a_planner_with_nothing_in_it_is_never_asked_what_to_replace(app):
     open_share_and_import("Import everything…", backup_file)
     # No confirm: the backup writes and reloads straight into its state.
     app.wait_css(".tabs .tab", timeout=20)
-    WebDriverWait(app.d, 15).until(
-        lambda d: "imported" in app.css(".sync-pill").text,
-        message=f"pill: {app.css('.sync-pill').text!r}")
+
+    def pill_says_imported(_d):
+        # The import replaces storage and navigates, so anything found here
+        # can go stale between the find and the read. `until` ignores only
+        # NoSuchElementException, and a StaleElementReference thrown from
+        # inside the predicate ends the wait instead of retrying it.
+        try:
+            return "imported" in app.css(".sync-pill").text
+        except Exception:
+            return False
+
+    WebDriverWait(app.d, 20).until(
+        pill_says_imported,
+        message="after a backup import the pill must say the data came from a file")
     app.wait_css("button.chip[aria-label^='TOC,']")
 
     # --- and once something IS set up, both ask again ---------------------
@@ -4798,9 +4829,7 @@ def t97_a_planner_with_nothing_in_it_is_never_asked_what_to_replace(app):
     app.wait_gone(".dialog")
 
     open_share_and_import("Import everything…", backup_file)
-    alert = WebDriverWait(app.d, 10).until(
-        lambda d: d.switch_to.alert,
-        message="a browser with courses in it must be asked before a backup replaces them")
+    alert = wait_for_confirm()
     assert "replace everything saved here" in alert.text, alert.text
     alert.dismiss()
     app.wait_css("button.chip[aria-label^='QCOM,']")

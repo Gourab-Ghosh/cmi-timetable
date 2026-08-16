@@ -13,6 +13,13 @@
    ========================================================================== */
 
 :root {
+  /* The browser's own widgets — checkboxes, date and number inputs, the
+     scrollbars — are painted by the browser, not by these tokens. Without
+     this they stay in their light-mode colours whatever the page does, and
+     the "Fits my schedule" checkbox sat on the dark filter bar as a solid
+     white square, brighter than anything else on the page. */
+  color-scheme: light;
+
   --font-ui: "Inter", "Segoe UI Variable Text", "Segoe UI", "SF Pro Text",
     "Helvetica Neue", system-ui, Arial, sans-serif;
   --font-mono: ui-monospace, "JetBrains Mono", "Cascadia Code", "Fira Code",
@@ -61,6 +68,8 @@
 }
 
 :root[data-theme="dark"] {
+  color-scheme: dark;
+
   --bg: #0e1014;
   --surface: #171a20;
   --surface-2: #1c2028;

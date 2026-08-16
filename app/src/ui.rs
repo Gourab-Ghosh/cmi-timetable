@@ -587,7 +587,19 @@ pub fn Header() -> impl IntoView {
             // re-checks by itself. So the line now says who is doing the
             // work, and leaves the button as the impatient option it is.
             <span class="sync-hint">
-                "The app checks CMI on its own, up to twice a day. Sync now for the latest."
+                // Before the first fetch there is nothing to re-check and no
+                // "Sync now" to press — the button beside this says "Fetch
+                // the timetable" — so the hint stopped naming a control that
+                // is not on the screen and says what IS true at that point.
+                {move || {
+                    if app.sync.with(|s| s.fetched_at <= 0.0) {
+                        "Nothing has been downloaded yet — press ⟳ Fetch the timetable \
+                         to get CMI's."
+                    } else {
+                        "The app checks CMI on its own, up to twice a day. Sync now for \
+                         the latest."
+                    }
+                }}
             </span>
             <div class="spacer"></div>
             <button
@@ -1849,6 +1861,13 @@ pub fn DialogHost() -> impl IntoView {
                     .and_then(|el| el.dyn_into::<web_sys::HtmlElement>().ok())
                 {
                     let _ = el.focus();
+                    // Focusing a text box with a value longer than itself
+                    // leaves the caret at the end, so the box opens showing
+                    // the MIDDLE of the value — the Share dialog's first
+                    // field greeted every reader with a link beginning
+                    // "tp://127.0.0.1…", which looks broken and is the one
+                    // thing that field exists to show whole.
+                    el.set_scroll_left(0);
                 }
             })
             .forget();
@@ -2446,11 +2465,22 @@ fn details_dialog(app: App, code: String) -> impl IntoView {
                         // there was more than one.
                         <h3 class="clash-head">
                             <span class="badge alarm">"⚠"</span>
-                            {format!(
-                                "{} {n} of your course{}",
-                                if selected { "Clashes with" } else { "Would clash with" },
-                                if n == 1 { "" } else { "s" },
-                            )}
+                            // "1 of your course" — the partitive keeps the
+                            // plural however few are picked out of it, so
+                            // the singular gets its own phrasing rather than
+                            // an "s" switched off.
+                            {
+                                let verb = if selected {
+                                    "Clashes with"
+                                } else {
+                                    "Would clash with"
+                                };
+                                if n == 1 {
+                                    format!("{verb} one other course of yours")
+                                } else {
+                                    format!("{verb} {n} of your courses")
+                                }
+                            }
                         </h3>
                         <ul class="clash-list">
                             {clash_groups
@@ -2687,18 +2717,29 @@ pub fn overrides_list(app: App) -> impl IntoView {
                     .map(|h| s.course_ci(&h.course).map(|c| c.name.clone()))
                     .collect()
             });
-            let credit_official: Vec<String> = app.snapshot.with(|s| {
+            // The number this row would go back to, and the button that says
+            // so. The button used to read "Back to CMI's credits" on every
+            // row — including the ones whose own text says the number is the
+            // app's guess because CMI lists none, where it offered to restore
+            // a figure CMI has never published.
+            let credit_official: Vec<(String, String)> = app.snapshot.with(|s| {
                 overrides
                     .credits
                     .iter()
                     .map(|c| match s.course(&c.course) {
                         // Short enough to sit left of the arrow, honest
                         // about whose number it was: "4 (the app's guess) → 3".
-                        Some(cr) if cr.credits_assumed() => {
-                            format!("{} (the app's guess)", cr.effective_credits())
-                        }
-                        Some(cr) => cr.effective_credits().to_string(),
-                        None => "?".to_string(),
+                        Some(cr) if cr.credits_assumed() => (
+                            format!("{} (the app's guess)", cr.effective_credits()),
+                            format!("Back to the app's {}", cr.effective_credits()),
+                        ),
+                        Some(cr) => (
+                            cr.effective_credits().to_string(),
+                            "Back to CMI's credits".to_string(),
+                        ),
+                        // A course CMI has dropped: there is no number to go
+                        // back TO, only this change to take away.
+                        None => ("?".to_string(), "Remove this change".to_string()),
                     })
                     .collect()
             });
@@ -2893,10 +2934,10 @@ pub fn overrides_list(app: App) -> impl IntoView {
                 }
                 let course = c.course.clone();
                 let remove_course = c.course.clone();
-                let official = credit_official
+                let (official, back_label) = credit_official
                     .get(i)
                     .cloned()
-                    .unwrap_or_else(|| "?".to_string());
+                    .unwrap_or_else(|| ("?".to_string(), "Remove this change".to_string()));
                 let selected = app.is_selected(&course);
                 rows.push((
                     OwnChange::Credits,
@@ -2916,9 +2957,10 @@ pub fn overrides_list(app: App) -> impl IntoView {
                                 class="btn small danger"
                                 on:click=move |_| app.remove_credit_override(&remove_course)
                             >
-                                // Not "Remove", which read as "remove the
-                                // credits" — it restores CMI's figure.
-                                "Back to CMI's credits"
+                                // Not a bare "Remove", which read as "remove
+                                // the credits" — it puts back whatever number
+                                // stood before, and says whose it is.
+                                {back_label}
                             </button>
                         </li>
                     }
@@ -3845,14 +3887,21 @@ fn course_editor_dialog(app: App, code: Option<String>, prefill: Option<String>)
     });
     let official_credits = cmi_course.as_ref().map(|c| c.effective_credits());
     let official_credits_assumed = cmi_course.as_ref().is_some_and(|c| c.credits_assumed());
+    // Phrased as the FALLBACK, not as the present state: this sits beside a
+    // credits control the reader may already have set to something else, and
+    // "so the app counts 4" next to a highlighted 3 was a sentence the
+    // screen itself disproved.
     let official_credits_note = cmi_course.as_ref().map(|c| {
         if !c.credits_assumed() {
             format!("CMI lists {}.", c.effective_credits())
         } else if c.credit_assumption() == ttcore::model::CreditAssumption::Seminar {
-            "CMI doesn't list credits for this seminar, so the app counts 0.".to_string()
+            "CMI doesn't list credits for this seminar; without a number of \
+             your own the app counts 0."
+                .to_string()
         } else {
             format!(
-                "CMI doesn't list credits for this course, so the app counts {}.",
+                "CMI doesn't list credits for this course; without a number of \
+                 your own the app counts {}.",
                 c.effective_credits()
             )
         }
@@ -5378,8 +5427,8 @@ fn share_dialog(app: App) -> impl IntoView {
                     "Holds your whole week: the courses, the classes you moved, added \
                      or struck out, the credits you corrected, and any course you wrote \
                      yourself. Opening one asks whether to replace your timetable or \
-                     merge the two — where both changed the same class, yours stays. An \
-                     empty timetable is asked nothing."
+                     merge the two — where both changed the same class, yours stays. \
+                     With nothing on the timetable yet, nothing is asked."
                 </p>
             </section>
 
