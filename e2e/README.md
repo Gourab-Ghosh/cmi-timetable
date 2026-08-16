@@ -23,7 +23,7 @@ Environment knobs: `CHROME_BIN` (default `/usr/bin/chromium`), `DIST_DIR`,
 `PORT`, `CARGO_TARGET_DIR` (for the seed generator; defaults to
 `~/.rust-target-e2e`).
 
-Covered flows (97 tests): Sync-now header + hidden developer mode (URL
+Covered flows (102 tests): Sync-now header + hidden developer mode (URL
 endpoint only), `?c=` selection + clash badges/panel (any casing), unknown-
 code warning, credits defaulting to 4 and per-course credit overwrites,
 master-grid ⚠ would-clash markers and clash toast on add, the ⓘ details

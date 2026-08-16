@@ -240,6 +240,9 @@ assuming:
 The credit summary on My courses spells each assumption out in a full
 sentence — which part of the total is a guess, why the app guessed what it
 did, and that **Edit this course** takes the real number if you know it.
+Where you set a number yourself, it names what that number stood in for:
+CMI's figure where CMI publishes one, the app's own guess where it does not,
+and both at once when your courses are a mix of the two.
 
 When CMI writes the credit count into a course's name — "Visualization(2
 credits)" — the app reads the number and shows the name without the note,
@@ -272,8 +275,12 @@ Each row prints only what actually changed — a room move shows two room names
 with the unchanged time beside it as context; a removal is struck through and
 has nothing on its right. Every row has a one-click way back that **says what
 pressing it leaves behind**: *Put it back*, *Back to CMI's time*, *Back to
-CMI's room*, *Back to CMI's credits*. One button undoes all of your changes to
-CMI's courses while keeping your own courses untouched.
+CMI's room*, and for credits whichever is true of that course — *Back to
+CMI's credits*, *Back to the app's 4*, or *Remove this change* where CMI has
+dropped the course and there is no number to go back to. Because those
+targets differ row by row, the panel's opening line does not name one for all
+of them — it points at the button beside each row instead. One button undoes all of your
+changes to CMI's courses while keeping your own courses untouched.
 
 A **✎ N changes** pill sits in the grid toolbars whenever custom data is in
 play, counting exactly the rows in that list.

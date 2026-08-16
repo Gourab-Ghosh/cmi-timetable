@@ -853,11 +853,17 @@ fn my_timetable(app: App) -> impl IntoView {
                                     <span class="badge accent">"✎"</span>
                                     " Your changes"
                                 </h3>
+                                // Not "back to CMI's version" — the credits
+                                // group goes back to a number the app guessed,
+                                // and this list says so two lines down. Each
+                                // row's own button names what it restores, so
+                                // the intro points at those instead of making
+                                // one promise for all of them.
                                 <p class="muted small">
                                     "Everything you've added, deleted or changed in \
-                                     your timetable. You can put any one of them back \
-                                     to CMI's version without touching the rest, and \
-                                     Ctrl+Z undoes your last change."
+                                     your timetable. Each one can be undone on its \
+                                     own — the button beside it says what it goes \
+                                     back to — and Ctrl+Z undoes your last change."
                                 </p>
                                 {overrides_list(app)}
                             </div>
@@ -1117,16 +1123,38 @@ fn my_courses(app: App) -> impl IntoView {
         if guessed > 0 {
             notes.push("If you know the real number, set it with Edit this course.".to_string());
         }
+        // What your number replaced is not always CMI's. Where CMI lists no
+        // credits, the thing it stands in for is the app's own guess — the
+        // course's card says exactly that, and this line used to disagree
+        // with it on the same screen.
         if custom > 0 {
-            notes.push(if custom == 1 {
-                "You set the credits on one course yourself. The total above uses \
-                 your number, not CMI's."
-                    .to_string()
-            } else {
-                format!(
-                    "You set the credits on {custom} courses yourself. The total \
-                     above uses your numbers, not CMI's."
-                )
+            let over_guess = courses
+                .iter()
+                .filter(|c| c.credits_assumed() && app.credits_custom(&c.code).is_some())
+                .count();
+            let over_cmi = custom - over_guess;
+            notes.push(match (over_cmi, over_guess) {
+                (0, 1) => "You set the credits on one course yourself. CMI doesn't list \
+                           credits for it, so the total above uses your number rather \
+                           than the app's guess."
+                    .to_string(),
+                (0, n) => format!(
+                    "You set the credits on {n} courses yourself. CMI doesn't list \
+                     credits for them, so the total above uses your numbers rather \
+                     than the app's guesses."
+                ),
+                (1, 0) => "You set the credits on one course yourself. The total above \
+                           uses your number, not CMI's."
+                    .to_string(),
+                (n, 0) => format!(
+                    "You set the credits on {n} courses yourself. The total above uses \
+                     your numbers, not CMI's."
+                ),
+                _ => format!(
+                    "You set the credits on {custom} courses yourself. The total above \
+                     uses your numbers — in place of CMI's where CMI lists them, and of \
+                     the app's guess where it doesn't."
+                ),
             });
         }
 

@@ -1124,6 +1124,17 @@ input[type="time"], input[type="number"], select {
   max-width: 100%;
   transition: border-color 140ms var(--ease), box-shadow 140ms var(--ease);
 }
+/* The browser's own placeholder grey is a light-theme constant (#757575) that
+   does NOT follow color-scheme, so on the dark field it came out at 3.78:1 —
+   the dimmest text in the app sitting on its darkest surface. These
+   placeholders carry an example of what to type ("e.g. German A1"), so they
+   are held to the 4.5:1 body-text bar and take the same muted token as every
+   other piece of helper text. */
+input::placeholder, textarea::placeholder {
+  color: var(--muted);
+  /* Firefox dims placeholders on top of the colour; the token IS the colour. */
+  opacity: 1;
+}
 input:focus-visible, select:focus-visible {
   outline: none;
   border-color: var(--accent);

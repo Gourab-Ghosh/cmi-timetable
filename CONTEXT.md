@@ -656,6 +656,26 @@ FEATURES.md  the user-facing feature list (written R39). README is the
   it the dark theme left the "Fits my schedule" checkbox a solid white block
   on a near-black bar, which reads as ticked (R64). Any new native control
   inherits the fix; do not re-solve it per control.
+- **`::placeholder` is the exception to that fix — `color-scheme` does NOT
+  reach it.** Chrome paints placeholders `#757575` in both themes, which on
+  the dark `#171a20` field is 3.78:1 (R65). The app therefore sets
+  `input::placeholder, textarea::placeholder { color: var(--muted);
+  opacity: 1 }` — `opacity` because Firefox dims placeholders ON TOP of
+  whatever colour is given. Placeholders here carry an example of what to
+  type, so they are held to the 4.5:1 body-text bar, not the 3:1 UI bar;
+  `.workagents/placeholder-contrast.py` measures it in a real browser.
+- **The e2e dist must be built `--release`.** `gen-sw.sh` writes the debug
+  STUB service worker — caches nothing, unregisters itself — for any
+  non-release profile, so a debug `dist-e2e` fails t74 (offline boot from
+  cache) legitimately, with a script timeout on `serviceWorker.ready` that
+  looks like a hang. A t74 failure immediately after a rebuild is the build
+  profile until proven otherwise (R65).
+- **Fixing a wrong sentence is not done until the claim is grepped.** R64
+  fixed a button that said "Back to CMI's credits" for a figure CMI never
+  published; the SAME false claim survived in a summary bullet and in a
+  panel's intro line, and shipped one round longer because only the button
+  was searched for (R65). Fix the string, then search for the assertion it
+  was making — here, `not CMI's` and `CMI's version`.
 - e2e Chrome flags: `--force-prefers-reduced-motion` (dialog animations),
   `--host-resolver-rules=MAP www.cmi.ac.in 127.0.0.1:$CMI_PORT, MAP *
   ~NOTFOUND, EXCLUDE 127.0.0.1` and `--ignore-certificate-errors`. Nothing
@@ -683,7 +703,7 @@ CARGO_TARGET_DIR=~/.rust-target-e2e RUSTFLAGS="" cargo test --workspace
 # `__wbindgen_externref_table_alloc`. Emptying it for this build restores
 # the wasm defaults without touching anything outside the repo.
 cd app && RUSTFLAGS="" CARGO_TARGET_DIR=~/.rust-target-e2e trunk build --release --dist dist-e2e
-# e2e (101 tests; self-generates seed via core example, needs cargo on PATH)
+# e2e (102 tests; self-generates seed via core example, needs cargo on PATH)
 cd e2e && DIST_DIR=../app/dist-e2e .venv/bin/python test_app.py
 # ...or just a few, by name fragment
 cd e2e && DIST_DIR=../app/dist-e2e .venv/bin/python test_app.py t44 t45
@@ -715,7 +735,7 @@ regenerates the .ics golden.
   selected course with no time is part of the timetable, not a footnote.
 - "Your changes" groups are headed by `.cg-head` (colour rail + small caps
   + count), coloured by `OwnChange::tone()`. See §4.
-- Tests: 132 native + 101/101 e2e green (as of R63). Meeting removals: `MeetingOverride.to`
+- Tests: 132 native + 102/102 e2e green (as of R65). Meeting removals: `MeetingOverride.to`
   is `Option<Meeting>` (None = removed; legacy JSON/share payloads still
   load — present meeting ⇒ Some). Out-of-grid times: **all three tables grow
   synthetic `.extra` columns**, each from its own source, all built by the
@@ -3954,6 +3974,65 @@ Gates on the final tree: fmt + clippy clean on both targets, 132 native,
 14/14, export-consumer 18/18, dialog-a11y 26/26, cold-start medians 10–88 ms
 at 4× CPU throttle, and the live-network check green — a real sync off the
 real deploy artifact reached CMI through corsproxy.io with no console errors.
+
+### R65 — the second look, and the placeholder nobody had themed
+
+Same user round as R64 (nothing new was asked). R64's *second* visual pass —
+a fresh set of eyes over the REGENERATED shots, so the fixes themselves get
+reviewed — finished after R64 was committed. 14 agents, 10 findings, each
+re-opened by a second agent: **5 confirmed, 3 of them distinct.** All three
+fixed here.
+
+1. **The credit summary said your number replaced CMI's when CMI had
+   published nothing.** `views.rs` pushed "The total above uses your number,
+   not CMI's." on `custom > 0` alone. On the same screen, the course's own
+   card said "CMI doesn't list credits for it — without your number the app
+   would count 4". Two things on one screen disagreeing about whether a CMI
+   figure exists. This is the same family as R64's "Back to CMI's credits"
+   button, and it survived that fix because it is a different string in a
+   different component — worth remembering when fixing a wording bug: **fix
+   the sentence, then grep for the claim.** Now split on
+   `credits_assumed()`: over-a-guess, over-CMI, and the mixed case get their
+   own sentence. Pinned by t102 (both new arms) and two extra assertions in
+   t17 (the guess-only arm, plus `"not CMI's" not in text`).
+2. **"You can put any one of them back to CMI's version"** headed a list
+   whose credits row goes back to a number the app guessed — the row says so
+   two lines below, and its button reads "Back to the app's 4". The intro
+   now points at the per-row buttons ("the button beside it says what it goes
+   back to") instead of naming one target for five different kinds of change.
+   Verdict was split 1–1; the refuter's own argument was that the sentence is
+   right for the OTHER four groups, which concedes it is wrong for this one.
+3. **Placeholders were never themed.** The app sets no `::placeholder` rule,
+   and Chrome's UA default `#757575` does NOT follow `color-scheme` — so on
+   the dark `#171a20` field the dimmest text in the app sat on its darkest
+   surface at **3.78:1**. Confirmed at the pixel level by an agent and then
+   measured in a browser by `.workagents/placeholder-contrast.py`. These
+   placeholders carry an example of what to type ("e.g. German A1"), so they
+   are held to the 4.5:1 body-text bar: `color: var(--muted); opacity: 1`
+   (Firefox dims placeholders ON TOP of the colour). Now 5.80:1 light and
+   6.69:1 dark, and the two themes finally differ.
+
+**A build-profile trap, recorded because it cost a suite run:** `trunk build
+--dist dist-e2e` WITHOUT `--release` makes `gen-sw.sh` write the debug stub
+worker — the one that caches nothing and unregisters itself — so **t74
+(offline boot from cache) fails legitimately**. The e2e dist must always be
+built `--release` (as `e2e/README.md` and §7's command block both say). A t74
+failure right after a rebuild means the profile, not the service worker.
+
+Refuted and NOT changed, so it is not re-litigated: the welcome screen's
+"This is the only fetch it will ever ask you for" beside a retry prompt (the
+retry IS that same first fetch — the promise is that later syncs are
+automatic); "71 courses match" above "4 more courses match your filters" on
+the Master grid (additive, and the second line is the app disclosing the gap,
+71 + 4 = the catalog's 75); and the Code field's hint spacing at phone width
+(the dialog's uniform rhythm, with no orphan input to mislabel).
+
+Gates: fmt + clippy clean on both targets, 132 native, **102/102 e2e**,
+deploy-parity 18/18, upgrade-path 17/17, cross-version 14/14,
+export-consumer 18/18, dialog-a11y 26/26, dialog-smoke 26/26,
+placeholder-contrast 9/9, cold-start medians 10–84 ms at 4× CPU throttle.
+All 47 shots and 3 PDFs regenerated; 01, 07b, 18, 19, 21 and 33 re-read by
+eye against the exact claims that were made about them.
 
 ## 8. Open bugs — found, confirmed, NOT fixed (do not delete)
 

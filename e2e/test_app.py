@@ -886,6 +886,11 @@ def t17_credit_override(app):
     section = app.css("section[aria-label='My courses']")
     assert app.css("section[aria-label='My courses'] .credit-summary .cs-num").text == "5", section.text
     assert "You set the credits on one course yourself" in section.text, section.text
+    # CMI publishes no credit figure for TOC, so the summary must not say the
+    # total prefers your number over CMI's — the card right below it says CMI
+    # has none. What your 3 stands in for is the app's guess of 4.
+    assert "rather than the app's guess" in section.text, section.text
+    assert "not CMI's" not in section.text, section.text
     # The 'Your changes' panel shows official → yours; removing it restores.
     app.open_tab("My timetable")
     panel = app.wait_css("[data-testid='your-changes']")
@@ -5138,6 +5143,45 @@ def t101_an_import_that_undeletes_a_course_says_so(app):
     app.wait_css("button.chip[aria-label^='MFD,']")
 
 
+def t102_credit_note_names_what_your_own_number_replaced(app):
+    """A number of your own does not always stand in for CMI's. Where CMI
+    lists no credits it stands in for the app's guess — the course's own card
+    says so — and the summary above it has to agree. t17 covers the
+    guess-only case; this covers the CMI-listed case and the mixed one."""
+    def set_credits(code, value):
+        app.chip(code, "section[aria-label='My courses']").click()
+        dialog = app.wait_css(".dialog")
+        dialog.find_element(
+            By.XPATH, ".//button[normalize-space()='Edit this course']").click()
+        app.wait_css(".dialog .course-form")
+        app.xpath(
+            f"//div[contains(@class,'seg')]/button[normalize-space()='{value}']").click()
+        app.xpath(
+            "//div[@class='dialog']//button[normalize-space()='Save changes']").click()
+        app.wait_toast(f"Saved your changes to {code}")
+        app.wait_gone(".dialog")
+
+    app.boot("/?c=TOC,RDBM")
+    app.open_tab("My courses")
+    summary = "section[aria-label='My courses'] .credit-summary"
+
+    # RDBM is a course CMI does publish credits for (2), so overriding it is
+    # the one case where "not CMI's" is the true sentence.
+    set_credits("RDBM", "3")
+    text = app.css(summary).text
+    assert "You set the credits on one course yourself" in text, text
+    assert "not CMI's" in text, text
+    assert "the app's guess" not in text, text
+
+    # Now one of each. The note has to cover both without claiming CMI
+    # published a figure for the course it published nothing for.
+    set_credits("TOC", "1")
+    text = app.css(summary).text
+    assert "You set the credits on 2 courses yourself" in text, text
+    assert "in place of CMI's where CMI lists them" in text, text
+    assert "of the app's guess where it doesn't" in text, text
+
+
 TESTS = [
     t01_header_sync_button_and_hidden_dev,
     t02_developer_endpoint_only,
@@ -5240,6 +5284,7 @@ TESTS = [
     t99_the_same_file_twice_says_what_it_refused,
     t100_replacing_twice_with_one_file_is_one_change,
     t101_an_import_that_undeletes_a_course_says_so,
+    t102_credit_note_names_what_your_own_number_replaced,
 ]
 
 
