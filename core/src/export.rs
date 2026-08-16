@@ -459,10 +459,11 @@ pub fn parse_timetable_export(text: &str) -> Result<TimetablePlan, String> {
     })?;
     let format = value.get("format").and_then(|f| f.as_str()).unwrap_or("");
     if format == "cmi-planner-backup" {
-        return Err("That's an “Export everything” file, not a timetable — use \
-             “Import everything…” under “Everything in one file” in My data \
-             to load it."
-            .to_string());
+        return Err(
+            "That's an “Export everything” file — a whole backup, not a \
+             timetable. Use “Import everything…” under Share to load it."
+                .to_string(),
+        );
     }
     if format != "cmi-timetable-export" {
         return Err(

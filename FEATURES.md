@@ -326,7 +326,11 @@ with an explanation of why that happens and what still worked.
 
 ### JSON, for your own tools
 
-- **Export my courses** (Share → As a file) writes your whole week as one
+Every way a timetable comes in or goes out lives in one place — the
+**Share** button in the header — as three sections: *As a link*, *As a
+timetable file* and *As a full backup*.
+
+- **Export my courses** (Share → As a timetable file) writes your whole week as one
   machine-readable file — not a list of codes. It has two halves. `courses`
   is the readable one: every course you have picked, with its credits and
   where each number came from (CMI, the app's guess and why, or you), plus
@@ -351,12 +355,18 @@ with an explanation of why that happens and what still worked.
   whole sentences, whether it should **join** your timetable or **replace**
   it. Nothing changes until you pick, and either answer is one Ctrl+Z from
   undone.
-- Joining is how two people put their weeks together. Everything of yours
-  stays; everything of theirs that this browser can take arrives. The same
-  change made on both sides counts once. Where a change of theirs meets a
-  change of yours **on the same class** — a class cannot be in two places at
-  once — yours stays and the app names the course it did that for. Classes
-  either of you invented are additions, so both survive.
+- **A browser with nothing in it is never asked.** If you have picked no
+  courses, changed nothing and written no course of your own, an import has
+  nothing to replace — so the file simply loads, with no question in the
+  way. That holds for the whole backup too. The question comes back the
+  moment there is something to lose. (The timetable downloaded from CMI
+  does not count as something to lose: a sync fetches it again.)
+- **Merging keeps everything from both.** Everything already on your
+  timetable stays; everything in the file that this browser can take
+  arrives. A change made on both sides counts once. Where a change in the
+  file meets a change of yours **on the same class** — a class cannot be in
+  two places at once — yours stays and the app names the course it did that
+  for. Classes invented on either side are additions, so both survive.
 - Nothing is ever dropped quietly. Codes this semester's catalog doesn't
   know are named and left out; a course of theirs whose code is already one
   of yours keeps yours; a course of theirs whose code CMI uses stays out, so
@@ -369,12 +379,12 @@ with an explanation of why that happens and what still worked.
   deleted course is off your timetable by definition, and importing someone
   else's deletions would take courses out of your catalog. Use **Export
   everything** to move a whole browser, deletions included.
-- **Export everything** (My data → Everything in one file) writes the whole
+- **Export everything** (Share → As a full backup) writes the whole
   planner as one JSON backup: the timetable downloaded from CMI — the whole
   catalog, halls and slots — plus your selected courses, every change you
   made, your own courses, your settings and any conflicts you postponed.
-  **Import everything** loads such a file back, on the welcome screen or in
-  My data, and the planner then looks exactly like the one that made the
+  **Import everything** loads such a file back, from Share or from the
+  welcome screen, and the planner then looks exactly like the one that made the
   file — even years later, even if CMI's site has changed or gone. It
   replaces what the browser has saved (it asks first when there is anything
   to lose), and the app stays honest about provenance: the sync pill says

@@ -313,7 +313,14 @@ pub fn import_planner_backup_text(app: App, text: &str) {
         }
     };
 
-    if app.has_data() || !app.selection.with_untracked(|s| s.is_empty()) {
+    // Asked only when there is something to lose. A browser holding nothing
+    // but a downloaded copy of CMI's timetable — a first visit, or a fresh
+    // device being set up from a backup — has no courses, no changes and no
+    // courses of its own for this file to replace, and stopping to ask
+    // "shall I replace nothing?" is a chore invented for its own sake. The
+    // cached timetable is not an answer to that question: a sync fetches it
+    // again, and the pill says the data now came from a file either way.
+    if !app.planner_is_untouched() {
         let made = domx::fmt_local_date(backup.snapshot.fetched_at);
         let ok = domx::window()
             .confirm_with_message(&format!(
@@ -482,14 +489,10 @@ pub fn import_courses_text(app: App, text: &str) {
         kept_yours,
         shadowed,
     };
-    // A browser with nothing on its timetable and nothing of its own to lose
-    // would be answering a question that has one answer: joining an empty
-    // week and replacing it are the same act.
-    if app.selection.with_untracked(|s| s.is_empty())
-        && app
-            .overrides
-            .with_untracked(|o| o.items.is_empty() && o.credits.is_empty())
-    {
+    // A browser with nothing of its own to lose would be answering a
+    // question that has one answer: joining an empty week and replacing it
+    // are the same act.
+    if app.planner_is_untouched() {
         // The work is done, so the dialog it was started from gets out of
         // the way — the same courtesy the asked-about path gets when an
         // answer is pressed. Leaving Share open would hide the timetable

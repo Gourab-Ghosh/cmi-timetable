@@ -104,15 +104,17 @@ rather than the app's storage shapes, with every list always present and
 each value stated both ways (minutes beside "HH:MM", ISO weekday beside
 "Mon", ISO 8601 beside epoch ms); reading defaults the decoration, so
 another program can write one of these files from the load-bearing fields
-alone. "Import my courses…" (Share → As a file) reads it back and asks
+alone. "Import my courses…" (Share → As a timetable file) reads it back and asks
 join-or-replace through a dialog; `core/src/combine.rs` owns the merge
 rules — identical changes collapse, a contested class keeps the reader's,
 invented classes are additive, deletions never travel — and is where the
 native tests for combining two students' weeks live. `cmi-planner-backup` carries the
 WHOLE planner — the internal `Snapshot` serde JSON plus selection,
 overrides, custom courses, prefs and postponed conflicts — and importing it
-(welcome screen, or My data → "Everything in one file") replaces the saved
-state after a confirm and reloads: validated fail-closed in core (envelope,
+(Share → "As a full backup", or the welcome screen) replaces the saved
+state and reloads — after a confirm, unless the planner is untouched
+(`App::planner_is_untouched`: no selection, no overrides, no customs), in
+which case there is nothing to confirm away: validated fail-closed in core (envelope,
 snapshot sanity) and in app (each store), labelled `SourceTier::Imported`
 in the pill, keeping the ORIGINAL fetch date.
 

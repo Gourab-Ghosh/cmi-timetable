@@ -664,7 +664,7 @@ regenerates the .ics golden.
   selected course with no time is part of the timetable, not a footnote.
 - "Your changes" groups are headed by `.cg-head` (colour rail + small caps
   + count), coloured by `OwnChange::tone()`. See §4.
-- Tests: 128 native + 96/96 e2e green (as of R61). Meeting removals: `MeetingOverride.to`
+- Tests: 128 native + 97/97 e2e green (as of R62). Meeting removals: `MeetingOverride.to`
   is `Option<Meeting>` (None = removed; legacy JSON/share payloads still
   load — present meeting ⇒ Some). Out-of-grid times: **all three tables grow
   synthetic `.extra` columns**, each from its own source, all built by the
@@ -3689,6 +3689,54 @@ so; a worktree baseline needs its own target dir. Everything measured and
 tested before the contamination was built from the right source (the
 artifact rebuilt from the wiped target dir is byte-for-byte the same
 size), and the whole battery was re-run from clean afterwards to prove it.
+
+### R62 — one door for everything that goes in or out
+
+User, in one round: move "Export/Import everything" into Share too; stop
+saying "two people can merge their timetables" and say plainly that you can
+**replace** your timetable with the file or **merge** them; and when the app
+has nothing in it yet — a first visit — don't stop to ask what to replace,
+because there is nothing to replace.
+
+**One door.** Share is now the only place a timetable enters or leaves this
+browser, as three sections named for WHAT they are, with the verbs on the
+buttons beside each heading: **As a link**, **As a timetable file**, **As a
+full backup**. My data's "Everything in one file" section is gone and its
+"Course selection" pointer with it; in their place is one "Files and links"
+section with an Open Share button. My data is now purely what-is-saved and
+how-to-remove-it, which is what its own lede always claimed.
+
+The dialog is titled "Share or import a timetable" — it does both
+directions now, and a title that says only "Share" would hide half of it.
+
+**One paragraph per section, deliberately.** With three sections the dialog
+ran past the fold on a 1500×1000 screen, and the third — the one a reader
+scrolls looking for — was the one cut off. Each section now answers only the
+two questions asked at that point (what is in it; what happens when I open
+one) and stops. The detail it used to carry — which change wins a
+disagreement, what is being left out — lives in the import dialog, which
+says it at the moment it decides something. All three sections fit without
+scrolling; on a phone it is one scroll, which is what a modal on a phone is.
+
+**`planner_is_untouched()`.** No selection, no overrides (items, credits AND
+deletions), no courses of the user's own. Both imports now skip their
+question in that state: the timetable file applies straight away, and the
+whole backup writes without a confirm. Deliberately NOT `has_data()` — the
+timetable downloaded from CMI is a cache, a sync fetches it again, and
+counting it as "something to lose" is what made a synced-but-empty browser
+sit through a confirm about replacing nothing. The old condition for the
+backup was `has_data() || !selection.is_empty()`, which had exactly that
+bug; the old condition for the timetable file checked selection + items +
+credits but not customs or deletions, so a user who had only written their
+own course, or only deleted one, was also asked a question with one answer.
+
+t97 pins both halves in both directions: a synced-but-untouched browser
+takes a timetable file with no dialog and a backup with no confirm, and the
+same two imports DO ask once a single course is selected.
+
+Gates: fmt + clippy clean on both targets, 128 native, 97/97 e2e, and the
+whole pre-deploy battery re-run (deploy-parity 18/18, upgrade-path 13/13,
+cross-version 14/14, export-consumer 17/17, dialog-a11y 26/26).
 
 ## 8. Open bugs — found, confirmed, NOT fixed (do not delete)
 

@@ -4236,12 +4236,9 @@ def t79_json_exports_parse_and_the_backup_restores_everything(app):
         for c in tt["courses"] for m in c["meetings"] if m["iso_weekday"] == 3)
     assert (1020, "TOC") in wednesday, wednesday
 
-    app.d.find_element(By.TAG_NAME, "body").send_keys(Keys.ESCAPE)
-    app.wait_gone(".dialog")
-    app.xpath("//button[normalize-space()='My data']").click()
-    dialog = app.wait_css(".dialog")
-    # The section lives low in the dialog, beneath the sticky footer at this
-    # scroll position — bring it to the middle first, like a reader would.
+    # The whole-planner backup lives in the same dialog now — third section,
+    # low enough to sit beneath the sticky footer at this scroll position,
+    # so bring it to the middle first, like a reader would.
     everything = dialog.find_element(
         By.XPATH, ".//button[normalize-space()='Export everything']")
     app.d.execute_script(
@@ -4727,6 +4724,88 @@ def t90_a_grid_chip_shows_the_tick_without_being_rebuilt(app):
     assert "in your timetable" in chip.get_attribute("aria-label")
 
 
+def t97_a_planner_with_nothing_in_it_is_never_asked_what_to_replace(app):
+    """Importing asks "replace or merge?" only when there is something to
+    replace. A browser that has synced but has no courses, no changes and
+    no courses of its own has set nothing up — the question would have one
+    answer — so the timetable file applies straight away and the whole
+    backup loads without a confirm. The moment anything IS set up, both ask
+    again."""
+    from selenium.common.exceptions import NoAlertPresentException
+
+    def assert_no_confirm():
+        try:
+            alert = app.d.switch_to.alert
+            text = alert.text
+            alert.dismiss()
+            raise AssertionError(f"a first-run import must not confirm: {text}")
+        except NoAlertPresentException:
+            pass
+
+    # --- make both kinds of file, from a browser that HAS set things up ---
+    app.boot("/", selection=["TOC", "RDBM"], overrides=TOC_OVR)
+    app.xpath("//button[normalize-space()='Share']").click()
+    dialog = app.wait_css(".dialog")
+    dialog.find_element(
+        By.XPATH, ".//button[normalize-space()='Export my courses']").click()
+    time.sleep(1.0)
+    week_file = os.path.join(DOWNLOADS, "first-run-week.json")
+    os.rename(newest_download("cmi-timetable-"), week_file)
+    everything = dialog.find_element(
+        By.XPATH, ".//button[normalize-space()='Export everything']")
+    app.d.execute_script("arguments[0].scrollIntoView({block: 'center'});", everything)
+    everything.click()
+    time.sleep(1.2)
+    backup_file = os.path.join(DOWNLOADS, "first-run-backup.json")
+    os.rename(newest_download("cmi-planner-"), backup_file)
+
+    def open_share_and_import(label, path):
+        app.xpath("//button[normalize-space()='Share']").click()
+        app.wait_css(".dialog").find_element(
+            By.XPATH, f".//button[normalize-space()='{label}']").click()
+        WebDriverWait(app.d, 10).until(
+            lambda d: d.find_element(By.CSS_SELECTOR, "#cmitt-import-input")
+        ).send_keys(path)
+
+    # --- a synced but untouched browser: no question, either way ----------
+    # It HAS the timetable downloaded from CMI, which the old rule counted
+    # as something to lose. It isn't: a sync fetches that again.
+    app.boot("/", selection=[])
+    assert app.css_all(".welcome-card") == [], "seeded: the catalog is here"
+    open_share_and_import("Import my courses…", week_file)
+    app.wait_toast("Added 2 courses from the file")
+    assert_no_confirm()
+    assert "A timetable from a file" not in app.css("body").text, \
+        "nothing was set up, so there was nothing to ask about"
+
+    app.boot("/", selection=[])
+    open_share_and_import("Import everything…", backup_file)
+    # No confirm: the backup writes and reloads straight into its state.
+    app.wait_css(".tabs .tab", timeout=20)
+    WebDriverWait(app.d, 15).until(
+        lambda d: "imported" in app.css(".sync-pill").text,
+        message=f"pill: {app.css('.sync-pill').text!r}")
+    app.wait_css("button.chip[aria-label^='TOC,']")
+
+    # --- and once something IS set up, both ask again ---------------------
+    app.boot("/", selection=["QCOM"])
+    open_share_and_import("Import my courses…", week_file)
+    ask = WebDriverWait(app.d, 10).until(
+        lambda d: app.css(".dialog") if "A timetable from a file"
+        in app.css(".dialog").text else None)
+    assert "Replace my timetable with it" in ask.text, ask.text
+    app.d.find_element(By.TAG_NAME, "body").send_keys(Keys.ESCAPE)
+    app.wait_gone(".dialog")
+
+    open_share_and_import("Import everything…", backup_file)
+    alert = WebDriverWait(app.d, 10).until(
+        lambda d: d.switch_to.alert,
+        message="a browser with courses in it must be asked before a backup replaces them")
+    assert "replace everything saved here" in alert.text, alert.text
+    alert.dismiss()
+    app.wait_css("button.chip[aria-label^='QCOM,']")
+
+
 def t95_two_students_combine_their_timetables(app):
     """The point of the file: one student exports their week — courses, a
     moved class, a credit correction and a course CMI never listed — and
@@ -4950,6 +5029,7 @@ TESTS = [
     t93_the_grid_picks_its_row_height_from_the_screen,
     t94_a_chosen_row_height_is_never_overruled,
     t95_two_students_combine_their_timetables,
+    t97_a_planner_with_nothing_in_it_is_never_asked_what_to_replace,
     t96_a_disagreement_over_one_class_keeps_your_own,
 ]
 

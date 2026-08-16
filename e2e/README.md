@@ -23,7 +23,7 @@ Environment knobs: `CHROME_BIN` (default `/usr/bin/chromium`), `DIST_DIR`,
 `PORT`, `CARGO_TARGET_DIR` (for the seed generator; defaults to
 `~/.rust-target-e2e`).
 
-Covered flows (96 tests): Sync-now header + hidden developer mode (URL
+Covered flows (97 tests): Sync-now header + hidden developer mode (URL
 endpoint only), `?c=` selection + clash badges/panel (any casing), unknown-
 code warning, credits defaulting to 4 and per-course credit overwrites,
 master-grid ⚠ would-clash markers and clash toast on add, the ⓘ details
@@ -115,7 +115,8 @@ chip still removable when expanded, the two JSON exports parsing and the
 whole-planner backup restoring EVERYTHING through a wiped browser — the
 selection, the custom move and the full catalog, with the pill saying
 "imported" (R46 reshaped this: the backup file replaced the old
-snapshot-only export, and "Import my courses" — moved to Share in R60 —
+snapshot-only export, and "Import my courses" — moved to Share in R60,
+where R62 gathered the whole-planner backup beside it —
 asks join-or-replace through a dialog, names the codes it must leave out, and
 skips the question when the timetable is empty; R47's pre-deploy audit
 added pins for the honest edges: an import that adds nothing spends no
@@ -140,8 +141,10 @@ correction and own course all arriving in the reader's week, counted in the
 dialog before anything is decided, and undone by one Ctrl+Z) with the two
 people who moved the SAME class settled without a second copy of it
 appearing — the reader's own kept, named in the sentence afterwards, and
-overridden only by Replace; and the order
-of the source chain, which
+overridden only by Replace; a browser with nothing in it never being asked
+what to replace — neither by the timetable file nor by the whole backup —
+while the same two imports do ask the moment one course is selected; and the
+order of the source chain, which
 exists for a reason a browser enforces: on CMI's own network cmi.ac.in is a
 LOCAL address, so a direct fetch makes the browser ask whether the page may
 reach devices on the local network. The relays are public hosts, go first,

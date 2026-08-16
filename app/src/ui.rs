@@ -3283,20 +3283,6 @@ fn my_data_dialog(app: App) -> impl IntoView {
                     }
                         .into_any()
                 }}
-                // One line, and a way to get there — a reader who came here
-                // looking for "Export my courses" should not have to hunt.
-                <p class="muted small">
-                    "Saving this timetable to a file, or adding someone else's to it, \
-                     lives under Share — the file carries your changes and your own \
-                     courses too."
-                    {" "}
-                    <button
-                        class="linklike"
-                        on:click=move |_| app.dialog.set(Some(Dialog::Share))
-                    >
-                        "Open Share"
-                    </button>
-                </p>
             </section>
 
             // Your own courses are NOT a section of their own: they are the
@@ -3384,46 +3370,25 @@ fn my_data_dialog(app: App) -> impl IntoView {
                 </p>
             </section>
 
+            // Every way of getting data OUT of this browser, or another
+            // browser's data IN, now lives behind Share — including the
+            // whole-planner file that used to sit here. This page is what
+            // is saved and how to remove it; that one is how it travels.
             <section class="data-section">
                 <header>
-                    <h3>"Everything in one file"</h3>
-                    <div class="btn-pair">
-                        {move || {
-                            app.has_data()
-                                .then(|| {
-                                    view! {
-                                        <button
-                                            class="btn small"
-                                            title="Saves the whole planner as one file: \
-                                                   the downloaded timetable, your courses, \
-                                                   your changes and your settings."
-                                            on:click=move |_| {
-                                                crate::export::download_planner_backup(&app)
-                                            }
-                                        >
-                                            "Export everything"
-                                        </button>
-                                    }
-                                })
-                        }}
-                        <button
-                            class="btn small"
-                            title="Loads an “Export everything” file in place of what \
-                                   this browser has saved — everything then looks \
-                                   exactly as it did on the device that made the file. \
-                                   It asks before replacing anything."
-                            on:click=move |_| crate::export::pick_and_import_backup(app)
-                        >
-                            "Import everything…"
-                        </button>
-                    </div>
+                    <h3>"Files and links"</h3>
+                    <div class="grow"></div>
+                    <button
+                        class="btn small"
+                        on:click=move |_| app.dialog.set(Some(Dialog::Share))
+                    >
+                        "Open Share"
+                    </button>
                 </header>
                 <p class="muted small">
-                    "One file holds it all — the downloaded timetable, the courses \
-                     you picked, your changes, your own courses and your settings. \
-                     Import it on any device and the planner looks exactly like this \
-                     one, even years from now. Importing replaces what's here, and \
-                     asks first."
+                    "Saving your timetable to a file, opening one somebody sent you, \
+                     backing up this whole browser, or sharing your week as a link — \
+                     all of it lives under Share."
                 </p>
             </section>
 
@@ -5174,19 +5139,25 @@ fn share_dialog(app: App) -> impl IntoView {
     let plain2 = plain.clone();
     let with2 = with_times.clone();
 
-    // The file half reads and writes the same thing the link half does, so
-    // it lives here rather than in My data, where it was filed under
-    // "Course selection" and read as a backup chore. Two people combining
-    // their weeks is the whole point of it, and this is the door marked
-    // Share.
+    // Every way a timetable enters or leaves this browser lives here now —
+    // the link, the timetable file and the whole-planner backup. They used
+    // to be split across My data (under "Course selection", where exporting
+    // read as a backup chore, and under "Everything in one file") and this
+    // dialog, so answering "how do I get this onto my laptop?" meant
+    // knowing which of two doors to open first.
     let empty = selection.is_empty();
 
     view! {
         <div class="share-dialog">
-            <h2>"Share or combine timetables"</h2>
+            // Three sections, one per kind of thing you can hand over or
+            // take in, each headed by WHAT it is rather than what you do
+            // with it — the buttons on the right of each header supply the
+            // verbs, and a reader scanning for "the backup one" finds it by
+            // name in one pass.
+            <h2>"Share or import a timetable"</h2>
             <p class="muted small dialog-lede">
-                "Hand your week to someone else, or take theirs into yours. Nothing \
-                 is uploaded anywhere."
+                "Everything here stays on your device. A link carries your timetable \
+                 inside the address itself; a file carries it as a file."
             </p>
 
             <section class="data-section">
@@ -5197,8 +5168,8 @@ fn share_dialog(app: App) -> impl IntoView {
                 // between the reader and the file buttons below, which are
                 // the half of this dialog that can't be done any other way.
                 <p class="muted small">
-                    "Whoever opens it gets your courses in place of theirs — better \
-                     for sending a copy of your week than for merging two."
+                    "Whoever opens it gets your courses in place of theirs — best for \
+                     sending someone a copy of your week."
                 </p>
                 {(!custom_codes.is_empty())
                     .then(|| {
@@ -5283,7 +5254,7 @@ fn share_dialog(app: App) -> impl IntoView {
 
             <section class="data-section">
                 <header>
-                    <h3>"As a file"</h3>
+                    <h3>"As a timetable file"</h3>
                     <div class="btn-pair">
                         <button
                             class="btn small"
@@ -5311,19 +5282,60 @@ fn share_dialog(app: App) -> impl IntoView {
                         </button>
                     </div>
                 </header>
-                // The sentence that answers the question everyone actually
-                // has about these two buttons: does it carry my changes?
+                // One paragraph per section, and no more. Each answers the
+                // only two questions a reader has here — what is in it, and
+                // what happens when I open one — and stops. The detail
+                // (which change wins, what is being left out) belongs in
+                // the dialog that asks, at the moment it decides something.
                 <p class="muted small">
-                    "The file holds everything about your week, not just a list of \
-                     codes: the courses on your timetable, the classes you moved, \
-                     added or struck out, the credits you corrected, and any course \
-                     you wrote yourself."
+                    "Holds your whole week, not just a list of codes: the courses on \
+                     your timetable, the classes you moved, added or struck out, the \
+                     credits you corrected, and any course you wrote yourself. \
+                     Opening one asks whether to replace your timetable with it, or \
+                     merge the two and keep everything from both."
                 </p>
+            </section>
+
+            <section class="data-section">
+                <header>
+                    <h3>"As a full backup"</h3>
+                    <div class="btn-pair">
+                        {move || {
+                            app.has_data()
+                                .then(|| {
+                                    view! {
+                                        <button
+                                            class="btn small"
+                                            title="Saves the whole planner as one file: \
+                                                   the downloaded timetable, your courses, \
+                                                   your changes and your settings."
+                                            on:click=move |_| {
+                                                crate::export::download_planner_backup(&app)
+                                            }
+                                        >
+                                            "Export everything"
+                                        </button>
+                                    }
+                                })
+                        }}
+                        <button
+                            class="btn small"
+                            title="Loads an “Export everything” file in place of what \
+                                   this browser has saved — everything then looks \
+                                   exactly as it did on the device that made the file. \
+                                   It asks first if there is anything to lose."
+                            on:click=move |_| crate::export::pick_and_import_backup(app)
+                        >
+                            "Import everything…"
+                        </button>
+                    </div>
+                </header>
                 <p class="muted small">
-                    "Importing one can either join it to your timetable or replace \
-                     yours with it — so two people can put their weeks together by \
-                     sending one file. Where a change of theirs meets a change of \
-                     yours on the same class, yours stays, and the app says so."
+                    "A complete copy of this browser — the downloaded timetable, your \
+                     courses, your changes and your settings — so the planner opens \
+                     exactly like this one, years from now. There is no merging: a \
+                     backup replaces everything in the browser that opens it. For a \
+                     new device, or a copy kept safe."
                 </p>
             </section>
 

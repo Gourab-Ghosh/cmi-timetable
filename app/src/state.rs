@@ -868,6 +868,21 @@ impl App {
         }
     }
 
+    /// Nothing of the user's own is saved yet: no courses picked, nothing
+    /// moved, added, struck out, re-credited or deleted, and no course of
+    /// their own written. A browser in this state has nothing an import
+    /// could overwrite, so it is never asked what to replace — the question
+    /// would have one answer, and asking it on a first visit teaches
+    /// somebody that this app makes them think before it does anything.
+    ///
+    /// Deliberately NOT `has_data()`: the timetable downloaded from CMI is
+    /// a cache, not the user's work, and a sync can fetch it again.
+    pub fn planner_is_untouched(&self) -> bool {
+        self.selection.with_untracked(|s| s.is_empty())
+            && self.overrides.with_untracked(|o| o.is_empty())
+            && self.customs.with_untracked(|c| c.is_empty())
+    }
+
     /// The import dialog's two answers, one undoable step either way.
     ///
     /// `replace` makes the file's courses the whole timetable and lets its
