@@ -778,7 +778,9 @@ regenerates the .ics golden.
   selected course with no time is part of the timetable, not a footnote.
 - "Your changes" groups are headed by `.cg-head` (colour rail + small caps
   + count), coloured by `OwnChange::tone()`. See §4.
-- Tests: 168 native + 116/116 e2e green (as of R74). Meeting removals: `MeetingOverride.to`
+- Tests: 169 native + 116/116 e2e green (as of R75, the deploy round; the
+  169 was counted from `deploy.sh`'s own in-container run —
+  49+18+3+9+25+27+28+10). Meeting removals: `MeetingOverride.to`
   is `Option<Meeting>` (None = removed; legacy JSON/share payloads still
   load — present meeting ⇒ Some). Out-of-grid times: **all three tables grow
   synthetic `.extra` columns**, each from its own source, all built by the
@@ -817,6 +819,12 @@ regenerates the .ics golden.
   the user's request: nothing on GitHub may build/schedule/fail/mail). The
   The ONLY GitHub-side step left is their managed `pages-build-deployment`,
   which copies the branch's static files — unavoidable for Pages.
+  **Live as of R75** (17 Aug 2026): `main` = `531a1d2` pushed, `gh-pages` tip
+  `3ea1a62`, serving that build. After a deploy, run
+  `.workagents/live-site-check.py` — the pre-deploy harnesses all drive a
+  localhost artifact, and it is the only one that drives the real origin
+  (GitHub's 404.html, the sub-path worker scope, and whether the fresh build
+  offers itself an update).
 
 ## 7. Prompt log (append one entry per user round; newest last)
 
@@ -4836,6 +4844,62 @@ like a student, then this build swapped under it: selection, overrides, prefs an
 cache intact, no corrupt-storage banner, offline still working), live-network-check
 (a real sync succeeded), field-clip-probe (0 findings at five widths),
 covered-text-probe (0 findings, self-test caught its planted lid).
+
+### R75 — published, then checked where it actually lives
+
+User: "push and deploy." — the sentence §2 has been waiting for. Nothing was
+decided this round; the round is the release, plus a new harness for the one
+question a release leaves open.
+
+`./deploy.sh --push` pushed `main` (11 commits, `531a1d2`), built in the
+`rust:1` container, ran the workspace tests there (**169 native**, counted from
+its own output: 49+18+3+9+25+27+28+10), built with `--public-url
+/cmi-timetable/`, published the site as a single orphan commit on `gh-pages`
+(tip `3ea1a62`), and polled the live URL until it served this build. The
+pre-push hook did not recurse — `deploy.sh` exports `CMITT_IN_DEPLOY=1` before
+it pushes anything. §6's test line said 168 and is now 169.
+
+**A doc edit landed while the container was building, and it did not matter.**
+`app/build.rs` stamps only `git rev-parse --short HEAD` and a build timestamp —
+there is no working-tree hash and no dirty flag — so the shipped build reports
+`531a1d2`. Worth knowing before assuming a mid-build edit taints a release, and
+worth NOT relying on: `DIRTY` in deploy.sh is sampled once, at the start.
+
+Verified independently of the script, which only greps the live page for the
+wasm filename: seven published files (`.nojekyll`, `404.html`, hashed js/wasm/css,
+`index.html`, `sw.js`), the live `index.html` **byte-identical** to
+`app/dist-deploy/index.html`, every asset reference carrying the
+`/cmi-timetable/` prefix, `application/wasm` on the 2,019,126-byte module, and
+`data/courses.html` still a 404 — no copy of CMI's site exists up there either.
+
+**New: `.workagents/live-site-check.py`, and it is the first thing here that
+drives the real origin.** `deploy-parity` is the closest existing harness and
+it is still our server, our origin, our idea of what got published. 14 checks,
+all green, and three of them can only be asked live: an offline reload at the
+real sub-path scope, an unknown path bouncing through **GitHub's** 404.html
+while keeping its hash, and — the check this round exists for — the
+just-published build **not offering itself an update**. Its silent daily check
+ran, found nothing newer, stayed quiet, and re-armed 24 h out; asked directly it
+said "This is the newest version of the app." That is R73's follow-up
+requirement confirmed against reality rather than a renamed-stylesheet fixture.
+A real sync from CMI stored **78 courses** — the site works for a student right
+now.
+
+**Three traps the harness cost, all mine, all now comments in it.** Comparing
+the served shell against every `.js/.css/.wasm` in `dist-deploy` fails on
+`sw.js`, which is deliberately unhashed (one stable URL, or the browser would
+never recognise the same worker) and is not a shell reference — compare
+content-hashed names only. On the real network an empty profile **starts its own
+first sync**, so `.welcome-card` is replaced within seconds; two checks asserted
+it and were asserting that the sync must fail — they now assert a control the
+app always paints, or the stored snapshot. And `get_log("browser")` **drains**:
+the cold-boot read has to happen before the planted self-test error, and the
+404 this harness requests on purpose has to be filtered or it fails a later
+console check. The detector is self-tested with a planted `console.error` for
+the reason §4 already records — a 0 from a detector that has never caught
+anything is not evidence.
+
+No app code changed this round, so FEATURES.md is untouched.
 
 ## 8. Open bugs — found, confirmed, NOT fixed (do not delete)
 
