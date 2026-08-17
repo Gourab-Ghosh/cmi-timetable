@@ -1412,7 +1412,9 @@ label.opt.alarm-lead input { width: 5rem; }
   /* Absolute positioning was what kept the strip out of the field's own click
      target; in flow it is its own row, so it takes its clicks normally. */
   .searchbox-switches { pointer-events: auto; }
-  .search-clear { margin-right: auto; }
+  /* The ✕ stays IN the cluster rather than being pushed to the far left of the
+     row: four controls under the field's right edge read as belonging to the
+     field, while a lone glyph at the opposite end reads as something else's. */
 }
 details.facet { position: relative; }
 details.facet > summary {
