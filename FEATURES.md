@@ -105,6 +105,12 @@ Every course this semester, searchable and filterable.
   dropdown with nothing left to offer does not appear. A filter you set on
   one page still shows there — ticked, and removable — even where its value
   is out of scope, so a short list always explains itself.
+- Every row carries **Add/Remove** and, beside it, **Delete** — the stronger
+  action that takes a course out of the catalog and the master grid as well
+  as your timetable. It is recorded under *Your changes*, so it can be put
+  back. (Not offered on the one row where a code of yours shadows CMI's: the
+  full sentence for that case, *"Delete my version and use CMI's"*, lives in
+  the course's own details.)
 - Filters are **undoable** like everything else, and shown as removable chips
   so you always know why a list is short.
 - Nothing found? The empty state offers to add it as a course of your own,
@@ -256,6 +262,25 @@ whatever is true after your changes.
 ---
 
 ## Nothing gets lost
+
+### Moving between sections
+
+The five sections — My timetable, My courses, Master grid, Catalog, Halls —
+are a real ARIA tab list, and every ordinary way of moving through a list
+works on them:
+
+- **Arrow keys**, both axes. The rail is a column on a desktop and a bar on a
+  phone, so Up/Down and Left/Right both step it rather than one being dead at
+  whichever width you happen to be at. **Home** and **End** jump to the ends,
+  and the list wraps.
+- **The wheel**, while the pointer is over the rail. The page underneath does
+  not move while it is — not between notches, and not at the ends.
+- **A swipe**, on a touchscreen. Drag along the bar and the sections follow.
+
+The rail is **one Tab stop**, not five: Tab reaches it, the arrows move
+within it, and one more Tab press leaves it for the page. Arrows pressed
+anywhere else still scroll the page exactly as before, and while a class is
+being moved by keyboard the arrows belong to the class, not the rail.
 
 ### Your changes, in one place
 

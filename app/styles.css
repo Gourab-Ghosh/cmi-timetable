@@ -1149,7 +1149,87 @@ input:focus-visible, select:focus-visible {
      markup and invisible on the screen. */
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 45%, transparent);
 }
-input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); width: 1rem; height: 1rem; }
+/* Checkboxes and radios, drawn by the app rather than the OS.
+   `accent-color` alone only tints the CHECKED fill — every unchecked box was
+   still the operating system's square grey control, and there are around
+   ninety of them visible at once in a filter menu, next to rounded pills and
+   chips the app drew itself. The <input> element stays exactly where it was,
+   so the accessibility tree, the label association and :focus-visible are
+   untouched; only the paint changes. */
+input[type="checkbox"], input[type="radio"] {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 1.05rem;
+  height: 1.05rem;
+  flex: none;
+  margin: 0;
+  border: 1px solid var(--line-strong);
+  background: var(--surface);
+  border-radius: 5px;
+  display: inline-grid;
+  place-content: center;
+  cursor: pointer;
+  transition: background 120ms var(--ease), border-color 120ms var(--ease);
+}
+input[type="radio"] { border-radius: 50%; }
+input[type="checkbox"]:hover, input[type="radio"]:hover { border-color: var(--accent); }
+input[type="checkbox"]:checked, input[type="radio"]:checked {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+/* The tick: two borders of an empty box, rotated. Cheaper than an SVG and it
+   scales with the control instead of blurring. */
+input[type="checkbox"]:checked::after {
+  content: "";
+  width: 0.3rem;
+  height: 0.55rem;
+  border: solid #fff;
+  border-width: 0 2px 2px 0;
+  transform: translateY(-1px) rotate(45deg);
+}
+input[type="radio"]:checked::after {
+  content: "";
+  width: 0.42rem;
+  height: 0.42rem;
+  border-radius: 50%;
+  background: #fff;
+}
+input[type="checkbox"]:disabled, input[type="radio"]:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+/* `appearance: none` opts a control out of Windows High Contrast rendering
+   as well, so it must be handed back there or the box disappears entirely
+   for the people who most need to see it. */
+@media (forced-colors: active) {
+  input[type="checkbox"], input[type="radio"] {
+    border-color: ButtonBorder;
+    background: Canvas;
+  }
+  input[type="checkbox"]:checked, input[type="radio"]:checked { background: Highlight; }
+  input[type="checkbox"]:checked::after { border-color: Canvas; }
+  input[type="radio"]:checked::after { background: Canvas; }
+}
+
+/* The same for dropdowns: the app already draws its own ▾ on the filter
+   facets (details.facet > summary::after), so a native chevron beside it in
+   the same bar reads as two different apps. Only the CLOSED box is restyled
+   — the open list stays the browser's, which keeps type-ahead, Home/End,
+   Alt+Down and the wheel stepping that domx::cycle_on_wheel relies on. */
+select {
+  appearance: none;
+  -webkit-appearance: none;
+  padding-right: 1.75rem;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%23808a99' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 0.6rem center;
+  background-size: 0.6rem;
+  cursor: pointer;
+}
+select:hover { border-color: var(--line-strong); }
+@media (forced-colors: active) {
+  select { appearance: auto; -webkit-appearance: auto; background-image: none; }
+}
 label.opt { display: flex; align-items: center; gap: 0.45rem; padding: 0.18rem 0; }
 /* The reminder-lead box: indented under its checkbox, sized for a number. */
 label.opt.alarm-lead { margin-left: 1.6rem; }

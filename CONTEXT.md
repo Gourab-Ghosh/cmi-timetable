@@ -4082,6 +4082,100 @@ fixing (§7 R58).
 That tier is last-resort only (CMI direct → relay → mirror), so it costs
 nothing while CMI is reachable; refresh it with `./deploy.sh --sync`.
 
+### R67 — five gestures, one honest question, and a drop that stopped lying
+
+Four asks, which grew to six mid-round. All landed except the last, which is
+NOT reproduced — see the end.
+
+**1. The reported drag bug was one of SIX in nine lines.** `perform_drop`
+had one "nothing changed" test and it compared the drop against `spec.base`
+— CMI's OFFICIAL cell — because `DragSpec` never carried where the chip
+actually sat. Confirmed by a 14-agent sweep, each finding re-opened:
+(a) an already-moved class put back on its own cell toasted a move, spent an
+undo step, **cleared the redo stack** and wrote two keys; (b) the keyboard
+path announced "stays where it was" while toasting a move; (c) dropping an
+UNSELECTED master/halls course on its own official cell returned early and
+**added nothing at all**, silently; (d) off the Halls tab `target_hall` is
+None, so `target_hall.is_none() ||` skipped the hall comparison entirely and
+an apparent no-op **DELETED a hall-only override**, saying it went "back to
+CMI's time" which was never touched; (e) a meeting that only falls INSIDE
+its column can never satisfy `base.slot == slot`, so dropping it where it
+renders **rewrote its time, unrecoverably** (the reset branch stays
+unreachable forever after); (f) `to` always sets `temp_booking: false`, so
+any fall-through dropped the "booked temporarily" badge.
+
+Fix: `DragSpec` gained `current: Option<Meeting>` (the chip already computed
+it — `move_from` at ui.rs, passed only to `enter_move_mode`), and
+`perform_drop` became **three ordered questions**: does the SELECTION change
+(asked first, which is what un-swallows the add) → does the MEETING change →
+is the override empty in EVERY respect. The predicate ignores `temp_booking`
+and matches halls with `same_hall`, the loose rule the grid uses to decide
+which row to draw a chip in — a strict `==` could fail on the very cell the
+chip occupies. A central guard in `apply_override` was considered and
+REJECTED: it cannot see the selection change that is the point of
+`select_and_override`.
+
+**2. All five `window.confirm` calls are gone.** They are a LAYER
+(`App::confirm`), not a `Dialog` variant, and that is load-bearing:
+`dismiss_dialog` asks its question while the course editor is open, and
+taking the single dialog slot would unmount the form whose typing the
+question exists to protect. `ConfirmAsk` is data (`Clone + PartialEq`) with
+a `ConfirmAction` enum rather than a boxed closure, so the question and the
+deed are inspectable together. The backup question now counts BOTH sides of
+the trade; the old one said "your courses, changes and settings" whatever
+the browser actually held.
+
+**3. The tab rail finally behaves like the `role="tablist"` it has always
+claimed to be.** Arrows on BOTH axes — there are three CSS regimes and the
+boundary is **900px**, not the `PHONE_MAX_PX` 640 used everywhere else, so a
+branch would be wrong for every window between them. `TAB_RAIL_MIN_PX` may
+be used for `aria-orientation` ONLY: a hint that drifts costs one wrong
+announcement, a key that drifts is a dead key. Roving tabindex keyed on
+`prefs.tab` ALONE, never the `aria-selected` predicate — that one also
+requires `Route::Planner`, and the rail is on screen on `#/developer`, where
+copying it would leave zero Tab stops on the one route where the rail is the
+only way back. Five Tab stops became one. The handler lives on the `<nav>`,
+never the document, so arrows outside the rail still scroll the page BY
+CONSTRUCTION. It stands down while `move_mode` is active (reachable: focus a
+chip, press `m`, Shift+Tab into the rail).
+
+Wheel and swipe step it too. Per the user: the rail **swallows the wheel
+outright** while the pointer is over it — including between trackpad notches
+and at both ends — because a page lurching under a resting pointer is the
+thing the feature exists to prevent. Swipe uses `touch-action: pan-y` so the
+bar cannot pan under the finger, and a `swiped` flag stops the tap that ends
+a swipe from re-selecting the tab underneath.
+
+**4. Catalog rows gained Delete**, withheld on a shadowed row (a code the
+student wrote before CMI listed it) where `delete_course` would destroy
+THEIR version and leave the row standing showing CMI's — a Delete that
+visibly deletes nothing.
+
+**5. Beauty pass.** `accent-color` alone only tints a CHECKED box, so ~90
+unchecked checkboxes were the OS's grey squares next to pills the app drew
+itself. Now `appearance: none` with a rotated-border tick, and `<select>`
+gets the app's own chevron — matching `details.facet > summary::after`,
+which was already the app's dropdown affordance sitting centimetres away.
+Both carry `@media (forced-colors: active)` fallbacks, because
+`appearance: none` opts a control out of Windows High Contrast entirely. The
+OPEN select popup is deliberately untouched: replacing it costs type-ahead,
+Home/End, Alt+Down and the wheel stepping `cycle_on_wheel` depends on.
+
+**6. Master grid slow on a mobile viewport — NOT REPRODUCED, still open.**
+New harness `.workagents/perf-mobile.py` measures every tab at desktop AND
+phone metrics (CDP `setDeviceMetricsOverride`, the same thing DevTools'
+device toolbar does), plus a scroll pass. At 4x throttle the phone is not
+slower — Master grid 83ms phone vs 91ms desktop, identical node counts
+(817), scroll frames 16.1 vs 15.9ms. An A/B removing the phone-only
+`backdrop-filter` behind the sticky rail changed nothing (16.2 vs 16.3ms).
+**The measurement is the limitation, not the verdict:** headless Chrome
+software-renders, so a 3x-DPI blur costs nothing here and would cost plenty
+on a real GPU. §8 carries this as open with what to try next.
+
+Gates: 106/106 e2e (4 new: t103 no-op drop, t104 catalog Delete, t105 arrow
+keys, t106 wheel), 132 native, fmt + clippy clean both targets, dialog-a11y
+26/26, dialog-smoke 26/26, placeholder-contrast 9/9, 47 shots regenerated.
+
 ## 8. Open bugs — found, confirmed, NOT fixed (do not delete)
 
 Rules for this section: entries stay until the bug is actually fixed and a
