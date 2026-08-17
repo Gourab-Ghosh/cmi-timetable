@@ -99,7 +99,9 @@ and no committed mirror (fixtures exist only for tests/e2e seed).
         to/from conversions — and the cmi-planner-backup envelope + import
         validation, iso_utc, filenames), combine (one student's timetable
         file folded into another's: dedupe, contested-class rules,
-        scoped clear, purge_custom_overrides);
+        scoped clear, purge_custom_overrides),
+        shorten (which free shorteners exist, how each is asked, fail-closed
+        reply parsing, and the remembered-links list + its staleness rule);
         feature `html` = native scraper path (tests + e2e seed).
         core/examples/snapshot_json.rs → fixtures → snapshot JSON (e2e
         seed; test tooling only, nothing ships it).
@@ -109,13 +111,15 @@ and no committed mirror (fixtures exist only for tests/e2e seed).
         filters), fetch.rs (tier chain proxy→direct, adopt/merge),
         ui.rs (header/tabs/facets/dialogs/chips), views.rs (5 tabs +
         welcome()), dnd.rs (pointer+keyboard drag), storage.rs, dev.rs,
-        domx.rs, export.rs (JSON exports + snapshot import);
+        domx.rs, export.rs (JSON exports + snapshot import),
+        shorten.rs (the network half of ttcore::shorten: direct first, the
+        relays raced behind it with a head start, one request per press);
         styles.css = whole design system (tokens, light+dark);
         hooks/gen-sw.sh + hooks/sw-body.js + hooks/sw-debug.js — the Trunk
         post_build hook writing the offline service worker into every build
         (debug builds get a self-cleaning no-cache stub);
         index.html registers ./sw.js on window load.
-/e2e    test_app.py — 96 Selenium tests, self-seeding (see §5); shoot.py —
+/e2e    test_app.py — 111 Selenium tests, self-seeding (see §5); shoot.py —
         design-review screenshots + print PDFs.
 /githooks  pre-push — builds+publishes via deploy.sh when main is pushed
         (activate per clone: `git config core.hooksPath githooks`; skip
@@ -669,13 +673,37 @@ FEATURES.md  the user-facing feature list (written R39). README is the
   non-release profile, so a debug `dist-e2e` fails t74 (offline boot from
   cache) legitimately, with a script timeout on `serviceWorker.ready` that
   looks like a hang. A t74 failure immediately after a rebuild is the build
-  profile until proven otherwise (R65).
+  profile until proven otherwise (R65). **And `DIST_DIR` is not optional**:
+  `test_app.py` defaults `DIST` to `app/dist`, which is where `trunk serve`
+  writes its DEBUG build — so running the suite without
+  `DIST_DIR=../app/dist-e2e` silently tests the dev build and fails t74 with
+  exactly the same script timeout, however carefully `dist-e2e` was built
+  `--release` (R69). Same symptom, different mistake: check the directory
+  before rebuilding anything.
 - **Fixing a wrong sentence is not done until the claim is grepped.** R64
   fixed a button that said "Back to CMI's credits" for a figure CMI never
   published; the SAME false claim survived in a summary bullet and in a
   panel's intro line, and shipped one round longer because only the button
   was searched for (R65). Fix the string, then search for the assertion it
   was making — here, `not CMI's` and `CMI's version`.
+- **Whether a third-party URL works can only be answered from a browser, at
+  the origin that will really ask it.** Three separate traps, all met for
+  real (R68, R69): (a) `curl` cannot judge CORS at all — the headers are
+  sent only in reply to an `Origin` header a command-line client never
+  sends, and the public relays answer a non-browser client with 403; (b) a
+  service can behave completely differently per origin — corsfix answered in
+  100ms from `127.0.0.1` and `domain_not_registered` from
+  `gourab-ghosh.github.io`, and cors.lol was fast on localhost and blocked
+  live, so **both would have shipped as bugs that only appear in
+  production**; (c) a 200 with a plausible body can still be wrong —
+  r.jina.ai answers a shorten request with an article about the page. The
+  live site is testable without deploying anything: point the harness at
+  `https://gourab-ghosh.github.io/cmi-timetable/` and run the fetch from
+  that page's own origin (`.workagents/relay-hunt.py` defaults to it;
+  `tinyurl-direct.py` prints `response.type`, which is the browser's own
+  word for "you were allowed to read this"). And never record "service X
+  needs a relay" without having asked X directly — R68 did, and cost the
+  default shortener a 9.7-second median for a call that answers in 330ms.
 - e2e Chrome flags: `--force-prefers-reduced-motion` (dialog animations),
   `--host-resolver-rules=MAP www.cmi.ac.in 127.0.0.1:$CMI_PORT, MAP *
   ~NOTFOUND, EXCLUDE 127.0.0.1` and `--ignore-certificate-errors`. Nothing
@@ -735,7 +763,7 @@ regenerates the .ics golden.
   selected course with no time is part of the timetable, not a footnote.
 - "Your changes" groups are headed by `.cg-head` (colour rail + small caps
   + count), coloured by `OwnChange::tone()`. See §4.
-- Tests: 132 native + 102/102 e2e green (as of R65). Meeting removals: `MeetingOverride.to`
+- Tests: 148 native + 111/111 e2e green (as of R69). Meeting removals: `MeetingOverride.to`
   is `Option<Meeting>` (None = removed; legacy JSON/share payloads still
   load — present meeting ⇒ Some). Out-of-grid times: **all three tables grow
   synthetic `.extra` columns**, each from its own source, all built by the
@@ -4175,6 +4203,170 @@ on a real GPU. §8 carries this as open with what to try next.
 Gates: 106/106 e2e (4 new: t103 no-op drop, t104 catalog Delete, t105 arrow
 keys, t106 wheel), 132 native, fmt + clippy clean both targets, dialog-a11y
 26/26, dialog-smoke 26/26, placeholder-contrast 9/9, 47 shots regenerated.
+
+### R68 — a short link, and the four services that turned out not to work
+
+User order: a URL shortener behind the share dialog. TinyURL by default and
+first in the list, several free services, **one** button in the share dialog,
+every detail inside the popup, never generate on its own, an explicit
+"Generate short link" button, and it must look as good as the dialog it
+comes from. Then: "make sure the link shortener actually works."
+
+Built as `core/src/shorten.rs` (services, request lines, fail-closed reply
+parsing — all natively testable) plus `app/src/shorten.rs` (the network
+half), `Dialog::Shorten`, and one `.share-shorten` button.
+
+**"Actually works" could only be answered from a browser**, and that is the
+lasting lesson of the round. CORS headers are sent only in reply to an
+`Origin` header a command-line client never sends, and both public relays
+answer a non-browser client with 403 — so `curl` reported failures that were
+not real and successes that were not either. `.workagents/shortener-live.py`
+drives a real Chrome at the built app and calls each service from the page's
+own origin. What it found changed what shipped: **is.gd and v.gd answered
+`Error, database insert failed` through every route** and were removed after
+being written and documented; ulvis, cleanuri, spoo.me and 1pt were
+CORS-blocked; tny.im answered a shorten request with its own home page and a
+200. Three survived. Bitly is not offered at all — its free tier needs an
+OAuth token, and a token inside a page anyone can view is not a secret; the
+popup says so instead of showing a button that cannot work.
+
+Also fixed from the screenshot: the result row slid under the sticky actions
+bar the moment it appeared, which is exactly when it matters most.
+
+Gates: 106/106 e2e, 140 native (8 new), fmt + clippy clean both targets, 0
+console errors in an end-to-end popup drive.
+
+### R69 — the relay that was never needed, and the popup that hid its own answer
+
+Four asks: the popup's margins and padding look bad — check it **visually**;
+a link is lost when the popup is closed, and every service's link should be
+remembered; make the popup as beautiful and understandable as possible;
+generation takes too long, optimise it. Then, mid-round: "TinyURL only is
+taking too much time", and "test the new implementations as much as possible
+so that when the app is live, there are no bugs".
+
+**1. The slowness was a wrong assumption, not a slow network.** R68 recorded
+"TinyURL sends no CORS headers" and built a relay chain on it — but never
+asked TinyURL directly; `shortener-live.py` only ever tried relays for a
+service marked `needs_relay`. Measured from the live GitHub Pages origin with
+`.workagents/shortener-timing.py` and `.workagents/relay-hunt.py`:
+
+| route | from the live origin |
+|---|---|
+| allorigins/raw (relay #1) | **median 9.7 s, worst 17.4 s, 2/3 rounds** |
+| corsproxy.io (relay #2) | 403 — it blocks `tinyurl.com` outright |
+| TinyURL **direct** | **326 ms, 10/10 parses, `response.type=cors`** |
+
+So the default service had exactly one working route and it was a
+ten-second one. `.workagents/tinyurl-direct.py` is the careful re-test: five
+rounds from BOTH origins, printing `response.type` — the browser's own word
+for "you were allowed to read this", which is the only proof that matters.
+Every service now goes direct first. **0.4 s end to end**, measured through
+the popup.
+
+**Two relay candidates would have shipped a bug that only appears live**:
+corsfix measured 100 ms from `127.0.0.1` and answers `domain_not_registered`
+from `gourab-ghosh.github.io`; cors.lol measured 247 ms on localhost and is
+blocked from the deployed origin. **A relay tested on localhost tells you
+nothing about the app the students use** — `relay-hunt.py` therefore defaults
+to the deployed origin. r.jina.ai was fast (429 ms) and rejected on content:
+it answers with a readable *article* about the page ("Title: … URL Source:
+…") and a 200. `parse_reply` caught it, and now has a test named after it.
+
+**2. Routes are raced with a head start, not queued.** `app/src/shorten.rs`
+holds a `FuturesUnordered` and starts the next route the moment the current
+one fails, or after `HEDGE_MS` (1.2 s) if it is merely slow. Fast path: one
+request, one company sees the link, ~330 ms. Bad day: the fallbacks overlap
+instead of adding up. Relays remain only as a fallback — a service can drop
+its CORS header any day, and that is what keeps it from being an outage.
+
+**2b. Then: "the other two services feel slower — make them all equally
+fast."** Right, and the cause was not the services thinking. Most of a first
+request to a host is DNS + TCP + TLS, paid before a byte is sent
+(`.workagents/shorten-warmup.py`, fresh browser profile per sample, from the
+live origin):
+
+| service | cold | with the connection already open | saved |
+|---|---|---|---|
+| TinyURL | 315 ms | 300 ms | 5% |
+| da.gd | 629 ms | **244 ms** | **61%** |
+| clck.ru | 804 ms | **418 ms** | **48%** |
+
+TinyURL was only ahead because its CDN has an edge nearby — which is exactly
+why the other two *felt* slower. So the popup opens the connection to the
+chosen service while the reader is still reading it (`domx::preconnect`, a
+`<link rel=preconnect crossorigin>`; `crossorigin` matters, because a
+credentialed socket is pooled separately and a cross-origin `fetch` sends no
+credentials, so without it the warmed connection is the wrong one). Measured
+through the real popup afterwards, in a fresh browser each time
+(`.workagents/shorten-endtoend.py`): **545 / 540 / 538 ms — within 7 ms of
+each other.** It sends nothing, it happens only for the service that is
+chosen, the popup says so in words, and t111 pins three things: the chosen
+one IS warmed, the other two are NOT contacted, and an existing hint is
+REPLACED rather than skipped — a browser acts on this hint when the element
+is INSERTED, and the connection it opened is long closed by the next visit,
+so leaving the old element in place would have made every visit after the
+first one the slow one.
+
+**3. Links are remembered, per service, in `cmitt.v1.shortlinks`.**
+`ShortenState` lost its `Done` variant entirely: a finished link belongs to
+the service that made it and to the timetable it stands for, so it lives in
+`App::shortlinks` and is read back from there. That is what makes it survive
+closing the popup, and what lets each service keep its own (`link ready`
+badge on the chooser). `Working`/`Failed` now carry the service key, so
+switching service shows that service's story rather than its neighbour's.
+
+The safety property, and the reason `ShortLink` stores `long`: a short link
+is a **permanent redirect to one address**, so the link made before a course
+was added still opens the older timetable. A remembered link is offered as
+the answer only when the long link matches to the byte; otherwise it is
+shown, clearly labelled "earlier", because it may already have been sent to
+someone. An answer that arrives after the reader has pressed again is still
+remembered but no longer shown — it cost a stranger a look at the timetable
+either way.
+
+**4. The spacing complaint was a CSS specificity bug, found by looking.**
+`label.opt` (0,1,1) beat `.shorten-opt` (0,1,0), so the base rule's
+`align-items: center` and `padding: 0.18rem 0` won every declaration the
+card made: **the radio sat halfway down the card, beside the second line of
+text and half over its left border**, and the card had no padding of its own.
+Reading the CSS did not show this; `.workagents/shorten-shots.py` did. The
+fix matches the base selector's shape (`.shorten-dialog label.shorten-opt`)
+and makes the card a grid so the radio is pinned to the NAME's row. The
+popup is now one rhythm — a grid with one gap, every child's margin zeroed —
+instead of five different margins collapsing differently at every width. The
+`padding-bottom: 3.6rem` hack on the disclosure is gone; it left a hole the
+size of a paragraph whenever that block was closed.
+
+The answer moved to the TOP, above the choice that produced it: opening the
+popup with a link already made should show you the link, not make you scroll
+past three radio buttons to find out you already have one.
+
+**A harness bug, not an app bug, and worth remembering:** the first stale-link
+screenshot looked wrong. `.workagents/shorten-stale-probe.py` showed why —
+the harness edited `cmitt.v1.selection` and reloaded, but the app also keeps
+the selection in the address bar, and boot reads that back over the top. A
+harness that edits storage behind a running app is testing the harness.
+Removing the course through the catalog, the way a student does, proved the
+guard works.
+
+**A harness mistake worth more than a fix.** The first full run came back
+109/110 with t74 (offline boot) failing on a `serviceWorker.ready` timeout —
+the exact signature §4 warns about. It was not the build profile this time:
+`test_app.py` defaults `DIST` to `app/dist`, where `trunk serve` writes its
+DEBUG output, whose worker is the self-unregistering stub. The suite had been
+run without `DIST_DIR=../app/dist-e2e`, so 109 of those passes were against
+the dev build and meant nothing as a gate. `.workagents/t74-diagnose.py`
+found it after its flag bisect ruled the driver out; §4 now carries it beside
+the older trap.
+
+Gates: **111/111 e2e** against `dist-e2e` built `--release` (5 new: t107
+remembering per service across reload and reopen, t108 an earlier link is
+never offered as current, t109 nothing is sent until the button is pressed,
+t110 an unreachable shortener says so and invents nothing, t111 only the
+chosen service is warmed), 148 native (8 new in `shorten`), fmt + clippy
+clean both targets, and the popup photographed in every state at desktop and
+phone width, before and after.
 
 ## 8. Open bugs — found, confirmed, NOT fixed (do not delete)
 

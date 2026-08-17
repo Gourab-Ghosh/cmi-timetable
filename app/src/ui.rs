@@ -858,26 +858,7 @@ fn step_tab(app: App, step: domx::GroupStep, scroll_into_view: bool) -> bool {
     if scroll_into_view {
         // On a phone the rail can be wider than the screen, so the section
         // just moved to has to be brought into the bar.
-        if let Some(el) = domx::document()
-            .query_selector(&format!("nav.tabs button:nth-of-type({})", next + 1))
-            .ok()
-            .flatten()
-            .and_then(|el| el.dyn_into::<web_sys::HtmlElement>().ok())
-        {
-            // The options form of scrollIntoView is not in this build's
-            // web-sys feature set, and enabling it for one call is a poor
-            // trade; JS says the same thing. `nearest` on both axes so the
-            // bar slides only as far as it must and the PAGE is never
-            // scrolled to reach a sticky bar that is already on screen.
-            let _ = js_sys::Reflect::get(&el, &"scrollIntoView".into()).map(|f| {
-                if let Ok(f) = f.dyn_into::<js_sys::Function>() {
-                    let opts = js_sys::Object::new();
-                    let _ = js_sys::Reflect::set(&opts, &"block".into(), &"nearest".into());
-                    let _ = js_sys::Reflect::set(&opts, &"inline".into(), &"nearest".into());
-                    let _ = f.call1(&el, &opts);
-                }
-            });
-        }
+        domx::scroll_nearest(&format!("nav.tabs button:nth-of-type({})", next + 1));
     }
     true
 }
@@ -5640,9 +5621,14 @@ fn export_dialog(app: App, scope: Option<String>) -> impl IntoView {
 /// "Make this link short" — the whole of shortening, in one popup.
 ///
 /// The rules it is built to: nothing is requested until the button is
-/// pressed; the choice of service is stated in full, including which one
-/// puts an extra stranger in the chain; and the long link stays on screen
-/// the whole time, so there is always something to fall back to.
+/// pressed; the choice of service is stated in full, including where the
+/// link is sent; the long link stays on screen the whole time, so there is
+/// always something to fall back to; and a link, once made, is still there
+/// when you come back — for every service, without asking anyone again.
+///
+/// The answer sits at the TOP, above the choice that produced it. Opening
+/// this popup with a link already made should show you the link, not make
+/// you scroll past three radio buttons to find out you already have one.
 fn shorten_dialog(app: App) -> impl IntoView {
     use ttcore::shorten::{SERVICES, service};
     // The fullest link the share dialog offers, built the same way it builds
@@ -5664,31 +5650,193 @@ fn shorten_dialog(app: App) -> impl IntoView {
     ));
     let long_for_call = long.clone();
     let long_copy = long.clone();
+    let long_for_result = long.clone();
+    let long_for_chips = long.clone();
+    let long_for_button = long.clone();
 
     let chosen =
         move || service(app.shorten_service.get()).unwrap_or(ttcore::shorten::default_service());
+    // What the popup should be showing for the service currently picked.
+    // Read as a closure, not a value: it has to answer again the moment a
+    // link lands, a service is picked or the timetable moves underneath.
+    let ready = move || app.short_for(chosen().key, &long_for_result);
+
+    // The answer lands at the TOP of the popup and the button that asks for
+    // it is pinned to the BOTTOM, so on a short screen a reader can press
+    // Generate and watch nothing happen. `nearest` — if the box is already
+    // on screen, which it is on a desktop, this does nothing at all.
+    let long_for_scroll = long.clone();
+    Effect::new(move |_| {
+        if app.short_for(chosen().key, &long_for_scroll).is_some() {
+            domx::scroll_nearest(".shorten-out");
+        }
+    });
+
+    // Open the connection to the chosen service while the reader is still
+    // reading — the handshake is most of the wait, and paying it now is what
+    // makes the three services equally quick. Runs again when the choice
+    // changes, and only ever for the one that is chosen. See
+    // `domx::preconnect`: it sends nothing.
+    Effect::new(move |_| domx::preconnect(&format!("https://{}", chosen().host)));
 
     view! {
         <div class="shorten-dialog">
             <h2>"Make this link short"</h2>
             <p class="muted small dialog-lede">
-                "A share link carries your whole timetable inside it, so it is long.
-                 A shortening service swaps it for a short one that redirects back
-                 to it — handy for a message, a slide or a poster."
+                "Your whole timetable travels inside a share link, which makes it
+                 long. A shortening service swaps it for a short one that leads
+                 back to the same place — easier to paste into a message."
             </p>
 
-            // The honest part. The app's promise everywhere else is that
-            // nothing leaves the browser; this is the one action that breaks
-            // it, so it says so before the button rather than after.
-            <p class="shorten-warn">
-                <span class="badge warn">"!"</span>
-                <span>
-                    "This is the one thing in the app that sends your link away.
-                     The service you pick can see the courses and changes inside
-                     it, and short links can be guessed by strangers — so treat a
-                     short link as public."
-                </span>
-            </p>
+            // The answer, first — because reopening this popup with a link
+            // already made should show you the link, not the form.
+            <div class="shorten-out" aria-live="polite">
+                {move || {
+                    let s = chosen();
+                    let state = app.shorten.get();
+                    // A live request and a live failure are shown ABOVE
+                    // whatever this service has already made, never instead
+                    // of it: asking again and being refused must not look
+                    // like losing the link you already had.
+                    let working = state.is_working(s.key);
+                    let failure = match &state {
+                        crate::state::ShortenState::Failed(key, why) if *key == s.key => {
+                            Some(why.clone())
+                        }
+                        _ => None,
+                    };
+                    let made = ready();
+                    // Only when this service has nothing for the timetable on
+                    // screen: an earlier link is a consolation, not an answer.
+                    let earlier = made.is_none().then(|| app.short_any(s.key)).flatten();
+                    let nothing_at_all =
+                        !working && failure.is_none() && made.is_none() && earlier.is_none();
+                    let head = view! {
+                        {failure
+                            .map(|why| {
+                                view! {
+                                    <p class="shorten-failed">
+                                        <span class="badge warn">"!"</span>
+                                        <span>{why}</span>
+                                    </p>
+                                }
+                            })}
+                        {working
+                            .then(|| {
+                                view! {
+                                    <p class="shorten-working">
+                                        <span class="spinner" aria-hidden="true"></span>
+                                        {format!("Asking {}…", s.name)}
+                                    </p>
+                                }
+                            })}
+                    };
+                    if let Some(made) = made {
+                        let to_copy = made.short.clone();
+                        let shown = made.short.clone();
+                        return view! {
+                            {head}
+                            <div class="shorten-have">
+                                <div class="shorten-link">
+                                    <input
+                                        type="text"
+                                        readonly
+                                        class="shorten-short"
+                                        prop:value=shown.clone()
+                                        aria-label="Your short link"
+                                        // A link you came back for is a link
+                                        // you are about to copy.
+                                        on:focus=|ev| domx::select_all_on_focus(&ev)
+                                    />
+                                    <button
+                                        class="btn primary"
+                                        on:click=move |_| {
+                                            domx::copy_to_clipboard(to_copy.clone(), |_| {});
+                                            app.toast("Short link copied.");
+                                        }
+                                    >
+                                        "Copy"
+                                    </button>
+                                </div>
+                                <p class="muted small shorten-made">
+                                    {match &made.via {
+                                        Some(relay) => {
+                                            format!(
+                                                "Made by {}. {} couldn't be reached directly, so \
+                                                 the helper site {relay} carried it — which means \
+                                                 it saw the link too.",
+                                                s.name,
+                                                s.name,
+                                            )
+                                        }
+                                        None => {
+                                            format!(
+                                                "Made by {}, and kept here so you don't have to \
+                                                 ask again.",
+                                                s.name,
+                                            )
+                                        }
+                                    }}
+                                </p>
+                            </div>
+                        }
+                            .into_any();
+                    }
+                    // Nothing for THIS timetable. If this service made one
+                    // for an earlier version, say so — it may already have
+                    // been sent to someone — but never offer it as if it
+                    // were current.
+                    if let Some(old) = earlier {
+                        let to_copy = old.short.clone();
+                        return view! {
+                            {head}
+                            <div class="shorten-stale">
+                                <p class="shorten-stale-head">
+                                    <span class="badge">"earlier"</span>
+                                    <span>
+                                        {format!(
+                                            "You made a {} link before your timetable changed. It \
+                                             still opens the older version.",
+                                            s.name,
+                                        )}
+                                    </span>
+                                </p>
+                                <div class="shorten-link">
+                                    <input
+                                        type="text"
+                                        readonly
+                                        class="shorten-short"
+                                        prop:value=old.short.clone()
+                                        aria-label="The short link you made earlier"
+                                    />
+                                    <button
+                                        class="btn"
+                                        on:click=move |_| {
+                                            domx::copy_to_clipboard(to_copy.clone(), |_| {});
+                                            app.toast("Earlier short link copied.");
+                                        }
+                                    >
+                                        "Copy"
+                                    </button>
+                                </div>
+                            </div>
+                        }
+                            .into_any();
+                    }
+                    view! {
+                        {head}
+                        {nothing_at_all
+                            .then(|| {
+                                view! {
+                                    <p class="muted small shorten-empty">
+                                        "No short link yet. Nothing has been sent anywhere."
+                                    </p>
+                                }
+                            })}
+                    }
+                        .into_any()
+                }}
+            </div>
 
             <fieldset class="shorten-pick">
                 <legend class="fieldlabel">"Which service?"</legend>
@@ -5696,6 +5844,7 @@ fn shorten_dialog(app: App) -> impl IntoView {
                     .iter()
                     .map(|s| {
                         let key = s.key;
+                        let long_here = long_for_chips.clone();
                         view! {
                             <label class="opt shorten-opt">
                                 <input
@@ -5704,10 +5853,19 @@ fn shorten_dialog(app: App) -> impl IntoView {
                                     prop:checked=move || app.shorten_service.get() == key
                                     on:change=move |_| {
                                         app.shorten_service.set(key);
-                                        // A different service is a different
-                                        // answer; don't leave the last one
-                                        // sitting under the new choice.
-                                        app.shorten.set(crate::state::ShortenState::Idle);
+                                        // Only a live request or a live
+                                        // failure is cleared: the LINKS are
+                                        // kept per service, so switching
+                                        // back shows what that service made
+                                        // rather than an empty box.
+                                        if app
+                                            .shorten
+                                            .with_untracked(|st| {
+                                                st.service().is_some_and(|k| k != key)
+                                            })
+                                        {
+                                            app.shorten.set(crate::state::ShortenState::Idle);
+                                        }
                                     }
                                 />
                                 <span class="shorten-opt-body">
@@ -5719,19 +5877,19 @@ fn shorten_dialog(app: App) -> impl IntoView {
                                                     <span class="badge accent">"suggested"</span>
                                                 }
                                             })}
-                                    </span>
-                                    <span class="muted small">{s.note}</span>
-                                    <span class="muted small shorten-opt-host">
-                                        {if s.needs_relay {
-                                            format!(
-                                                "Goes to {} through a relay, because it can't \
-                                                 answer this browser directly — so two services \
-                                                 see the link, not one.",
-                                                s.host,
-                                            )
-                                        } else {
-                                            format!("Goes straight to {}.", s.host)
+                                        {move || {
+                                            app.short_for(key, &long_here)
+                                                .map(|_| {
+                                                    view! {
+                                                        <span class="badge ok shorten-ready">
+                                                            "link ready"
+                                                        </span>
+                                                    }
+                                                })
                                         }}
+                                    </span>
+                                    <span class="muted small shorten-opt-note">
+                                        {s.note} " Goes to " {s.host} "."
                                     </span>
                                 </span>
                             </label>
@@ -5740,65 +5898,26 @@ fn shorten_dialog(app: App) -> impl IntoView {
                     .collect_view()}
             </fieldset>
 
+            // The honest part. The app's promise everywhere else is that
+            // nothing leaves the browser; this is the one action that breaks
+            // it, so it says so before the button rather than after.
+            <p class="shorten-warn">
+                <span class="badge warn">"!"</span>
+                <span>
+                    "Shortening is the one thing here that sends your timetable
+                     away. The service you pick can read it, and short links are
+                     short enough to be guessed — treat one as public."
+                </span>
+            </p>
+
             <p class="muted small shorten-why">
                 "Only services that work without an account are offered. Bitly and
                  TinyURL's newer API both need a personal key, and a key built into
                  a web page isn't private — so neither can be offered honestly here."
+                " While this popup is open the app opens a bare connection to the
+                 service above — a handshake and nothing else, no link and no
+                 timetable — because that handshake is most of the waiting."
             </p>
-
-            <div class="shorten-result">
-                {move || match app.shorten.get() {
-                    crate::state::ShortenState::Idle => {
-                        view! {
-                            <p class="muted small">
-                                "Nothing has been sent yet."
-                            </p>
-                        }
-                            .into_any()
-                    }
-                    crate::state::ShortenState::Working => {
-                        view! {
-                            <p class="shorten-working" aria-live="polite">
-                                {format!("Asking {}…", chosen().name)}
-                            </p>
-                        }
-                            .into_any()
-                    }
-                    crate::state::ShortenState::Done(link) => {
-                        let to_copy = link.clone();
-                        view! {
-                            <div class="fieldrow shorten-done" aria-live="polite">
-                                <span class="muted small">"Short link"</span>
-                                <input
-                                    type="text"
-                                    readonly
-                                    prop:value=link.clone()
-                                    aria-label="Shortened share link"
-                                />
-                                <button
-                                    class="btn primary"
-                                    on:click=move |_| {
-                                        domx::copy_to_clipboard(to_copy.clone(), |_| {});
-                                        app.toast("Short link copied.");
-                                    }
-                                >
-                                    "Copy"
-                                </button>
-                            </div>
-                        }
-                            .into_any()
-                    }
-                    crate::state::ShortenState::Failed(why) => {
-                        view! {
-                            <p class="shorten-failed" aria-live="polite">
-                                <span class="badge warn">"!"</span>
-                                <span>{why}</span>
-                            </p>
-                        }
-                            .into_any()
-                    }
-                }}
-            </div>
 
             // The long link never leaves the screen: whatever the service
             // does or fails to do, there is always a link that works.
@@ -5829,18 +5948,23 @@ fn shorten_dialog(app: App) -> impl IntoView {
                 </button>
                 <button
                     class="btn primary"
-                    disabled=move || matches!(app.shorten.get(), crate::state::ShortenState::Working)
+                    disabled=move || app.shorten.with(|st| st.is_working(chosen().key))
                     on:click=move |_| {
                         crate::shorten::generate(app, chosen(), long_for_call.clone());
                     }
                 >
                     {move || {
-                        match app.shorten.get() {
-                            crate::state::ShortenState::Working => "Generating…".to_string(),
-                            crate::state::ShortenState::Done(_) => {
-                                "Generate again".to_string()
-                            }
-                            _ => "Generate short link".to_string(),
+                        let s = chosen();
+                        if app.shorten.with(|st| st.is_working(s.key)) {
+                            "Asking…".to_string()
+                        } else if app.short_for(s.key, &long_for_button).is_some() {
+                            // The link is already in hand and the Copy
+                            // button beside it is the likelier next move, so
+                            // this one says what it would DO, not what it is
+                            // for: pressing it spends another request.
+                            format!("Ask {} again", s.name)
+                        } else {
+                            "Generate short link".to_string()
                         }
                     }}
                 </button>

@@ -5336,6 +5336,193 @@ def t106_the_wheel_over_the_rail_walks_the_sections(app):
         f"the page must not scroll while the wheel is over the rail: {before} -> {after}"
 
 
+def _open_shorten(app):
+    """The share dialog, then the one button in it that leads to shortening.
+    Returns the full share link the popup is holding — which is the key every
+    remembered short link is filed under, so tests plant links against it
+    rather than hard-coding a payload that the encoder is free to change."""
+    app.dismiss_toasts()
+    app.xpath("//button[normalize-space()='Share or import']").click()
+    app.wait_css(".share-shorten button")
+    buttons = app.css_all(".share-shorten button")
+    assert len(buttons) == 1, \
+        f"the share dialog must carry exactly ONE shortening control, found {len(buttons)}"
+    buttons[0].click()
+    app.wait_css(".shorten-dialog")
+    return app.css(".shorten-long input").get_attribute("value")
+
+
+def _plant_short_links(app, entries):
+    """Write short links into storage the way a successful generate would.
+    The e2e browser has every non-localhost name blackholed, so no test can
+    (or should) depend on a shortener being up to check that the app
+    remembers what it was told."""
+    app.d.execute_script(
+        "localStorage.setItem('cmitt.v1.shortlinks', arguments[0]);",
+        json.dumps(entries))
+    # Reloaded, not re-booted: `boot` navigates to a bare path, and the app
+    # also keeps the selection in the address bar — so a fresh navigation
+    # would build a DIFFERENT share link and none of the planted entries
+    # would match.
+    app.d.refresh()
+    app.wait_css(".header h1")
+
+
+def t107_a_short_link_is_remembered_for_each_service(app):
+    """A link, once made, is still there when you come back — per service,
+    and after a reload. Making one costs a request to a stranger and is a
+    permanent redirect once made; the popup used to throw it away the moment
+    it was closed, so the only way to see it again was to pay for it again."""
+    app.boot("/", selection=["TOC", "RDBM"])
+    long = _open_shorten(app)
+    assert app.css(".shorten-empty"), "a browser that has shortened nothing shows nothing"
+
+    _plant_short_links(app, [
+        {"service": "dagd", "long": long, "short": "https://da.gd/zzz"},
+        {"service": "tinyurl", "long": long, "short": "https://tinyurl.com/abcd"},
+    ])
+    assert _open_shorten(app) == long, "the same timetable must build the same link"
+
+    # The default service's link, shown without anyone being asked anything.
+    shown = app.wait_css(".shorten-have .shorten-short")
+    assert shown.get_attribute("value") == "https://tinyurl.com/abcd", \
+        shown.get_attribute("value")
+    ready = [b.text for b in app.css_all(".shorten-opt .shorten-ready")]
+    assert len(ready) == 2, f"both services have a link for this timetable: {ready}"
+    # And the button offers to spend another request, rather than pretending
+    # there is nothing there.
+    assert "again" in app.css(".shorten-dialog .actions button:last-child").text.lower()
+
+    # Each service keeps its own, and switching between them costs nothing.
+    radios = app.css_all(".shorten-opt input")
+    radios[1].click()
+    WebDriverWait(app.d, 5).until(
+        lambda d: app.css(".shorten-have .shorten-short").get_attribute("value")
+        == "https://da.gd/zzz")
+    radios[2].click()
+    WebDriverWait(app.d, 5).until(lambda d: app.css_all(".shorten-empty"))
+    assert app.css(".shorten-dialog .actions button:last-child").text == \
+        "Generate short link", "a service with no link yet offers to make one"
+    radios[0].click()
+    WebDriverWait(app.d, 5).until(
+        lambda d: app.css(".shorten-have .shorten-short").get_attribute("value")
+        == "https://tinyurl.com/abcd")
+
+    # Leaving the popup and coming back is the case the user reported.
+    app.xpath("//div[contains(@class,'dialog')]//button[normalize-space()='Back']").click()
+    app.wait_css(".share-dialog")
+    app.xpath("//div[contains(@class,'dialog')]//button[normalize-space()='Close']").click()
+    assert _open_shorten(app) == long
+    assert app.css(".shorten-have .shorten-short").get_attribute("value") == \
+        "https://tinyurl.com/abcd"
+
+
+def t108_a_link_made_before_the_timetable_changed_is_not_offered_as_current(app):
+    """The safety property. A short link is a permanent redirect to ONE
+    address, so the link made yesterday points at yesterday's timetable.
+    Remembering it is right; handing it back as though it were the answer
+    would silently share the wrong courses."""
+    app.boot("/", selection=["TOC", "RDBM"])
+    long = _open_shorten(app)
+    _plant_short_links(app, [
+        # Filed under a link this timetable no longer builds.
+        {"service": "tinyurl", "long": long + "&fromanothertime=1",
+         "short": "https://tinyurl.com/older"},
+    ])
+    _open_shorten(app)
+
+    assert app.css_all(".shorten-stale"), "an earlier link is shown, and said to be earlier"
+    assert not app.css_all(".shorten-have"), "but never as the link for this timetable"
+    assert "earlier" in app.css(".shorten-out").text.lower()
+    assert app.css(".shorten-dialog .actions button:last-child").text == \
+        "Generate short link", "and the button offers to make the current one"
+    # No "link ready" badge either: the chooser must not claim a link this
+    # timetable does not have.
+    assert not app.css_all(".shorten-opt .shorten-ready")
+
+
+def t109_nothing_is_sent_until_the_button_is_pressed(app):
+    """Opening the popup — or the share dialog behind it — must not shorten
+    anything. This is the one action in the app that hands a student's
+    timetable to a stranger, and it happens once per press or not at all."""
+    app.boot("/", selection=["TOC", "RDBM"])
+    _open_shorten(app)
+    assert "nothing has been sent" in app.css(".shorten-empty").text.lower()
+    time.sleep(1.5)
+    assert not app.css_all(".shorten-short"), "a link appeared without anyone asking for one"
+    assert app.d.execute_script(
+        "return localStorage.getItem('cmitt.v1.shortlinks');") is None
+
+
+def t110_a_shortener_that_cannot_be_reached_says_so_and_invents_nothing(app):
+    """Every name but localhost is blackholed here, so pressing Generate is
+    a real request that really fails — the state a student meets on a train.
+    It has to end in a sentence, not a spinner, and it must never leave a
+    made-up link behind."""
+    app.boot("/", selection=["TOC", "RDBM"])
+    _open_shorten(app)
+    app.css(".shorten-dialog .actions button:last-child").click()
+
+    failed = WebDriverWait(app.d, 40).until(
+        lambda d: d.find_elements(By.CSS_SELECTOR, ".shorten-failed") or False)
+    text = failed[0].text
+    assert "TinyURL" in text and "couldn't be reached" in text, text
+    assert "copy the full link instead" in text, text
+    assert not app.css_all(".shorten-short"), "a failure must not produce a link"
+    assert app.d.execute_script(
+        "return localStorage.getItem('cmitt.v1.shortlinks');") is None
+    # The fallback is still on screen, which is the whole reason it is there.
+    assert app.css(".shorten-long input").get_attribute("value").startswith("http")
+    # And the failure belongs to the service that failed: picking another one
+    # shows a clean slate rather than TinyURL's bad news.
+    app.css_all(".shorten-opt input")[1].click()
+    WebDriverWait(app.d, 5).until(lambda d: app.css_all(".shorten-empty"))
+
+
+def t111_the_chosen_service_is_warmed_and_only_the_chosen_one(app):
+    """A first request to a host pays DNS, TCP and TLS before a byte of it is
+    sent, and on a shortener that is most of the wait — 629ms cold against
+    244ms warmed, for da.gd. So the popup opens the connection while the
+    reader is still reading. Two things have to stay true: it happens for the
+    service that is CHOSEN, and it does not happen for the others — a
+    handshake sends no data, but it is still a connection to a company the
+    reader did not pick."""
+    def warmed():
+        return app.d.execute_script(
+            "return [...document.querySelectorAll(\"link[rel='preconnect']\")]"
+            ".map(l => l.href).join(' ');")
+
+    app.boot("/", selection=["TOC", "RDBM"])
+    _open_shorten(app)
+    WebDriverWait(app.d, 5).until(lambda d: "tinyurl.com" in warmed())
+    assert "da.gd" not in warmed(), warmed()
+    assert "clck.ru" not in warmed(), warmed()
+
+    app.css_all(".shorten-opt input")[1].click()
+    WebDriverWait(app.d, 5).until(lambda d: "da.gd" in warmed())
+    assert "clck.ru" not in warmed(), \
+        f"a service nobody picked must not be contacted: {warmed()}"
+
+    # And it stays a hint, not a request: warming must never put a link on
+    # screen or in storage.
+    assert not app.css_all(".shorten-short")
+    assert app.d.execute_script(
+        "return localStorage.getItem('cmitt.v1.shortlinks');") is None
+
+    # Coming back has to warm again. A browser acts on this hint when the
+    # element is INSERTED, and the connection it opened is long closed by the
+    # next visit — so leaving the old element in place would make every visit
+    # after the first one the slow one. The old element must be gone.
+    old = app.css("link[rel='preconnect'][href*='da.gd']")
+    app.xpath("//div[contains(@class,'dialog')]//button[normalize-space()='Back']").click()
+    app.wait_css(".share-dialog")
+    app.xpath("//div[contains(@class,'dialog')]//button[normalize-space()='Close']").click()
+    _open_shorten(app)
+    WebDriverWait(app.d, 5).until(EC.staleness_of(old))
+    assert app.css_all("link[rel='preconnect'][href*='da.gd']"), \
+        "the service still chosen must be warmed again on the way back in"
+
+
 def t105_arrow_keys_walk_the_tab_rail(app):
     """The rail has always claimed role=tablist; now it behaves like one.
     Both axes work (the rail is a column on a desktop and a bar on a phone),
@@ -5508,6 +5695,11 @@ TESTS = [
     t103_putting_a_class_back_where_it_was_changes_nothing,
     t104_catalog_row_can_delete_a_course,
     t105_arrow_keys_walk_the_tab_rail,
+    t107_a_short_link_is_remembered_for_each_service,
+    t108_a_link_made_before_the_timetable_changed_is_not_offered_as_current,
+    t109_nothing_is_sent_until_the_button_is_pressed,
+    t110_a_shortener_that_cannot_be_reached_says_so_and_invents_nothing,
+    t111_the_chosen_service_is_warmed_and_only_the_chosen_one,
     t106_the_wheel_over_the_rail_walks_the_sections,
 ]
 

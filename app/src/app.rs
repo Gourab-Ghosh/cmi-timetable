@@ -47,6 +47,10 @@ fn init_app() -> (App, bool) {
     // until answered — a refresh must not answer them silently.
     let conflicts: Vec<ttcore::merge::Conflict> =
         load_or(storage::KEY_CONFLICTS, &mut corrupt, Vec::new);
+    // Short links already made. Nothing depends on these being there — a
+    // browser that has never shortened anything simply has none.
+    let shortlinks: Vec<ttcore::shorten::ShortLink> =
+        load_or(storage::KEY_SHORTLINKS, &mut corrupt, Vec::new);
     let mut snapshot: Snapshot =
         load_or(storage::KEY_SNAPSHOT, &mut corrupt, Snapshot::placeholder);
     // Old app versions shipped a snapshot baked in at build time; that data
@@ -112,6 +116,8 @@ fn init_app() -> (App, bool) {
         confirm: RwSignal::new(None),
         shorten: RwSignal::new(crate::state::ShortenState::Idle),
         shorten_service: RwSignal::new(ttcore::shorten::default_service().key),
+        shorten_seq: RwSignal::new(0),
+        shortlinks: RwSignal::new(shortlinks),
         drag,
         // Derived here, at the root, for the same reason as CourseIndex
         // below: it outlives every cell that reads it. `drag` fires on every

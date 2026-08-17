@@ -12,6 +12,7 @@ use ttcore::model::{
     Course, CustomStore, Day, Meeting, MeetingOverride, OverridesStore, ParseReport,
     ScheduleStatus, Slot, Snapshot, SourceTier,
 };
+use ttcore::shorten::ShortLink;
 
 pub const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const GIT_COMMIT: &str = env!("APP_GIT_COMMIT");
@@ -329,12 +330,33 @@ pub enum Dialog {
 /// Where the one shortening request has got to. Nothing here starts on its
 /// own: `Idle` is where the popup opens and where it stays until the button
 /// is pressed.
+///
+/// There is deliberately no `Done`. A finished link belongs to the service
+/// that made it and to the timetable it stands for, so it is kept in
+/// `App::shortlinks` and read back from there — which is what makes it still
+/// be there when the popup is closed and opened again, and what lets each
+/// service keep its own. This type carries only what is true *right now*,
+/// and both live variants name the service they belong to so that switching
+/// service shows that service's story rather than its neighbour's.
 #[derive(Clone, PartialEq)]
 pub enum ShortenState {
     Idle,
-    Working,
-    Done(String),
-    Failed(String),
+    Working(&'static str),
+    Failed(&'static str, String),
+}
+
+impl ShortenState {
+    /// The service this state is about, if it is about one.
+    pub fn service(&self) -> Option<&'static str> {
+        match self {
+            ShortenState::Idle => None,
+            ShortenState::Working(key) | ShortenState::Failed(key, _) => Some(key),
+        }
+    }
+
+    pub fn is_working(&self, key: &str) -> bool {
+        matches!(self, ShortenState::Working(k) if *k == key)
+    }
 }
 
 /// A timetable file, resolved against this browser and ready to apply — the
@@ -581,6 +603,15 @@ pub struct App {
     /// popup and reopening it does not silently re-run anything.
     pub shorten: RwSignal<ShortenState>,
     pub shorten_service: RwSignal<&'static str>,
+    /// Which press is the current one. A slow answer that arrives after the
+    /// reader has pressed again must not overwrite the newer request's
+    /// state — but it is still remembered (see `crate::shorten::generate`).
+    pub shorten_seq: RwSignal<u64>,
+    /// Every short link this browser has been given, newest first, kept in
+    /// localStorage. A short link costs a request to a stranger and is a
+    /// permanent redirect once made; losing it because a popup was closed
+    /// meant paying that price twice for the same link.
+    pub shortlinks: RwSignal<Vec<ShortLink>>,
     pub drag: RwSignal<Option<DragState>>,
     /// The cell under the pointer, for the drop-target highlight. Derived
     /// from `drag` at the root (see `app.rs`) and deliberately NOT read off
@@ -2090,6 +2121,40 @@ impl App {
         // doesn't carry over.
         self.conflicts_dismissed.set(false);
         self.conflicts.set(conflicts);
+    }
+
+    /// Keep a short link the app was just given — in the signal and in
+    /// localStorage together, so that closing the popup, closing the dialog
+    /// or closing the browser all lose nothing.
+    ///
+    /// Not undoable, and deliberately not part of "Your changes": making a
+    /// short link changes nothing about the timetable. It is a receipt for
+    /// something that has already happened somewhere else, and Ctrl+Z cannot
+    /// un-send it.
+    pub fn remember_short(&self, link: ShortLink) {
+        self.shortlinks.update(|links| {
+            ttcore::shorten::remember(links, link);
+            if let Err(e) = crate::storage::save(crate::storage::KEY_SHORTLINKS, links) {
+                // Worth a line in the console and nothing more: the link is
+                // in hand and on screen either way, and a student who cannot
+                // write to storage has bigger news than this.
+                leptos::logging::warn!("cmitt: couldn't store short links: {e}");
+            }
+        });
+    }
+
+    /// The link this service made for exactly this timetable, if any.
+    pub fn short_for(&self, service: &str, long: &str) -> Option<ShortLink> {
+        self.shortlinks
+            .with(|links| ttcore::shorten::find(links, service, long).cloned())
+    }
+
+    /// The most recent link this service made for ANY version of the
+    /// timetable — offered only as "you made this earlier", never as the
+    /// answer to the link on screen now.
+    pub fn short_any(&self, service: &str) -> Option<ShortLink> {
+        self.shortlinks
+            .with(|links| ttcore::shorten::find_any(links, service).cloned())
     }
 
     /// Resolve the ANSWERED conflicts in one undoable step; the unanswered

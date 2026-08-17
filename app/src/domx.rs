@@ -112,6 +112,84 @@ fn wheel_notch(ev: &web_sys::WheelEvent, el: &web_sys::Element) -> bool {
     }
 }
 
+/// Open the connection to `origin` before anything is sent through it.
+///
+/// A first request to a host pays DNS, TCP and TLS before one byte of it is
+/// sent, and on a shortener that is most of the wait: measured from the live
+/// origin, da.gd took 629ms cold and 244ms with the connection already
+/// standing, clck.ru 804ms against 418ms
+/// (`.workagents/shorten-warmup.py`). TinyURL barely moves — 315ms against
+/// 300ms — because its CDN has an edge nearby, which is the whole reason the
+/// other two *felt* slower. Warming levels them.
+///
+/// **This sends nothing.** No URL, no timetable, no request at all — a
+/// handshake and then silence. It is still a connection to a third party, so
+/// it is made only for the service the reader has actually chosen, only
+/// while the shortening popup is open, and the popup says so in words.
+///
+/// `crossorigin` matters: a credentialed socket is pooled separately from an
+/// anonymous one, and `fetch()` to another origin sends no credentials — so
+/// without this the warmed connection is the wrong one and buys nothing.
+pub fn preconnect(origin: &str) {
+    let doc = document();
+    // A browser acts on this hint when the element is INSERTED, and a
+    // connection it opened minutes ago has long since been closed. So an
+    // existing hint for this origin is replaced rather than left alone —
+    // skipping it would mean the second time a reader opens the popup is
+    // the slow one, which is the case this round exists to fix.
+    let selector = format!("link[rel='preconnect'][href='{origin}']");
+    if let Ok(Some(old)) = doc.query_selector(&selector) {
+        old.remove();
+    }
+    let Ok(link) = doc.create_element("link") else {
+        return;
+    };
+    let _ = link.set_attribute("rel", "preconnect");
+    let _ = link.set_attribute("href", origin);
+    let _ = link.set_attribute("crossorigin", "anonymous");
+    // The <head> element needs a web-sys feature of its own; the document
+    // element does not, and a preconnect hint is honoured wherever it lands.
+    if let Some(root) = doc.document_element() {
+        let _ = root.append_child(&link);
+    }
+}
+
+/// `scrollIntoView({block: "nearest", inline: "nearest"})`, by selector.
+///
+/// The options form of `scrollIntoView` is not in this build's web-sys
+/// feature set, and enabling it for two call sites is a poor trade; JS says
+/// the same thing. `nearest` on both axes so a scroller slides only as far
+/// as it must, and the PAGE is never scrolled to reach something that is
+/// already on screen.
+pub fn scroll_nearest(selector: &str) {
+    let Some(el) = document().query_selector(selector).ok().flatten() else {
+        return;
+    };
+    let _ = js_sys::Reflect::get(&el, &"scrollIntoView".into()).map(|f| {
+        if let Ok(f) = f.dyn_into::<js_sys::Function>() {
+            let opts = js_sys::Object::new();
+            let _ = js_sys::Reflect::set(&opts, &"block".into(), &"nearest".into());
+            let _ = js_sys::Reflect::set(&opts, &"inline".into(), &"nearest".into());
+            let _ = f.call1(&el, &opts);
+        }
+    });
+}
+
+/// Select the whole value when a read-only box takes focus.
+///
+/// Everything in one of these — a share link, a short link — is meant to be
+/// taken whole, and half a URL is not a URL. The Copy button beside it is
+/// still the easy path; this is for the keyboard, and for anyone who reaches
+/// for Ctrl+C out of habit.
+pub fn select_all_on_focus(ev: &web_sys::FocusEvent) {
+    if let Some(input) = ev
+        .target()
+        .and_then(|t| t.dyn_into::<web_sys::HtmlInputElement>().ok())
+    {
+        input.select();
+    }
+}
+
 /// Turn the wheel over a box that has a step — credits, a meeting's start or
 /// end time, an export date, the reminder lead — and it moves by one step.
 ///

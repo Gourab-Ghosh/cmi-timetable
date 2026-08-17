@@ -1635,65 +1635,144 @@ details.facet .menu .menu-empty { margin: 0.2rem 0 0; }
 
 /* The shortening popup. Same furniture as every other dialog — .fieldrow,
    .badge, .actions, .opt — so it reads as part of the app rather than a
-   feature bolted to the side of it. */
+   feature bolted to the side of it.
+
+   ONE rhythm, set here and nowhere else: the popup is a grid, the gap is the
+   spacing between blocks, and every child's own margin is zeroed. The first
+   version gave each block its own margin (0.9 / 1 / 0.6 / 1 / 0.4rem), which
+   collapsed against its neighbours differently at every width and read as
+   the padding being wrong — because it was. */
+.shorten-dialog {
+  display: grid;
+  gap: 0.95rem;
+  /* Clears the sticky actions bar. It belongs to the LAST element, not to
+     whichever block happens to be last today — the previous version hung
+     3.6rem off the disclosure and left a hole the size of a paragraph when
+     that block was closed. `.actions` is in normal flow and sticks as it
+     scrolls past, so the clearance is simply the gap above it. */
+  align-content: start;
+}
+.shorten-dialog > * { margin: 0; }
+.shorten-dialog h2 { margin-bottom: -0.25rem; }
+.shorten-dialog .dialog-lede { margin: 0; }
+
 .shorten-dialog .shorten-warn,
-.shorten-dialog .shorten-failed {
+.shorten-dialog .shorten-failed,
+.shorten-dialog .shorten-stale-head {
   display: flex;
   gap: 0.55rem;
   align-items: flex-start;
-  margin: 0 0 1rem;
-  padding: 0.7rem 0.85rem;
+  margin: 0;
+  padding: 0.65rem 0.8rem;
   border-radius: var(--r-sm);
   border: 1px solid color-mix(in srgb, var(--warn) 40%, transparent);
   background: var(--warn-wash);
-  font-size: 0.9rem;
+  font-size: 0.88rem;
   line-height: 1.45;
 }
-.shorten-dialog .shorten-failed { margin: 0; }
 .shorten-dialog .badge { flex: none; margin-top: 0.1rem; }
 
-.shorten-pick { border: 0; padding: 0; margin: 0 0 0.6rem; }
-.shorten-pick legend { padding: 0; margin-bottom: 0.45rem; }
-/* Each service is a card, not a bare radio: three lines of consequence sit
-   under every name, and they need somewhere to live. */
-.shorten-opt {
-  align-items: flex-start;
-  gap: 0.6rem;
-  padding: 0.6rem 0.7rem;
+/* The answer, and the box it lives in whether or not there is one yet. A
+   fixed floor stops the popup from jumping by the height of a link the
+   moment one arrives. */
+.shorten-out {
+  min-height: 4.4rem;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 0.85rem 0.9rem;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--surface-2);
+}
+.shorten-out > * { margin: 0; }
+.shorten-have { display: grid; gap: 0.45rem; }
+.shorten-stale { display: grid; gap: 0.55rem; }
+.shorten-link { display: flex; gap: 0.6rem; align-items: center; }
+/* The link itself is the biggest thing in the popup, because it is the only
+   thing the reader came for. */
+.shorten-short {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: 1.02rem;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+.shorten-made { line-height: 1.4; }
+.shorten-working { display: flex; align-items: center; gap: 0.6rem; font-weight: 550; }
+.shorten-empty { line-height: 1.45; }
+.shorten-stale-head { font-size: 0.86rem; }
+
+.shorten-pick { border: 0; padding: 0; margin: 0; display: grid; gap: 0.4rem; }
+.shorten-pick legend { padding: 0; margin-bottom: 0.45rem; float: left; width: 100%; }
+/* Each service is a card, not a bare radio: a name, a badge or two and a
+   line of consequence need somewhere to live.
+
+   `label.opt` (0,1,1) beats a bare `.shorten-opt` (0,1,0), so the base rule's
+   `align-items: center` and `padding: 0.18rem 0` won every one of these
+   declarations: the radio sat halfway down the card beside the second line
+   of text and half over its left border, and the card had no padding of its
+   own at all. That is what "the margin and padding look bad" was. Matching
+   the base selector's shape is the fix — a grid, so the radio is pinned to
+   the NAME's row rather than to the card's centre. */
+.shorten-dialog label.shorten-opt {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  gap: 0.15rem 0.65rem;
+  padding: 0.7rem 0.85rem;
   border: 1px solid var(--line);
   border-radius: var(--r-sm);
-  margin-bottom: 0.4rem;
+  margin: 0;
   background: var(--surface);
   cursor: pointer;
   transition: border-color 120ms var(--ease), background 120ms var(--ease);
 }
-.shorten-opt:hover { border-color: var(--line-strong); background: var(--surface-2); }
-.shorten-opt:has(input:checked) {
+.shorten-dialog label.shorten-opt:hover {
+  border-color: var(--line-strong);
+  background: var(--surface-2);
+}
+.shorten-dialog label.shorten-opt:has(input:checked) {
   border-color: var(--accent);
   background: var(--accent-wash);
 }
-.shorten-opt input { margin-top: 0.15rem; }
-.shorten-opt-body { display: flex; flex-direction: column; gap: 0.15rem; }
+/* Optical alignment: the radio's box is taller than the cap height beside
+   it, so centring it on the line leaves it looking low. */
+.shorten-dialog label.shorten-opt input { margin: 0.15rem 0 0; }
+.shorten-opt-body { display: grid; gap: 0.2rem; min-width: 0; }
 .shorten-opt-name {
   display: flex;
   align-items: center;
   gap: 0.45rem;
+  flex-wrap: wrap;
   font-weight: 600;
 }
-.shorten-opt-host { opacity: 0.85; }
+.shorten-opt-note { line-height: 1.45; }
+.badge.ok { border-color: transparent; color: var(--ok); background: var(--ok-wash); }
+.shorten-ready { font-variant-numeric: tabular-nums; }
 
-.shorten-why { margin: 0 0 1rem; }
-.shorten-result { min-height: 2.6rem; display: flex; align-items: center; margin-bottom: 0.4rem; }
-.shorten-result > * { width: 100%; }
-.shorten-working { margin: 0; font-weight: 550; }
-.shorten-done input { flex: 1; font-family: var(--font-mono); }
-/* The actions row is sticky and floats over the content, so the last thing
-   in the dialog has to clear it — without this the short link and its Copy
-   button appeared UNDER the bar the moment they were generated, which is
-   exactly when they matter most. */
-.shorten-long { margin: 0.4rem 0 0; padding-bottom: 3.6rem; }
+.shorten-why { line-height: 1.45; }
+.shorten-long { margin: 0; }
 .shorten-long summary { cursor: pointer; padding: 0.3rem 0; }
-.shorten-long input { flex: 1; }
+.shorten-long .fieldrow { margin: 0.35rem 0 0; }
+.shorten-long input { flex: 1; min-width: 0; font-family: var(--font-mono); }
+
+/* On a phone the popup is nearly the whole screen, so the blocks tighten and
+   the link and its Copy button stack rather than squeezing a 30-character
+   monospace URL into half a line. */
+@media (max-width: 640px) {
+  .shorten-dialog { gap: 0.8rem; }
+  .shorten-out { padding: 0.75rem 0.8rem; }
+  .shorten-link { flex-wrap: wrap; }
+  /* The link takes the whole width and Copy sits under its right end. Not
+     stretched: a full-width gradient button under a 30-character link is a
+     button the size of the thing it acts on, which reads as the loudest
+     control in a popup whose loudest control is meant to be the link. */
+  .shorten-link .btn { flex: 0 0 auto; margin-left: auto; }
+  .shorten-short { font-size: 0.95rem; flex-basis: 100%; }
+}
 
 /* The app's own confirmation, in place of the browser's grey box.
    Stacks ABOVE .overlay (z-index 80) so it can be asked over an open

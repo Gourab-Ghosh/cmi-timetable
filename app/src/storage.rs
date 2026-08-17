@@ -18,6 +18,12 @@ pub const KEY_CUSTOM: &str = "cmitt.v1.custom";
 /// the user deferred must survive a reload — losing it on refresh silently
 /// answered "use CMI's version" for them (R43).
 pub const KEY_CONFLICTS: &str = "cmitt.v1.conflicts";
+/// Short links this browser has already been given, newest first. A cache,
+/// not user data: it is rebuildable (by asking again) and carries nothing
+/// the timetable does not, so it stays out of the export file — but it is
+/// still the student's, so "Delete all app data" takes it with everything
+/// else (that walks every `cmitt.` key, so this needs no line there).
+pub const KEY_SHORTLINKS: &str = "cmitt.v1.shortlinks";
 
 fn raw() -> Option<web_sys::Storage> {
     web_sys::window()?.local_storage().ok().flatten()

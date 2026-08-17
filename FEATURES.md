@@ -343,6 +343,44 @@ link that got re-encoded on its way through a chat app still opens correctly.
 Codes the catalog doesn't know are **warned about, not silently dropped** —
 with an explanation of why that happens and what still worked.
 
+### Making a link short
+
+A link carrying your whole timetable is long. **Make this link short** — one
+button in the share dialog, and everything about shortening lives behind it —
+trades it for a short one through a free shortening service.
+
+- **Three services, no account needed by any of them**: TinyURL (suggested,
+  and the fastest), da.gd (the shortest links) and clck.ru. Each says where
+  your link is being sent before you send it.
+- **Nothing is sent until you press the button.** Opening the share dialog
+  shortens nothing; opening this popup shortens nothing. One press, one
+  request — this is the only action in the app that hands your timetable to
+  anyone else, and it says so in as many words.
+- **Links you have made are kept**, for each service separately. Close the
+  popup, close the browser, come back tomorrow: your short link is still
+  there, and the service that made it is marked *link ready*. Nobody is
+  asked again unless you ask them to be.
+- **A link made before your timetable changed is shown as an earlier one**,
+  never as the current answer. A short link is a permanent redirect to one
+  address, so the one you made last week still opens last week's timetable —
+  it is kept and clearly labelled, because you may already have sent it to
+  someone, and a fresh one is one press away.
+- **The full link never leaves the screen**, so a service being down or slow
+  costs you nothing.
+- **All three are equally quick.** Most of the wait for a short link is not
+  the service thinking, it is your browser meeting it for the first time —
+  looking up the name, opening the connection, agreeing on encryption. While
+  the popup is open the app gets that out of the way for the service you have
+  picked: a handshake and nothing else, no link and no timetable. The popup
+  says so. It is what takes da.gd from 629 ms to 244 ms, and it is why the
+  three now finish within a few milliseconds of each other.
+- If a service cannot be reached, the app says which one and why, and leaves
+  no half-made link behind.
+
+Bitly is deliberately **not** offered: its free tier needs a personal key,
+and a key built into a web page anyone can read is not private. The popup
+says this rather than showing a button that cannot work.
+
 ### Calendar export (`.ics`)
 
 - The whole timetable, or a single course — the choice appears only when you
