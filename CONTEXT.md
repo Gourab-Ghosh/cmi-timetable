@@ -4544,6 +4544,48 @@ that pins finding 2), 168 native (19 new across
 search box and the shortening popup photographed in both themes at desktop and
 phone width.
 
+### R72 — the update feature, photographed
+
+"Give me screenshots of the auto update feature … and what the banner looks
+like when the tab is in mid edit." No code changed this round; the deliverable
+is `.workagents/update-shots.py` and the 22 PNGs under
+`.workagents/shots-update/update/`, assembled into a captioned page
+(`.workagents/shots-update/walkthrough.src.html` + `build-walkthrough.py`,
+published as an artifact).
+
+**How a state that only exists for 1.5 seconds gets photographed.** The
+harness owns its own port so it can swap what one origin serves: the app is
+loaded from `dist-e2e`, then `_next_build()` (borrowed from t114) starts
+serving a renamed-stylesheet copy on the same port, and the check is run the
+production way — `localStorage` says the schedule is due, then
+`window.dispatchEvent(new Event('online'))`. No test hook, and no navigation,
+which matters: any `d.get()` after the swap would load the NEW build and there
+would be nothing to find. Two states needed their own trick — the banner has
+to be HELD, so the tab is made busy first (a keyboard move for the undimmed
+banner, an open course editor with unsaved typing for the mid-edit one), and
+the 1.5-second notice is caught by polling `.toast` text every 60 ms and
+shooting the instant it appears.
+
+**What the pictures show that the code alone did not.**
+1. **"Update now" is unreachable while a dialog is open** — the modal overlay
+   takes the click (Selenium reports the interception, which is the honest
+   answer: a reader cannot press it either). The banner is behind the
+   backdrop-blur, which reads correctly as "waiting, not your turn"; the
+   update lands by itself the moment the dialog closes.
+2. **An update can land on top of a live Undo.** Saving the half-typed course
+   raises "Added READING … Undo" and the tab goes quiet in the same instant,
+   so the reload happens 1.5 s later and the undo stack — in-memory by
+   design — is gone while its offer is still on screen. Nothing is lost, but
+   the affordance is. NOT fixed; see §8.
+3. On a phone the banner keeps "Update now" in the top-right corner and wraps
+   the note into about two thirds of the row. Consistent with every other
+   banner in the app, so it is a judgement call, not a defect — flagged, not
+   changed.
+
+Also worth knowing for the next round: `dist-e2e` is stamped `Git commit
+8bdf859` because it was built before R71's commit — the R71 code is in it (the
+suite's own t112–t115 only pass with it), the stamp just predates the commit.
+
 ## 8. Open bugs — found, confirmed, NOT fixed (do not delete)
 
 Rules for this section: entries stay until the bug is actually fixed and a
@@ -4559,7 +4601,8 @@ the R37 audit added (8.7–8.13), deliberately deferred because each was a
 change of behaviour big enough to want its own look, were all fixed in R48 —
 R48's §7 entry says what each was, how it was fixed, and which test now
 fails without the fix. 8.6 below is not a bug and never leaves. 8.18 was
-found by the R58 scouts and is open.
+found by the R58 scouts and is open; 8.19 was found by R72's screenshots — by
+looking at them, not by reading the code — and is open.
 
 ### 8.18 The Day and Time-slot facets read the WRONG filter set on My courses
 
@@ -4581,6 +4624,29 @@ it needs its own test: extend t75 to tick a day on My courses, switch to
 Catalog, and assert the Day menu there is untouched — and the reverse. Check
 `with_picked`'s callers at the same time, since the badge and the menu
 disagreeing is the symptom that would remain if only one side were changed.
+
+### 8.19 A self-update can land on top of a live Undo offer
+
+Found in R72 by photographing the feature, not by reading it: see
+`.workagents/shots-update/update/5-lands-when-the-edit-is-done.png`, where
+both toasts are on screen at once.
+
+`settle()` treats "no unsaved work and no dialog" as a safe moment, and
+finishing an action is exactly when both become true. So saving a course
+raises "Added READING … **Undo**" and starts the 1.5-second notice in the same
+instant; the reload follows, and the undo stack — in-memory by design, and
+documented as not surviving a reload — is gone while its offer is still
+sitting there. The data is safe (that is what the banner promises), but a
+control the reader can see stops working without a word.
+
+The fix is small and belongs in `busy_with_unsaved_work()` or in `settle()`:
+treat a toast that is still offering Undo as "in the middle of something", so
+the update waits out the toast's 6 seconds. Do NOT reach for a timer — the
+toast stack already knows; ask it. It needs a test that pins the whole
+sequence rather than the delay: arm an update, do something undoable, and
+assert the page has not reloaded while an Undo is on screen. Note the
+interaction with rule 1 while writing it — a HIDDEN tab still reloads at once,
+which is correct, because nobody is looking at that Undo.
 
 ### 8.6 Deliberate non-bug — do not "fix" this
 
