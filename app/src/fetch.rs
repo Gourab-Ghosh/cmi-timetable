@@ -94,6 +94,13 @@ struct FetchOk {
     duration_ms: f64,
 }
 
+/// `fetch_text` for callers outside this module, without the timing record
+/// the sync log wants. Used by the link shortener, which reaches the same
+/// kind of public host through the same relays.
+pub async fn fetch_text_public(url: &str, timeout_ms: u32) -> Result<String, String> {
+    fetch_text(url, timeout_ms).await.map(|ok| ok.text)
+}
+
 async fn fetch_text(url: &str, timeout_ms: u32) -> Result<FetchOk, String> {
     let started = domx::now_ms();
     let controller = web_sys::AbortController::new().ok();

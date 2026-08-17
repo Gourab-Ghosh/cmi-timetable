@@ -110,6 +110,8 @@ fn init_app() -> (App, bool) {
         dialog: RwSignal::new(None),
         dialog_dirty: RwSignal::new(false),
         confirm: RwSignal::new(None),
+        shorten: RwSignal::new(crate::state::ShortenState::Idle),
+        shorten_service: RwSignal::new(ttcore::shorten::default_service().key),
         drag,
         // Derived here, at the root, for the same reason as CourseIndex
         // below: it outlives every cell that reads it. `drag` fires on every

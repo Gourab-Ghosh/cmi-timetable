@@ -7,6 +7,7 @@ mod domx;
 mod export;
 mod fetch;
 mod hues;
+mod shorten;
 mod state;
 mod storage;
 mod ui;

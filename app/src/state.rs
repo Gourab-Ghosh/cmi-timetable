@@ -318,6 +318,23 @@ pub enum Dialog {
     /// "Import my courses…" read a timetable file. The dialog shows what is
     /// in it and asks join-or-replace; nothing changes until the user picks.
     ImportCourses(IncomingPlan),
+    /// Making the share link short. Everything about shortening lives here
+    /// and nowhere else — the share dialog carries one button to reach it.
+    /// Swaps the dialog slot the way `RemovedCourse` does, and Back swaps
+    /// straight to `Share`: the link is derived, so nothing is lost either
+    /// way.
+    Shorten,
+}
+
+/// Where the one shortening request has got to. Nothing here starts on its
+/// own: `Idle` is where the popup opens and where it stays until the button
+/// is pressed.
+#[derive(Clone, PartialEq)]
+pub enum ShortenState {
+    Idle,
+    Working,
+    Done(String),
+    Failed(String),
 }
 
 /// A timetable file, resolved against this browser and ready to apply — the
@@ -559,6 +576,11 @@ pub struct App {
     /// form and destroy the very typing the question exists to protect. This
     /// stacks on top instead, so whatever is underneath keeps its state.
     pub confirm: RwSignal<Option<ConfirmAsk>>,
+    /// The shortening popup's one request, and which service it will ask.
+    /// Both live on `App` rather than inside the dialog so that closing the
+    /// popup and reopening it does not silently re-run anything.
+    pub shorten: RwSignal<ShortenState>,
+    pub shorten_service: RwSignal<&'static str>,
     pub drag: RwSignal<Option<DragState>>,
     /// The cell under the pointer, for the drop-target highlight. Derived
     /// from `drag` at the root (see `app.rs`) and deliberately NOT read off

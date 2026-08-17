@@ -16,6 +16,7 @@ pub mod model;
 pub mod parse;
 pub mod rawhtml;
 pub mod share;
+pub mod shorten;
 pub mod textgrid;
 pub mod validate;
 

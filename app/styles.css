@@ -1621,6 +1621,80 @@ details.facet .menu .menu-empty { margin: 0.2rem 0 0; }
 }
 .dialog h2 { margin-bottom: 0.65rem; }
 
+/* The one shortening control in the share dialog: a quiet accent button and
+   the promise that nothing has happened yet, on one line. */
+.share-shorten {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  flex-wrap: wrap;
+  margin-top: 0.9rem;
+  padding-top: 0.85rem;
+  border-top: 1px dashed var(--line);
+}
+
+/* The shortening popup. Same furniture as every other dialog — .fieldrow,
+   .badge, .actions, .opt — so it reads as part of the app rather than a
+   feature bolted to the side of it. */
+.shorten-dialog .shorten-warn,
+.shorten-dialog .shorten-failed {
+  display: flex;
+  gap: 0.55rem;
+  align-items: flex-start;
+  margin: 0 0 1rem;
+  padding: 0.7rem 0.85rem;
+  border-radius: var(--r-sm);
+  border: 1px solid color-mix(in srgb, var(--warn) 40%, transparent);
+  background: var(--warn-wash);
+  font-size: 0.9rem;
+  line-height: 1.45;
+}
+.shorten-dialog .shorten-failed { margin: 0; }
+.shorten-dialog .badge { flex: none; margin-top: 0.1rem; }
+
+.shorten-pick { border: 0; padding: 0; margin: 0 0 0.6rem; }
+.shorten-pick legend { padding: 0; margin-bottom: 0.45rem; }
+/* Each service is a card, not a bare radio: three lines of consequence sit
+   under every name, and they need somewhere to live. */
+.shorten-opt {
+  align-items: flex-start;
+  gap: 0.6rem;
+  padding: 0.6rem 0.7rem;
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  margin-bottom: 0.4rem;
+  background: var(--surface);
+  cursor: pointer;
+  transition: border-color 120ms var(--ease), background 120ms var(--ease);
+}
+.shorten-opt:hover { border-color: var(--line-strong); background: var(--surface-2); }
+.shorten-opt:has(input:checked) {
+  border-color: var(--accent);
+  background: var(--accent-wash);
+}
+.shorten-opt input { margin-top: 0.15rem; }
+.shorten-opt-body { display: flex; flex-direction: column; gap: 0.15rem; }
+.shorten-opt-name {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-weight: 600;
+}
+.shorten-opt-host { opacity: 0.85; }
+
+.shorten-why { margin: 0 0 1rem; }
+.shorten-result { min-height: 2.6rem; display: flex; align-items: center; margin-bottom: 0.4rem; }
+.shorten-result > * { width: 100%; }
+.shorten-working { margin: 0; font-weight: 550; }
+.shorten-done input { flex: 1; font-family: var(--font-mono); }
+/* The actions row is sticky and floats over the content, so the last thing
+   in the dialog has to clear it — without this the short link and its Copy
+   button appeared UNDER the bar the moment they were generated, which is
+   exactly when they matter most. */
+.shorten-long { margin: 0.4rem 0 0; padding-bottom: 3.6rem; }
+.shorten-long summary { cursor: pointer; padding: 0.3rem 0; }
+.shorten-long input { flex: 1; }
+
 /* The app's own confirmation, in place of the browser's grey box.
    Stacks ABOVE .overlay (z-index 80) so it can be asked over an open
    dialog — the course editor's "lose your changes?" is asked while that

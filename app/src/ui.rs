@@ -2129,6 +2129,7 @@ pub fn DialogHost() -> impl IntoView {
                         Dialog::ImportCourses(plan) => {
                             import_courses_dialog(app, plan).into_any()
                         }
+                        Dialog::Shorten => shorten_dialog(app).into_any(),
                     };
                     view! {
                         <div class="overlay" on:click=move |_| app.dismiss_dialog()>
@@ -5636,6 +5637,218 @@ fn export_dialog(app: App, scope: Option<String>) -> impl IntoView {
 // Share dialog
 // ---------------------------------------------------------------------------
 
+/// "Make this link short" — the whole of shortening, in one popup.
+///
+/// The rules it is built to: nothing is requested until the button is
+/// pressed; the choice of service is stated in full, including which one
+/// puts an extra stranger in the chain; and the long link stays on screen
+/// the whole time, so there is always something to fall back to.
+fn shorten_dialog(app: App) -> impl IntoView {
+    use ttcore::shorten::{SERVICES, service};
+    // The fullest link the share dialog offers, built the same way it builds
+    // it — shortening the courses-only one would throw away the changes the
+    // reader came for. Tracked, so an undo while this is open cannot leave a
+    // stale link under the button.
+    let selection = app.selection.get();
+    let overrides = app.overrides.get();
+    let shared_customs: Vec<Course> = app.customs.with(|cs| {
+        selection
+            .iter()
+            .filter_map(|code| cs.get(code).cloned())
+            .collect()
+    });
+    let long = domx::share_url(&format!(
+        "?c={}&s={}",
+        domx::c_param(&selection),
+        ttcore::share::encode_share(&selection, &overrides, &shared_customs)
+    ));
+    let long_for_call = long.clone();
+    let long_copy = long.clone();
+
+    let chosen =
+        move || service(app.shorten_service.get()).unwrap_or(ttcore::shorten::default_service());
+
+    view! {
+        <div class="shorten-dialog">
+            <h2>"Make this link short"</h2>
+            <p class="muted small dialog-lede">
+                "A share link carries your whole timetable inside it, so it is long.
+                 A shortening service swaps it for a short one that redirects back
+                 to it — handy for a message, a slide or a poster."
+            </p>
+
+            // The honest part. The app's promise everywhere else is that
+            // nothing leaves the browser; this is the one action that breaks
+            // it, so it says so before the button rather than after.
+            <p class="shorten-warn">
+                <span class="badge warn">"!"</span>
+                <span>
+                    "This is the one thing in the app that sends your link away.
+                     The service you pick can see the courses and changes inside
+                     it, and short links can be guessed by strangers — so treat a
+                     short link as public."
+                </span>
+            </p>
+
+            <fieldset class="shorten-pick">
+                <legend class="fieldlabel">"Which service?"</legend>
+                {SERVICES
+                    .iter()
+                    .map(|s| {
+                        let key = s.key;
+                        view! {
+                            <label class="opt shorten-opt">
+                                <input
+                                    type="radio"
+                                    name="shortener"
+                                    prop:checked=move || app.shorten_service.get() == key
+                                    on:change=move |_| {
+                                        app.shorten_service.set(key);
+                                        // A different service is a different
+                                        // answer; don't leave the last one
+                                        // sitting under the new choice.
+                                        app.shorten.set(crate::state::ShortenState::Idle);
+                                    }
+                                />
+                                <span class="shorten-opt-body">
+                                    <span class="shorten-opt-name">
+                                        {s.name}
+                                        {(s.key == ttcore::shorten::default_service().key)
+                                            .then(|| {
+                                                view! {
+                                                    <span class="badge accent">"suggested"</span>
+                                                }
+                                            })}
+                                    </span>
+                                    <span class="muted small">{s.note}</span>
+                                    <span class="muted small shorten-opt-host">
+                                        {if s.needs_relay {
+                                            format!(
+                                                "Goes to {} through a relay, because it can't \
+                                                 answer this browser directly — so two services \
+                                                 see the link, not one.",
+                                                s.host,
+                                            )
+                                        } else {
+                                            format!("Goes straight to {}.", s.host)
+                                        }}
+                                    </span>
+                                </span>
+                            </label>
+                        }
+                    })
+                    .collect_view()}
+            </fieldset>
+
+            <p class="muted small shorten-why">
+                "Only services that work without an account are offered. Bitly and
+                 TinyURL's newer API both need a personal key, and a key built into
+                 a web page isn't private — so neither can be offered honestly here."
+            </p>
+
+            <div class="shorten-result">
+                {move || match app.shorten.get() {
+                    crate::state::ShortenState::Idle => {
+                        view! {
+                            <p class="muted small">
+                                "Nothing has been sent yet."
+                            </p>
+                        }
+                            .into_any()
+                    }
+                    crate::state::ShortenState::Working => {
+                        view! {
+                            <p class="shorten-working" aria-live="polite">
+                                {format!("Asking {}…", chosen().name)}
+                            </p>
+                        }
+                            .into_any()
+                    }
+                    crate::state::ShortenState::Done(link) => {
+                        let to_copy = link.clone();
+                        view! {
+                            <div class="fieldrow shorten-done" aria-live="polite">
+                                <span class="muted small">"Short link"</span>
+                                <input
+                                    type="text"
+                                    readonly
+                                    prop:value=link.clone()
+                                    aria-label="Shortened share link"
+                                />
+                                <button
+                                    class="btn primary"
+                                    on:click=move |_| {
+                                        domx::copy_to_clipboard(to_copy.clone(), |_| {});
+                                        app.toast("Short link copied.");
+                                    }
+                                >
+                                    "Copy"
+                                </button>
+                            </div>
+                        }
+                            .into_any()
+                    }
+                    crate::state::ShortenState::Failed(why) => {
+                        view! {
+                            <p class="shorten-failed" aria-live="polite">
+                                <span class="badge warn">"!"</span>
+                                <span>{why}</span>
+                            </p>
+                        }
+                            .into_any()
+                    }
+                }}
+            </div>
+
+            // The long link never leaves the screen: whatever the service
+            // does or fails to do, there is always a link that works.
+            <details class="shorten-long">
+                <summary class="muted small">"The full link, as it is now"</summary>
+                <div class="fieldrow">
+                    <input
+                        type="text"
+                        readonly
+                        prop:value=long.clone()
+                        aria-label="The full share link"
+                    />
+                    <button
+                        class="btn"
+                        on:click=move |_| {
+                            domx::copy_to_clipboard(long_copy.clone(), |_| {});
+                            app.toast("Link copied.");
+                        }
+                    >
+                        "Copy"
+                    </button>
+                </div>
+            </details>
+
+            <div class="actions">
+                <button class="btn" on:click=move |_| app.dialog.set(Some(Dialog::Share))>
+                    "Back"
+                </button>
+                <button
+                    class="btn primary"
+                    disabled=move || matches!(app.shorten.get(), crate::state::ShortenState::Working)
+                    on:click=move |_| {
+                        crate::shorten::generate(app, chosen(), long_for_call.clone());
+                    }
+                >
+                    {move || {
+                        match app.shorten.get() {
+                            crate::state::ShortenState::Working => "Generating…".to_string(),
+                            crate::state::ShortenState::Done(_) => {
+                                "Generate again".to_string()
+                            }
+                            _ => "Generate short link".to_string(),
+                        }
+                    }}
+                </button>
+            </div>
+        </div>
+    }
+}
+
 fn share_dialog(app: App) -> impl IntoView {
     // Tracked: the dialog is stateless, so if the state changes while it is
     // open (Ctrl+Z reaches the document handler), DialogHost rebuilds it and
@@ -5772,6 +5985,26 @@ fn share_dialog(app: App) -> impl IntoView {
                         "Copy link"
                     </button>
                 </div>
+                </div>
+                // The ONE thing about shortening that lives out here. Every
+                // detail of it — which service, what it costs in privacy,
+                // the result — is inside the popup this opens, so the share
+                // dialog stays about sharing.
+                <div class="share-shorten">
+                    <button
+                        class="btn ghost-accent"
+                        title="Trade a long link for a short one through a free \
+                               shortening service"
+                        on:click=move |_| {
+                            app.shorten.set(crate::state::ShortenState::Idle);
+                            app.dialog.set(Some(Dialog::Shorten));
+                        }
+                    >
+                        "🔗 Make this link short…"
+                    </button>
+                    <span class="muted small">
+                        "Nothing is sent anywhere until you ask for it."
+                    </span>
                 </div>
             </section>
 
