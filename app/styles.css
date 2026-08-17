@@ -762,7 +762,10 @@ table.tt.halls-merged tr.quiet th.dayhead {
   padding-top: 0.15rem;
   padding-bottom: 0.15rem;
 }
-table.tt.halls-merged tr.quiet th.dayhead { opacity: 0.6; }
+/* Empty days are dimmed — but not today's, which is the one label on the
+   page a reader is looking for. `tr.quiet` catches a day with no bookings,
+   and dimming it took today's marker down to 2.6:1 on white. */
+table.tt.halls-merged tr.quiet:not(.today) th.dayhead { opacity: 0.6; }
 table.tt.halls-merged tbody tr:hover td:not(.extra) { background: var(--surface-2); }
 table.tt tbody tr.group-start:not(:first-child) > th,
 table.tt tbody tr.group-start:not(:first-child) > td {
@@ -1202,6 +1205,15 @@ input[type="checkbox"]:disabled, input[type="radio"]:disabled {
    as well, so it must be handed back there or the box disappears entirely
    for the people who most need to see it. */
 @media (forced-colors: active) {
+  /* The base rules trade the outline for a border colour and a wash
+     (styles.css `input:focus-visible`), and forced colours drop the wash and
+     override the border to a system colour — leaving a focused field with no
+     visible focus at all. Put the outline back here, where it is the only
+     signal available. */
+  input:focus-visible, select:focus-visible, textarea:focus-visible {
+    outline: 2px solid Highlight;
+    outline-offset: 2px;
+  }
   input[type="checkbox"], input[type="radio"] {
     border-color: ButtonBorder;
     background: Canvas;
@@ -1365,11 +1377,42 @@ label.opt.alarm-lead input { width: 5rem; }
      and the box's own minimum are calculated from it. */
   .searchbox { --switch: 34px; }
   .search-switch { width: 34px; height: 34px; font-size: 0.8rem; }
+  /* …restated after it: the ✕ carries both classes, and the line above would
+     otherwise shrink it to 12.8px inside a 34px box — smaller on a phone than
+     on a desktop, which is backwards. */
+  .search-clear { font-size: 0.92rem; }
 }
 @media (max-width: 640px) {
   /* The box is the full width of the bar here, so it needs no minimum of its
      own — but it still needs the strip's room, which the calc keeps. */
   .searchbox { display: flex; width: 100%; --search-text: 0px; }
+}
+/* Below this width the strip and the placeholder cannot both fit, and something
+   has to give. Measured, not guessed (.workagents/field-clip-probe.py): at
+   360px the placeholder is 17px too wide for what is left beside three
+   finger-sized switches, and at 320px it is 57px too wide — so R73's fix held
+   at 430px and quietly failed on most phones in the world.
+   Shrinking the switches would put them under the 44px touch minimum, and
+   shortening the placeholder would take away the one line that says what the
+   box searches. So the strip moves BELOW the field, right-aligned under it,
+   and the field takes the whole width: the placeholder is read whole, the
+   targets stay big, and the switches still read as belonging to the box
+   because nothing else is on that line. */
+@media (max-width: 439px) {
+  .searchbox { flex-wrap: wrap; --switch-strip: 0px; }
+  .searchbox > input[type="search"] { flex-basis: 100%; }
+  .searchbox.filled > input[type="search"] { padding-right: 0.6rem; }
+  .searchbox-switches {
+    position: static;
+    width: 100%;
+    justify-content: flex-end;
+    gap: 0.25rem;
+    margin-top: 0.3rem;
+  }
+  /* Absolute positioning was what kept the strip out of the field's own click
+     target; in flow it is its own row, so it takes its clicks normally. */
+  .searchbox-switches { pointer-events: auto; }
+  .search-clear { margin-right: auto; }
 }
 details.facet { position: relative; }
 details.facet > summary {
@@ -1674,7 +1717,10 @@ details.facet .menu .menu-empty { margin: 0.2rem 0 0; }
    than the note wrapping into two thirds of the row to leave a button in the
    corner. (The banner's own phone layout, noticed in R72's screenshots.) */
 @media (max-width: 640px) {
-  .banner { flex-direction: column; align-items: stretch; }
+  /* Only the banners built as title + note + actions (`.banner-main`): the
+     conflicts banner is three loose children, and stacking those put Review
+     and Dismiss on separate rows. */
+  .banner:has(.banner-main) { flex-direction: column; align-items: stretch; }
   .banner-actions { align-self: flex-start; }
 }
 /* The codes are what the message is about, so they are set as codes —
@@ -2215,7 +2261,7 @@ details.facet .menu .menu-empty { margin: 0.2rem 0 0; }
   gap: 0.15rem;
 }
 .file-bill li { font-size: 0.9rem; }
-.file-bill .chipline { margin-top: 0.5rem; }
+.file-bill .chipline { margin: 0.5rem 0 0; }
 
 /* Share: the link half and the file half are sections like My data's, so
    the two dialogs that both hand data around look like each other.
@@ -2497,7 +2543,10 @@ pre.devpre {
      inside the query, rather than by weakening `.mobile-only` — which the
      day strip also uses. */
   .day-list.mobile-only { display: flex; }
-  .week-grid.day-mode-active { display: none; }
+  .week-grid.day-mode-active,
+  /* …and the sentence that describes its columns (views.rs), which is a
+     sibling of the grid rather than inside it. */
+  .week-note.day-mode-active { display: none; }
 }
 
 /* Screen-reader-only live region */
@@ -2839,7 +2888,10 @@ pre.devpre {
     font-weight: 500;
     opacity: 0.85;
     max-width: 100%;
-    /* Wraps like on screen — a printed hall name must be whole. */
+    /* Wraps like on screen — a printed hall name must be whole. Centred with
+       it: the chip's first line is centred, so a wrapped "802" left-aligned
+       under a centred "Lecture Hall" read as a mistake on paper. */
+    text-align: center;
     white-space: normal;
     overflow-wrap: anywhere;
   }
@@ -2934,8 +2986,10 @@ pre.devpre {
     border: 1px solid hsl(var(--hue) 42% 60%);
   }
   .print-footnote {
-    font-size: 8px;
-    color: #8a909c;
+    /* 8px at #8a909c measured 4.0:1 on white — fine on a screen, thin on
+       paper and hopeless on a photocopy. */
+    font-size: 9px;
+    color: #464b55;
     border-top: 0.5px solid #d5d9e2;
     padding-top: 1.5mm;
     margin-top: 2.5mm;

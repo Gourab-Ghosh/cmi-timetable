@@ -2400,6 +2400,19 @@ impl App {
                 }
             }
         }
+        // In the order a week is read, not the order the courses happened to be
+        // selected in. The print sheet lists these one after another
+        // (views.rs's clash strip) and a Wednesday after a Friday reads as a
+        // mistake on paper; on screen the panel gains the same. Every field is
+        // in the key so the order cannot depend on how the pairs were built.
+        out.sort_by(|x, y| {
+            (x.day.index(), x.a_slot.start_min, &x.a, &x.b).cmp(&(
+                y.day.index(),
+                y.a_slot.start_min,
+                &y.a,
+                &y.b,
+            ))
+        });
         out
     }
 

@@ -120,14 +120,18 @@ and no committed mirror (fixtures exist only for tests/e2e seed).
         shorten.rs (the network half of ttcore::shorten: direct first, the
         relays raced behind it with a head start, one request per press),
         update.rs (the once-a-day self-update: fetch our own shell, compare
-        build ids, reload at a moment that costs the reader nothing, and
-        never twice for the same id);
+        build ids, and ASK — a banner with Update now / Not now / Stop
+        checking. NOTHING here reloads the page without a press (R73 deleted
+        the hidden-tab and countdown reloads); "Not now" is stored and holds
+        for a day; `Prefs::update_checks_off` stops the checking for good and
+        My data's switch turns it back on; a build id whose reload did not
+        arrive is not offered again that day);
         styles.css = whole design system (tokens, light+dark);
         hooks/gen-sw.sh + hooks/sw-body.js + hooks/sw-debug.js — the Trunk
         post_build hook writing the offline service worker into every build
         (debug builds get a self-cleaning no-cache stub);
         index.html registers ./sw.js on window load.
-/e2e    test_app.py — 115 Selenium tests, self-seeding (see §5); shoot.py —
+/e2e    test_app.py — 116 Selenium tests, self-seeding (see §5); shoot.py —
         design-review screenshots + print PDFs.
 /githooks  pre-push — builds+publishes via deploy.sh when main is pushed
         (activate per clone: `git config core.hooksPath githooks`; skip
@@ -638,8 +642,11 @@ FEATURES.md  the user-facing feature list (written R39). README is the
   `planner_is_untouched()` = no selection, no overrides (items, credits AND
   deletions), no courses of the user's own — the gate for a TIMETABLE file,
   which can only overwrite a timetable. `nothing_saved_to_lose()` adds the
-  preferences somebody has to press something to set (theme, density,
-  halls view, both filter sets, the digest's own-courses box) — the gate for
+  preferences somebody has to press something to set (theme, density, the two
+  day strips, the shortening service, the three search switches, whether
+  update checks are off, both filter sets, the digest's own-courses box; read
+  `nothing_saved_to_lose` rather than this list, which has been behind the code
+  twice) — the gate for
   a whole BACKUP, which replaces those too. Neither is `has_data()`: the
   downloaded timetable is a cache and a sync fetches it again. Preferences
   are compared field by field, never against `Prefs::default()`, because
@@ -730,7 +737,7 @@ FEATURES.md  the user-facing feature list (written R39). README is the
 ## 5. Build & test commands (exact)
 
 ```sh
-# native tests (132; the html feature comes from core's self dev-dependency)
+# native tests (168; the html feature comes from core's self dev-dependency)
 CARGO_TARGET_DIR=~/.rust-target-e2e RUSTFLAGS="" cargo test --workspace
 # app build for e2e (never plain dist while trunk serve runs).
 # RUSTFLAGS="" on purpose: a global ~/.cargo/config.toml carrying
@@ -739,7 +746,7 @@ CARGO_TARGET_DIR=~/.rust-target-e2e RUSTFLAGS="" cargo test --workspace
 # `__wbindgen_externref_table_alloc`. Emptying it for this build restores
 # the wasm defaults without touching anything outside the repo.
 cd app && RUSTFLAGS="" CARGO_TARGET_DIR=~/.rust-target-e2e trunk build --release --dist dist-e2e
-# e2e (102 tests; self-generates seed via core example, needs cargo on PATH)
+# e2e (116 tests; self-generates seed via core example, needs cargo on PATH)
 cd e2e && DIST_DIR=../app/dist-e2e .venv/bin/python test_app.py
 # ...or just a few, by name fragment
 cd e2e && DIST_DIR=../app/dist-e2e .venv/bin/python test_app.py t44 t45
@@ -771,7 +778,7 @@ regenerates the .ics golden.
   selected course with no time is part of the timetable, not a footnote.
 - "Your changes" groups are headed by `.cg-head` (colour rail + small caps
   + count), coloured by `OwnChange::tone()`. See §4.
-- Tests: 168 native + 115/115 e2e green (as of R71). Meeting removals: `MeetingOverride.to`
+- Tests: 168 native + 116/116 e2e green (as of R74). Meeting removals: `MeetingOverride.to`
   is `Option<Meeting>` (None = removed; legacy JSON/share payloads still
   load — present meeting ⇒ Some). Out-of-grid times: **all three tables grow
   synthetic `.extra` columns**, each from its own source, all built by the
@@ -4728,6 +4735,107 @@ the same code twice therefore does read as a new version. That is not a bug to
 paper over in `update.rs`: the files on the server really did change, and an id
 that ignored the wasm to avoid this would be an id that misses real code
 changes.
+
+### R74 — the pass before publishing
+
+"Do one final test before I publish… test as much as possible, visually and
+functionally, focus on the recently made changes… see all the texts in the app
+and make them as readable as possible. Use as many agents as possible."
+
+**How it was run, including the part that went wrong.** Two fleets: 12 read-only
+lenses over the R72/R73 code, copy and docs with two skeptics per finding, and 10
+lenses over the 50 regenerated screenshots and 3 print PDFs with one re-opener
+per finding. Both hit the session limit **in their verify phases** — 28 agents
+finished, 210 errored, neither reached synthesis. Nothing was lost, because every
+finder result was harvested out of the run journals into
+`.workagents/r74-audit-raw.json` (56 findings) and `r74-visual-raw.json` (102).
+The lesson is in the shape, not the luck: **one verifier per finding is a fan-out
+you cannot afford** — 56 findings × 2 skeptics + 102 × 1 is 214 agents for 158
+claims. The re-run (`wf_130744d8-7c6`) batched them instead — 14 agents, ~13
+claims each, judged together so duplicates fold as they go — and finished 15/15,
+144 judged, 50 confirmed, with a synthesis that re-read the working tree and
+listed 27 findings as already fixed.
+
+**The reported bug from R73 was still there, on most phones.** Six independent
+lenses said so and a measurement settled it: `field-clip-probe.py` extended to
+412/390/360/320px showed the search placeholder **17px short at 360 and 57px at
+320**. R73 tested 430px only, so the fix looked complete and was not. Shrinking
+the switches would break the 44px touch minimum and shortening the placeholder
+would take away the one line that says what the box searches, so below 440px the
+switch strip now **moves to its own line under the field** (`--switch-strip: 0px`
+in that query), which gives the text the whole width and keeps the targets. t116
+now measures all five widths under real device emulation — `pointer: coarse` does
+not match in a merely-narrow desktop window, so measuring without
+`setDeviceMetricsOverride` measures the wrong strip.
+
+**The subtlest bug found: `check()` wrote a pre-await snapshot.** It loaded
+`UpdateState`, awaited the network, then saved the copy it had loaded — so a "Not
+now" pressed during those seconds was erased and the same check went on to raise
+the banner again. Four lenses found it independently. Fixed by construction: all
+writes go through `edit_state(|s| …)`, which re-reads at the moment of the
+change, so holding a copy across an await is no longer expressible.
+
+**Other confirmed behaviour fixes.** The daily check was calling
+`refresh_worker`, which pulls the **whole new build (~2 MB)** before the reader
+has agreed, while My data promised "a few kilobytes" — deleted, not moved: a
+navigation makes the browser look for a new `sw.js` anyway. The loop guard now
+lapses after a day (`reload_target_at`), because a stale proxy is a passing
+condition and a permanent guard silences real updates for the life of the
+profile. A forced check whose banner is behind the open dialog now says so. A
+banner is taken down when a later check finds nothing new (a deploy can be rolled
+back). A device clock that jumped forward no longer parks the schedule
+(`next_check_at` further out than one interval means the clock moved). The banner
+is announced through the live region rather than a `role="status"` created in the
+same paint as its text — the third time this project has written that down. And a
+sibling tab can no longer silently turn update checks back on: prefs are stored
+as one blob, so another tab's next keystroke wrote its older copy back; the
+storage listener now copies **that one boolean** across, and nothing else.
+
+**Copy that was not true.** Three separate absolutes about the network survived
+R71's sweep and are now honest: My data's "nothing is sent anywhere on its own",
+the welcome screen's "nothing you do here leaves your device", and the Share
+dialog's "nothing is uploaded". The "two things leave this browser" paragraph
+claimed to be exhaustive and was not — three things use the network, two of them
+unasked, and only the short link carries the timetable. **A first attempt at that
+paragraph introduced a NEW falsehood** ("none of them sends your timetable") and
+was caught by comparing it against the synthesis before it shipped. Both
+unknown-code branches named a share-link label that does not exist on screen. The
+update banner implied Undo survives a reload. "Stop checking" had no object on a
+screen whose other copy is about checking CMI. "density" appeared in exactly one
+user-facing string for a control that calls itself "Rows". "press I" was
+unreadable at the app's font size. The welcome hint ended on a bare possessive
+("…to get CMI's."). And a broken pattern now says what to ADD — the old mapping
+was written for the full `regex` crate's wording, which `regex-lite` never
+emits, so readers saw its raw text.
+
+**Three harnesses had drifted, and the drift was the finding.** deploy-parity
+asserted a course code was painted on whatever tab its own walk left open —
+Halls, which opens on today — so it passed on a Tuesday and failed on a Monday
+for a share link that worked on both. cross-version-files looked for the export
+button inside My data (the deployed build keeps it behind the header), demanded
+"no `my_changes`" from a build that has written 1.1.0 since August, and expected
+import copy R63 had rewritten. Both fixed to assert the invariant rather than a
+particular pair of builds.
+
+**Refuted, and worth keeping refuted:** dropping the red from "Remove" (styles.css
+states the rule — anything that removes wears red — and two tests pin Delete's
+colour beside it; the real gap was the missing tooltip, now added); hoisting
+Ctrl+Z above `is_editing_context` (it would break native text undo); putting
+visible labels on the switches (widens the strip and re-breaks the clipping bug
+this round just fixed); making the service worker's MANIFEST scan compare `./x`
+to `/cmi-timetable/x` (would disable offline for everyone); sizing the grid to
+the week (kills the sticky slot header).
+
+Gates: 116/116 e2e (t114 grown to eight phases — including "asking is not
+downloading", the lapsed guard, and "Not now" with checks off; t116 measuring
+five phone widths under device emulation), 169 native (one new: a broken
+pattern says what to add), fmt + clippy clean on both targets, and green from every
+pre-deploy harness this repo keeps: dialog-smoke, deploy-parity,
+cross-version-files (both directions), **upgrade-path** (the deployed build used
+like a student, then this build swapped under it: selection, overrides, prefs and
+cache intact, no corrupt-storage banner, offline still working), live-network-check
+(a real sync succeeded), field-clip-probe (0 findings at five widths),
+covered-text-probe (0 findings, self-test caught its planted lid).
 
 ## 8. Open bugs — found, confirmed, NOT fixed (do not delete)
 

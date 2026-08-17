@@ -331,6 +331,10 @@ git config core.hooksPath githooks   # activate the deploy-on-push hook
 ```
 
 Push without deploying once: `CMITT_SKIP_DEPLOY=1 git push`.
+The hook publishes with `--no-verify`, so it does **not** wait to watch the
+site go live — that check costs several minutes on every push. After a push,
+open the live URL yourself, or run `./deploy.sh --republish` if the new build
+has not appeared.
 
 ```sh
 ./deploy.sh               # test + build + publish + verify it went live

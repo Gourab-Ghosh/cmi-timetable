@@ -101,17 +101,21 @@ any hour of the week.
 Every course this semester, searchable and filterable.
 
 - Search by code, name or instructor — with the three switches every editor
-  has, at the right-hand end of the box:
-  **`Aa`** match case, **`ab`** whole word, **`.*`** regular expression.
-  Whole-word means what `\b` means, so it means the same thing whether or not
-  the pattern switch is on; a pattern can use the other two switches with it.
+  has: **`Aa`** match case, **`ab`** whole word, **`.*`** regular expression.
+  They sit inside the right-hand end of the box, and on a phone, where the box
+  and the switches cannot both have the width they need, they move to their own
+  line just under it rather than cutting the box short.
+  Whole-word means what `\b` means. With `.*` off it understands accented
+  letters (`rào` finds *Raghavendra Rào*); with `.*` on, the pattern engine's
+  own `\b` and case-folding are ASCII-only, so an accented word may stop
+  matching. A pattern can use the other two switches with it.
   A pattern you are still typing is **never read as an empty search**: the box
-  says what is wrong with it so far (`Not a pattern yet — unclosed group`) and
+  says what is wrong with it so far (`Not a pattern yet — add a ')' to close the group`) and
   shows nothing, rather than quietly showing the whole catalog. The switches
   are filters like any other — they persist, they show in the chip line
-  (`/^ana/ (case)`), and Ctrl+Z takes them back. A **✕** appears in the box the
-  moment there is something to clear, and the box is wide enough that what it
-  says about itself is never cut off by the switches beside it.
+  (`/^ana/ (case)`), and Ctrl+Z takes them back. A **✕** appears the moment
+  there is something to clear, and the box is always wide enough to show what it
+  searches — on every screen from a 320-pixel phone up.
 - Filter by **branch, instructor, day, time slot, hall, credits, course** and
   **flags** (optional courses, unscheduled ones, ones you have customised),
   plus a **"Fits my schedule"** switch that hides anything overlapping what
@@ -661,8 +665,9 @@ itself has been published. If there is one, it **asks**.
   countdown, not while you're looking away. A page that reloads itself takes
   things with it that were never saved — an **Undo** you hadn't used yet, where
   you had scrolled to, a thought you were half way through.
-- **Nothing you have done is lost by updating.** Your timetable, your changes
-  and your preferences live in this browser, not in the page.
+- **Nothing you have saved is lost by updating.** Your timetable, your changes
+  and your preferences live in this browser, not in the page. The one thing a
+  reload does start over is the undo history — the app says so on the banner.
 - **You can switch the asking off** — in the banner (**Stop checking**) or in
   My data → **App updates**. Off means the app never looks; you still get the
   newest version whenever you refresh. The same switch turns it back on, and
@@ -745,9 +750,9 @@ GitHub Pages. The parsing, validation, merging, calendar generation and URL
 codecs live in a separate crate with no browser dependencies, so they can be
 tested on their own.
 
-**Tested like it matters:** 114 native tests — including a synthetic CMI
+**Tested like it matters:** 168 native tests — including a synthetic CMI
 website the tests generate themselves, with other semesters, other time
-formats, renamed halls and ten different kinds of broken page — plus 86
+formats, renamed halls and ten different kinds of broken page — plus 116
 end-to-end browser tests driving the real app in a real browser: drag & drop,
 touch gestures, keyboard-only flows, storage corruption, and a stand-in CMI
 that lets the true sync path be exercised end to end.

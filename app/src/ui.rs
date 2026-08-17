@@ -595,8 +595,13 @@ pub fn Header() -> impl IntoView {
                 // is not on the screen and says what IS true at that point.
                 {move || {
                     if app.sync.with(|s| s.fetched_at <= 0.0) {
+                        // The sentence used to end "…to get CMI's.", a possessive
+                        // with nothing after it, which reads as text that got cut
+                        // off — on the very first screen, beside the one button a
+                        // new reader has to trust. It names the source instead,
+                        // which is also what the welcome card below says.
                         "Nothing has been downloaded yet — press ⟳ Fetch the timetable \
-                         to get CMI's."
+                         to get it from cmi.ac.in."
                     } else {
                         "The app checks CMI on its own, up to twice a day. Sync now for \
                          the latest."
@@ -1063,17 +1068,17 @@ pub fn BannerView() -> impl IntoView {
                                     {if one {
                                         "It may be from an earlier semester, or it may be a \
                                          course added by hand rather than published by CMI. \
-                                         A course added by hand travels only in the full \
-                                         share link — the one made “with custom changes” — \
-                                         so ask for that link instead. Everything else in \
+                                         A course added by hand travels only in the \
+                                         “Courses and your changes” link, so ask whoever \
+                                         sent this for that one instead. Everything else in \
                                          the link opened as usual."
                                     } else {
                                         "They may be from an earlier semester, or they may be \
                                          courses added by hand rather than published by CMI. \
-                                         Courses added by hand travel only in the full share \
-                                         link — the one made “with custom changes” — so ask \
-                                         for that link instead. Everything else in the link \
-                                         opened as usual."
+                                         Courses added by hand travel only in the “Courses \
+                                         and your changes” link, so ask whoever sent this for \
+                                         that one instead. Everything else in the link opened \
+                                         as usual."
                                     }}
                                 </p>
                             </div>
@@ -1737,6 +1742,12 @@ pub fn filter_bar(app: App, scope: FilterScope, result_count: Signal<usize>) -> 
                     aria-invalid=move || {
                         if matcher.with(Option::is_some) { "true" } else { "false" }
                     }
+                    // Named only while it exists: a screen reader that hears
+                    // "invalid" is owed the reason, and the reason is the line
+                    // under the box.
+                    aria-describedby=move || {
+                        if matcher.with(Option::is_some) { "search-pattern-error" } else { "" }
+                    }
                     prop:value=move || app.with_filters_in(scope.mine(), |f| f.text.clone())
                     on:input=move |ev| {
                         let text = event_target_value(&ev);
@@ -1823,7 +1834,7 @@ pub fn filter_bar(app: App, scope: FilterScope, result_count: Signal<usize>) -> 
                     .get()
                     .map(|why| {
                         view! {
-                            <p class="searchbox-bad" role="status">
+                            <p id="search-pattern-error" class="searchbox-bad" role="status">
                                 <span aria-hidden="true">"⚠ "</span>
                                 {format!("Not a pattern yet — {why}.")}
                             </p>
@@ -2634,7 +2645,19 @@ pub fn meeting_row(app: App, course: &Course, eff: EffMeeting) -> impl IntoView 
                             </span>
                         }
                     })}
-                {clash.then(|| view! { <span class="badge alarm">"⚠ clash"</span> })}
+                {clash
+                    .then(|| {
+                        view! {
+                            <span
+                                class="badge alarm"
+                                title="Meets at the same time as another course on your \
+                                       timetable — the Clashes list on My timetable says \
+                                       which one."
+                            >
+                                "⚠ clash"
+                            </span>
+                        }
+                    })}
             </span>
             {replaces
                 .map(|text| {
@@ -3903,18 +3926,19 @@ fn my_data_dialog(app: App) -> impl IntoView {
             <h2>"My data"</h2>
             <p class="muted small dialog-lede">
                 "Everything the app knows lives in this browser. This list shows \
-                 all of it, and you can remove any of it right here. Nothing is \
-                 sent anywhere on its own — the app fetches CMI's two pages and \
-                 nothing else."
+                 all of it, and you can remove any of it right here. Nothing you \
+                 save here is uploaded anywhere."
             </p>
             // …with the one exception said out loud, rather than a promise
             // that used to read "nothing is ever sent to a server" and stopped
             // being true the day shortening was added (R71).
             <p class="muted small dialog-lede">
-                "Two things leave this browser only when you ask for them, and
-                 both say so at the time: fetching CMI's timetable, and making a
-                 share link short — which hands that link to the shortening
-                 service you pick."
+                "The app reaches the network for three things: fetching CMI's two
+                 pages (when you press Sync now, and on its own at most twice a
+                 day), asking this site whether a newer version of the app has
+                 been published (once a day — see App updates below), and making
+                 a share link short. Only the last one carries your timetable
+                 away, and it is the only one that waits to be asked."
             </p>
 
             // Every custom change together, and exactly which CMI data each
@@ -4126,13 +4150,13 @@ fn my_data_dialog(app: App) -> impl IntoView {
                 <p class="muted small">
                     {move || {
                         if app.update_checks_on() {
-                            "Checking asks the server for this page and compares it with the \
-                             one you loaded — a few kilobytes, once a day. Nothing installs \
-                             itself: when there is a new version the app asks, and “Not now” \
-                             keeps what you have until tomorrow."
+                            "A few kilobytes once a day, and again when your connection \
+                             comes back. Nothing installs itself: when there is a new \
+                             version the app asks, and “Not now” keeps what you have until \
+                             tomorrow."
                         } else {
-                            "The app isn't looking. You'll still get the newest version \
-                             whenever you refresh the page — this only stops the asking."
+                            "The app won't look for new versions. You are not stuck on this \
+                             one — refreshing the page always gives you the newest."
                         }
                     }}
                 </p>
@@ -4143,7 +4167,7 @@ fn my_data_dialog(app: App) -> impl IntoView {
                     <h3>"Preferences"</h3>
                     <button
                         class="btn small danger"
-                        title="Theme and density only — your filters stay as they are"
+                        title="Theme and row height only — your filters stay as they are"
                         on:click=move |_| {
                             // Filters and the current tab used to go too,
                             // under a button that says "Reset" beside the
@@ -4160,15 +4184,15 @@ fn my_data_dialog(app: App) -> impl IntoView {
                                 });
                             app.persist_prefs();
                             crate::apply_theme(app);
-                            app.toast("Theme and density reset.");
+                            app.toast("Theme and row height reset.");
                         }
                     >
                         "Reset"
                     </button>
                 </header>
                 <p class="muted small">
-                    "Theme and density live here. Your filters and the tab you're on \
-                     stay put."
+                    "Reset puts the theme and the row height back to the way they started. \
+                     Your filters and the tab you're on stay put."
                 </p>
             </section>
 
@@ -6335,9 +6359,10 @@ fn share_dialog(app: App) -> impl IntoView {
             // name in one pass.
             <h2>"Share or import a timetable"</h2>
             <p class="muted small dialog-lede">
-                "Everything here happens on this device — nothing is uploaded. A link \
-                 carries your timetable inside the web address; a file carries it as a \
-                 download to keep or pass on."
+                "A link carries your timetable inside the web address; a file carries \
+                 it as a download to keep or pass on. Both are made here on your \
+                 device — the one thing that leaves it is a short link, and only when \
+                 you ask for one."
             </p>
 
             <section class="data-section">

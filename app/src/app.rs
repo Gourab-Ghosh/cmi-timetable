@@ -489,6 +489,30 @@ fn install_cross_tab_sync(app: App) {
             if ev.key().as_deref() == Some(storage::KEY_SNAPSHOT) && ev.new_value().is_some() {
                 pending.set(true);
             }
+            // One preference has to cross tabs the moment it changes: whether
+            // the app may look for new versions of itself.
+            //
+            // Preferences are stored as one blob, so the next keystroke in
+            // ANOTHER tab's search box writes that tab's whole (older) copy
+            // back — silently turning update checks on again for someone who
+            // had switched them off. Only this one field is copied: adopting
+            // the blob would stomp this tab's filters, theme and day view,
+            // which are deliberately per-tab until a refresh. Nothing is
+            // written back from here either, or the two tabs would echo.
+            if ev.key().as_deref() == Some(storage::KEY_PREFS)
+                && let storage::Loaded::Value(stored) =
+                    storage::load::<crate::state::Prefs>(storage::KEY_PREFS)
+            {
+                let off = stored.update_checks_off;
+                if app.prefs.with_untracked(|p| p.update_checks_off) != off {
+                    app.prefs.update(|p| p.update_checks_off = off);
+                    if off {
+                        // They said stop, in the other tab. A banner already
+                        // asking here is that same question.
+                        app.update_ready.set(None);
+                    }
+                }
+            }
         });
     let _ = domx::window()
         .add_event_listener_with_callback("storage", closure.as_ref().unchecked_ref());

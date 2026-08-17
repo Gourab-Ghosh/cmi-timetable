@@ -89,11 +89,17 @@ pub struct UpdateState {
     /// an hour after a failure.
     #[serde(default)]
     pub next_check_at: f64,
-    /// The build id this app reloaded in order to become. Cleared the moment
-    /// it is running — while it is set and does NOT match, the app has tried
-    /// and failed to get that build, and must not try again.
+    /// The build id this app reloaded in order to become, and when. Cleared the
+    /// moment it is running — while it is set and does NOT match, the app has
+    /// tried and failed to get that build, and does not offer it again TODAY.
+    /// The timestamp is what makes that "today" rather than "ever": whatever
+    /// was serving a stale copy will probably have stopped by tomorrow, and a
+    /// permanent guard would silence a real update for the life of the browser
+    /// profile.
     #[serde(default)]
     pub reload_target: Option<String>,
+    #[serde(default)]
+    pub reload_target_at: f64,
     /// The build the reader answered "Not now" to, and when.
     ///
     /// Stored rather than kept in memory: "not now" has to mean something after
@@ -121,6 +127,26 @@ fn save_state(state: &UpdateState) {
     if let Err(e) = crate::storage::save(crate::storage::KEY_UPDATE, state) {
         leptos::logging::warn!("cmitt: couldn't store the update marker: {e}");
     }
+}
+
+/// Read, change, write — and NEVER hold a copy across an `await`.
+///
+/// Everything here is async, and the marker is shared with whatever else is
+/// happening: a reader pressing "Not now" while a check is waiting on the
+/// network, another tab doing its own check. `check` used to load the marker,
+/// fetch the shell, and then save the copy it had loaded BEFORE the fetch —
+/// so a "Not now" pressed during those two seconds was erased, and the same
+/// check went on to raise the banner again immediately. That is the worst kind
+/// of bug to ship: the app appearing to ignore an answer the reader had just
+/// given it.
+///
+/// Reading the marker fresh at the moment of the change makes that
+/// unrepresentable, so every write here goes through this.
+fn edit_state(f: impl FnOnce(&mut UpdateState)) -> UpdateState {
+    let mut state = load_state();
+    f(&mut state);
+    save_state(&state);
+    state
 }
 
 /// Which build is running, read off the document the browser actually loaded.
@@ -196,18 +222,14 @@ async fn registration() -> Option<web_sys::ServiceWorkerRegistration> {
         .ok()
 }
 
-/// Ask the worker to re-fetch itself, so the new build is precached before
-/// the reload rather than downloaded during it. Best-effort: the reload
-/// works without it (navigations are network-first), it is just slower and
-/// briefly not offline-capable.
-async fn refresh_worker(reg: &web_sys::ServiceWorkerRegistration) {
-    // `update()` is fallible before it is even a promise (a worker being
-    // installed refuses), and either way its failure is not the reader's
-    // problem — the reload works without it.
-    if let Ok(promise) = reg.update() {
-        let _ = JsFuture::from(promise).await;
-    }
-}
+// There used to be a `refresh_worker` here, asking the service worker to
+// re-fetch itself so the new build was precached before the reload. It ran
+// during the CHECK — before the reader had been asked — which meant the daily
+// question quietly pulled about two megabytes of a version they might decline,
+// on a phone, while My data promised the check costs "a few kilobytes". It is
+// gone rather than moved: a navigation makes the browser look for a new
+// `sw.js` by itself, the reload is network-first either way, and the new
+// worker warms its cache moments later without anybody waiting on it.
 
 /// Ask the server which build it is serving. `None` means "learned nothing".
 async fn latest_build_id(scope: Option<&str>) -> Option<String> {
@@ -235,13 +257,13 @@ async fn check(app: App, forced: bool) {
         return;
     }
     let now = crate::domx::now_ms();
-    let mut state = load_state();
-    state.attempted_at = now;
-    // Pencilled in as a failure FIRST, so that a check which never returns —
-    // a tab closed mid-flight, a hung request — cannot leave the app checking
-    // on every tick forever.
-    state.next_check_at = now + RETRY_AFTER_MS;
-    save_state(&state);
+    edit_state(|s| {
+        s.attempted_at = now;
+        // Pencilled in as a failure FIRST, so that a check which never
+        // returns — a tab closed mid-flight, a hung request — cannot leave the
+        // app checking on every tick forever.
+        s.next_check_at = now + RETRY_AFTER_MS;
+    });
 
     let reg = registration().await;
     let scope = reg.as_ref().map(|r| r.scope());
@@ -260,11 +282,16 @@ async fn check(app: App, forced: bool) {
         return;
     }
 
-    // An answer arrived, so the next scheduled question is a day away.
-    state.next_check_at = crate::domx::now_ms() + CHECK_EVERY_MS;
-    save_state(&state);
+    // An answer arrived, so the next scheduled question is a day away. Read
+    // fresh: this is after the network, and the marker may have been written
+    // while we were waiting on it.
+    let state = edit_state(|s| s.next_check_at = crate::domx::now_ms() + CHECK_EVERY_MS);
 
     if !ttcore::update::is_newer(mine.as_deref(), latest.as_deref()) {
+        // The same answer that says "nothing new" also takes down a banner
+        // raised earlier: a deploy can be rolled back, and an offer for a
+        // version the server no longer has is an offer that cannot be kept.
+        app.update_ready.set(None);
         if forced {
             // Only ever said when a person pressed the button and is owed an
             // answer. The daily check is silent by design.
@@ -289,28 +316,42 @@ async fn check(app: App, forced: bool) {
     // so finding it still set here means a previous "Update now" did not
     // arrive at this build, and offering it again would send the reader round
     // the same circle.
-    if state.reload_target.as_deref() == Some(latest.as_str()) {
+    // …and it LAPSES after a day. A stale proxy or a CDN mid-purge is a
+    // passing condition, and a guard that never expired would silence updates
+    // for that build for as long as the browser profile lives — including the
+    // reader's own "Check now". A day is the same rhythm as everything else
+    // here: try again tomorrow, once, rather than never.
+    if state.reload_target.as_deref() == Some(latest.as_str())
+        && crate::domx::now_ms() - state.reload_target_at < CHECK_EVERY_MS
+    {
         leptos::logging::warn!(
             "cmitt: a newer build is being served but reloading did not reach it; \
-             not trying again"
+             not offering it again today"
         );
         if forced {
             app.toast(
                 "A newer version is on the server, but reloading didn't reach it — \
-                 something between here and it is serving an old copy.",
+                 something between here and it is serving an old copy. The app will \
+                 try again tomorrow.",
             );
         }
         return;
     }
-    // Precached BEFORE the banner appears, not after the reader presses the
-    // button: the wait belongs to the daily check, which nobody is watching,
-    // rather than to the click, where it would read as a hang. Best-effort —
-    // the reload works without it, just colder.
-    if let Some(reg) = &reg {
-        refresh_worker(reg).await;
-    }
     // The whole answer to "when does it land": when the reader says so.
     app.update_ready.set(Some(latest));
+    // Said through the live region rather than with `role="status"` on the
+    // banner: a region created in the same paint as its text is not announced,
+    // which this project has now written down three times.
+    app.say(
+        "A newer version of the app is ready. Update now, Not now, or Stop \
+         checking for updates, at the top of the page.",
+    );
+    // A forced check raises the banner — but "Check now" lives inside My data,
+    // and a modal covers the banner it just raised, so pressing it looked like
+    // nothing at all happened. Only said when something is actually in the way.
+    if forced && app.dialog.with_untracked(|d| d.is_some()) {
+        app.toast("A newer version is ready — close this to see it.");
+    }
 }
 
 /// "Update now." The only thing in this app that reloads the page.
@@ -320,9 +361,11 @@ async fn check(app: App, forced: bool) {
 /// `install` leaves the marker where it is and `check` refuses to offer that
 /// same id again, so a reader cannot be walked around this circle twice.
 fn take(app: App) {
-    let mut state = load_state();
-    state.reload_target = app.update_ready.get_untracked();
-    save_state(&state);
+    let now = crate::domx::now_ms();
+    edit_state(|s| {
+        s.reload_target = app.update_ready.get_untracked();
+        s.reload_target_at = now;
+    });
     reload();
 }
 
@@ -334,16 +377,28 @@ fn decline(app: App) {
         return;
     };
     let now = crate::domx::now_ms();
-    let mut state = load_state();
-    state.declined = Some(id);
-    state.declined_at = now;
-    state.next_check_at = now + CHECK_EVERY_MS;
-    save_state(&state);
+    edit_state(|s| {
+        s.declined = Some(id);
+        s.declined_at = now;
+        s.next_check_at = now + CHECK_EVERY_MS;
+    });
     app.update_ready.set(None);
-    app.toast(
-        "Left as it is. Refresh the page whenever you'd like the new version — \
-         the app will ask again tomorrow.",
-    );
+    // "Tomorrow" is only true while the daily check is on. A reader can reach
+    // this banner with checking OFF, through My data's own "Check now", and
+    // promising them a question that can never come is exactly the kind of
+    // small lie that makes an app feel untrustworthy. Same pref, read
+    // untracked, as the gate at the top of `check`.
+    if app.prefs.with_untracked(|p| p.update_checks_off) {
+        app.toast(
+            "Left as it is. Refresh the page whenever you'd like the new version — \
+             daily checks are off, so the app won't ask again.",
+        );
+    } else {
+        app.toast(
+            "Left as it is. Refresh the page whenever you'd like the new version — \
+             the app will ask again tomorrow.",
+        );
+    }
 }
 
 fn reload() {
@@ -352,17 +407,17 @@ fn reload() {
 
 /// Wire the app up to keep itself current. Called once, at boot.
 pub fn install(app: App) {
-    let mut state = load_state();
-
-    // Did the last reload get what it went for? If it did, say so — the page
-    // reappeared on its own and the reader deserves to know why. If it did
-    // NOT, the marker stays exactly where it is: `check` reads it and refuses
-    // to reload for that id a second time.
-    if let Some(target) = state.reload_target.clone()
+    // Did the last reload get what it went for? If it did, say so — the reader
+    // pressed a button and deserves to know it worked. If it did NOT, the
+    // marker stays exactly where it is: `check` reads it and does not offer
+    // that id again today.
+    if let Some(target) = load_state().reload_target
         && own_build_id().as_deref() == Some(target.as_str())
     {
-        state.reload_target = None;
-        save_state(&state);
+        edit_state(|s| {
+            s.reload_target = None;
+            s.reload_target_at = 0.0;
+        });
         app.toast("Updated to the newest version of the app.");
     }
 
@@ -414,8 +469,14 @@ pub fn check_now(app: App) {
 }
 
 /// Is a scheduled check due?
+///
+/// Also true when the stored time is further out than one whole interval, which
+/// cannot happen unless the device clock moved: a phone whose clock was briefly
+/// set to next year would otherwise park the check there for good.
 fn due() -> bool {
-    crate::domx::now_ms() >= load_state().next_check_at
+    let now = crate::domx::now_ms();
+    let next = load_state().next_check_at;
+    now >= next || next > now + CHECK_EVERY_MS
 }
 
 /// Coming back online is the one moment worth asking outside the schedule —
@@ -454,16 +515,16 @@ pub fn update_banner(app: App) -> impl IntoView {
                 .with(|u| u.is_some())
                 .then(|| {
                     view! {
-                        <div class="banner update-banner" role="status">
+                        <div class="banner update-banner">
                             <div class="banner-main">
                                 <p class="banner-title">
                                     "A newer version of the app is ready."
                                 </p>
                                 <p class="banner-note">
-                                    "It won't install itself. Update now reloads the page
-                                     and takes a moment; everything you have — your
-                                     courses, your changes, your filters — is saved in
-                                     this browser and comes back with it."
+                                    "It won't install itself. “Update now” reloads the page
+                                     and takes a moment; your courses, your changes and
+                                     your filters are saved in this browser and come back
+                                     with it. Only Undo starts over."
                                 </p>
                             </div>
                             <div class="banner-actions">
@@ -499,7 +560,7 @@ pub fn update_banner(app: App) -> impl IntoView {
                                         );
                                     }
                                 >
-                                    "Stop checking"
+                                    "Stop checking for updates"
                                 </button>
                             </div>
                         </div>

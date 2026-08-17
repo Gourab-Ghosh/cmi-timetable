@@ -61,9 +61,10 @@ fn build_info(app: App) -> impl IntoView {
                 <dd>{crate::update::own_id_for_display()}</dd>
             </dl>
             // The daily self-update check, on demand. The app asks the server
-            // it was loaded from which build it is serving and takes it if it
-            // differs; this is the only way to run that without waiting a
-            // day, and it is what the end-to-end test presses.
+            // it was loaded from which build it is serving and, if it differs,
+            // ASKS the reader — nothing installs without a press. My data has
+            // the same button for everyone; this one is here because the panel
+            // beside it shows the build id being compared.
             <div class="row" style="display:flex;gap:0.5rem;flex-wrap:wrap;margin-top:0.6rem">
                 <button
                     class="btn small"

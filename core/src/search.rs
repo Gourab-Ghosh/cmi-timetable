@@ -161,8 +161,11 @@ fn contains_ci_ascii(hay: &str, needle: &str) -> bool {
 
 /// Is `needle` in `hay` with a non-word character (or nothing) on both sides?
 ///
-/// A word character is a letter, a digit or `_` — the same rule `\b` uses, so
-/// turning the regex switch on does not change what "whole word" means.
+/// A word character is a letter, a digit or `_` — the same rule `\b` uses for
+/// ASCII. It is NOT identical once the pattern switch is on: regex-lite's `\b`
+/// and `(?i)` are ASCII-only, while this path is Unicode-aware, so a name with
+/// an accented letter can answer differently in the two modes. FEATURES.md says
+/// so too; do not "simplify" either of them into the other.
 ///
 /// Allocation-free: `find` returns byte offsets that are always character
 /// boundaries, and the two neighbours are read as characters, so this stays
@@ -225,6 +228,22 @@ fn tidy_error(raw: &str) -> String {
         .find(|line| !line.is_empty() && !line.starts_with("regex parse error"))
         .unwrap_or("that pattern can't be read");
     let first = first.trim_start_matches("error: ").trim();
+    // The engine's own words, turned into the thing to DO about them. These
+    // are `regex-lite`'s actual phrasings — the earlier mapping was written
+    // against the full `regex` crate's wording, which this dependency never
+    // emits, so the reader was shown "found open group without closing ')'"
+    // verbatim under their half-typed pattern.
+    if first.contains("open group without closing") {
+        return "add a ')' to close the group".to_string();
+    }
+    if first.contains("character class") && first.contains("closing bracket") {
+        return "add a ']' to close the [ … ] set".to_string();
+    }
+    if first.contains("repetition operator missing expression")
+        || first.contains("repetition quantifier expects")
+    {
+        return "* + ? need something in front of them".to_string();
+    }
     let mut out = first.to_string();
     if let Some(rest) = out.strip_prefix("unclosed group") {
         out = format!("unclosed ( group{rest}");
@@ -235,6 +254,36 @@ fn tidy_error(raw: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The reason under a half-typed pattern has to say what to DO. These are
+    /// `regex-lite`'s own phrasings, which is the engine this crate actually
+    /// depends on — an earlier mapping was written for the full `regex`
+    /// crate's wording and never fired, so readers saw "found open group
+    /// without closing ')'" verbatim.
+    #[test]
+    fn a_broken_pattern_says_what_to_add() {
+        let cases = [("(unclosed", "')'"), ("[A-", "']'")];
+        for (pattern, wanted) in cases {
+            let m = Matcher::new(&Query {
+                text: pattern,
+                use_regex: true,
+                ..Query::default()
+            });
+            let why = m.error().unwrap_or("");
+            assert!(
+                why.contains(wanted),
+                "{pattern:?} should tell the reader to add {wanted}, said {why:?}"
+            );
+            assert!(
+                why.len() < 60,
+                "{why:?} is too long to read in a filter bar"
+            );
+            assert!(
+                !why.contains("regex"),
+                "{why:?} names the engine, not the fix"
+            );
+        }
+    }
 
     fn q<'a>(text: &'a str) -> Query<'a> {
         Query {

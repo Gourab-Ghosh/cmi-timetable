@@ -5759,6 +5759,24 @@ def _update_state(d):
         "return JSON.parse(localStorage.getItem('cmitt.v1.update') || '{}');")
 
 
+def _build_id_of(d):
+    """The id the app would compute for the build the SERVER is offering — which
+    is what the loop guard stores. Taken the same way `ttcore::update::build_id`
+    takes it: the hashed asset names in the shell, deduplicated and sorted."""
+    return d.execute_async_script("""
+        const done = arguments[arguments.length - 1];
+        fetch('./index.html?probe=' + Date.now())
+          .then(r => r.text())
+          .then(html => {
+              const names = [...new Set(
+                  (html.match(/[A-Za-z0-9_.-]+-[0-9a-f]{8,}(?:_bg)?\\.(?:js|css|wasm)/g) || []))];
+              names.sort();
+              done(names.join(' '));
+          })
+          .catch(() => done(''));
+    """)
+
+
 def _set_update_checks(app, on):
     """Turn the daily check off or on the way a reader does: My data → App
     updates. Not by editing localStorage — the running app holds prefs in a
@@ -5870,6 +5888,20 @@ def t114_the_app_asks_before_it_updates_itself(app):
             "nothing may reload on its own — not even a tab nobody is looking at"
         assert app.css_all(".update-banner"), "and the question stays until it is answered"
 
+        # Asking is not downloading. The check used to ask the service worker to
+        # update itself BEFORE the reader had agreed, which pulled ~2MB of a
+        # version they might decline while My data promised "a few kilobytes".
+        # Asserted here, at the first offer: after "Update now" the new build is
+        # in a cache for the right reason. (R74)
+        cached = d.execute_async_script("""
+            const done = arguments[arguments.length - 1];
+            caches.keys().then(ks => Promise.all(ks.map(k =>
+                caches.open(k).then(c => c.keys()))))
+              .then(all => done(all.flat().map(r => r.url)), () => done([]));
+        """)
+        assert not any(new_css in u for u in cached), \
+            f"the new build was fetched before the reader agreed: {cached}"
+
         # 4. "Not now": the banner goes, the app says how to get it later, and
         # the scheduled check leaves it alone for the day.
         d.find_element(
@@ -5925,6 +5957,39 @@ def t114_the_app_asks_before_it_updates_itself(app):
         assert not app.css_all(".update-banner"), \
             "checks are off: the app must not even look"
 
+        # …but "Check now", pressed by the reader, answers even with checks off
+        # — and answers VISIBLY, which is the part that was missing: the banner
+        # it raises is behind the My data dialog it was pressed in, so without a
+        # word the button looked broken. (R74)
+        _set_update_checks(app, False)
+        d.execute_script("localStorage.removeItem('cmitt.v1.update');")
+        app.xpath("//button[normalize-space()='My data']").click()
+        app.wait_css("[data-update-switch]")
+        # Scoped to the dialog: the developer panel behind the modal carries the
+        # same marker, and an unscoped find picks IT — then the click lands on
+        # the overlay and the failure reads as a broken button.
+        d.find_element(By.CSS_SELECTOR, ".dialog [data-update-check]").click()
+        app.wait_toast("close this to see it", timeout=30)
+        d.execute_script("""
+            const b = [...document.querySelectorAll('.dialog button')]
+              .find(x => x.textContent.trim() === 'Close');
+            if (b) b.click();
+        """)
+        banner = WebDriverWait(d, 10).until(
+            EC.presence_of_element_located((By.CSS_SELECTOR, ".update-banner")))
+        app.dismiss_toasts()
+
+        # And with checks off, "Not now" must not promise a question that can
+        # never come. (R74: the toast said "the app will ask again tomorrow"
+        # unconditionally, while nothing was going to ask ever again.)
+        d.find_element(
+            By.XPATH, "//div[contains(@class,'update-banner')]"
+                      "//button[normalize-space()='Not now']").click()
+        app.wait_toast("won't ask again", timeout=15)
+        assert "tomorrow" not in app.toasts_text(), app.toasts_text()
+        app.dismiss_toasts()
+        assert banner is not None
+
         # On again, through the app's own switch — the point of the setting is
         # that it is not a one-way door.
         _set_update_checks(app, True)
@@ -5933,6 +5998,31 @@ def t114_the_app_asks_before_it_updates_itself(app):
         WebDriverWait(d, 30).until(
             EC.presence_of_element_located((By.CSS_SELECTOR, ".update-banner")),
             message="switched back on, the app has to look again")
+
+        # 8. A loop guard that never expires would silence a real update for the
+        # life of the browser profile. Plant a guard from two days ago and the
+        # app must offer the build again. (R74)
+        d.execute_script("""
+            const s = JSON.parse(localStorage.getItem('cmitt.v1.update') || '{}');
+            s.declined = null;
+            s.reload_target = arguments[0];
+            s.reload_target_at = Date.now() - 2 * 24 * 60 * 60 * 1000;
+            localStorage.setItem('cmitt.v1.update', JSON.stringify(s));
+        """, _build_id_of(d))
+        d.find_element(
+            By.XPATH, "//div[contains(@class,'update-banner')]"
+                      "//button[normalize-space()='Not now']").click()
+        WebDriverWait(d, 5).until(lambda drv: not app.css_all(".update-banner"))
+        app.dismiss_toasts()
+        d.execute_script("""
+            const s = JSON.parse(localStorage.getItem('cmitt.v1.update') || '{}');
+            s.declined = null;
+            localStorage.setItem('cmitt.v1.update', JSON.stringify(s));
+        """)
+        _scheduled_check(d)
+        WebDriverWait(d, 30).until(
+            EC.presence_of_element_located((By.CSS_SELECTOR, ".update-banner")),
+            message="a guard from two days ago must have lapsed")
     finally:
         try:
             _really_stop(server)
@@ -6136,14 +6226,36 @@ def t116_the_search_box_shows_its_whole_placeholder(app):
         lambda d: app.css(sel).get_attribute("value") == "algebra",
         message="undoing a clear must bring the words back")
 
-    # A phone: the box is the full width of the bar, and the strip is bigger
-    # there (fingers), so the sums are different and worth their own check.
-    app.d.set_window_size(430, 900)
-    time.sleep(0.5)
-    box = app.css(sel)
-    app.d.execute_script("arguments[0].scrollIntoView({block: 'center'});", box)
-    m = app.d.execute_script(ROOM_JS, sel)
-    assert m["at_text_end"] == "the field", m["at_text_end"]
+    # Phones, at the widths phones actually are. This is where R73's fix
+    # quietly failed: it was checked at 430px and held, while at 360px the
+    # placeholder was 17px too wide for what three finger-sized switches left
+    # behind, and at 320px it was 57px too wide. Below 440px the switches now
+    # take their own line under the box, so the field has the whole width.
+    for width, height in ((430, 900), (412, 915), (390, 844), (360, 800), (320, 700)):
+        # Emulated as a real phone, not just a narrow window: `pointer: coarse`
+        # is what grows the switches to finger size, and a resized desktop
+        # window never matches it — so measuring in one measures the wrong strip.
+        app.d.execute_cdp_cmd("Emulation.setDeviceMetricsOverride", {
+            "width": width, "height": height, "deviceScaleFactor": 2, "mobile": True})
+        app.d.execute_cdp_cmd("Emulation.setTouchEmulationEnabled", {
+            "enabled": True, "maxTouchPoints": 5})
+        time.sleep(0.6)
+        box = app.css(sel)
+        app.d.execute_script("arguments[0].scrollIntoView({block: 'center'});", box)
+        m = app.d.execute_script(ROOM_JS, sel)
+        assert m["needs"] <= m["room"], (
+            f"at {width}px the placeholder {m['placeholder']!r} needs {m['needs']}px "
+            f"and the box gives it {m['room']}px")
+        assert m["at_text_end"] == "the field", f"at {width}px: {m['at_text_end']!r}"
+        # The switches are still there, still reachable, still finger-sized.
+        sw = app.css_all("section[aria-label='Catalog'] .search-switch")
+        assert len(sw) >= 3, f"at {width}px only {len(sw)} switches"
+        for s in sw:
+            r = s.rect
+            assert r["width"] >= 30 and r["height"] >= 30, \
+                f"at {width}px a switch is {r['width']}x{r['height']}"
+    app.d.execute_cdp_cmd("Emulation.clearDeviceMetricsOverride", {})
+    app.d.execute_cdp_cmd("Emulation.setTouchEmulationEnabled", {"enabled": False})
     app.d.set_window_size(1400, 950)
 
 

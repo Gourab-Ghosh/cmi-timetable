@@ -25,9 +25,11 @@ pub const KEY_CONFLICTS: &str = "cmitt.v1.conflicts";
 /// else (that walks every `cmitt.` key, so this needs no line there).
 pub const KEY_SHORTLINKS: &str = "cmitt.v1.shortlinks";
 /// When the app last asked the server whether a newer build of ITSELF is
-/// published, and which build a reload was last taken for. Nothing about the
-/// student's timetable — it is the app's own housekeeping, and losing it
-/// costs one extra check. See `crate::update`.
+/// published, which build a reload was last taken for, and which build the
+/// reader answered "Not now" to. Nothing about the student's timetable — but
+/// not free to lose either: without it the app re-asks a question they have
+/// already answered, which `crate::update` calls the loudest possible way to
+/// ignore an answer.
 pub const KEY_UPDATE: &str = "cmitt.v1.update";
 
 fn raw() -> Option<web_sys::Storage> {

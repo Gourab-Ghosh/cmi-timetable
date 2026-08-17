@@ -55,7 +55,8 @@ fn welcome(app: App) -> impl IntoView {
                 <p class="welcome-sub">
                     "Pick courses, spot clashes, move meetings around, and take your \
                      week with you as a calendar or a printout. Everything runs and \
-                     stays in this browser — nothing you do here leaves your device."
+                     stays in this browser — no account, and nothing leaves your \
+                     device unless you ask it to."
                 </p>
                 <button
                     class="btn primary big"
@@ -567,7 +568,19 @@ fn my_timetable(app: App) -> impl IntoView {
                             (extras > 0)
                                 .then(|| {
                                     view! {
-                                        <p class="muted small">
+                                        // Hidden with the grid it is about: on a
+                                        // phone with a single day picked the week
+                                        // table is display:none, and a sentence
+                                        // about "the tinted column" then named
+                                        // something nobody could see. Same toggle
+                                        // as the grid, so the two can never
+                                        // disagree.
+                                        <p
+                                            class="muted small week-note"
+                                            class:day-mode-active=move || {
+                                                day_mode.get().is_some()
+                                            }
+                                        >
                                             {if extras == 1 {
                                                 "The tinted column with the odd time is \
                                                  outside CMI's regular grid — it exists \
@@ -854,7 +867,8 @@ fn my_timetable(app: App) -> impl IntoView {
                                     "Everything you've added, deleted or changed in \
                                      your timetable. Each one can be undone on its \
                                      own — the button beside it says what it goes \
-                                     back to — and Ctrl+Z undoes your last change."
+                                     back to — and Ctrl+Z undoes the last change you \
+                                     made in this visit."
                                 </p>
                                 {overrides_list(app)}
                             </div>
@@ -1583,7 +1597,19 @@ fn course_card(app: App, course: Course) -> impl IntoView {
                     })}
                 {(!notes.is_empty())
                     .then(|| view! { <span class="badge">{notes.join(" · ")}</span> })}
-                {clash.then(|| view! { <span class="badge alarm">"⚠ clash"</span> })}
+                {clash
+                    .then(|| {
+                        view! {
+                            <span
+                                class="badge alarm"
+                                title="Meets at the same time as another course on your \
+                                       timetable — the Clashes list on My timetable says \
+                                       which one."
+                            >
+                                "⚠ clash"
+                            </span>
+                        }
+                    })}
                 {removed
                     .then(|| {
                         view! { <span class="badge warn">"No longer on CMI's timetable"</span> }
@@ -1844,7 +1870,7 @@ fn master_grid(app: App) -> impl IntoView {
                 <li><span class="legend-mark">"⚠"</span>" clashes with something you have"</li>
                 <li>
                     <span class="legend-mark">"ⓘ"</span>
-                    " full details (or Tab to a course and press I)"
+                    " full details (or Tab to a course and press the i key)"
                 </li>
                 <li>
                     <span class="legend-mark">"✎"</span>
@@ -2286,6 +2312,7 @@ fn catalog_row(app: App, course: Course) -> impl IntoView {
     let code = course.code.clone();
     let toggle_code = code.clone();
     let danger_code = code.clone();
+    let title_code = code.clone();
     let click_code = code.clone();
     let del_code = code.clone();
     let del_show = code.clone();
@@ -2309,7 +2336,13 @@ fn catalog_row(app: App, course: Course) -> impl IntoView {
                 "no fixed slot".to_string()
             } else {
                 eff.iter()
-                    .map(|e| format!("{} {}", e.meeting.day.short(), e.meeting.slot.start_label()))
+                    .map(|e| {
+                        format!(
+                            "{}\u{00a0}{}",
+                            e.meeting.day.short(),
+                            e.meeting.slot.start_label()
+                        )
+                    })
                     .collect::<Vec<_>>()
                     .join(" · ")
             }
@@ -2401,10 +2434,26 @@ fn catalog_row(app: App, course: Course) -> impl IntoView {
                 }}
                 // One button, two jobs, and it wears the colour of whichever
                 // it is about to do: quiet accent to add, red to take away.
+                //
+                // It KEEPS the red, though R74's visual review argued for
+                // dropping it: styles.css states the rule out loud — anything
+                // that removes wears red, everywhere and at rest, so a
+                // destructive button is recognised before it is read — and one
+                // exception would cost more than it buys. What was actually
+                // missing is that "Remove" never said what it removes while the
+                // "Delete" beside it does, so on a touch screen two red buttons
+                // sat there with one explanation between them.
                 <button
                     class="btn small"
                     class:ghost-accent=move || !app.is_selected(&toggle_code)
                     class:danger=move || app.is_selected(&danger_code)
+                    title=move || {
+                        if app.is_selected(&title_code) {
+                            "Takes this course off your timetable. It stays in the catalog."
+                        } else {
+                            "Puts this course on your timetable."
+                        }
+                    }
                     on:click=move |_| app.toggle_select(&click_code)
                 >
                     // `code` itself: the view macro builds children before
