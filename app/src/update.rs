@@ -129,19 +129,40 @@ fn save_state(state: &UpdateState) {
 /// names live in exactly those (an href, a src, and the inline module script
 /// that imports the JS and names the wasm), and serialising the app's entire
 /// DOM once a day to find them would be absurd.
+///
+/// **Only the app's OWN files count.** A tag whose URL points somewhere else
+/// is skipped, because this id has to be comparable with the id of the shell
+/// on the server — and the server's shell contains what the build put there,
+/// not what arrived in this particular browser afterwards. A theme or
+/// reader-mode extension that injects a hashed stylesheet into the page would
+/// otherwise change the running app's id and nothing else, and the app would
+/// then ask, every day, about an update that does not exist. Inline scripts
+/// have no URL to judge and are always kept: the module script Trunk writes is
+/// where the wasm file is named.
 fn own_build_id() -> Option<String> {
-    let nodes = crate::domx::document()
-        .query_selector_all("link[href], script")
-        .ok()?;
+    let doc = crate::domx::document();
+    let here = crate::domx::window().location().href().ok()?;
+    let origin = crate::domx::window().location().origin().ok()?;
+    let nodes = doc.query_selector_all("link[href], script").ok()?;
     let mut html = String::new();
     for i in 0..nodes.length() {
-        if let Some(el) = nodes
+        let Some(el) = nodes
             .item(i)
             .and_then(|n| n.dyn_into::<web_sys::Element>().ok())
-        {
-            html.push_str(&el.outer_html());
-            html.push('\n');
+        else {
+            continue;
+        };
+        if let Some(url) = el.get_attribute("href").or_else(|| el.get_attribute("src")) {
+            // Resolved against the document, so a relative path — which is
+            // what this app's own tags carry — is judged as what it actually
+            // points at. An unparseable URL is not ours either.
+            match web_sys::Url::new_with_base(&url, &here) {
+                Ok(parsed) if parsed.origin() == origin => {}
+                _ => continue,
+            }
         }
+        html.push_str(&el.outer_html());
+        html.push('\n');
     }
     ttcore::update::build_id(&html)
 }

@@ -5806,12 +5806,40 @@ def t114_the_app_asks_before_it_updates_itself(app):
                          "localStorage.removeItem('cmitt.v1.prefs');")
         first_build = _shown_build(d)
 
-        # 1. Nothing new: it says so, and changes nothing.
+        # 1. Nothing new: it says so when ASKED, and says nothing at all when
+        # it looked on its own.
         d.find_element(By.CSS_SELECTOR, "[data-update-check]").click()
         app.wait_toast("newest version")
         assert not app.css_all(".update-banner")
         assert _shown_build(d) == first_build
         app.dismiss_toasts()
+
+        # The daily check on an up-to-date app must be INVISIBLE: no banner, no
+        # toast, no word of any kind. A check that announced "you're up to
+        # date" once a day would be a notification nobody asked for.
+        _scheduled_check(d)
+        time.sleep(3.0)
+        assert not app.css_all(".update-banner"), "nothing new is not an update"
+        assert app.toasts_text() == "", \
+            f"the daily check must be silent when nothing changed; said {app.toasts_text()!r}"
+
+        # …and something ELSE on the page carrying a hashed name must not be
+        # mistaken for this app's own build. A theme extension injecting a
+        # stylesheet would otherwise change the running app's id, and the app
+        # would ask every day about an update that does not exist.
+        d.execute_script("""
+            const l = document.createElement('link');
+            l.rel = 'stylesheet';
+            l.href = 'https://example.invalid/injected-0badc0de1234beef.css';
+            document.head.appendChild(l);
+        """)
+        _scheduled_check(d)
+        time.sleep(3.0)
+        assert not app.css_all(".update-banner"), \
+            "a foreign hashed file is not a new version of this app"
+        assert app.toasts_text() == "", app.toasts_text()
+        d.execute_script(
+            "document.querySelector('link[href^=\"https://example.invalid\"]').remove();")
 
         # 2. No network: the check fails, says so plainly, and the app keeps
         # working — everything it needs is already in this browser.

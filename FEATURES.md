@@ -646,6 +646,12 @@ itself has been published. If there is one, it **asks**.
 - **A tab left open for a week finds out about the fixes.** Browsers only look
   for a new version when a page is navigated, so a tab nobody reloads can run
   last month's app indefinitely. This closes that.
+- **When nothing has changed, it says nothing.** The daily check on an
+  up-to-date app is completely silent — no banner, no toast, no "you're up to
+  date". Only a version genuinely different from the one you loaded raises
+  anything, and only the app's own files count towards that: a browser
+  extension that adds a stylesheet to the page cannot make the app think it is
+  out of date.
 - **Nothing installs itself.** A banner says a newer version is ready and waits
   for one of two answers:
   - **Update now** — the page reloads and you are on the new version.

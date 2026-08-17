@@ -4697,6 +4697,38 @@ reloads NOTHING, so the phase that needs the old build back must use
 `d.refresh()`. The assertion that the old build is actually being served is now
 in the test.
 
+**Follow-up in the same round: "if the website is not updated, the app should
+not prompt."** Already true by construction — `is_newer` is only ever satisfied
+by two ids that are both understood and genuinely different, and the
+"newest version" toast is behind `if forced` — but "already true" is worth
+proving rather than asserting, and looking for the ways it could be false found
+one that was real:
+
+`own_build_id()` read EVERY `link[href]` and `script` in the live DOM. A theme
+or reader-mode extension that injects a hashed stylesheet into the page changes
+the running app's id and nothing on the server, so the app would compare
+different ids every day and ask about an update that does not exist. Now only
+same-origin URLs count (resolved against the document, so the app's own
+relative paths still count); inline scripts have no URL to judge and are always
+kept, because Trunk's module script is where the wasm file is named.
+
+t114 phase 1 pins both halves: after a scheduled check on an up-to-date app,
+`toasts_text()` must be **empty** — not just "no banner", because a daily "you
+are up to date" would be a notification nobody asked for — and then a foreign
+`https://example.invalid/injected-0badc0de1234beef.css` is appended to `<head>`
+and the check must still say nothing. That second assertion was run against a
+deliberately un-hardened build first and it FAILED (the banner appeared), which
+is the only way to know a regression test is a pin rather than decoration.
+
+The honest boundary of "not updated", for whoever asks next: the app compares
+what the SERVER serves. `app/build.rs` stamps `APP_BUILD_TIME` into the binary,
+so a build from a clean target dir — which is what `deploy.sh`'s Docker build
+always is — produces a different wasm hash even from identical source. Deploying
+the same code twice therefore does read as a new version. That is not a bug to
+paper over in `update.rs`: the files on the server really did change, and an id
+that ignored the wasm to avoid this would be an id that misses real code
+changes.
+
 ## 8. Open bugs — found, confirmed, NOT fixed (do not delete)
 
 Rules for this section: entries stay until the bug is actually fixed and a
