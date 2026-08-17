@@ -1976,6 +1976,48 @@ details.facet .menu .menu-empty { margin: 0.2rem 0 0; }
 .shorten-long .fieldrow { margin: 0.35rem 0 0; }
 .shorten-long input { flex: 1; min-width: 0; font-family: var(--font-mono); }
 
+/* This popup's footer carries three buttons, and two of them mean "I am
+   leaving" while the third spends a request and sends the timetable away. So
+   it is laid out as two groups rather than one row: both exits keep the left
+   edge, the action keeps the right corner.
+
+   THREE classes, and the third is load-bearing. `.shorten-dialog .actions` is
+   (0,2,0) — exactly tying `.dialog .actions { justify-content: flex-end }`
+   further down this file — and every rule in this block sits ABOVE it, so a
+   two-class selector here loses on source order and changes nothing. The
+   failure is silent: the buttons still work, the row just stays right-aligned
+   and Close ends up directly above the primary on a narrow screen, which is
+   the one mis-tap this rule exists to prevent. */
+.dialog .shorten-dialog .actions {
+  /* Honest about what this does: TODAY, nothing. On one line the auto margin
+     below eats all the free space, so flex-start and flex-end are
+     indistinguishable — and measured at every width the app supports
+     (1400/640/430/412/390/375/360/320) the row never wraps, because a popup at
+     a 320px viewport still gets a 335px footer. It is kept because the moment
+     it does wrap it decides the whole shape: the pair goes flush LEFT under an
+     empty column instead of stacking at the right edge, directly where the
+     thumb was already travelling for the button that sends. Fixing the
+     sideways-scroll bug in CONTEXT §8 gives 320px a real 244px footer and
+     makes this rule load-bearing that day. */
+  justify-content: flex-start;
+}
+.dialog .shorten-dialog .actions .btn.primary {
+  /* Two exits on the left, the one action on the right — the same split the
+     details footer makes with `.grow`, done with a margin because a spacer div
+     claims a flex `gap` of its own and would move the first wrap 8px earlier,
+     onto 360px, a width this repo tests. */
+  margin-left: auto;
+  /* One footprint for all three labels, so the button does not resize under
+     the finger that just pressed it. Measured, not assumed: without this the
+     primary is 147px saying "Generate short link" and 143px saying "Ask
+     TinyURL again" — a 4px twitch, small — but the label it wears WHILE the
+     request is out is "Asking…", which is far narrower again, and that is the
+     one the reader is watching. 9.4rem clears the widest of them with a little
+     headroom, since no webfont is ever loaded and the real face is whatever
+     the phone supplies. */
+  min-width: 9.4rem;
+}
+
 /* On a phone the popup is nearly the whole screen, so the blocks tighten and
    the link and its Copy button stack rather than squeezing a 30-character
    monospace URL into half a line. */

@@ -6286,10 +6286,44 @@ fn shorten_dialog(app: App) -> impl IntoView {
                 </div>
             </details>
 
+            // Three buttons where there were two, and only the last of them
+            // acts. The two ways OUT keep the left edge and the one control in
+            // this app that hands a timetable to a stranger keeps the right
+            // corner to itself — that gap is a safety property, not spacing,
+            // the same reason the removed-course popup demotes its primary out
+            // of first place.
+            //
+            // Close goes SECOND, not last. The details and removed-course
+            // footers put Close after their primary, but four e2e assertions
+            // read `.shorten-dialog .actions button:last-child` as the thing
+            // this popup does and one of them clicks it — so this footer
+            // follows the other family instead (export, the editor,
+            // conflicts): the way out first, the action last.
             <div class="actions">
-                <button class="btn" on:click=move |_| app.dialog.set(Some(Dialog::Share))>
+                <button
+                    class="btn"
+                    // Two exits side by side differ only in where they land,
+                    // and a dialog with no accessible name gives a screen
+                    // reader no context to tell them apart — "Back" alone
+                    // announces nothing about where it goes. The VISIBLE word
+                    // stays "Back": it is contained in the accessible name, so
+                    // WCAG 2.5.3 holds, and it is what speech control and the
+                    // tests both say.
+                    aria-label="Back to sharing"
+                    on:click=move |_| app.dialog.set(Some(Dialog::Share))
+                >
                     "Back"
                 </button>
+                // The control this popup was missing. The shared helper, so it
+                // is the same word, the same class and the same
+                // `dialog.set(None)` as the Close in Share, My data, What
+                // changed, Details and Removed course — this popup's own CSS
+                // promises "same furniture as every other dialog", and the one
+                // dialog you could not leave by pressing a button was where
+                // that promise broke. `dialog.set(None)`, not
+                // `dismiss_dialog()`: that one is for the two ACCIDENTAL exits
+                // (Escape, the dark area), and a pressed button is an answer.
+                {close_button(app)}
                 <button
                     class="btn primary"
                     disabled=move || app.shorten.with(|st| st.is_working(chosen().key))

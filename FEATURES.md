@@ -403,6 +403,11 @@ trades it for a short one through a free shortening service.
   three now finish within a few milliseconds of each other.
 - If a service cannot be reached, the app says which one and why, and leaves
   no half-made link behind.
+- **Two ways out, and they say which is which.** *Back* returns to the share
+  dialog you came from; *Close* leaves altogether. Both sit at the left of the
+  bottom bar, and the button that actually sends your timetable keeps the right
+  corner to itself — so the thumb reaching for the way out is never reaching
+  across the one control here that hands your timetable to a stranger.
 
 Bitly is deliberately **not** offered: its free tier needs a personal key,
 and a key built into a web page anyone can read is not private. The popup

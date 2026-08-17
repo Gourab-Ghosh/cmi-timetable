@@ -4906,6 +4906,102 @@ anything is not evidence.
 
 No app code changed this round, so FEATURES.md is untouched.
 
+### R76 — the popup you could not leave
+
+User: "There should be a close button on the popup in the make this link short
+section. The close button should close the popup. Implement it. Think smartly
+about where to keep the pop-up buttons so that they feel as user-friendly and
+easy to use as possible, and as beautiful as possible."
+
+True, and it was the only one. `shorten_dialog` was the one dialog of ten whose
+footer held no dismiss control: "Back" went to the share dialog and the primary
+spent a request. Escape and the dark area worked, which is not the same as
+offering a way out — and this popup's own CSS block promises "same furniture as
+every other dialog … so it reads as part of the app" (styles.css:1853), which is
+exactly where it broke.
+
+**Shipped:** `{close_button(app)}` — the shared helper, so the same word, class
+and `dialog.set(None)` as the Close in Share, My data, What changed, Details and
+Removed course — inserted as the SECOND child, plus `aria-label="Back to
+sharing"` on the existing Back, and two scoped CSS declarations. Footer reads
+`[Back][Close] ……… [Generate short link]`: both exits keep the left edge, the one
+control in this app that hands a timetable to a stranger keeps the right corner.
+
+**Why Close is second and not last.** The app runs TWO contradictory footer
+orders, which an inventory of all 14 `.actions` rows turned up: the Cancel family
+puts the dismiss FIRST (export, the editor, conflicts, the confirm layer), the
+Close family puts Close AFTER the primary (details ×2, removed_course). So
+"follow the convention" was not a well-defined instruction. Four e2e assertions
+read `.shorten-dialog .actions button:last-child` as the primary and t110 CLICKS
+it, so the Cancel order is the one that fits. Recorded because the next person
+will see Close last in three footers and second here.
+
+**The one that would have failed silently.** `.shorten-dialog .actions` is
+(0,2,0) and `.dialog .actions { justify-content: flex-end }` is also (0,2,0) —
+and every rule in the `.shorten-dialog` block sits ABOVE it in the file, so a
+two-class selector loses on source order and changes nothing while looking
+right. Proved rather than argued: weakened to two classes, rebuilt, and t117
+reported `flex-end`. The rule needs three classes and its comment says so.
+
+**Where the design panel was wrong, and how it was caught.** All three rival
+designs and all three judges reasoned from "three word buttons need a ~354px
+viewport, so the footer wraps at 320px" — two proposals were argued largely on
+the shape of that wrap. It does not exist: measured at
+1400/640/430/412/390/375/360/320px the footer is ONE row every time, because at
+a 320px viewport this app lays out at 369px and the popup still gets a 335px
+footer. The reason is a bug of its own, and it is now §8.20 — a `.badge` holding
+a whole sentence under `white-space: nowrap` (views.rs:688) measures 338px and
+cannot break, so the whole app scrolls sideways at 320 and 360px. NOT fixed
+here: different surface, and the fix is a visual decision about the tray rather
+than a mechanical one. `justify-content: flex-start` is kept anyway, with a
+comment that says plainly it does nothing today and becomes load-bearing the day
+§8.20 is fixed. `min-width` was likewise trimmed to what was measured — 4px
+between the two persistent labels, not the 52px projected; the real jump is the
+transient "Asking…".
+
+Rejected, with reasons kept: a header ✕ or head-row Close (ranked first by one
+judge of three) — no dialog in this app has a head-row control, ✕ here means
+"remove this one small thing", and the skeptic killed it with arithmetic: the
+popup's content exceeds `max-height: min(85dvh, 720px)` on a 320×568 phone, so a
+Close in the title row scrolls off, making it the app's only dismiss control that
+is not always reachable, while the footer is already sticky. Also rejected:
+renaming Back to "Back to sharing" visibly (123px against 55px, pushing the wrap
+onto every tested phone), Close beside Copy (`.shorten-out` renders no button at
+all in the empty and failed states — no exit exactly after a failure), and a
+`<div class="grow">` spacer (claims a gap of its own, wrapping 8px sooner).
+
+**The harness that should have caught this, and why it didn't.**
+`.workagents/dialog-smoke.py` has asserted "has a visible way out" — a button
+labelled Close or Cancel, inside the dialog — since it was written, and it
+reported all green for years while this bug stood. Its `OPENERS` table only ever
+opened four dialogs, all reachable in ONE click from the header or a chip, and
+the shorten popup is two clicks deep BEHIND the share dialog. A coverage gap in a
+check is indistinguishable from a pass. Fixed: `OPENERS` takes a `("css", sel)`
+step and the popup is in the table (it now reports exactly 1 way out, in both
+themes), and the docstring names the five dialogs it still does not open — What
+changed, Conflicts, the course editor, the import question, the dropped-course
+popup — so the next green run is not misread as a statement about them.
+
+Not touched, deliberately, and named so nobody counts them as new: the dialog has
+no accessible name at all (`DialogHost` sets `role="dialog" aria-modal="true"`
+with no `aria-labelledby` while the confirm layer has one) — that is the root
+reason two exits read as an ambiguous pair, and it is a ten-dialog change; the
+primary blurs to `<body>` when it disables mid-request, dropping the Tab trap;
+and Ctrl+Z rebuilds the popup and destroys the focused node.
+
+Gates: **117/117 e2e** (t117 new, and verified by breaking both things it pins —
+the two-class selector reported `flex-end`, the removed `min-width` reported
+147px against 143px), 169 native, fmt and clippy clean on both targets,
+dialog-smoke green WITH the popup now in its table, dialog-a11y green,
+field-clip-probe and covered-text-probe 0 findings. Screenshots in
+`.workagents/shots-shorten/r76-close/` — the footer was LOOKED at, desktop and
+phone, before this was called done.
+
+t117 also pins the keyboard order (Back, Close, primary), sent to whatever has
+focus rather than to `<body>` — `send_keys` focuses what it is called on, and
+tabbing via the body walks focus out of the dialog and then reports a break that
+is not there. dialog-a11y documents that trap; it does not cover this popup.
+
 ## 8. Open bugs — found, confirmed, NOT fixed (do not delete)
 
 Rules for this section: entries stay until the bug is actually fixed and a
@@ -4946,6 +5042,55 @@ it needs its own test: extend t75 to tick a day on My courses, switch to
 Catalog, and assert the Day menu there is untouched — and the reverse. Check
 `with_picked`'s callers at the same time, since the badge and the menu
 disagreeing is the symptom that would remain if only one side were changed.
+
+### 8.20 The whole app scrolls SIDEWAYS at 320px and 360px
+
+Found in R76 by measuring, while checking whether a third button fits the
+shorten popup's footer. It is not about that footer and not caused by it — the
+bare app, with no dialog open at all, already does this:
+
+```text
+NO DIALOG  set= 430  inner= 430 client= 430 scroll= 430  fits
+NO DIALOG  set= 390  inner= 390 client= 390 scroll= 390  fits
+NO DIALOG  set= 360  inner= 368 client= 360 scroll= 368  OVERFLOWS
+NO DIALOG  set= 320  inner= 369 client= 320 scroll= 369  OVERFLOWS
+```
+
+(CDP `Emulation.setDeviceMetricsOverride`, `mobile: true`; `client` is
+`documentElement.clientWidth`, `scroll` is `scrollingElement.scrollWidth`.)
+
+The single culprit, isolated by walking every element and reporting the ones
+whose rect leaves the viewport: **`app/src/views.rs:688`** puts a whole
+sentence inside a pill —
+
+```rust
+<span class="badge warn">{note}</span>   // note = "CMI lists these courses
+                                         // but hasn't put them on the timetable"
+```
+
+— and `.badge` sets `white-space: nowrap` (`app/styles.css:614`), which is
+right for a tag and wrong for a sentence. The span measures **338px** and
+cannot break, so the layout floor becomes ~368px and both narrow widths scroll
+sideways. Two more elements are then dragged out of view at 320px as a
+consequence (`button.tab` "Halls" at r=346, `.toasts` at r=329).
+
+Why it was invisible: t116 measures the search box at these widths and passes,
+because that box was fixed in R73 — nothing in the suite asserts that the
+DOCUMENT does not overflow. And the tray only renders when a selected course
+has no time, so a fixture without one never shows it.
+
+Not fixed in R76 on purpose: the ask was a Close button on the shorten popup,
+and this is the My-timetable tray on a different surface, where the fix is a
+visual decision rather than a mechanical one — a pill that wraps to three lines
+at 320px stops looking like a pill, so the honest options are to let this note
+stop being a `.badge` (a `.muted small` line beside the heading) or to give it
+its own wrapping variant. Either changes what the tray looks like, which is the
+user's call.
+
+What a fix must come with, or it will pass while the bug survives: an assertion
+that `scrollingElement.scrollWidth <= documentElement.clientWidth` at 320 and
+360px, taken **with the tray on screen** — i.e. with a selected course that has
+no time (the fixture has one: SVA is unscheduled).
 
 ### 8.6 Deliberate non-bug — do not "fix" this
 

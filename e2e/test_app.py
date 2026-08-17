@@ -6259,6 +6259,175 @@ def t116_the_search_box_shows_its_whole_placeholder(app):
     app.d.set_window_size(1400, 950)
 
 
+def t117_the_shorten_popup_has_a_way_out_and_it_is_not_beside_the_send(app):
+    """Every other dialog in this app can be left by pressing a button. This
+    one could not: its footer held "Back" (to the share dialog) and the one
+    control in the app that hands a timetable to a stranger, and nothing that
+    simply closed it. Escape and the dark area worked, which is not the same as
+    offering a way out.
+
+    The button is the easy half. The half worth a test is WHERE it sits:
+    three word buttons do not fit a 320px footer, so the row wraps, and the
+    two things that must stay true when it does are that the exits keep the
+    left edge — never stacked at the right, directly where the thumb is already
+    travelling for the button that sends — and that the primary keeps one
+    footprint through all of its labels, or the sticky bar re-wraps under the
+    finger that just pressed it.
+
+    The left-edge property rides on a THREE-class selector, because
+    `.shorten-dialog .actions` merely ties `.dialog .actions` and loses on
+    source order. That failure is silent — every button still works, the row is
+    just still right-aligned — so it is asserted here directly.
+    """
+    app.d.set_window_size(1400, 950)
+    app.boot("/", selection=["TOC", "RDBM"])
+    long = _open_shorten(app)
+
+    # Left to right: two ways out, then the one thing this popup does.
+    footer = app.css(".shorten-dialog .actions")
+    assert [b.text for b in footer.find_elements(By.CSS_SELECTOR, "button")] == \
+        ["Back", "Close", "Generate short link"], \
+        [b.text for b in footer.find_elements(By.CSS_SELECTOR, "button")]
+    # Four other assertions in this file read the LAST child as the primary,
+    # and t110 clicks it. Close must never take that place.
+    assert app.css(".shorten-dialog .actions button:last-child").text == \
+        "Generate short link"
+    # "Back" keeps its visible word (speech control, and two xpaths here say
+    # it) and gains the destination for anyone hearing the page read out.
+    back = app.xpath("//div[contains(@class,'shorten-dialog')]"
+                     "//button[normalize-space()='Back']")
+    assert back.get_attribute("aria-label") == "Back to sharing"
+
+    GEOM = """
+        const dlg = document.querySelector('.dialog');
+        const f = document.querySelector('.shorten-dialog .actions');
+        const bs = [...f.querySelectorAll('button')];
+        const r = (e) => e.getBoundingClientRect();
+        const last = bs[bs.length - 1];
+        return {
+            justify: getComputedStyle(f).justifyContent,
+            rows: new Set(bs.map((b) => Math.round(r(b).top))).size,
+            back_left: Math.round(r(bs[0]).left),
+            close_right: Math.round(r(bs[1]).right),
+            primary_left: Math.round(r(last).left),
+            primary_w: Math.round(r(last).width),
+            footer_h: Math.round(r(f).height),
+            widest: Math.max(...bs.map((b) => Math.round(r(b).right))),
+            leftmost: Math.min(...bs.map((b) => Math.round(r(b).left))),
+            // The box the footer is allowed to fill. NOT the viewport: at
+            // 320/360px this app lays out wider than the viewport for a reason
+            // that has nothing to do with this footer (CONTEXT §8 — a badge
+            // holding a whole sentence with white-space: nowrap), so measuring
+            // the buttons against `documentElement.clientWidth` would fail
+            // this test for somebody else's bug.
+            dlg_left: Math.round(r(dlg).left),
+            dlg_right: Math.round(r(dlg).right),
+        };
+    """
+    wide = app.d.execute_script(GEOM)
+    assert wide["justify"] == "flex-start", (
+        "the footer is still inheriting flex-end — the three-class selector "
+        f"lost the cascade ({wide['justify']}), so on a narrow screen Close "
+        "stacks directly above the button that sends")
+    assert wide["primary_left"] - wide["close_right"] > 40, (
+        "the way out and the button that sends a timetable away are "
+        f"shoulder to shoulder ({wide['primary_left'] - wide['close_right']}px "
+        "apart)")
+
+    # Reachable by keyboard, in the order it is read. Tab is sent to whatever
+    # currently HAS focus, never to <body>: `send_keys` focuses what it is
+    # called on, so tabbing via the body would walk focus out of the dialog and
+    # then report a break that isn't there (the trap dialog-a11y documents).
+    seen, chain = [], ActionChains(app.d)
+    for _ in range(24):
+        chain.send_keys(Keys.TAB).perform()
+        label = app.d.execute_script(
+            "const a = document.activeElement;"
+            "return a ? a.tagName + '|' + (a.textContent || '').trim() : '';")
+        if label.startswith("BUTTON|") and label[7:] in (
+                "Back", "Close", "Generate short link"):
+            if label[7:] not in seen:
+                seen.append(label[7:])
+        if len(seen) == 3:
+            break
+    assert seen == ["Back", "Close", "Generate short link"], (
+        f"the footer's keyboard order is {seen} — it must read the way it looks")
+
+    # Close means gone — not back to the share dialog behind it.
+    app.xpath("//div[contains(@class,'shorten-dialog')]"
+              "//button[normalize-space()='Close']").click()
+    WebDriverWait(app.d, 5).until(
+        lambda d: not app.css_all(".dialog"),
+        message="Close left a dialog on screen")
+    assert not app.css_all(".share-shorten"), \
+        "Close is not Back: it must not leave the share dialog open"
+
+    # And Back still means back, which is why both buttons exist.
+    _open_shorten(app)
+    app.xpath("//div[contains(@class,'shorten-dialog')]"
+              "//button[normalize-space()='Back']").click()
+    app.wait_css(".share-shorten button")
+    app.xpath("//div[contains(@class,'dialog')]"
+              "//button[normalize-space()='Close']").click()
+    WebDriverWait(app.d, 5).until(lambda d: not app.css_all(".dialog"))
+
+    # One footprint for every label. "Ask TinyURL again" is a different
+    # sentence from "Generate short link"; if the button resizes with it, the
+    # sticky bar re-wraps the moment it is pressed and again when the link
+    # lands — twice per request, under the reader's thumb.
+    _plant_short_links(app, [
+        {"service": "tinyurl", "long": long, "short": "https://tinyurl.com/abcd"},
+    ])
+    assert _open_shorten(app) == long
+    app.wait_css(".shorten-have .shorten-short")
+    made = app.d.execute_script(GEOM)
+    assert "again" in app.css(".shorten-dialog .actions button:last-child").text.lower()
+    assert made["primary_w"] == wide["primary_w"], (
+        f"the primary is {wide['primary_w']}px saying 'Generate short link' and "
+        f"{made['primary_w']}px saying 'Ask TinyURL again' — min-width is not "
+        "holding its footprint")
+    assert made["footer_h"] == wide["footer_h"], (
+        f"the footer is {wide['footer_h']}px with one label and "
+        f"{made['footer_h']}px with the other")
+
+    # Phones, at the widths phones actually are. Three word buttons cannot fit
+    # a 320px footer; what matters is that the wrap is the SHAPE this design
+    # chose, and that nothing lands off screen.
+    for width, height in ((430, 900), (390, 844), (360, 800), (320, 700)):
+        app.d.execute_cdp_cmd("Emulation.setDeviceMetricsOverride", {
+            "width": width, "height": height, "deviceScaleFactor": 2,
+            "mobile": True})
+        app.d.execute_cdp_cmd("Emulation.setTouchEmulationEnabled", {
+            "enabled": True, "maxTouchPoints": 5})
+        time.sleep(0.5)
+        g = app.d.execute_script(GEOM)
+        # Inside the popup it belongs to, at both ends.
+        assert g["leftmost"] >= g["dlg_left"] and g["widest"] <= g["dlg_right"], (
+            f"at {width}px a footer button is outside the popup: buttons span "
+            f"{g['leftmost']}..{g['widest']}, popup {g['dlg_left']}..{g['dlg_right']}")
+        # Wrapped or not, the exits stay left of the send, with real space
+        # between them — measured 19px at 320-360px, where the row is still one
+        # line because the popup gets a 335px footer rather than the 244px a
+        # 320px viewport would give it (see §8).
+        assert g["back_left"] < g["close_right"] < g["primary_left"], (
+            f"at {width}px the footer order broke: back {g['back_left']}, "
+            f"close ends {g['close_right']}, primary starts {g['primary_left']}")
+        assert app.css(".shorten-dialog .actions button:last-child").text.strip(), \
+            f"at {width}px the primary has no label"
+        # Finger-sized, which is what `pointer: coarse` is emulated for here.
+        for b in app.css_all(".shorten-dialog .actions button"):
+            assert b.rect["height"] >= 40, \
+                f"at {width}px {b.text!r} is only {b.rect['height']}px tall"
+    app.d.execute_cdp_cmd("Emulation.clearDeviceMetricsOverride", {})
+    app.d.execute_cdp_cmd("Emulation.setTouchEmulationEnabled", {"enabled": False})
+    app.d.set_window_size(1400, 950)
+
+    # Cleanly closed, by the button this test is about.
+    app.xpath("//div[contains(@class,'shorten-dialog')]"
+              "//button[normalize-space()='Close']").click()
+    WebDriverWait(app.d, 5).until(lambda d: not app.css_all(".dialog"))
+
+
 def t105_arrow_keys_walk_the_tab_rail(app):
     """The rail has always claimed role=tablist; now it behaves like one.
     Both axes work (the rail is a column on a desktop and a bar on a phone),
@@ -6441,6 +6610,7 @@ TESTS = [
     t114_the_app_asks_before_it_updates_itself,
     t115_the_search_box_has_the_three_switches_every_editor_has,
     t116_the_search_box_shows_its_whole_placeholder,
+    t117_the_shorten_popup_has_a_way_out_and_it_is_not_beside_the_send,
     t106_the_wheel_over_the_rail_walks_the_sections,
 ]
 
