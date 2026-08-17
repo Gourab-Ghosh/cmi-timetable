@@ -825,6 +825,11 @@ regenerates the .ics golden.
   localhost artifact, and it is the only one that drives the real origin
   (GitHub's 404.html, the sub-path worker scope, and whether the fresh build
   offers itself an update).
+  **A docs-only push must be `CMITT_SKIP_DEPLOY=1 git push`.** The pre-push
+  hook redeploys on any `main` push, and `build.rs` stamps `APP_BUILD_TIME`
+  into the wasm — so rebuilding identical source yields a new content hash, a
+  new build id, and an update prompt for every reader who already has the app.
+  Redeploy only when the shipped files actually change.
 
 ## 7. Prompt log (append one entry per user round; newest last)
 
