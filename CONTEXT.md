@@ -4586,6 +4586,117 @@ Also worth knowing for the next round: `dist-e2e` is stamped `Git commit
 8bdf859` because it was built before R71's commit — the R71 code is in it (the
 suite's own t112–t115 only pass with it), the stamp just predates the commit.
 
+### R73 — text that was cut off, and an update that stopped taking itself
+
+Two rounds in one prompt: "the text inside the search box is covered by the new
+icons — check it visually and fix it, and sweep the app for the same class of
+bug", then "before updating, the app should ask; the user must be able to say
+not now, and to turn updates off for good — and back on".
+
+**The reported bug, and its actual cause.** The placeholder read
+`Search by code, name or in` — cut mid-word. R71 had sized the box with
+`.filterbar input[type="search"] { min-width: 17.5rem }` and a comment saying
+that width fits "Search by code, name or instructor", which it does — and then
+spent `padding-right: 6.4rem` of that same width on the switches. **Room for
+text and room for buttons are not the same room.** The fix makes that
+impossible to get wrong again rather than picking a bigger number: `.searchbox`
+declares `--switch`, `--switch-gap`, `--switch-inset` and derives
+`--switch-strip` from them, and the input's `padding-right` AND its `min-width`
+are both calculated from that one value (`min-width: calc(var(--search-text) +
+var(--switch-strip))`). The coarse-pointer media query now sets `--switch: 34px`
+and nothing else; the phone one sets `--search-text: 0px`, because there the box
+is the full width of the bar and only needs the strip's room.
+
+`--search-text` is **17rem for a 231px placeholder** — the slack is
+deliberate and commented: that 231px is what this machine's fallback sans
+measures, and a reader whose face is 10% wider must not get the bug back.
+
+**Found by measuring, not by looking.** `.workagents/field-clip-probe.py` asks
+the browser, for every input/textarea/select on every tab and in every dialog
+at three widths: how much room the text area has (`clientWidth` minus its
+padding), how wide the placeholder is in that field's own computed font
+(canvas `measureText`), and who answers `elementFromPoint` at the far end of the
+text area. It printed **38px short** before the fix and **0 findings** after,
+and it caught two more of the same family:
+1. The pattern-mode placeholder needed **322px of a 244px field** — worse than
+   the reported one, and nobody had noticed. Shortened to
+   `Pattern: ^ana or algebra|analysis`, which fits the same room the other one
+   does.
+2. `#ce-name` in the course editor is an unsized text input — about 24
+   characters — while the `select`s in the rows under it are half again as
+   wide, so "Topics in Algebraic Number Theory" scrolled away as it was typed.
+   The form's free-text rows now take the width of the form (`flex: 1`), and
+   `.code-input` keeps its 9rem with `flex: none`.
+
+**Chrome's own ✕ was in the strip.** `input[type="search"]` gets a native
+cancel button at the end of its text — which, with the padding, lands
+immediately left of `Aa`, in a heavier weight and a different colour than
+anything else in the app. It is suppressed
+(`::-webkit-search-cancel-button { appearance: none }`) and replaced with the
+app's own: a fourth slot in the strip, present only while there is text (so the
+placeholder never pays for it — `.searchbox.filled` widens the padding), styled
+as the switches are but at weight 400 with a wider gap after it, clearing as
+its own undo step, and leaving the caret in the box. Note for whoever tests it:
+Ctrl+Z will NOT bring the text back with the caret still in the field —
+`is_editing_context` (dnd.rs) hands every shortcut to the field being typed in,
+by design — the header Undo is the one that reaches filters. t116 says so in a
+comment so the next person does not "fix" it.
+
+**Two more sweeps, both clean, and one non-bug worth keeping.**
+`.workagents/covered-text-probe.py` samples every text node's real line
+rectangles (`Range.getClientRects`) at both ends and the middle and asks who is
+actually there — 0 findings once three legitimate cases are excluded: sticky
+layers (the header and the tab rail covering content is what sticky MEANS),
+deliberate overlays (dialog, toast, open dropdown), and text scrolled out of a
+scroll container, which is clipped rather than covered. Getting there took two
+runs: the first reported ~40 findings, all three of those categories.
+`.workagents/closed-menu-probe.py` settled the other suspicious result — the
+facet dropdowns' search boxes ARE laid out while shut (187px wide, inside a
+closed `<details>`), and are invisible to `checkVisibility` and skipped by a
+real Tab press. Not a bug; the probe now skips what the browser says nobody can
+see.
+
+**The update feature now asks.** This closes §8.19 (an update landing on top of
+a live Undo offer) by removing the thing that caused it rather than timing
+around it: **nothing in the app reloads the page except a button press.** Gone
+are the hidden-tab instant reload, the 1.5-second notice-then-reload, `settle`,
+`update_reloading`, the `busy_with_unsaved_work` gate and the
+`visibilitychange`-while-hiding hook. What is left is a banner with two answers
+and a way out:
+- **Update now** → `take()` writes the loop-guard target and reloads. (The
+  target is now armed HERE, at the moment a reload is actually attempted, not
+  when the banner appears — otherwise "Not now" would leave a guard armed
+  against a build nothing had tried to reach.)
+- **Not now** → `decline()`: `UpdateState::{declined, declined_at}` are stored
+  (in storage, not memory — an answer that a reload forgets is not an answer),
+  `next_check_at` moves a day out, and the toast says the true thing: a refresh
+  whenever they like does the same job. `check` ignores a declination only when
+  `forced`, i.e. when the reader pressed Check now themselves.
+- **Stop checking** → `Prefs::update_checks_off`, stored the "off" way round so
+  that every prefs blob written before this field existed loads as "keep
+  checking". `check` returns immediately unless `forced`. Counted in
+  `nothing_saved_to_lose`, so an import asks before putting it back.
+- **My data → App updates** has the same switch both ways plus **Check now**,
+  so turning it off is not a one-way door, and a line that changes with the
+  state rather than describing both.
+
+The banner also got the phone layout R72 flagged: `.banner` becomes a column
+under 640px, so the note has the full width and the answers sit under it.
+
+Gates: 116/116 e2e (t114 rewritten to six phases — nothing new, no network, a
+new build ASKS and does not install itself even with the tab hidden, "Not now"
+honoured for the day but overridden by asking yourself, "Update now" installs
+it, and off/on through the app's own switch; t116 new for the placeholder and
+the clear button), 168 native, fmt + clippy clean on both targets, and the box
+re-photographed in both themes at both widths
+(`.workagents/shots-search/after-fix/`).
+
+One thing t114 documents that cost a debugging cycle: `d.get(url)` with the URL
+the browser is already on — hash and all — is a same-document navigation and
+reloads NOTHING, so the phase that needs the old build back must use
+`d.refresh()`. The assertion that the old build is actually being served is now
+in the test.
+
 ## 8. Open bugs — found, confirmed, NOT fixed (do not delete)
 
 Rules for this section: entries stay until the bug is actually fixed and a
@@ -4601,8 +4712,10 @@ the R37 audit added (8.7–8.13), deliberately deferred because each was a
 change of behaviour big enough to want its own look, were all fixed in R48 —
 R48's §7 entry says what each was, how it was fixed, and which test now
 fails without the fix. 8.6 below is not a bug and never leaves. 8.18 was
-found by the R58 scouts and is open; 8.19 was found by R72's screenshots — by
-looking at them, not by reading the code — and is open.
+found by the R58 scouts and is open. 8.19 (a self-update landing on top of a
+live Undo offer, found by R72's screenshots) was fixed in R73 by removing every
+self-initiated reload — R73's §7 entry says what replaced it and which phase of
+t114 fails without it.
 
 ### 8.18 The Day and Time-slot facets read the WRONG filter set on My courses
 
@@ -4624,29 +4737,6 @@ it needs its own test: extend t75 to tick a day on My courses, switch to
 Catalog, and assert the Day menu there is untouched — and the reverse. Check
 `with_picked`'s callers at the same time, since the badge and the menu
 disagreeing is the symptom that would remain if only one side were changed.
-
-### 8.19 A self-update can land on top of a live Undo offer
-
-Found in R72 by photographing the feature, not by reading it: see
-`.workagents/shots-update/update/5-lands-when-the-edit-is-done.png`, where
-both toasts are on screen at once.
-
-`settle()` treats "no unsaved work and no dialog" as a safe moment, and
-finishing an action is exactly when both become true. So saving a course
-raises "Added READING … **Undo**" and starts the 1.5-second notice in the same
-instant; the reload follows, and the undo stack — in-memory by design, and
-documented as not surviving a reload — is gone while its offer is still
-sitting there. The data is safe (that is what the banner promises), but a
-control the reader can see stops working without a word.
-
-The fix is small and belongs in `busy_with_unsaved_work()` or in `settle()`:
-treat a toast that is still offering Undo as "in the middle of something", so
-the update waits out the toast's 6 seconds. Do NOT reach for a timer — the
-toast stack already knows; ask it. It needs a test that pins the whole
-sequence rather than the delay: arm an update, do something undoable, and
-assert the page has not reloaded while an Undo is on screen. Note the
-interaction with rule 1 while writing it — a HIDDEN tab still reloads at once,
-which is correct, because nobody is looking at that Undo.
 
 ### 8.6 Deliberate non-bug — do not "fix" this
 

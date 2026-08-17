@@ -4738,7 +4738,15 @@ def t94_a_chosen_row_height_is_never_overruled(app):
     app.boot("/", fresh=False)
     app.xpath("//button[normalize-space()='My data']").click()
     app.wait_css(".dialog")
-    app.xpath("//div[@class='dialog']//button[normalize-space()='Reset']").click()
+    reset = app.xpath("//div[@class='dialog']//button[normalize-space()='Reset']")
+    # Scrolled to the MIDDLE of the dialog, then clicked for real. WebDriver's
+    # own scroll-into-view stops at the nearest edge, which in this dialog can
+    # be under the sticky actions footer — the click then hits the footer and
+    # the failure reads as a missing button. (Whose Reset lands there depends on
+    # how many sections the dialog has; R73 added one.)
+    app.d.execute_script("arguments[0].scrollIntoView({block: 'center'});", reset)
+    time.sleep(0.2)
+    reset.click()
     app.dismiss_toasts()
     stored = app.d.execute_script(
         "return JSON.parse(localStorage.getItem('cmitt.v1.prefs') || '{}').density;")
@@ -5731,11 +5739,56 @@ def _shown_build(d):
         ".map(l => l.href).join(' ');")
 
 
-def t114_the_app_checks_whether_a_newer_version_of_itself_is_published(app):
+def _scheduled_check(d):
+    """Run the DAILY check the way the app runs it, with no button pressed: the
+    schedule is due and the network just came back. Every path that must obey
+    "off" and "not now" is this one — the developer button is deliberately
+    exempt from both, so testing with it would prove nothing."""
+    d.execute_script("""
+        const raw = localStorage.getItem('cmitt.v1.update');
+        const state = raw ? JSON.parse(raw) : {};
+        state.attempted_at = 0;
+        state.next_check_at = 0;
+        localStorage.setItem('cmitt.v1.update', JSON.stringify(state));
+        window.dispatchEvent(new Event('online'));
+    """)
+
+
+def _update_state(d):
+    return d.execute_script(
+        "return JSON.parse(localStorage.getItem('cmitt.v1.update') || '{}');")
+
+
+def _set_update_checks(app, on):
+    """Turn the daily check off or on the way a reader does: My data → App
+    updates. Not by editing localStorage — the running app holds prefs in a
+    signal, so a stored value it never read would prove nothing."""
+    app.xpath("//button[normalize-space()='My data']").click()
+    box = app.wait_css("[data-update-switch]")
+    if box.is_selected() != on:
+        app.d.execute_script("arguments[0].click();", box)
+    WebDriverWait(app.d, 5).until(
+        lambda d: app.css("[data-update-switch]").is_selected() == on)
+    app.d.execute_script("""
+        const b = [...document.querySelectorAll('.dialog button')]
+          .find(x => x.textContent.trim() === 'Close');
+        if (b) b.click();
+    """)
+    WebDriverWait(app.d, 5).until(lambda d: not app.css_all(".dialog"))
+    app.dismiss_toasts()
+
+
+def t114_the_app_asks_before_it_updates_itself(app):
     """A tab left open for a week never learns that a new version was
     deployed: browsers only look for a new service worker when a page is
-    navigated. So the app asks, itself — and the answer must be right in all
-    three cases: nothing new, something new, and no network at all.
+    navigated. So the app asks, itself — and then it asks the READER, because
+    a page that reloads itself takes things with it that are not saved: an
+    Undo offer, a scroll position, a half-finished thought.
+
+    Six things have to hold: nothing new says so, no network says so and breaks
+    nothing, a new build ASKS and never installs itself, "Not now" is honoured
+    for the day, "Update now" installs it, and "stop checking" means no
+    checking — reversibly.
 
     Runs on its own port so its service worker and its update marker never
     touch the origin the rest of the suite uses.
@@ -5749,7 +5802,8 @@ def t114_the_app_checks_whether_a_newer_version_of_itself_is_published(app):
         d.get(f"{base}/#/developer")
         WebDriverWait(d, 20).until(
             EC.presence_of_element_located((By.CSS_SELECTOR, "[data-update-check]")))
-        d.execute_script("localStorage.removeItem('cmitt.v1.update');")
+        d.execute_script("localStorage.removeItem('cmitt.v1.update');"
+                         "localStorage.removeItem('cmitt.v1.prefs');")
         first_build = _shown_build(d)
 
         # 1. Nothing new: it says so, and changes nothing.
@@ -5771,17 +5825,86 @@ def t114_the_app_checks_whether_a_newer_version_of_itself_is_published(app):
         app.wait_toast("Couldn't reach the server")
         app.dismiss_toasts()
 
-        # 3. A new build appears on the same origin: the app takes it.
+        # 3. A new build appears on the same origin: the app ASKS. It must not
+        # install anything — not now, not in a second and a half, not when the
+        # tab is hidden.
         nxt, old_css, new_css = _next_build(DIST)
         server = _serve_dir(nxt, port)
+        _scheduled_check(d)
+        banner = WebDriverWait(d, 30).until(
+            EC.presence_of_element_located((By.CSS_SELECTOR, ".update-banner")))
+        assert "Update now" in banner.text and "Not now" in banner.text, banner.text
+        d.execute_script(
+            "Object.defineProperty(document, 'hidden', {value: true, configurable: true});"
+            "document.dispatchEvent(new Event('visibilitychange'));")
+        time.sleep(3.0)
+        assert old_css in _shown_build(d), \
+            "nothing may reload on its own — not even a tab nobody is looking at"
+        assert app.css_all(".update-banner"), "and the question stays until it is answered"
+
+        # 4. "Not now": the banner goes, the app says how to get it later, and
+        # the scheduled check leaves it alone for the day.
+        d.find_element(
+            By.XPATH, "//div[contains(@class,'update-banner')]"
+                      "//button[normalize-space()='Not now']").click()
+        app.wait_toast("Refresh the page whenever")
+        WebDriverWait(d, 5).until(lambda drv: not app.css_all(".update-banner"))
+        assert _update_state(d)["declined"], "the answer has to survive a reload"
+        app.dismiss_toasts()
+        _scheduled_check(d)
+        time.sleep(3.0)
+        assert not app.css_all(".update-banner"), \
+            "'not now' asked twice in one afternoon is not 'not now'"
+
+        # …but asking for it yourself always answers, declination or not.
         d.find_element(By.CSS_SELECTOR, "[data-update-check]").click()
+        WebDriverWait(d, 30).until(
+            EC.presence_of_element_located((By.CSS_SELECTOR, ".update-banner")))
+
+        # 5. "Update now": that, and only that, installs it — and the page says
+        # why it reappeared rather than leaving it eerie.
+        d.find_element(
+            By.XPATH, "//div[contains(@class,'update-banner')]"
+                      "//button[normalize-space()='Update now']").click()
         WebDriverWait(d, 30).until(lambda drv: new_css in _shown_build(drv))
         assert old_css not in _shown_build(d)
-        # And it says why the page reappeared, rather than leaving it eerie.
         app.wait_toast("Updated to the newest version")
         # The loop guard is spent, not left armed.
-        assert d.execute_script(
-            "return JSON.parse(localStorage.getItem('cmitt.v1.update')).reload_target;") is None
+        assert _update_state(d)["reload_target"] is None
+        app.dismiss_toasts()
+
+        # 6. "Stop checking" means it stops — and the same switch turns it back
+        # on. Back to the OLD build first, so there is something to find again;
+        # every reload from here on has to happen while the old build is being
+        # served, or the reload itself does the updating.
+        _really_stop(server)
+        server = _serve_dir(DIST, port)
+        # `d.get` with the URL the browser is already on — hash and all — is a
+        # same-document navigation and reloads NOTHING, so the tab would have
+        # stayed on the new build and there would have been nothing to find.
+        d.refresh()
+        WebDriverWait(d, 20).until(
+            EC.presence_of_element_located((By.CSS_SELECTOR, "[data-update-check]")))
+        assert old_css in _shown_build(d), \
+            "this phase needs the old build back, or it proves nothing"
+        d.execute_script("localStorage.removeItem('cmitt.v1.update');")
+        _set_update_checks(app, False)
+        _really_stop(server)
+        server = _serve_dir(nxt, port)
+
+        _scheduled_check(d)
+        time.sleep(3.0)
+        assert not app.css_all(".update-banner"), \
+            "checks are off: the app must not even look"
+
+        # On again, through the app's own switch — the point of the setting is
+        # that it is not a one-way door.
+        _set_update_checks(app, True)
+        d.execute_script("localStorage.removeItem('cmitt.v1.update');")
+        _scheduled_check(d)
+        WebDriverWait(d, 30).until(
+            EC.presence_of_element_located((By.CSS_SELECTOR, ".update-banner")),
+            message="switched back on, the app has to look again")
     finally:
         try:
             _really_stop(server)
@@ -5889,6 +6012,111 @@ def t115_the_search_box_has_the_three_switches_every_editor_has(app):
                    ".search-switch[aria-label='Match case']")
     assert mine.get_attribute("aria-pressed") == "false"
     assert section is not None
+
+
+ROOM_JS = """
+const box = document.querySelector(arguments[0]);
+const cs = getComputedStyle(box);
+const ctx = document.createElement('canvas').getContext('2d');
+ctx.font = `${cs.fontStyle} ${cs.fontWeight} ${cs.fontSize} ${cs.fontFamily}`;
+const padL = parseFloat(cs.paddingLeft), padR = parseFloat(cs.paddingRight);
+const r = box.getBoundingClientRect();
+// Who answers at the far end of the text area? Anything but the field itself
+// means text put there is under something else.
+const at = document.elementFromPoint(
+  Math.round(r.right - parseFloat(cs.borderRightWidth) - padR - 2),
+  Math.round(r.top + r.height / 2));
+return {
+  room: Math.round(box.clientWidth - padL - padR),
+  placeholder: box.placeholder,
+  needs: Math.round(ctx.measureText(box.placeholder).width),
+  at_text_end: at ? (at === box ? 'the field' : (at.className || at.tagName)) : null,
+};
+"""
+
+
+def t116_the_search_box_shows_its_whole_placeholder(app):
+    """The switches sit inside the box's right edge, so the box has to be wide
+    enough for BOTH — its placeholder and the strip. R71 sized it for the
+    placeholder alone and then spent 6.4rem of that on the buttons, which cut
+    the placeholder off mid-word: "Search by code, name or in".
+
+    Measured, not eyeballed: how much room the text area has, against how wide
+    the placeholder is in the field's own font. A pixel comparison is the only
+    kind that survives a font change, and it is what `.workagents/
+    field-clip-probe.py` swept the whole app with.
+    """
+    app.d.set_window_size(1400, 950)
+    app.boot("/", selection=["TOC"])
+    sel = "section[aria-label='Catalog'] .searchbox input"
+
+    for tab, label in (("Catalog", "Catalog"), ("My courses", "My courses"),
+                       ("Master grid", "Master grid")):
+        app.open_tab(tab)
+        app.wait_css(f"section[aria-label='{label}'] .searchbox input")
+        m = app.d.execute_script(
+            ROOM_JS, f"section[aria-label='{label}'] .searchbox input")
+        assert m["needs"] <= m["room"], (
+            f"{label}: {m['placeholder']!r} needs {m['needs']}px and the box "
+            f"gives it {m['room']}px — it is being cut off")
+        assert m["at_text_end"] == "the field", (
+            f"{label}: {m['at_text_end']!r} is sitting over the end of the "
+            "text area")
+
+    app.open_tab("Catalog")
+    app.wait_css(sel)
+
+    # Pattern mode has its own, different placeholder; it has to fit the same
+    # room. (The first one written for it needed 322px of a 244px field.)
+    app.css("section[aria-label='Catalog'] .search-switch[aria-label='Regular expression']").click()
+    time.sleep(0.3)
+    m = app.d.execute_script(ROOM_JS, sel)
+    assert "attern" in m["placeholder"], m["placeholder"]
+    assert m["needs"] <= m["room"], (
+        f"pattern mode: {m['placeholder']!r} needs {m['needs']}px of "
+        f"{m['room']}px")
+    app.css("section[aria-label='Catalog'] .search-switch[aria-label='Regular expression']").click()
+    time.sleep(0.3)
+
+    # Emptying the box: the app's own button, in the app's own language,
+    # because the browser's ✕ landed in the middle of the switches.
+    assert not app.css_all(".search-clear"), \
+        "nothing to clear yet, so no button to clear it"
+    box = app.css(sel)
+    box.send_keys("algebra")
+    WebDriverWait(app.d, 5).until(lambda d: app.css_all(".search-clear"))
+    narrowed = len(app.css_all("section[aria-label='Catalog'] .card"))
+    assert narrowed > 0
+
+    app.css("section[aria-label='Catalog'] .search-clear").click()
+    WebDriverWait(app.d, 5).until(
+        lambda d: not app.css_all("section[aria-label='Catalog'] .search-clear"))
+    assert app.css(sel).get_attribute("value") == "", "the box has to be empty"
+    assert len(app.css_all("section[aria-label='Catalog'] .card")) > narrowed, \
+        "and the list has to come back"
+    assert app.d.execute_script(
+        "return document.activeElement === document.querySelector(arguments[0]);",
+        sel), "the caret belongs in the box the reader was typing in"
+
+    # Its own undo step, never folded into the typing it undid. Pressed as the
+    # button, not as Ctrl+Z: the caret is in the box after clearing, and the
+    # app hands every shortcut to the field the reader is typing in
+    # (`is_editing_context` in dnd.rs) so that the browser's own text editing
+    # keeps working. The header button is the undo that reaches filters.
+    app.xpath("//button[contains(., 'Undo')]").click()
+    WebDriverWait(app.d, 5).until(
+        lambda d: app.css(sel).get_attribute("value") == "algebra",
+        message="undoing a clear must bring the words back")
+
+    # A phone: the box is the full width of the bar, and the strip is bigger
+    # there (fingers), so the sums are different and worth their own check.
+    app.d.set_window_size(430, 900)
+    time.sleep(0.5)
+    box = app.css(sel)
+    app.d.execute_script("arguments[0].scrollIntoView({block: 'center'});", box)
+    m = app.d.execute_script(ROOM_JS, sel)
+    assert m["at_text_end"] == "the field", m["at_text_end"]
+    app.d.set_window_size(1400, 950)
 
 
 def t105_arrow_keys_walk_the_tab_rail(app):
@@ -6070,8 +6298,9 @@ TESTS = [
     t111_the_chosen_service_is_warmed_and_only_the_chosen_one,
     t112_a_chosen_day_view_survives_a_refresh,
     t113_the_shortening_service_you_picked_is_the_one_you_come_back_to,
-    t114_the_app_checks_whether_a_newer_version_of_itself_is_published,
+    t114_the_app_asks_before_it_updates_itself,
     t115_the_search_box_has_the_three_switches_every_editor_has,
+    t116_the_search_box_shows_its_whole_placeholder,
     t106_the_wheel_over_the_rail_walks_the_sections,
 ]
 

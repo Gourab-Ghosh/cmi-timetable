@@ -1701,18 +1701,34 @@ pub fn filter_bar(app: App, scope: FilterScope, result_count: Signal<usize>) -> 
         })
     });
 
+    // Is there anything in the box? Two things ask: the clear button, and the
+    // class that reserves room for it.
+    let has_text = Memo::new(move |_| app.with_filters_in(scope.mine(), |f| !f.text.is_empty()));
+    // Clearing puts the cursor back where the reader was typing — the button
+    // is a shortcut for selecting all and deleting, and that leaves the caret
+    // in the box.
+    let box_ref = NodeRef::<leptos::html::Input>::new();
+
     view! {
         <div class="filterbar" role="group" aria-label="Filters">
             // The search box and its three switches are one control, the way
             // an editor's find bar is: the box owns the row, the switches sit
             // inside its right edge, and nothing about the layout moves when
             // one is turned on.
-            <div class="searchbox" class:bad=move || matcher.with(Option::is_some)>
+            <div
+                class="searchbox"
+                class:bad=move || matcher.with(Option::is_some)
+                class:filled=move || has_text.get()
+            >
                 <input
+                    node_ref=box_ref
                     type="search"
+                    // Both placeholders have to fit the room the box reserves
+                    // beside the switches (see `--search-text` in styles.css),
+                    // so the pattern one names its two examples and stops.
                     placeholder=move || {
                         if app.with_filters_in(scope.mine(), |f| f.use_regex) {
-                            "Search by pattern — try ^ana or algebra|analysis"
+                            "Pattern: ^ana or algebra|analysis"
                         } else {
                             "Search by code, name or instructor"
                         }
@@ -1735,6 +1751,40 @@ pub fn filter_bar(app: App, scope: FilterScope, result_count: Signal<usize>) -> 
                     on:keydown=domx::blur_on_enter
                 />
                 <div class="searchbox-switches">
+                    // Only while there is something to clear. The browser's own
+                    // ✕ is hidden (styles.css) because it landed here too, in
+                    // its own weight and colour, making two.
+                    {move || {
+                        has_text
+                            .get()
+                            .then(|| {
+                                view! {
+                                    <button
+                                        type="button"
+                                        class="search-switch search-clear"
+                                        aria-label="Clear search"
+                                        title="Clear the search box"
+                                        on:click=move |_| {
+                                            // Its own undo step, never coalesced into the
+                                            // typing it undoes: Ctrl+Z after this has to
+                                            // bring the words back, not the keystroke
+                                            // before them.
+                                            app.act_filters_in(
+                                                scope.mine(),
+                                                &format!("clearing the search{}", scope.undo_suffix()),
+                                                false,
+                                                |f| f.text.clear(),
+                                            );
+                                            if let Some(el) = box_ref.get() {
+                                                let _ = el.focus();
+                                            }
+                                        }
+                                    >
+                                        "✕"
+                                    </button>
+                                }
+                            })
+                    }}
                     {search_switch(
                         app,
                         scope,
@@ -4034,6 +4084,59 @@ fn my_data_dialog(app: App) -> impl IntoView {
                         }
                     })
             }}
+
+            // Not data, strictly — but it is the one decision about the app
+            // itself a reader might want to change, and this dialog is where
+            // the app explains what it does on its own. A switch and a
+            // sentence; the "Check now" button is what makes it usable with
+            // checking off, so turning it off is not a one-way door.
+            <section class="data-section">
+                <header>
+                    <h3>"App updates"</h3>
+                    <button
+                        class="btn small"
+                        title="Ask the server right now whether a newer version is published"
+                        data-update-check
+                        on:click=move |_| crate::update::check_now(app)
+                    >
+                        "Check now"
+                    </button>
+                </header>
+                <label class="opt">
+                    <input
+                        type="checkbox"
+                        data-update-switch
+                        prop:checked=move || app.update_checks_on()
+                        on:change=move |ev| {
+                            let on = event_target_checked(&ev);
+                            app.set_update_checks(on);
+                            app.toast(
+                                if on {
+                                    "The app will look for a new version once a day, and ask \
+                                     before installing one."
+                                } else {
+                                    "Update checks are off. Refresh the page any time to pick \
+                                     up the newest version."
+                                },
+                            );
+                        }
+                    />
+                    <span>"Look for a new version once a day"</span>
+                </label>
+                <p class="muted small">
+                    {move || {
+                        if app.update_checks_on() {
+                            "Checking asks the server for this page and compares it with the \
+                             one you loaded — a few kilobytes, once a day. Nothing installs \
+                             itself: when there is a new version the app asks, and “Not now” \
+                             keeps what you have until tomorrow."
+                        } else {
+                            "The app isn't looking. You'll still get the newest version \
+                             whenever you refresh the page — this only stops the asking."
+                        }
+                    }}
+                </p>
+            </section>
 
             <section class="data-section">
                 <header>

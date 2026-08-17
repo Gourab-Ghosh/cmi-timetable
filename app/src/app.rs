@@ -131,7 +131,6 @@ fn init_app() -> (App, bool) {
         shortlinks: RwSignal::new(shortlinks),
         phone_viewport: RwSignal::new(domx::is_phone_viewport()),
         update_ready: RwSignal::new(None),
-        update_reloading: RwSignal::new(false),
         drag,
         // Derived here, at the root, for the same reason as CourseIndex
         // below: it outlives every cell that reads it. `drag` fires on every

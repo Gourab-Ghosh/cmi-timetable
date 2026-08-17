@@ -6,9 +6,9 @@
 //! reloaded can run last month's app indefinitely — with last month's bugs,
 //! and none of the fixes.
 //!
-//! So the app asks, itself, once a day: it fetches its own shell, works out
+//! So the app looks, itself, once a day: it fetches its own shell, works out
 //! which build that is (`ttcore::update::build_id`), and if it is not the
-//! build in front of the reader it takes the new one.
+//! build in front of the reader it puts the question on the page.
 //!
 //! # Nothing is hard-coded about where the app lives
 //!
@@ -19,25 +19,36 @@
 //! is no URL here to keep in step, because the app only ever asks the server
 //! it was itself loaded from.
 //!
-//! # Never a reload the reader pays for
+//! # The app asks. It never takes.
 //!
-//! Three rules, in order:
+//! Checking is automatic; **installing is not**. Finding a newer build puts a
+//! banner on the page with two answers and nothing else happens until one of
+//! them is pressed:
 //!
-//! 1. **A hidden tab updates instantly.** It is the perfect moment: nobody is
-//!    looking, and the reader comes back to the new version already running.
-//! 2. **A tab in the middle of something waits.** Unsaved typing in the
-//!    course editor, a drag, an unanswered conflict — the same
-//!    `busy_with_unsaved_work` gate the cross-tab sync uses. A banner says an
-//!    update is waiting; the moment the tab goes quiet, it lands.
-//! 3. **Otherwise, a word first.** A toast, a beat, then the reload — so the
-//!    page reappearing is explained rather than eerie.
+//! * **Update now** — reload, and the new version is running.
+//! * **Not now** — the banner goes, and the app says the true thing: a refresh
+//!   whenever they feel like it will do the same job. It asks again tomorrow.
+//!
+//! Nothing reloads on its own, in any state: not a hidden tab, not an idle
+//! one, not after a countdown. That is worth more than the seconds it saves,
+//! because a page that reloads itself takes things with it that are not
+//! stored — the undo stack (in memory by design), a scroll position, a
+//! half-finished thought. An earlier version of this module reloaded a quiet
+//! tab after a 1.5-second toast, which meant an update could land on top of a
+//! live "Undo" offer the moment the reader finished something: the offer was
+//! still on screen and would no longer work. There is no correct delay for
+//! that; there is only asking.
+//!
+//! And a reader who wants none of it can say so once — `Prefs
+//! ::update_checks_off`, from My data — after which nothing here runs at all
+//! until they switch it back on.
 //!
 //! # It can never reload in a loop
 //!
 //! The id the app reloaded FOR is remembered. If the app comes back still not
 //! running that build — a proxy serving a stale shell, a CDN mid-purge — it
-//! does not try again for that id. Getting this wrong would be the worst bug
-//! in the app: a tab reloading forever, with a student's timetable behind it.
+//! does not offer that id again. Getting this wrong would be the worst bug in
+//! the app: a tab reloading forever, with a student's timetable behind it.
 
 use crate::state::App;
 use gloo_timers::future::TimeoutFuture;
@@ -66,8 +77,6 @@ const TICK_MS: u32 = 5 * 60 * 1000;
 /// A shell is a few kilobytes. If it has not arrived by now the network is
 /// not in a state to be updating anything.
 const SHELL_TIMEOUT_MS: u32 = 8_000;
-/// Long enough to read "updating now", short enough not to feel like a hang.
-const NOTICE_MS: u32 = 1_500;
 
 /// What the app remembers between reloads about updating itself.
 #[derive(Clone, Default, Serialize, Deserialize)]
@@ -85,6 +94,18 @@ pub struct UpdateState {
     /// and failed to get that build, and must not try again.
     #[serde(default)]
     pub reload_target: Option<String>,
+    /// The build the reader answered "Not now" to, and when.
+    ///
+    /// Stored rather than kept in memory: "not now" has to mean something after
+    /// a reload the reader did for their own reasons, or the banner would be
+    /// back the moment the page came up — the loudest possible way to ignore
+    /// an answer. It lapses after a day, which is the same schedule as
+    /// everything else here: not now means today, not never. Never is a
+    /// preference (`Prefs::update_checks_off`).
+    #[serde(default)]
+    pub declined: Option<String>,
+    #[serde(default)]
+    pub declined_at: f64,
 }
 
 fn load_state() -> UpdateState {
@@ -186,6 +207,12 @@ async fn latest_build_id(scope: Option<&str>) -> Option<String> {
 /// downloaded. The only visible difference is that the next attempt is an
 /// hour away instead of a day.
 async fn check(app: App, forced: bool) {
+    // Switched off means off: no request, no banner, nothing. `forced` is the
+    // reader pressing "Check now" themselves, which is a different question
+    // and always gets an answer.
+    if !forced && app.prefs.with_untracked(|p| p.update_checks_off) {
+        return;
+    }
     let now = crate::domx::now_ms();
     let mut state = load_state();
     state.attempted_at = now;
@@ -205,7 +232,8 @@ async fn check(app: App, forced: bool) {
         // truncated download. The retry is already scheduled.
         if forced {
             app.toast(
-                "Couldn't reach the server to check for a newer version.                  Everything here keeps working — the app is already in this                  browser.",
+                "Couldn't reach the server to check for a newer version. Everything \
+                 here keeps working — the app is already in this browser.",
             );
         }
         return;
@@ -225,8 +253,21 @@ async fn check(app: App, forced: bool) {
     }
     let Some(latest) = latest else { return };
 
-    // The loop guard. Set BEFORE anything reloads, and only cleared at boot
-    // by the build that satisfies it.
+    // "Not now" holds for a day. A reader who pressed it does not want to be
+    // asked again this afternoon — but pressing "Check now" themselves is
+    // asking, so that path ignores it.
+    if !forced
+        && state.declined.as_deref() == Some(latest.as_str())
+        && crate::domx::now_ms() - state.declined_at < CHECK_EVERY_MS
+    {
+        return;
+    }
+
+    // The loop guard, read. It is WRITTEN by `take`, at the moment a reload is
+    // actually attempted, and cleared at boot by the build that satisfies it —
+    // so finding it still set here means a previous "Update now" did not
+    // arrive at this build, and offering it again would send the reader round
+    // the same circle.
     if state.reload_target.as_deref() == Some(latest.as_str()) {
         leptos::logging::warn!(
             "cmitt: a newer build is being served but reloading did not reach it; \
@@ -240,51 +281,48 @@ async fn check(app: App, forced: bool) {
         }
         return;
     }
-    state.reload_target = Some(latest.clone());
-    save_state(&state);
-
+    // Precached BEFORE the banner appears, not after the reader presses the
+    // button: the wait belongs to the daily check, which nobody is watching,
+    // rather than to the click, where it would read as a hang. Best-effort —
+    // the reload works without it, just colder.
     if let Some(reg) = &reg {
         refresh_worker(reg).await;
     }
+    // The whole answer to "when does it land": when the reader says so.
     app.update_ready.set(Some(latest));
-    settle(app);
 }
 
-/// Take the update if this is a good moment, or wait for one.
+/// "Update now." The only thing in this app that reloads the page.
 ///
-/// Called from three places — the check that found the update, the effect
-/// that notices the reader has finished something, and the tab being
-/// hidden — so the decision lives here once rather than in each of them.
-pub fn settle(app: App) {
-    if app.update_ready.with_untracked(|u| u.is_none()) {
-        return;
-    }
-    if hidden() {
-        reload();
-        return;
-    }
-    if app.busy_with_unsaved_work() || app.dialog.with_untracked(|d| d.is_some()) {
-        return; // the banner is already saying so; the effect will call back
-    }
-    if app.update_reloading.get_untracked() {
-        return; // already counting down
-    }
-    app.update_reloading.set(true);
-    app.toast("A newer version of the app is ready — updating now.");
-    leptos::task::spawn_local(async move {
-        TimeoutFuture::new(NOTICE_MS).await;
-        // Asked again at the last moment: a reader who started typing during
-        // the notice keeps their typing, and the banner takes over.
-        if app.busy_with_unsaved_work() || app.dialog.with_untracked(|d| d.is_some()) {
-            app.update_reloading.set(false);
-            return;
-        }
-        reload();
-    });
+/// The build being reloaded FOR is written down first. If the app comes back
+/// still not running it — a proxy holding a stale shell, a CDN mid-purge —
+/// `install` leaves the marker where it is and `check` refuses to offer that
+/// same id again, so a reader cannot be walked around this circle twice.
+fn take(app: App) {
+    let mut state = load_state();
+    state.reload_target = app.update_ready.get_untracked();
+    save_state(&state);
+    reload();
 }
 
-fn hidden() -> bool {
-    crate::domx::document().hidden()
+/// "Not now." Puts the banner away for a day and says the true thing: nothing
+/// is being withheld — the new version is one ordinary refresh away, whenever
+/// they feel like it.
+fn decline(app: App) {
+    let Some(id) = app.update_ready.get_untracked() else {
+        return;
+    };
+    let now = crate::domx::now_ms();
+    let mut state = load_state();
+    state.declined = Some(id);
+    state.declined_at = now;
+    state.next_check_at = now + CHECK_EVERY_MS;
+    save_state(&state);
+    app.update_ready.set(None);
+    app.toast(
+        "Left as it is. Refresh the page whenever you'd like the new version — \
+         the app will ask again tomorrow.",
+    );
 }
 
 fn reload() {
@@ -321,8 +359,7 @@ pub fn install(app: App) {
     });
 
     // The two other moments a stale tab is most likely: coming back to it,
-    // and the network returning under it. Hiding the tab is the moment to
-    // TAKE an update already in hand — nobody is looking.
+    // and the network returning under it.
     on_window_event("online", move || {
         // Not gated on the schedule: a reader who has just reconnected after
         // a day offline is exactly the reader owed a check, and the previous
@@ -333,21 +370,11 @@ pub fn install(app: App) {
         }
     });
     on_document_event("visibilitychange", move || {
-        if hidden() {
-            settle(app);
-        } else if due() {
+        // Coming BACK to a tab, not leaving it: leaving used to be when the
+        // app took the update behind the reader's back, and it no longer does
+        // anything without being asked.
+        if !crate::domx::document().hidden() && due() {
             leptos::task::spawn_local(check(app, false));
-        }
-    });
-
-    // When the reader finishes whatever kept the update waiting, take it.
-    // Tracked, so it fires the moment the editor closes or the drag ends —
-    // the same shape as the cross-tab sync's deferred adoption.
-    Effect::new(move |_| {
-        let ready = app.update_ready.with(|u| u.is_some());
-        let quiet = !app.busy_with_unsaved_work() && app.dialog.with(|d| d.is_none());
-        if ready && quiet {
-            settle(app);
         }
     });
 }
@@ -393,7 +420,12 @@ fn on_document_event(name: &str, f: impl FnMut() + 'static) {
     closure.forget();
 }
 
-/// The banner shown while an update is waiting for the reader to finish.
+/// The question: a newer version exists, and would you like it?
+///
+/// A banner rather than a dialog. A dialog would be a demand — it takes the
+/// screen, the focus and the keyboard for something that is not urgent and was
+/// not asked for. This waits in the page, above the tab's own heading, until
+/// it is answered.
 pub fn update_banner(app: App) -> impl IntoView {
     view! {
         {move || {
@@ -407,23 +439,48 @@ pub fn update_banner(app: App) -> impl IntoView {
                                     "A newer version of the app is ready."
                                 </p>
                                 <p class="banner-note">
-                                    "It will install itself the moment you're not in the
-                                     middle of something. Nothing you have done will be
-                                     lost — your timetable lives in this browser."
+                                    "It won't install itself. Update now reloads the page
+                                     and takes a moment; everything you have — your
+                                     courses, your changes, your filters — is saved in
+                                     this browser and comes back with it."
                                 </p>
                             </div>
-                            <button
-                                class="btn small"
-                                title="Reload now to run the new version"
-                                on:click=move |_| {
-                                    // The reader's own decision beats every
-                                    // guard: they can see what they would be
-                                    // interrupting.
-                                    reload();
-                                }
-                            >
-                                "Update now"
-                            </button>
+                            <div class="banner-actions">
+                                <button
+                                    class="btn small primary"
+                                    title="Reload the page to run the new version"
+                                    on:click=move |_| take(app)
+                                >
+                                    "Update now"
+                                </button>
+                                <button
+                                    class="btn small"
+                                    title="Keep using this version. Refreshing the page at \
+                                           any time installs the new one."
+                                    on:click=move |_| decline(app)
+                                >
+                                    "Not now"
+                                </button>
+                                // The way out of being asked at all, offered where the
+                                // reader is already thinking about it — a quiet third
+                                // control, not a third button competing with the two
+                                // answers.
+                                <button
+                                    class="btn small ghost"
+                                    title="Stop checking for new versions. You can switch \
+                                           checks back on under My data."
+                                    on:click=move |_| {
+                                        app.set_update_checks(false);
+                                        app.toast(
+                                            "Update checks are off. Refresh the page any time to \
+                                             pick up the newest version — My data has the switch \
+                                             to turn checking back on.",
+                                        );
+                                    }
+                                >
+                                    "Stop checking"
+                                </button>
+                            </div>
                         </div>
                     }
                 })

@@ -109,7 +109,9 @@ Every course this semester, searchable and filterable.
   says what is wrong with it so far (`Not a pattern yet — unclosed group`) and
   shows nothing, rather than quietly showing the whole catalog. The switches
   are filters like any other — they persist, they show in the chip line
-  (`/^ana/ (case)`), and Ctrl+Z takes them back.
+  (`/^ana/ (case)`), and Ctrl+Z takes them back. A **✕** appears in the box the
+  moment there is something to clear, and the box is wide enough that what it
+  says about itself is never cut off by the switches beside it.
 - Filter by **branch, instructor, day, time slot, hall, credits, course** and
   **flags** (optional courses, unscheduled ones, ones you have customised),
   plus a **"Fits my schedule"** switch that hides anything overlapping what
@@ -636,29 +638,37 @@ its own, never as a change CMI made.
 
 ---
 
-## Staying current, on its own
+## Staying current — when you say so
 
 The app checks **once a day**, while it is open, whether a newer version of
-itself has been published — and takes it.
+itself has been published. If there is one, it **asks**.
 
-- **A tab left open for a week gets the fixes anyway.** Browsers only look for
-  a new version when a page is navigated, so a tab nobody reloads can run last
-  month's app indefinitely. This closes that.
-- **It updates at a moment that costs you nothing.** A tab you are not looking
-  at updates instantly and silently. A tab in the middle of something — unsaved
-  typing in a course form, a drag, a question you haven't answered — waits, and
-  says so in a banner with an **Update now** button if you would rather not
-  wait. Otherwise you get a word first and then the reload.
-- **Nothing you have done is lost by it.** Your timetable, your changes and
-  your preferences live in this browser, not in the page.
+- **A tab left open for a week finds out about the fixes.** Browsers only look
+  for a new version when a page is navigated, so a tab nobody reloads can run
+  last month's app indefinitely. This closes that.
+- **Nothing installs itself.** A banner says a newer version is ready and waits
+  for one of two answers:
+  - **Update now** — the page reloads and you are on the new version.
+  - **Not now** — the banner goes. The new version is still one ordinary
+    refresh away whenever you feel like it, and the app asks again tomorrow.
+- **Never a reload you didn't ask for.** Not on an idle tab, not after a
+  countdown, not while you're looking away. A page that reloads itself takes
+  things with it that were never saved — an **Undo** you hadn't used yet, where
+  you had scrolled to, a thought you were half way through.
+- **Nothing you have done is lost by updating.** Your timetable, your changes
+  and your preferences live in this browser, not in the page.
+- **You can switch the asking off** — in the banner (**Stop checking**) or in
+  My data → **App updates**. Off means the app never looks; you still get the
+  newest version whenever you refresh. The same switch turns it back on, and
+  **Check now** beside it asks the server there and then.
 - **No internet, no problem.** If the check cannot reach the server it changes
   nothing at all, says nothing, and tries again in an hour — the app you are
   using is already downloaded, and it keeps working exactly as it did.
 - **It works wherever the app is hosted.** The check asks the server the app
   was loaded from, so moving it to another repository, another domain, a
   sub-path, or off GitHub Pages entirely needs no change and no configuration.
-- Developer mode has a **Check for an update now** button, and shows the build
-  id the check compares.
+- Developer mode shows the build id the check compares, and has the same
+  **Check for an update now** button.
 
 ## Comfort and control
 

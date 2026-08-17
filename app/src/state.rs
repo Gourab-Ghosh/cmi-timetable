@@ -200,6 +200,15 @@ pub struct Prefs {
     /// the changes are theirs — see `what_changed_dialog`.
     #[serde(default)]
     pub changes_mine_only: bool,
+    /// Has the reader told the app to stop looking for new versions of itself?
+    ///
+    /// Stored the "off" way round on purpose: `#[serde(default)]` gives a
+    /// missing bool `false`, so every prefs blob written before this field
+    /// existed loads as "keep checking", which is what those readers already
+    /// had. A `checks_on: bool` would have silently switched the feature off
+    /// for everyone who ever used an older build.
+    #[serde(default)]
+    pub update_checks_off: bool,
 }
 
 /// A day strip's selection: one day, or all of them.
@@ -237,6 +246,7 @@ impl Default for Prefs {
             plan_view: None,
             shorten_service: None,
             changes_mine_only: false,
+            update_checks_off: false,
         }
     }
 }
@@ -665,10 +675,6 @@ pub struct App {
     /// permanent redirect once made; losing it because a popup was closed
     /// meant paying that price twice for the same link.
     pub shortlinks: RwSignal<Vec<ShortLink>>,
-    /// The build id of a newer version of the app that is on the server, once
-    /// the daily check has found one. `Some` means "waiting to be taken" —
-    /// the banner is showing and `update::settle` is watching for a moment
-    /// that costs the reader nothing. See `crate::update`.
     /// Is the viewport a phone right now? A SIGNAL, not a question asked at
     /// the moment of use, because `plan_view()` branches on it — and a memo
     /// that read the width without reading a signal recorded no dependencies
@@ -677,10 +683,12 @@ pub struct App {
     /// by a media-query listener in `app.rs`, at the stylesheet's own
     /// boundary.
     pub phone_viewport: RwSignal<bool>,
+    /// The build id of a newer version on the server, once the daily check has
+    /// found one. `Some` means the banner is up, asking — nothing installs
+    /// until the reader answers it, so this is only ever cleared by them
+    /// (pressing "Not now", or switching checks off) or by the reload they
+    /// asked for. See `crate::update`.
     pub update_ready: RwSignal<Option<String>>,
-    /// True between "updating now" and the reload. Only there to stop a
-    /// second notice being scheduled on top of the first.
-    pub update_reloading: RwSignal<bool>,
     pub drag: RwSignal<Option<DragState>>,
     /// The cell under the pointer, for the drop-target highlight. Derived
     /// from `drag` at the root (see `app.rs`) and deliberately NOT read off
@@ -1128,6 +1136,10 @@ impl App {
                     && p.plan_view.is_none()
                     && p.shorten_service.is_none()
                     && !p.changes_mine_only
+                    // Turning update checks off is a decision about the app
+                    // itself, and one nobody makes by accident — an import
+                    // must ask before putting it back.
+                    && !p.update_checks_off
                     && p.filters.is_empty()
                     && p.my_filters.is_empty()
                     && p.filters.switches_are_default()
@@ -2770,6 +2782,27 @@ impl App {
         self.prefs
             .update(|p| p.shorten_service = Some(key.to_string()));
         self.persist_prefs();
+    }
+
+    /// Should the app look for new versions of itself? Off is a real answer,
+    /// kept until it is changed back — the same control turns it on again (My
+    /// data → App updates).
+    ///
+    /// Turning it off also takes down a banner that is already asking: someone
+    /// who has just said "stop checking" has answered the question in front of
+    /// them, and leaving it on screen would be arguing with them.
+    pub fn set_update_checks(&self, on: bool) {
+        self.prefs.update(|p| p.update_checks_off = !on);
+        self.persist_prefs();
+        if !on {
+            self.update_ready.set(None);
+        }
+    }
+
+    /// Is the app allowed to look for new versions? Read as a signal, so the My
+    /// data switch and the section under it stay in step.
+    pub fn update_checks_on(&self) -> bool {
+        !self.prefs.with(|p| p.update_checks_off)
     }
 
     /// Days for the Halls tab and the free-hall finder: grid days UNION any

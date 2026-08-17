@@ -1243,9 +1243,6 @@ label.opt.alarm-lead input { width: 5rem; }
   align-items: center;
   margin-bottom: 0.6rem;
 }
-/* Wide enough that the placeholder ("Search by code, name or instructor")
-   is read whole, never clipped mid-word. */
-.filterbar input[type="search"] { min-width: 17.5rem; }
 
 /* The search box and its three switches — match case, whole word, regular
    expression — as ONE control, the shape every editor's find bar has and
@@ -1253,12 +1250,52 @@ label.opt.alarm-lead input { width: 5rem; }
 
    The switches sit INSIDE the field's right edge rather than beside it: they
    belong to the box, and a row of three more buttons in a bar that already
-   has seven would read as four more filters. `padding-right` on the input is
-   what keeps typed text from sliding under them, and it is computed from the
-   same numbers as the buttons — three 26px squares, their gaps, and the
-   field's own inset. */
-.searchbox { position: relative; display: inline-flex; align-items: center; }
-.searchbox > input[type="search"] { padding-right: 6.4rem; width: 100%; }
+   has seven would read as four more filters.
+
+   ONE number describes that strip, and everything else is derived from it —
+   the padding that keeps text out from under it, and the width the box needs
+   so that its placeholder still fits BESIDE it. Getting that second part
+   wrong is what shipped in R71: the box asked for 17.5rem because that fits
+   "Search by code, name or instructor", then handed 6.4rem of it to the
+   switches, and the placeholder was cut off mid-word ("…name or in"). Room
+   for text and room for buttons are not the same room. */
+.searchbox {
+  --switch: 26px;
+  --switch-gap: 0.12rem;
+  --switch-inset: 0.32rem;
+  --switch-strip: calc(3 * var(--switch) + 2 * var(--switch-gap)
+      + 2 * var(--switch-inset));
+  /* Text room, measured rather than guessed: the longest placeholder the box
+     shows is 231px in the font this machine falls back to
+     (.workagents/field-clip-probe.py prints the number). 17rem leaves ~29px
+     of slack on top of that, deliberately — the placeholder is set in
+     whatever sans the READER's machine has, and a face 10% wider than the one
+     measured here must not put the bug straight back. */
+  --search-text: 17rem;
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+.searchbox > input[type="search"] {
+  width: 100%;
+  padding-right: var(--switch-strip);
+  min-width: calc(var(--search-text) + var(--switch-strip));
+}
+/* Chrome puts its own ✕ inside a search field, at the end of the text — which
+   here is immediately left of the switches, in a heavier weight and a
+   different colour than anything else in the app. The box has its own clear
+   button below; this stops there being two. */
+.searchbox > input[type="search"]::-webkit-search-cancel-button,
+.searchbox > input[type="search"]::-webkit-search-decoration {
+  -webkit-appearance: none;
+  appearance: none;
+}
+/* Clearing is a fourth slot, and it only exists while there is something to
+   clear — so the padding grows for it exactly then, and the placeholder never
+   pays for a button that isn't there. */
+.searchbox.filled > input[type="search"] {
+  padding-right: calc(var(--switch-strip) + var(--switch) + var(--switch-gap));
+}
 .searchbox-switches {
   position: absolute;
   right: 0.32rem;
@@ -1299,6 +1336,20 @@ label.opt.alarm-lead input { width: 5rem; }
   outline: 2px solid var(--accent);
   outline-offset: 1px;
 }
+/* Emptying the box. Same square as the switches, so the strip is one control,
+   but it acts on the TEXT rather than on how matching works — a glyph instead
+   of a label, and a wider gap after it than between the three switches, which
+   is what groups them without drawing a rule. */
+.search-clear {
+  font-family: var(--font-sans);
+  font-size: 0.92rem;
+  /* The switches are 600 because they are labels; a glyph at 600 in the sans
+     face reads heavier than the three beside it and pulls the eye to the one
+     button that is not a mode. */
+  font-weight: 400;
+  margin-right: 0.28rem;
+}
+.search-clear:hover { color: var(--warn); background: var(--warn-wash); }
 /* A pattern that does not compile yet: the field says so quietly, and the
    line underneath says what is wrong. Not red-alert styling — the reader is
    mid-word, not in trouble. */
@@ -1310,14 +1361,15 @@ label.opt.alarm-lead input { width: 5rem; }
   color: var(--warn);
 }
 @media (pointer: coarse) {
-  /* Fingers need a bigger target, and a phone's box is narrower — so the
-     switches grow and the padding grows with them. */
+  /* Fingers need a bigger target. Only the one number changes: the padding
+     and the box's own minimum are calculated from it. */
+  .searchbox { --switch: 34px; }
   .search-switch { width: 34px; height: 34px; font-size: 0.8rem; }
-  .searchbox > input[type="search"] { padding-right: 7.6rem; }
 }
 @media (max-width: 640px) {
-  .searchbox { display: flex; width: 100%; }
-  .filterbar input[type="search"] { min-width: 0; }
+  /* The box is the full width of the bar here, so it needs no minimum of its
+     own — but it still needs the strip's room, which the calc keeps. */
+  .searchbox { display: flex; width: 100%; --search-text: 0px; }
 }
 details.facet { position: relative; }
 details.facet > summary {
@@ -1593,6 +1645,38 @@ details.facet .menu .menu-empty { margin: 0.2rem 0 0; }
 .banner-title { margin: 0; font-weight: 600; }
 .banner-note { margin: 0; max-width: 62ch; line-height: 1.45; }
 .banner .btn.small { align-self: flex-start; }
+/* A banner that asks something has answers, and they belong together — one
+   row, the plain answer beside the primary one, and the way out of being asked
+   at all set apart at the end. They wrap as a group rather than one at a time,
+   so a narrow screen never strands "Not now" on a line of its own. */
+.banner-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+  align-self: center;
+}
+/* No border and no fill: it is the third thing in a row of three, and it is
+   not an answer to the question — it is a decision about the question. */
+.banner-actions .btn.ghost {
+  border-color: transparent;
+  background: transparent;
+  color: var(--muted);
+  box-shadow: none;
+}
+.banner-actions .btn.ghost:hover:not(:disabled),
+.banner-actions .btn.ghost:focus-visible {
+  color: var(--text);
+  border-color: var(--line);
+  background: var(--surface-2);
+}
+/* On a phone the note has the whole width and the answers sit under it, rather
+   than the note wrapping into two thirds of the row to leave a button in the
+   corner. (The banner's own phone layout, noticed in R72's screenshots.) */
+@media (max-width: 640px) {
+  .banner { flex-direction: column; align-items: stretch; }
+  .banner-actions { align-self: flex-start; }
+}
 /* The codes are what the message is about, so they are set as codes —
    monospace, boxed, in the warning's own colour — rather than as words in
    the middle of a paragraph. */
@@ -2497,10 +2581,21 @@ pre.devpre {
     min-width: 0;
   }
 }
+/* A course name is long — "Topics in Algebraic Number Theory" is a normal one
+   — and an unsized text input is about 24 characters wide, so the reader was
+   typing into a field that scrolled away from them while the `select`s in the
+   rows below it were half again as wide. The free-text rows take the width of
+   the form; the code, which is four or five letters by design, keeps its own.
+   (Found by measuring: .workagents/field-clip-probe.py.) */
+.course-form .fieldrow > input[type="text"]:not(.code-input) {
+  flex: 1;
+  min-width: 12rem;
+}
 .course-form .code-input {
   font-family: var(--font-mono);
   text-transform: uppercase;
   width: 9rem;
+  flex: none;
 }
 .course-form .meetings-title { margin: 0.9rem 0 0.45rem; font-size: 0.95rem; }
 .course-form .meeting-draft {
