@@ -191,10 +191,20 @@ pub struct ShortLink {
     pub long: String,
     /// What came back.
     pub short: String,
-    /// The relay that carried it, if the direct route was unavailable and
-    /// one was needed. Shown, because it means a second party saw the link.
+    /// The relay that carried the answer, if the direct route was
+    /// unavailable and one was needed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub via: Option<String>,
+    /// Every relay this link was handed to, whether or not its answer was the
+    /// one used.
+    ///
+    /// A race with a head start can have a relay still in flight when the
+    /// direct call wins. That relay SAW the student's timetable, and a popup
+    /// that promises "the service you pick can read it" has to count it —
+    /// recording only the winner made the app understate who had the link
+    /// (R71, found by an adversarial sweep of R69).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub saw: Vec<String>,
 }
 
 /// How many to keep. Enough that a student who tries all three services on
@@ -242,6 +252,7 @@ mod tests {
             long: long.into(),
             short: short.into(),
             via: None,
+            saw: Vec::new(),
         }
     }
 
@@ -438,6 +449,23 @@ mod tests {
         assert_eq!(links[0].short, format!("https://t/{}", MAX_REMEMBERED + 4));
         // The oldest is gone, not the newest.
         assert!(find(&links, "tinyurl", "https://x/?c=0").is_none());
+    }
+
+    #[test]
+    fn every_relay_that_saw_the_link_is_remembered_even_when_it_lost() {
+        // The honesty rule: the popup counts who could read the timetable,
+        // and a hedged relay that lost the race read it just the same.
+        let mut made = link("tinyurl", "https://x/?c=A", "https://t/1");
+        made.saw = vec!["allorigins.win".into()];
+        let mut links = Vec::new();
+        remember(&mut links, made);
+        let back = find(&links, "tinyurl", "https://x/?c=A").unwrap();
+        assert_eq!(back.via, None, "the direct call won");
+        assert_eq!(
+            back.saw,
+            vec!["allorigins.win".to_string()],
+            "but it was asked"
+        );
     }
 
     #[test]

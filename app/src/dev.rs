@@ -57,7 +57,23 @@ fn build_info(app: App) -> impl IntoView {
                             })
                     }}
                 </dd>
+                <dt>"This build's id"</dt>
+                <dd>{crate::update::own_id_for_display()}</dd>
             </dl>
+            // The daily self-update check, on demand. The app asks the server
+            // it was loaded from which build it is serving and takes it if it
+            // differs; this is the only way to run that without waiting a
+            // day, and it is what the end-to-end test presses.
+            <div class="row" style="display:flex;gap:0.5rem;flex-wrap:wrap;margin-top:0.6rem">
+                <button
+                    class="btn small"
+                    data-update-check
+                    title="Ask the server whether a newer build of this app is published"
+                    on:click=move |_| crate::update::check_now(app)
+                >
+                    "Check for an update now"
+                </button>
+            </div>
         </div>
     }
 }

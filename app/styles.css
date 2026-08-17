@@ -1246,6 +1246,79 @@ label.opt.alarm-lead input { width: 5rem; }
 /* Wide enough that the placeholder ("Search by code, name or instructor")
    is read whole, never clipped mid-word. */
 .filterbar input[type="search"] { min-width: 17.5rem; }
+
+/* The search box and its three switches — match case, whole word, regular
+   expression — as ONE control, the shape every editor's find bar has and
+   therefore the shape nobody has to be taught.
+
+   The switches sit INSIDE the field's right edge rather than beside it: they
+   belong to the box, and a row of three more buttons in a bar that already
+   has seven would read as four more filters. `padding-right` on the input is
+   what keeps typed text from sliding under them, and it is computed from the
+   same numbers as the buttons — three 26px squares, their gaps, and the
+   field's own inset. */
+.searchbox { position: relative; display: inline-flex; align-items: center; }
+.searchbox > input[type="search"] { padding-right: 6.4rem; width: 100%; }
+.searchbox-switches {
+  position: absolute;
+  right: 0.32rem;
+  display: flex;
+  gap: 0.12rem;
+  /* The field owns the click target; only the buttons take pointer events, so
+     the whole strip is still text you can click into to place a cursor. */
+  pointer-events: none;
+}
+.search-switch {
+  pointer-events: auto;
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  border: 1px solid transparent;
+  border-radius: calc(var(--r-sm) - 2px);
+  background: transparent;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 0.74rem;
+  font-weight: 600;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 120ms var(--ease), color 120ms var(--ease),
+    border-color 120ms var(--ease);
+}
+.search-switch:hover { background: var(--surface-2); color: var(--fg); }
+/* On is a filled, bordered chip — legible without colour (the border and the
+   weight change too), which is the same rule the chips and the tab rail
+   follow. */
+.search-switch.on {
+  background: var(--accent-wash);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.search-switch:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+/* A pattern that does not compile yet: the field says so quietly, and the
+   line underneath says what is wrong. Not red-alert styling — the reader is
+   mid-word, not in trouble. */
+.searchbox.bad > input[type="search"] { border-color: var(--warn); }
+.searchbox-bad {
+  margin: 0.1rem 0 0;
+  flex-basis: 100%;
+  font-size: 0.82rem;
+  color: var(--warn);
+}
+@media (pointer: coarse) {
+  /* Fingers need a bigger target, and a phone's box is narrower — so the
+     switches grow and the padding grows with them. */
+  .search-switch { width: 34px; height: 34px; font-size: 0.8rem; }
+  .searchbox > input[type="search"] { padding-right: 7.6rem; }
+}
+@media (max-width: 640px) {
+  .searchbox { display: flex; width: 100%; }
+  .filterbar input[type="search"] { min-width: 0; }
+}
 details.facet { position: relative; }
 details.facet > summary {
   list-style: none;
@@ -1494,6 +1567,18 @@ details.facet .menu .menu-empty { margin: 0.2rem 0 0; }
   box-shadow: var(--shadow-sm);
 }
 .banner.warn { border-left-color: var(--warn); }
+/* A newer version of the app itself. Not a warning — nothing is wrong and
+   nothing needs deciding — so it takes the "good news" colour and a faint
+   tint of it, which is also what keeps it from being read as another
+   problem when it appears beside one. */
+.banner.update-banner {
+  border-left-color: var(--ok);
+  background: linear-gradient(
+    to right,
+    color-mix(in srgb, var(--ok-wash) 70%, var(--surface)),
+    var(--surface) 60%
+  );
+}
 
 /* A banner that has more than one sentence to say: a headline, the thing
    it is about, and the explanation — stacked, so each can be read on its
@@ -2321,6 +2406,13 @@ pre.devpre {
 .mobile-only { display: none; }
 @media (max-width: 640px) {
   .mobile-only { display: block; }
+  /* …but not over a display of its own. `.day-list` and `.mobile-only` are
+     both one class, so source order decided it and the rule below won: the
+     phone day list has been `display: block` all along, quietly losing the
+     0.45rem `gap` between its rows (found by the R70 sweep). Restated here,
+     inside the query, rather than by weakening `.mobile-only` — which the
+     day strip also uses. */
+  .day-list.mobile-only { display: flex; }
   .week-grid.day-mode-active { display: none; }
 }
 

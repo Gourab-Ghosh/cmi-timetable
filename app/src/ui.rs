@@ -969,6 +969,11 @@ pub fn Toasts() -> impl IntoView {
 pub fn BannerView() -> impl IntoView {
     let app = App::use_ctx();
     view! {
+        // A newer build of the app itself, waiting for a moment that costs
+        // the reader nothing. First in the stack because it is the only
+        // banner about the app rather than about the timetable — and because
+        // it is good news, which should not queue behind a warning.
+        {crate::update::update_banner(app)}
         {move || {
             app.banner
                 .get()
@@ -1182,6 +1187,51 @@ fn toggle_vec<T: PartialEq>(v: &mut Vec<T>, item: T, on: bool) {
         }
     } else {
         v.retain(|x| x != &item);
+    }
+}
+
+/// One of the three switches beside the search box — match case, whole word,
+/// regular expression.
+///
+/// Deliberately the shape every editor uses, because it is the shape everyone
+/// already knows: a small square button inside the box's right edge, its glyph
+/// standing for what it does (`Aa`, `ab`, `.*`), lit when it is on. A real
+/// toggle button rather than a checkbox — `aria-pressed` is what a screen
+/// reader needs here, and the accessible name spells the glyph out, so
+/// "Match case, pressed" is what gets announced rather than "A a".
+fn search_switch(
+    app: App,
+    scope: FilterScope,
+    glyph: &'static str,
+    label: &'static str,
+    hint: &'static str,
+    read: fn(&Filters) -> bool,
+    write: fn(&mut Filters, bool),
+) -> impl IntoView {
+    let on = move || app.with_filters_in(scope.mine(), read);
+    view! {
+        <button
+            type="button"
+            class="search-switch"
+            class:on=on
+            aria-pressed=move || if on() { "true" } else { "false" }
+            aria-label=label
+            title=format!("{label} — {hint}")
+            on:click=move |_| {
+                let next = !on();
+                // An undo step of its own, like every other filter change:
+                // turning a switch on can empty a list, and Ctrl+Z has to be
+                // able to put it back.
+                app.act_filters_in(
+                    scope.mine(),
+                    &format!("{}{}", label.to_lowercase(), scope.undo_suffix()),
+                    false,
+                    move |f| write(f, next),
+                );
+            }
+        >
+            {glyph}
+        </button>
     }
 }
 
@@ -1637,25 +1687,99 @@ pub fn filter_bar(app: App, scope: FilterScope, result_count: Signal<usize>) -> 
         with_picked(out, flag_picked.get())
     });
 
+    // What the box is doing right now, prepared once for the two things that
+    // ask: the switch buttons and the "that isn't a pattern yet" line.
+    let matcher = Memo::new(move |_| {
+        app.with_filters_in(scope.mine(), |f| {
+            // Nothing is compiled unless the switch is on and there is
+            // something to compile: this runs on every filter change, and
+            // a plain search must not pay for a parser it never uses.
+            if !f.use_regex || f.text.trim().is_empty() {
+                return None;
+            }
+            crate::state::text_matcher(f).error().map(str::to_string)
+        })
+    });
+
     view! {
         <div class="filterbar" role="group" aria-label="Filters">
-            <input
-                type="search"
-                placeholder="Search by code, name or instructor"
-                aria-label="Search courses"
-                prop:value=move || app.with_filters_in(scope.mine(), |f| f.text.clone())
-                on:input=move |ev| {
-                    let text = event_target_value(&ev);
-                    // Coalesced: one undo step per burst of typing.
-                    app.act_filters_in(
-                        scope.mine(),
-                        &format!("the search text{}", scope.undo_suffix()),
-                        true,
-                        move |f| f.text = text,
-                    );
-                }
-                on:keydown=domx::blur_on_enter
-            />
+            // The search box and its three switches are one control, the way
+            // an editor's find bar is: the box owns the row, the switches sit
+            // inside its right edge, and nothing about the layout moves when
+            // one is turned on.
+            <div class="searchbox" class:bad=move || matcher.with(Option::is_some)>
+                <input
+                    type="search"
+                    placeholder=move || {
+                        if app.with_filters_in(scope.mine(), |f| f.use_regex) {
+                            "Search by pattern — try ^ana or algebra|analysis"
+                        } else {
+                            "Search by code, name or instructor"
+                        }
+                    }
+                    aria-label="Search courses"
+                    aria-invalid=move || {
+                        if matcher.with(Option::is_some) { "true" } else { "false" }
+                    }
+                    prop:value=move || app.with_filters_in(scope.mine(), |f| f.text.clone())
+                    on:input=move |ev| {
+                        let text = event_target_value(&ev);
+                        // Coalesced: one undo step per burst of typing.
+                        app.act_filters_in(
+                            scope.mine(),
+                            &format!("the search text{}", scope.undo_suffix()),
+                            true,
+                            move |f| f.text = text,
+                        );
+                    }
+                    on:keydown=domx::blur_on_enter
+                />
+                <div class="searchbox-switches">
+                    {search_switch(
+                        app,
+                        scope,
+                        "Aa",
+                        "Match case",
+                        "Tell capitals apart: Aa matches Aa, not aa",
+                        |f| f.match_case,
+                        |f, on| f.match_case = on,
+                    )}
+                    {search_switch(
+                        app,
+                        scope,
+                        "ab",
+                        "Whole word",
+                        "Only whole words: alg stops matching Algebra",
+                        |f| f.whole_word,
+                        |f, on| f.whole_word = on,
+                    )}
+                    {search_switch(
+                        app,
+                        scope,
+                        ".*",
+                        "Regular expression",
+                        "Read the box as a pattern: ^ana, algebra|analysis, m(a|e)th",
+                        |f| f.use_regex,
+                        |f, on| f.use_regex = on,
+                    )}
+                </div>
+            </div>
+            // A pattern the reader is still typing is not an error to be
+            // scolded for — it is a half-finished thought. Said quietly,
+            // under the box, naming only what is wrong so far. While it
+            // stands, the list shows nothing rather than everything.
+            {move || {
+                matcher
+                    .get()
+                    .map(|why| {
+                        view! {
+                            <p class="searchbox-bad" role="status">
+                                <span aria-hidden="true">"⚠ "</span>
+                                {format!("Not a pattern yet — {why}.")}
+                            </p>
+                        }
+                    })
+            }}
             // A facet with nothing to offer is not rendered at all: on My
             // courses a facet can legitimately have no values in scope, and a
             // summary, a search box and All/None over an empty list is
@@ -1961,7 +2085,28 @@ fn active_filter_chip_list(app: App, scope: FilterScope) -> Vec<FilterChip> {
         chips.push((c, Box::new(move |f| f.courses.retain(|x| x != &c2))));
     }
     if !f.text.trim().is_empty() {
-        chips.push((format!("“{}”", f.text.trim()), Box::new(|f| f.text.clear())));
+        // A pattern is shown as a pattern — /^ana/ — and a whole-word or
+        // case-sensitive search says so, because otherwise a list narrowed by
+        // a switch looks like a list narrowed by nothing.
+        let text = f.text.trim();
+        let label = if f.use_regex {
+            format!("/{text}/")
+        } else {
+            format!("“{text}”")
+        };
+        let mut notes: Vec<&str> = Vec::new();
+        if f.match_case {
+            notes.push("case");
+        }
+        if f.whole_word {
+            notes.push("whole word");
+        }
+        let label = if notes.is_empty() {
+            label
+        } else {
+            format!("{label} ({})", notes.join(", "))
+        };
+        chips.push((label, Box::new(|f| f.text.clear())));
     }
     // Only where it can act. On My courses the filter is inert, so listing
     // it as a reason the list is short would be a lie.
@@ -3708,8 +3853,18 @@ fn my_data_dialog(app: App) -> impl IntoView {
             <h2>"My data"</h2>
             <p class="muted small dialog-lede">
                 "Everything the app knows lives in this browser. This list shows \
-                 all of it — nothing is ever sent to a server, and you can remove \
-                 any of it right here."
+                 all of it, and you can remove any of it right here. Nothing is \
+                 sent anywhere on its own — the app fetches CMI's two pages and \
+                 nothing else."
+            </p>
+            // …with the one exception said out loud, rather than a promise
+            // that used to read "nothing is ever sent to a server" and stopped
+            // being true the day shortening was added (R71).
+            <p class="muted small dialog-lede">
+                "Two things leave this browser only when you ask for them, and
+                 both say so at the time: fetching CMI's timetable, and making a
+                 share link short — which hands that link to the shortening
+                 service you pick."
             </p>
 
             // Every custom change together, and exactly which CMI data each
@@ -3832,6 +3987,53 @@ fn my_data_dialog(app: App) -> impl IntoView {
                      fetches CMI's pages immediately, for when you'd rather not wait."
                 </p>
             </section>
+
+            // Short links made from this browser. Listed because the lede
+            // says this dialog lists everything the app keeps — and it did
+            // not, until R71's sweep read the two against each other. Shown
+            // only when there are some: a control that cannot act is not
+            // shown anywhere else in this app either.
+            {move || {
+                let n = app.shortlinks.with(Vec::len);
+                (n > 0)
+                    .then(|| {
+                        view! {
+                            <section class="data-section">
+                                <header>
+                                    <h3>"Short links you've made"</h3>
+                                    <button
+                                        class="btn small"
+                                        title="Forget them here. The links themselves keep \
+                                               working — they live on the shortening service, \
+                                               not in this browser."
+                                        on:click=move |_| {
+                                            app.forget_short_links();
+                                            app.toast("Short links forgotten.");
+                                        }
+                                    >
+                                        "Forget them"
+                                    </button>
+                                </header>
+                                <p class="muted small">
+                                    {if n == 1 {
+                                        "One short link, kept so that asking for it again \
+                                         costs nobody anything. Forgetting it here does not \
+                                         break it — a short link lives on the service that \
+                                         made it."
+                                            .to_string()
+                                    } else {
+                                        format!(
+                                            "{n} short links, kept so that asking for them \
+                                             again costs nobody anything. Forgetting them here \
+                                             does not break them — a short link lives on the \
+                                             service that made it.",
+                                        )
+                                    }}
+                                </p>
+                            </section>
+                        }
+                    })
+            }}
 
             <section class="data-section">
                 <header>
@@ -5759,21 +5961,35 @@ fn shorten_dialog(app: App) -> impl IntoView {
                                     </button>
                                 </div>
                                 <p class="muted small shorten-made">
-                                    {match &made.via {
-                                        Some(relay) => {
+                                    // Who actually saw the link, not who
+                                    // answered: a relay brought in behind a
+                                    // slow direct call read the timetable
+                                    // whether or not its answer was used.
+                                    {match (&made.via, made.saw.as_slice()) {
+                                        (_, []) => {
                                             format!(
-                                                "Made by {}. {} couldn't be reached directly, so \
-                                                 the helper site {relay} carried it — which means \
-                                                 it saw the link too.",
+                                                "Made by {}, straight from this browser, and kept \
+                                                 here so you don't have to ask again.",
+                                                s.name,
+                                            )
+                                        }
+                                        (Some(relay), _) => {
+                                            format!(
+                                                "Made by {} through the helper site {relay}, \
+                                                 because {} couldn't be reached directly — so \
+                                                 {relay} saw the link too.",
                                                 s.name,
                                                 s.name,
                                             )
                                         }
-                                        None => {
+                                        (None, asked) => {
                                             format!(
-                                                "Made by {}, and kept here so you don't have to \
-                                                 ask again.",
+                                                "Made by {}. {} was slow to answer, so the helper \
+                                                 {} {} asked as well and saw the link too.",
                                                 s.name,
+                                                s.name,
+                                                if asked.len() == 1 { "site" } else { "sites" },
+                                                asked.join(" and "),
                                             )
                                         }
                                     }}
@@ -5829,7 +6045,8 @@ fn shorten_dialog(app: App) -> impl IntoView {
                             .then(|| {
                                 view! {
                                     <p class="muted small shorten-empty">
-                                        "No short link yet. Nothing has been sent anywhere."
+                                        "No short link yet — your timetable hasn't left this
+                                         browser."
                                     </p>
                                 }
                             })}
@@ -5852,7 +6069,7 @@ fn shorten_dialog(app: App) -> impl IntoView {
                                     name="shortener"
                                     prop:checked=move || app.shorten_service.get() == key
                                     on:change=move |_| {
-                                        app.shorten_service.set(key);
+                                        app.set_shorten_service(key);
                                         // Only a live request or a live
                                         // failure is cleared: the LINKS are
                                         // kept per service, so switching
@@ -6120,7 +6337,19 @@ fn share_dialog(app: App) -> impl IntoView {
                         title="Trade a long link for a short one through a free \
                                shortening service"
                         on:click=move |_| {
-                            app.shorten.set(crate::state::ShortenState::Idle);
+                            // A stale FAILURE is cleared — reopening the
+                            // popup should not open on last week's bad news.
+                            // A request still IN FLIGHT is not: clearing it
+                            // made the popup claim "nothing has been sent
+                            // anywhere" while a request was in the air, and
+                            // re-armed the button so a second press sent a
+                            // second one (R71).
+                            if matches!(
+                                app.shorten.get_untracked(),
+                                crate::state::ShortenState::Failed(..)
+                            ) {
+                                app.shorten.set(crate::state::ShortenState::Idle);
+                            }
                             app.dialog.set(Some(Dialog::Shorten));
                         }
                     >

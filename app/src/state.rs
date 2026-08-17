@@ -83,6 +83,17 @@ pub struct Filters {
     /// Specific course codes picked in the Course dropdown.
     pub courses: Vec<String>,
     pub text: String,
+    /// The three switches beside the search box, the ones every editor has:
+    /// match case, whole word, regular expression. Stored with the filters
+    /// they modify — so they persist, they are per-scope (the Catalog and
+    /// Master grid share a set; My courses has its own), and Ctrl+Z reaches
+    /// them like every other filter change.
+    #[serde(default)]
+    pub match_case: bool,
+    #[serde(default)]
+    pub whole_word: bool,
+    #[serde(default)]
+    pub use_regex: bool,
     /// "Fits my schedule": hide anything overlapping the current selection.
     pub fits: bool,
 }
@@ -103,6 +114,15 @@ impl Filters {
 
     pub fn is_empty(&self) -> bool {
         self.active_count() == 0
+    }
+
+    /// Are the three search switches all off? Separate from `is_empty`,
+    /// because `active_count` counts things that HIDE courses and a switch on
+    /// its own hides nothing — but a switch the reader turned on is still a
+    /// choice they made, which is what "is there anything here to lose?" has
+    /// to weigh (see `App::nothing_saved_to_lose`).
+    pub fn switches_are_default(&self) -> bool {
+        !self.match_case && !self.whole_word && !self.use_regex
     }
 }
 
@@ -148,7 +168,30 @@ pub struct Prefs {
     /// has never chosen: the tab then opens on today, and only a real click
     /// writes a value here — so the choice, once made, survives every reload.
     #[serde(default)]
-    pub halls_view: Option<HallsView>,
+    pub halls_view: Option<DayView>,
+    /// The same question for My timetable's day strip, which a phone opens
+    /// on today. Same rule, and for the same reason: a value here means the
+    /// reader tapped something, so a reload must show what they tapped —
+    /// including "Week", which is a choice like any other and was being
+    /// overwritten by today's date on every refresh (R70).
+    ///
+    /// A separate field from `halls_view` on purpose: the two tabs answer
+    /// different questions ("where is a free room on Thursday" and "what do
+    /// I have today"), and a reader who narrows one has said nothing about
+    /// the other.
+    #[serde(default)]
+    pub plan_view: Option<DayView>,
+    /// Which shortening service was last picked. Same family of bug, found
+    /// by the same sweep (R70): the choice lived only in memory, so a reader
+    /// who preferred da.gd was handed TinyURL again after every reload —
+    /// and, since each service remembers its own links, was shown a
+    /// different service's link than the one they had been using.
+    ///
+    /// A `String`, not a `&'static str`: a build that drops a service must
+    /// still be able to read prefs written by one that had it. An unknown
+    /// key falls back to the default rather than failing to load.
+    #[serde(default)]
+    pub shorten_service: Option<String>,
     /// Whether the "what changed" digest is narrowed to the reader's own
     /// courses. A stored preference rather than state that dies with the
     /// dialog: someone who only wants to hear about their own week wants
@@ -159,12 +202,17 @@ pub struct Prefs {
     pub changes_mine_only: bool,
 }
 
-/// The Halls tab's day selection.
-#[derive(Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub enum HallsView {
-    /// One day at a time — the usual way to read a room timetable.
+/// A day strip's selection: one day, or all of them.
+///
+/// Shared by the Halls tab and My timetable. Named `HallsView` until R70,
+/// when My timetable needed the same three states; the variant names are
+/// unchanged, so prefs written by every older build still load.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
+pub enum DayView {
+    /// One day at a time — the usual way to read a room timetable, and what
+    /// a phone opens My timetable on.
     Day(Day),
-    /// Every day the hall data covers, one table each.
+    /// Every day at once: the Halls tab's tables, or the whole week grid.
     All,
 }
 
@@ -182,7 +230,12 @@ impl Default for Prefs {
             last_update_attempt: 0.0,
             tab: Tab::default(),
             halls_day: Day::Mon,
+            // Both None for the same reason as `density`: nothing has been
+            // chosen yet, so the day strips are free to open on today. The
+            // moment either is tapped it stops being the app's decision.
             halls_view: None,
+            plan_view: None,
+            shorten_service: None,
             changes_mine_only: false,
         }
     }
@@ -612,6 +665,22 @@ pub struct App {
     /// permanent redirect once made; losing it because a popup was closed
     /// meant paying that price twice for the same link.
     pub shortlinks: RwSignal<Vec<ShortLink>>,
+    /// The build id of a newer version of the app that is on the server, once
+    /// the daily check has found one. `Some` means "waiting to be taken" —
+    /// the banner is showing and `update::settle` is watching for a moment
+    /// that costs the reader nothing. See `crate::update`.
+    /// Is the viewport a phone right now? A SIGNAL, not a question asked at
+    /// the moment of use, because `plan_view()` branches on it — and a memo
+    /// that read the width without reading a signal recorded no dependencies
+    /// at all and never recomputed again, leaving the day strip inert after a
+    /// rotate (R70, caught by the sweep that closed the round). Kept in step
+    /// by a media-query listener in `app.rs`, at the stylesheet's own
+    /// boundary.
+    pub phone_viewport: RwSignal<bool>,
+    pub update_ready: RwSignal<Option<String>>,
+    /// True between "updating now" and the reload. Only there to stop a
+    /// second notice being scheduled on top of the first.
+    pub update_reloading: RwSignal<bool>,
     pub drag: RwSignal<Option<DragState>>,
     /// The cell under the pointer, for the drop-target highlight. Derived
     /// from `drag` at the root (see `app.rs`) and deliberately NOT read off
@@ -1056,9 +1125,13 @@ impl App {
                 p.theme == ThemePref::default()
                     && p.density.is_none()
                     && p.halls_view.is_none()
+                    && p.plan_view.is_none()
+                    && p.shorten_service.is_none()
                     && !p.changes_mine_only
                     && p.filters.is_empty()
                     && p.my_filters.is_empty()
+                    && p.filters.switches_are_default()
+                    && p.my_filters.switches_are_default()
             })
     }
 
@@ -2143,6 +2216,17 @@ impl App {
         });
     }
 
+    /// Forget every short link this browser has been given.
+    ///
+    /// Not undoable and not a loss: the links still work — they live on the
+    /// shortener, not here — and asking again would produce the same ones.
+    /// This is the "My data" entry for them, because a dialog that says it
+    /// lists everything the app keeps has to list them.
+    pub fn forget_short_links(&self) {
+        crate::storage::remove(crate::storage::KEY_SHORTLINKS);
+        self.shortlinks.set(Vec::new());
+    }
+
     /// The link this service made for exactly this timetable, if any.
     pub fn short_for(&self, service: &str, long: &str) -> Option<ShortLink> {
         self.shortlinks
@@ -2598,23 +2682,94 @@ impl App {
     /// is what someone looking for a free room almost always wants. On a
     /// weekend with nothing timetabled it opens on every day instead, rather
     /// than on an empty Saturday.
-    pub fn halls_view(&self) -> HallsView {
+    pub fn halls_view(&self) -> DayView {
         if let Some(stored) = self.prefs.with(|p| p.halls_view) {
-            if let HallsView::Day(d) = stored {
+            if let DayView::Day(d) = stored {
                 // A stored day CMI no longer publishes would title a table
                 // the day strip has no button for.
                 if !self.hall_days().contains(&d) {
-                    return HallsView::All;
+                    return DayView::All;
                 }
             }
             return stored;
         }
         let today = crate::domx::today_local().weekday();
         if self.hall_days().contains(&today) {
-            HallsView::Day(today)
+            DayView::Day(today)
         } else {
-            HallsView::All
+            DayView::All
         }
+    }
+
+    /// What My timetable's day strip should show right now — the same rule
+    /// as `halls_view`, arrived at the hard way.
+    ///
+    /// A stored choice always wins. Without this the strip was worked out
+    /// fresh on every mount, so a reader who tapped **Week** got today's
+    /// column back on the next refresh, and one who tapped Thursday got
+    /// Monday: the app answered a question they had already answered (R70).
+    /// "Week" is a choice like any other, which is why the stored type has
+    /// three states and not two — `None` alone cannot tell "never chose"
+    /// apart from "chose the whole week".
+    ///
+    /// With no stored choice a phone opens on TODAY, because the question a
+    /// student asks their phone is "what do I have today?"; a wider screen
+    /// opens on the whole week, and so does a weekend or a day CMI does not
+    /// teach. Derived on read and never written back: persisting the
+    /// fallback would turn "the device decided" into "the user chose", and
+    /// tomorrow would open on today's day.
+    pub fn plan_view(&self) -> DayView {
+        // Both reads happen BEFORE any branch, and both are tracked. That is
+        // load-bearing, not tidiness: this function is read inside a memo, and
+        // the first version returned early on the width — so at desktop width
+        // the memo subscribed to NOTHING, was never marked dirty again, and
+        // the day strip stopped working the moment a phone was rotated into
+        // portrait. A reactive-graph memo with no sources is clean forever.
+        let stored = self.prefs.with(|p| p.plan_view);
+        let phone = self.phone_viewport.get();
+        if !phone {
+            // The week grid fits here and the day strip is not on screen at
+            // all, so a single day has no control to be changed by and
+            // nothing to gain — it would only build a day list the CSS then
+            // hides. The stored choice is READ past, never cleared: it is
+            // still what the phone should open on.
+            return DayView::All;
+        }
+        if let Some(stored) = stored {
+            if let DayView::Day(d) = stored {
+                // A stored day this timetable no longer has (the course was
+                // dropped, or CMI moved it) would show an empty list under a
+                // strip with no button for it.
+                if !self.grid_days().contains(&d) {
+                    return DayView::All;
+                }
+            }
+            return stored;
+        }
+        let today = crate::domx::today_local().weekday();
+        if self.grid_days().contains(&today) {
+            DayView::Day(today)
+        } else {
+            DayView::All
+        }
+    }
+
+    /// Record what the reader picked in My timetable's day strip. Only a
+    /// real tap (or a keyboard move walking onto another day, which moves
+    /// the strip in front of them) reaches here.
+    pub fn set_plan_view(&self, view: DayView) {
+        self.prefs.update(|p| p.plan_view = Some(view));
+        self.persist_prefs();
+    }
+
+    /// Record which shortening service the reader picked, so the next visit
+    /// opens on it — and, because links are remembered per service, shows
+    /// the link they have actually been using.
+    pub fn set_shorten_service(&self, key: &'static str) {
+        self.shorten_service.set(key);
+        self.prefs
+            .update(|p| p.shorten_service = Some(key.to_string()));
+        self.persist_prefs();
     }
 
     /// Days for the Halls tab and the free-hall finder: grid days UNION any
@@ -2886,6 +3041,22 @@ pub fn effective_meetings(course: &Course, overrides: &OverridesStore) -> Vec<Ef
     out
 }
 
+/// The search box's matcher for this filter set, prepared once.
+///
+/// Built by the CALLER, before it walks the courses, and handed to
+/// [`course_matches`]. That is the whole point: with the switches came a
+/// regular expression, and compiling one per course would put a parser inside
+/// the filter loop — 75 courses per keystroke on three tabs. Compiled once, it
+/// is a pointer read per course.
+pub fn text_matcher(f: &Filters) -> ttcore::search::Matcher {
+    ttcore::search::Matcher::new(&ttcore::search::Query {
+        text: &f.text,
+        match_case: f.match_case,
+        whole_word: f.whole_word,
+        use_regex: f.use_regex,
+    })
+}
+
 /// Facet matching: OR within a facet, AND across facets.
 /// `overrides` is passed in, not read here: this runs once per course in a
 /// filter pass, and cloning the whole override store per course made the
@@ -2893,7 +3064,13 @@ pub fn effective_meetings(course: &Course, overrides: &OverridesStore) -> Vec<Ef
 /// needed for the two things the override store does not hold — the user's
 /// own courses (`is_custom`) and the "fits my schedule" walk, which reaches
 /// the snapshot and so must not run inside a read of it (§4).
-pub fn course_matches(app: &App, course: &Course, f: &Filters, overrides: &OverridesStore) -> bool {
+pub fn course_matches(
+    app: &App,
+    course: &Course,
+    f: &Filters,
+    overrides: &OverridesStore,
+    text: &ttcore::search::Matcher,
+) -> bool {
     // A course the user deleted is out of the catalog and the master grid
     // entirely. It comes first because no filter should be able to bring
     // one back — restoring it is a decision, made in "Your changes".
@@ -2962,16 +3139,29 @@ pub fn course_matches(app: &App, course: &Course, f: &Filters, overrides: &Overr
     if !f.courses.is_empty() && !f.courses.contains(&course.code) {
         return false;
     }
-    let text = f.text.trim().to_ascii_lowercase();
-    if !text.is_empty() {
-        let hay = format!(
-            "{} {} {}",
-            course.code,
-            course.name,
-            course.instructors.join(" ")
-        )
-        .to_ascii_lowercase();
-        if !hay.contains(&text) {
+    if !matches!(text, ttcore::search::Matcher::Everything) {
+        // One string, built with its size known, instead of `format!` plus a
+        // `join` plus a lowercased copy (three allocations per course before
+        // the matcher even looked at it). The fields stay joined — a reader
+        // searching "toc theory" means the code and the name together.
+        let mut hay = String::with_capacity(
+            course.code.len()
+                + course.name.len()
+                + course
+                    .instructors
+                    .iter()
+                    .map(|i| i.len() + 1)
+                    .sum::<usize>()
+                + 2,
+        );
+        hay.push_str(&course.code);
+        hay.push(' ');
+        hay.push_str(&course.name);
+        for instructor in &course.instructors {
+            hay.push(' ');
+            hay.push_str(instructor);
+        }
+        if !text.matches(&hay) {
             return false;
         }
     }

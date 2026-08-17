@@ -556,6 +556,20 @@ fn on_key_down(app: App, ev: &web_sys::KeyboardEvent) {
                     // reader the opposite of what the toast said.
                     let unmoved = mm.cursor == mm.start && mm.spec.current.is_some();
                     if perform_drop(app, &mm.spec, mm.cursor.0, mm.cursor.1, None) {
+                        // A COMMITTED move takes the day strip with it: the
+                        // reader deliberately put the class on Wednesday, and
+                        // snapping back to Tuesday would hide the thing they
+                        // just did. Only here — a move CANCELLED with Escape
+                        // leaves their chosen day exactly as it was, which is
+                        // what following the cursor by preference got wrong
+                        // (R71). Writing it only in single-day view: in the
+                        // week view there is nothing to follow.
+                        if !unmoved
+                            && app.plan_view() != crate::state::DayView::All
+                            && app.plan_view() != crate::state::DayView::Day(mm.cursor.0)
+                        {
+                            app.set_plan_view(crate::state::DayView::Day(mm.cursor.0));
+                        }
                         if unmoved {
                             app.say(format!("{} stays where it was.", mm.spec.code));
                         } else {

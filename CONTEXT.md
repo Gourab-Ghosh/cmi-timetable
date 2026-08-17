@@ -101,7 +101,12 @@ and no committed mirror (fixtures exist only for tests/e2e seed).
         file folded into another's: dedupe, contested-class rules,
         scoped clear, purge_custom_overrides),
         shorten (which free shorteners exist, how each is asked, fail-closed
-        reply parsing, and the remembered-links list + its staleness rule);
+        reply parsing, and the remembered-links list + its staleness rule),
+        search (what the search box's three switches mean — match case, whole
+        word, regex — as one prepared Matcher, allocation-free on the ASCII
+        path; a broken pattern matches NOTHING and says why),
+        update (which build a shell is, from its hashed asset names alone —
+        so "is there a newer version?" needs no version file and no URL);
         feature `html` = native scraper path (tests + e2e seed).
         core/examples/snapshot_json.rs → fixtures → snapshot JSON (e2e
         seed; test tooling only, nothing ships it).
@@ -113,13 +118,16 @@ and no committed mirror (fixtures exist only for tests/e2e seed).
         welcome()), dnd.rs (pointer+keyboard drag), storage.rs, dev.rs,
         domx.rs, export.rs (JSON exports + snapshot import),
         shorten.rs (the network half of ttcore::shorten: direct first, the
-        relays raced behind it with a head start, one request per press);
+        relays raced behind it with a head start, one request per press),
+        update.rs (the once-a-day self-update: fetch our own shell, compare
+        build ids, reload at a moment that costs the reader nothing, and
+        never twice for the same id);
         styles.css = whole design system (tokens, light+dark);
         hooks/gen-sw.sh + hooks/sw-body.js + hooks/sw-debug.js — the Trunk
         post_build hook writing the offline service worker into every build
         (debug builds get a self-cleaning no-cache stub);
         index.html registers ./sw.js on window load.
-/e2e    test_app.py — 111 Selenium tests, self-seeding (see §5); shoot.py —
+/e2e    test_app.py — 115 Selenium tests, self-seeding (see §5); shoot.py —
         design-review screenshots + print PDFs.
 /githooks  pre-push — builds+publishes via deploy.sh when main is pushed
         (activate per clone: `git config core.hooksPath githooks`; skip
@@ -763,7 +771,7 @@ regenerates the .ics golden.
   selected course with no time is part of the timetable, not a footnote.
 - "Your changes" groups are headed by `.cg-head` (colour rail + small caps
   + count), coloured by `OwnChange::tone()`. See §4.
-- Tests: 148 native + 111/111 e2e green (as of R69). Meeting removals: `MeetingOverride.to`
+- Tests: 168 native + 115/115 e2e green (as of R71). Meeting removals: `MeetingOverride.to`
   is `Option<Meeting>` (None = removed; legacy JSON/share payloads still
   load — present meeting ⇒ Some). Out-of-grid times: **all three tables grow
   synthetic `.extra` columns**, each from its own source, all built by the
@@ -1269,7 +1277,7 @@ regenerates the .ics golden.
   the credits editor kept form state inside the rebuilt details dialog
   (hoisted to `App::credit_edit`); the Hall facet compared halls exactly;
   keyboard move addressed raw start times on the wrong grid. Halls gained
-  an "All" day button and `HallsView` (see §4). Copy: today's new strings
+  an "All" day button and `DayView` (named `HallsView` before R70) (see §4). Copy: today's new strings
   rewritten (halls lede, "your own" hall badge, finder note, unscheduled
   tray, catalog empty state, keyboard-move message). e2e t49; shot 32.
   66 native + 49/49 e2e. Committed locally, NOT pushed.
@@ -4367,6 +4375,174 @@ t110 an unreachable shortener says so and invents nothing, t111 only the
 chosen service is warmed), 148 native (8 new in `shorten`), fmt + clippy
 clean both targets, and the popup photographed in every state at desktop and
 phone width, before and after.
+
+### R70 — a default is not an instruction
+
+User report: on a phone, My timetable's day strip. Tap **Week**, refresh, and
+the app puts you back on Monday — today. "If the user hasn't selected
+anything, then this behavior is fine. But if the user has already selected
+something, like my week, then our refresh should not change it." Then: find
+this kind of bug everywhere and fix it.
+
+**The bug.** `my_timetable` held `day_mode` as a plain `RwSignal` seeded from
+`initial_day_view()`, which reads today's date. Nothing persisted it, so
+every mount answered a question the reader had already answered. **Week was
+the case that made it obvious**, and it is also the case that proves the
+stored type needs three states, not two: `Option<Day>` cannot tell "never
+chose" apart from "chose the whole week".
+
+**The fix already existed in this repo.** The Halls tab met exactly this in
+R40 and settled it: `Option<DayView>` in prefs, `None` = never chosen, only a
+real tap writes, the fallback is derived on read and NEVER written back
+(writing it would turn "the device decided" into "the user chose", and
+tomorrow would open on today). R70 gives My timetable the same treatment —
+`Prefs::plan_view`, `App::plan_view()`, `App::set_plan_view()` — and renames
+`DayView` (named `HallsView` before R70) to `DayView` now that two tabs share it (variant names unchanged,
+so every older prefs blob still loads).
+
+Two details worth keeping:
+
+- `day_mode` is now a **Memo over the preference**, not a signal. That is
+  also what preserves the R33/t68 fix: `plan_view()` reads `grid_days()`, and
+  `my_timetable`'s body runs inside the tab dispatcher's reactive closure, so
+  reading it there would remount the view on every override change and snap
+  the strip back mid-edit. A memo's reads belong to the memo.
+- On a screen wider than a phone `plan_view()` returns `All` **before**
+  consulting the stored value: the strip is `mobile-only`, so a stored day
+  has no control to change it with and would only build a day list the CSS
+  hides. Read past, never cleared — going back to phone width still shows the
+  choice (t112 asserts exactly that).
+
+**The sweep found one more, and it was mine.** `App::shorten_service` lived
+only in memory, so a reader who preferred da.gd was handed TinyURL again
+after every reload — and since R69 made each service remember its own links,
+they were also shown a different service's link than the one they had been
+using. Now `Prefs::shorten_service`, stored as a `String` so a build that
+drops a service can still read prefs written by one that had it; an unknown
+key falls back to the default rather than being a dead choice.
+
+Everything else came back clean: every `prefs.update` site is user-initiated
+(theme cycle, density button, both day strips, tab, the digest checkbox,
+filters and their undo restore; `last_update_attempt` is bookkeeping, not a
+choice). `density` and `halls_view` already follow the rule; deferred
+conflicts already survive reloads (R43); the "Reset" button under Preferences
+deliberately touches theme and density only, and says so. `edit_mode` is left
+session-scoped on purpose — a reload returns it to the neutral off, which is
+not a different choice being made for you.
+
+Gates: 113/113 e2e (2 new: t112 a chosen day view survives a refresh, at both
+widths and in both directions; t113 the shortening service you picked is the
+one you come back to), 148 native, fmt + clippy clean both targets. t68 (the
+keyboard move that follows the cursor across days) and t94 (a chosen row
+height is never overruled) re-run green: they are the two tests that would
+break if the memo or the fallback rule were wrong.
+
+### R71 — the sweep that read its own round, then two features
+
+Three things in one round: an adversarial sweep of R69/R70 (asked for as "make
+sure all the workers complete their work correctly"), a once-a-day
+self-update, and the search box every editor has. Ultracode was on, so the
+sweep ran as a 29-agent workflow — 5 read-only lenses over the app, then two
+independent skeptics per finding, each told to default to refuting.
+
+**27 findings, 12 verified, 10 survived both skeptics. Two of them were mine,
+from the round that had just been declared green.**
+
+1. **`day_mode`'s memo recorded ZERO dependencies at desktop width.**
+   `plan_view()` returned `DayView::All` from an early return *before* reading
+   any signal, and `is_phone_viewport()` is a bare `match_media` — so a memo
+   built above 640px subscribed to nothing and, per reactive_graph's own
+   `MemoInner::update_if_necessary`, stayed Clean forever. Rotate a phone from
+   landscape (844px reads as "not a phone" — §4 already says so about
+   density) into portrait and the day strip appeared, said "Week", and did
+   NOTHING: every tap wrote `plan_view` to localStorage and changed nothing on
+   screen until a reload. Both skeptics confirmed it at library level. t112
+   passed only because it refreshes between resizes.
+   Fixed twice over: `plan_view()` now reads prefs and the viewport BEFORE any
+   branch, and the viewport is a real signal (`App::phone_viewport`, kept in
+   step by a media-query listener at the stylesheet's own boundary), so the
+   strip is live on rotate rather than merely correct after a reload.
+2. **A cancelled keyboard move rewrote the stored day.** The move effect wrote
+   the preference on every arrow key, so pressing `M`, arrowing to Wednesday
+   and pressing Escape left the reader on a day they never picked. The strip
+   now FOLLOWS the cursor through a derived memo that lasts exactly as long as
+   the move does — and the day is written only when the move is COMMITTED,
+   in `dnd.rs` at the drop. That distinction is the whole fix and t68 now
+   pins both halves: the first draft dropped the write entirely, which made
+   t68 fail honestly — a class moved to Wednesday vanished from a strip that
+   snapped back to Tuesday.
+3. `nothing_saved_to_lose()` did not count `plan_view` or `shorten_service`, so
+   "Import everything" replaced a real choice without asking. Counted now,
+   along with the three new search switches.
+4. `.mobile-only { display: block }` beat `.day-list`'s own `display: flex`
+   (equal specificity, later in the file), so the phone day list had been
+   losing its row gaps all along. Restated inside the media query.
+5. **A hedged relay saw the link and was never recorded.** The popup said only
+   the chosen service had it. `ShortLink` now carries `saw: Vec<String>` —
+   every relay the link was handed to, winner or not — and the popup names
+   them.
+6. Reopening the popup mid-flight reset `Working` to `Idle`, so it claimed
+   nothing had been sent while a request was in the air, and re-armed the
+   button. Only a stale FAILURE is cleared now.
+7. `race()` waited out a whole hedge before starting the next route when one
+   had just failed with another still running; and the failure it reported was
+   whichever finished LAST. It now advances on any failure and prefers a
+   service's own words (`Failure::Service`) over a transport error.
+8. Copy the sweep caught, all now true: "My data" promised nothing is ever
+   sent to a server (the shortener sends the link), the dialog claimed to list
+   everything while short links were absent (they have their own section now,
+   with "Forget them"), FEATURES said TinyURL was "the fastest" seventeen
+   lines before saying all three are equal, "one press, one request" was false
+   whenever the hedge fires, "the full link never leaves the screen" described
+   a `<details>` that is closed, and "Nothing has been sent anywhere" sat
+   above a paragraph explaining the connection the app had just opened.
+   Two findings were REFUTED and stay refuted: CONTEXT §7's mentions of
+   `HallsView` and `initial_day_view` are inside the append-only prompt log,
+   which is a record of what was true that round, not a description of today.
+
+**Writing the update feature found a bug in the service worker.** Its
+precache rule tested `/-[0-9a-f]{8,}\.(wasm|js|css)$/`, which does not match
+`cmi-timetable-app-<hash>_bg.wasm` — wasm-bindgen puts `_bg` AFTER the hash.
+So the one branch that exists to avoid re-downloading hashed assets was
+missing the biggest file in the build, and every worker install fetched 1.8 MB
+of wasm a second time with `cache: 'reload'`. `(_bg)?` fixes it.
+
+**The self-update, and why it needs no URL.** A static site tells a long-open
+tab nothing: browsers look for a new worker only on a navigation. So
+`ttcore::update::build_id` reads a build's identity out of the shell itself —
+the set of hashed asset names, deduplicated and sorted — and `app/src/update.rs`
+fetches the app's OWN shell once a day (relative to the service worker's scope,
+falling back to the document's directory) and compares. Nothing is configured,
+so moving the app to another repo, domain, sub-path or host needs no change.
+Three rules for WHEN it lands: a hidden tab reloads instantly, a tab in the
+middle of something waits behind a banner with an Update now button, and
+otherwise a toast then a beat then the reload. It can never loop: the id the
+app reloaded FOR is stored, and if the app comes back not running it, it does
+not try again for that id. **Offline is a normal outcome** — the fetch fails,
+`build_id` returns None, nothing happens at all, and the next attempt is an
+hour away instead of a day; `online` retries outside the schedule with a
+one-minute floor. t114 drives all three cases on its own origin, including
+severing every accepted socket (the first version of that test "passed" while
+still being served over a keep-alive connection).
+
+**The search box.** `Aa` / `ab` / `.*` inside the box's right edge, the shape
+every find bar has. `ttcore::search::Matcher` is prepared ONCE per filter pass
+— compiling a regex per course would have put a parser inside a loop that runs
+75 times per keystroke on three tabs — and its plain path allocates nothing at
+all for ASCII, which is what nearly every search here is. A pattern that does
+not compile **matches nothing and says why**, because the alternative is
+showing the whole catalog the moment someone types `(`. The switches live in
+`Filters`, so they persist per scope and Ctrl+Z reaches them. Two details the
+screenshots caught: the empty state was offering to create a course named
+`(unclosed`, and its "a filter is hiding it" probe searched without the
+switches and so blamed a facet for what "match case" was doing.
+
+Gates: 115/115 e2e (t114 self-update in all three states, t115 the three
+switches, t112/t113 from R70, and t68 extended with the cancelled-move case
+that pins finding 2), 168 native (19 new across
+`search`, `update` and `shorten`), fmt + clippy clean on both targets, and the
+search box and the shortening popup photographed in both themes at desktop and
+phone width.
 
 ## 8. Open bugs — found, confirmed, NOT fixed (do not delete)
 

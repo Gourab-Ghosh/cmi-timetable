@@ -2,9 +2,7 @@
 //! and days/halls run down the left column — never transposed.
 
 use crate::fetch;
-use crate::state::{
-    App, Density, Dialog, EffMeeting, HallsView, Tab, effective_meetings, same_hall,
-};
+use crate::state::{App, DayView, Density, Dialog, EffMeeting, Tab, effective_meetings, same_hall};
 use crate::ui::{
     ChipClick, ChipProps, FilterScope, branch_chip, chip, custom_changes_pill, edit_toggle,
     filter_bar, overrides_list,
@@ -248,46 +246,38 @@ fn grid_cell(
 // 1. My timetable
 // ---------------------------------------------------------------------------
 
-/// On a phone-sized screen the week grid asks for sideways scrolling the
-/// moment it draws, so the timetable opens on today's list instead — the
-/// question a student asks their phone is "what do I have today?". Desktop
-/// keeps the whole week, and so do weekends and days CMI doesn't teach.
-/// The Week button in the day strip is one tap away throughout.
-fn initial_day_view(app: App) -> Option<Day> {
-    let width = web_sys::window()?.inner_width().ok()?.as_f64()?;
-    if width > 640.0 {
-        return None;
-    }
-    let today = match js_sys::Date::new_0().get_day() {
-        1 => Day::Mon,
-        2 => Day::Tue,
-        3 => Day::Wed,
-        4 => Day::Thu,
-        5 => Day::Fri,
-        _ => return None,
-    };
-    app.grid_days().contains(&today).then_some(today)
-}
-
 fn my_timetable(app: App) -> impl IntoView {
-    // untrack: `initial_day_view` reads `grid_days()` (a signal read), and
-    // this body runs inside the tab dispatcher's reactive closure — a
-    // tracked read here would remount the whole view on every override
-    // change, snapping the day strip back to today mid-edit (caught by
-    // t68: the keyboard drop itself triggered the remount).
-    let day_mode = RwSignal::new(untrack(|| initial_day_view(app)));
-
+    // What the day strip shows: `None` is the whole week, `Some(day)` one
+    // day's list. It is a MEMO over the stored preference, not a signal of
+    // its own — a signal was the bug (R70): it was seeded from today at
+    // mount, so every refresh threw away what the reader had picked.
+    //
+    // A memo is also what keeps the older fix working. `App::plan_view`
+    // reads `grid_days()`, and this body runs inside the tab dispatcher's
+    // reactive closure, so reading it HERE would remount the whole view on
+    // every override change and snap the strip back mid-edit (t68 caught
+    // that with a keyboard drop). A memo's reads belong to the memo.
     // Keyboard move mode walks days as well as times, and the per-day list
     // shows one day at a time: arrowing off Tuesday used to leave the cursor
     // on a row nobody could see, and Enter then dropped the course somewhere
-    // the user never looked at. Follow the cursor instead — the day strip
-    // updates with it, so the move stays visible in either layout.
-    Effect::new(move |_| {
-        let cursor_day = app.move_mode.with(|m| m.as_ref().map(|m| m.cursor.0));
-        if let Some(day) = cursor_day
-            && day_mode.with_untracked(|shown| shown.is_some_and(|s| s != day))
-        {
-            day_mode.set(Some(day));
+    // the user never looked at. So the strip FOLLOWS the cursor — but only
+    // looks. It is derived from `move_mode` rather than written anywhere, so
+    // it lasts exactly as long as the move does, and a move that is cancelled
+    // with Escape leaves the reader's own choice untouched. Persisting it (the
+    // first R70 draft did) meant a cancelled move silently became a
+    // preference the reader had never made.
+    let move_day = Memo::new(move |_| app.move_mode.with(|m| m.as_ref().map(|m| m.cursor.0)));
+
+    let day_mode = Memo::new(move |_| {
+        let chosen = match app.plan_view() {
+            DayView::All => None,
+            DayView::Day(d) => Some(d),
+        };
+        match (chosen, move_day.get()) {
+            // Already on one day, and a move is walking: show where it is.
+            (Some(_), Some(cursor)) => Some(cursor),
+            // Showing the whole week: the move is visible already.
+            (chosen, _) => chosen,
         }
     });
 
@@ -424,7 +414,8 @@ fn my_timetable(app: App) -> impl IntoView {
                             if day_mode.get().is_none() { "true" } else { "false" }
                         }
                         tabindex=move || if day_mode.get().is_none() { "0" } else { "-1" }
-                        on:click=move |_| day_mode.set(None)
+                        title="The whole week at once"
+                        on:click=move |_| app.set_plan_view(DayView::All)
                     >
                         "Week"
                     </button>
@@ -441,7 +432,7 @@ fn my_timetable(app: App) -> impl IntoView {
                                         tabindex=move || {
                                             if day_mode.get() == Some(d) { "0" } else { "-1" }
                                         }
-                                        on:click=move |_| day_mode.set(Some(d))
+                                        on:click=move |_| app.set_plan_view(DayView::Day(d))
                                     >
                                         {d.short()}
                                     </button>
@@ -1192,9 +1183,11 @@ fn my_courses(app: App) -> impl IntoView {
     let filtered = Memo::new(move |_| {
         let f = app.filters_in(true);
         let ovs = app.overrides.get();
+        // Prepared once for the whole pass — see `state::text_matcher`.
+        let text = crate::state::text_matcher(&f);
         app.selected_courses()
             .into_iter()
-            .filter(|c| crate::state::course_matches(&app, c, &f, &ovs))
+            .filter(|c| crate::state::course_matches(&app, c, &f, &ovs, &text))
             .collect::<Vec<_>>()
     });
     let shown = Signal::derive(move || filtered.get().len());
@@ -1661,10 +1654,11 @@ fn master_grid(app: App) -> impl IntoView {
         // and that must not happen inside a read of it.
         let f = app.filters();
         let ovs = app.overrides.get();
+        let text = crate::state::text_matcher(&f);
         let courses = app.snapshot.with(|s| s.courses.clone());
         courses
             .into_iter()
-            .filter(|c| crate::state::course_matches(&app, c, &f, &ovs))
+            .filter(|c| crate::state::course_matches(&app, c, &f, &ovs, &text))
             .collect::<Vec<_>>()
     });
     // What this grid can actually put on screen. It draws courses only
@@ -2006,10 +2000,11 @@ fn catalog(app: App) -> impl IntoView {
         // and that must not happen inside a read of it.
         let f = app.filters();
         let ovs = app.overrides.get();
+        let text = crate::state::text_matcher(&f);
         let courses = app.snapshot.with(|s| s.courses.clone());
         courses
             .into_iter()
-            .filter(|c| crate::state::course_matches(&app, c, &f, &ovs))
+            .filter(|c| crate::state::course_matches(&app, c, &f, &ovs, &text))
             .collect::<Vec<_>>()
     });
     let count = Signal::derive(move || filtered.get().len());
@@ -2104,8 +2099,21 @@ fn catalog(app: App) -> impl IntoView {
                         // longer has to be cloned to name one course.
                         let filtered_out = (!needle.is_empty())
                             .then(|| {
+                                // The switches ride along: they are part of
+                                // what the box MEANS, so a probe without them
+                                // searches differently from the reader and
+                                // then blames a facet for a course that
+                                // "match case" is hiding (R71).
+                                let (case, word, rx) = app
+                                    .with_filters_in(
+                                        false,
+                                        |f| (f.match_case, f.whole_word, f.use_regex),
+                                    );
                                 let text_only = crate::state::Filters {
                                     text: search.clone(),
+                                    match_case: case,
+                                    whole_word: word,
+                                    use_regex: rx,
                                     ..Default::default()
                                 };
                                 // The borrow below is only safe while this
@@ -2115,6 +2123,7 @@ fn catalog(app: App) -> impl IntoView {
                                 // whole pass: it used to be cloned inside
                                 // the closure, once per course tried.
                                 let ovs = app.overrides.get();
+                                let matcher = crate::state::text_matcher(&text_only);
                                 app.snapshot
                                     .with(|s| {
                                         s.courses
@@ -2126,6 +2135,7 @@ fn catalog(app: App) -> impl IntoView {
                                                     c,
                                                     &text_only,
                                                     &ovs,
+                                                    &matcher,
                                                 )
                                             })
                                             .map(|c| (c.code.clone(), c.name.clone()))
@@ -2235,7 +2245,16 @@ fn catalog(app: App) -> impl IntoView {
                                             </button>
                                         }
                                     })}
-                                {(!search.is_empty())
+                                // Not offered while the box is a PATTERN:
+                                // "^ana|algebra" is a search, not a course
+                                // name, and prefilling the form with it would
+                                // invite a course called `^ana|algebra`. A
+                                // reader who does want to create one turns the
+                                // switch off first — which is also the moment
+                                // they would notice their search was a
+                                // pattern (R71).
+                                {(!search.is_empty()
+                                    && !app.with_filters_in(false, |f| f.use_regex))
                                     .then(|| {
                                         let prefill = search.clone();
                                         view! {
@@ -3176,12 +3195,12 @@ fn halls_view(app: App) -> impl IntoView {
                     <button
                         role="radio"
                         aria-checked=move || {
-                            if view_mode.get() == HallsView::All { "true" } else { "false" }
+                            if view_mode.get() == DayView::All { "true" } else { "false" }
                         }
-                        tabindex=move || if view_mode.get() == HallsView::All { "0" } else { "-1" }
+                        tabindex=move || if view_mode.get() == DayView::All { "0" } else { "-1" }
                         title="Every day at once"
                         on:click=move |_| {
-                            app.prefs.update(|p| p.halls_view = Some(HallsView::All));
+                            app.prefs.update(|p| p.halls_view = Some(DayView::All));
                             app.persist_prefs();
                         }
                     >
@@ -3196,14 +3215,14 @@ fn halls_view(app: App) -> impl IntoView {
                                     <button
                                         role="radio"
                                         aria-checked=move || {
-                                            if view_mode.get() == HallsView::Day(d) {
+                                            if view_mode.get() == DayView::Day(d) {
                                                 "true"
                                             } else {
                                                 "false"
                                             }
                                         }
                                         tabindex=move || {
-                                            if view_mode.get() == HallsView::Day(d) {
+                                            if view_mode.get() == DayView::Day(d) {
                                                 "0"
                                             } else {
                                                 "-1"
@@ -3212,7 +3231,7 @@ fn halls_view(app: App) -> impl IntoView {
                                         on:click=move |_| {
                                             app.prefs
                                                 .update(|p| {
-                                                    p.halls_view = Some(HallsView::Day(d));
+                                                    p.halls_view = Some(DayView::Day(d));
                                                 });
                                             app.persist_prefs();
                                         }
@@ -3236,11 +3255,11 @@ fn halls_view(app: App) -> impl IntoView {
 
             {move || match view_mode.get() {
                 // One day: the corner says which, and every row is a hall.
-                HallsView::Day(d) => hall_table(app, hall_cols, own_halls, vec![d], false),
+                DayView::Day(d) => hall_table(app, hall_cols, own_halls, vec![d], false),
                 // The whole week: still ONE table, a hall's days kept
                 // together, so a room reads down the page instead of across
                 // five tables you have to hold in your head.
-                HallsView::All => hall_table(app, hall_cols, own_halls, day_list.get(), true),
+                DayView::All => hall_table(app, hall_cols, own_halls, day_list.get(), true),
             }}
             // The tinted column, explained in visible words — not a tooltip.
             {move || {

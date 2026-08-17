@@ -32,8 +32,13 @@ self.addEventListener('install', (event) => {
       // a second time, on the first visit, while the app was starting.
       .then((cache) =>
         cache.addAll(
+          // `(_bg)?` because wasm-bindgen puts its own suffix AFTER the
+          // hash: `cmi-timetable-app-7b21e746537d6add_bg.wasm`. Without it
+          // the rule missed the WASM — the biggest file in the build, 1.8 MB
+          // of it — so the very download this branch exists to avoid was
+          // happening on every install anyway (R71).
           MANIFEST.map((url) =>
-            /-[0-9a-f]{8,}\.(wasm|js|css)$/.test(url)
+            /-[0-9a-f]{8,}(_bg)?\.(wasm|js|css)$/.test(url)
               ? new Request(url)
               : new Request(url, { cache: 'reload' })
           )

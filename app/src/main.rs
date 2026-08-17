@@ -11,6 +11,7 @@ mod shorten;
 mod state;
 mod storage;
 mod ui;
+mod update;
 mod views;
 
 pub use app::apply_theme;

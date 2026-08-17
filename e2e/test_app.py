@@ -36,6 +36,7 @@ import socket
 import ssl
 import subprocess
 import sys
+import shutil
 import tempfile
 import threading
 import time
@@ -3553,6 +3554,36 @@ def t68_a_keyboard_move_on_a_phone_shows_where_it_is(app):
         app.wait_toast("Moved TOC")
         assert app.chips("TOC", ".day-list .slotrow[data-day='2'][data-slot='550']"), \
             "and it lands where the cursor was"
+
+        # A COMMITTED move takes the strip with it — the reader put the class
+        # on Wednesday and wants to see it there.
+        def checked():
+            return app.xpath("//div[@aria-label='Day view']"
+                             "//button[@aria-checked='true']").text
+        assert checked() == "Wed", checked()
+        stored = app.d.execute_script(
+            "return JSON.stringify(JSON.parse("
+            "localStorage.getItem('cmitt.v1.prefs')).plan_view);")
+
+        # …but a move CANCELLED with Escape must leave that choice exactly as
+        # it was. Walking days while moving is looking, not choosing: the
+        # first version of this wrote a preference on every arrow key, so
+        # pressing Escape left the reader on a day they never picked.
+        chip = app.chip("TOC", ".day-list .slotrow[data-day='2'][data-slot='550']")
+        app.d.execute_script("arguments[0].focus();", chip)
+        chip.send_keys("m")
+        app.wait_css(".day-list .slotrow.kbd-cursor")
+        body.send_keys(Keys.ARROW_UP)
+        WebDriverWait(app.d, 10).until(
+            lambda d: d.find_elements(
+                By.CSS_SELECTOR, ".day-list .slotrow.kbd-cursor[data-day='1']"))
+        assert checked() == "Tue", "the strip follows the cursor while moving"
+        body.send_keys(Keys.ESCAPE)
+        WebDriverWait(app.d, 10).until(lambda d: checked() == "Wed")
+        assert app.d.execute_script(
+            "return JSON.stringify(JSON.parse("
+            "localStorage.getItem('cmitt.v1.prefs')).plan_view);") == stored, \
+            "a cancelled move must not have changed the stored day"
     finally:
         app.d.set_window_size(1500, 1000)
 
@@ -5447,7 +5478,7 @@ def t109_nothing_is_sent_until_the_button_is_pressed(app):
     timetable to a stranger, and it happens once per press or not at all."""
     app.boot("/", selection=["TOC", "RDBM"])
     _open_shorten(app)
-    assert "nothing has been sent" in app.css(".shorten-empty").text.lower()
+    assert "hasn't left this browser" in app.css(".shorten-empty").text
     time.sleep(1.5)
     assert not app.css_all(".shorten-short"), "a link appeared without anyone asking for one"
     assert app.d.execute_script(
@@ -5521,6 +5552,343 @@ def t111_the_chosen_service_is_warmed_and_only_the_chosen_one(app):
     WebDriverWait(app.d, 5).until(EC.staleness_of(old))
     assert app.css_all("link[rel='preconnect'][href*='da.gd']"), \
         "the service still chosen must be warmed again on the way back in"
+
+
+def t112_a_chosen_day_view_survives_a_refresh(app):
+    """On a phone My timetable opens on today, because that is the question
+    a student asks their phone. But "opens on today" is a default, not an
+    instruction: once the reader taps Week — or taps another day — a refresh
+    must show what they tapped. It used to work the choice out fresh on
+    every mount, so every reload undid it and answered a question they had
+    already answered."""
+    app.d.set_window_size(420, 850)
+    try:
+        app.boot("/", selection=["TOC", "RDBM", "MFD"])
+        strip = app.wait_css(".toolbar .seg[aria-label='Day view']")
+
+        def checked():
+            return app.css(
+                ".toolbar .seg[aria-label='Day view'] button[aria-checked='true']").text
+
+        def button(label):
+            return strip.find_element(
+                By.XPATH, f".//button[normalize-space()='{label}']")
+
+        # Untouched, it still opens on today (or on the week, at a weekend or
+        # on a day CMI does not teach) — the default is not being removed.
+        opened_on = checked()
+        assert app.d.execute_script(
+            "return JSON.parse(localStorage.getItem('cmitt.v1.prefs')).plan_view;") is None, \
+            "opening the tab must not write a choice nobody made"
+
+        # Week is a choice like any other. This is the reported bug.
+        button("Week").click()
+        WebDriverWait(app.d, 5).until(lambda d: checked() == "Week")
+        app.d.refresh()
+        app.wait_css(".toolbar .seg[aria-label='Day view']")
+        assert checked() == "Week", \
+            f"a refresh replaced the reader's choice with {checked()!r}"
+
+        # And so is a particular day — including one that is not today.
+        strip = app.css(".toolbar .seg[aria-label='Day view']")
+        others = [b for b in strip.find_elements(By.CSS_SELECTOR, "button")
+                  if b.text not in ("Week", opened_on)]
+        assert others, "the fixture week must have a day that is not today"
+        picked = others[-1].text
+        others[-1].click()
+        WebDriverWait(app.d, 5).until(lambda d: checked() == picked)
+        app.d.refresh()
+        app.wait_css(".toolbar .seg[aria-label='Day view']")
+        assert checked() == picked, f"expected {picked}, got {checked()}"
+
+        # The day list on screen is the one the strip claims.
+        assert app.css_all(".day-list"), "a day view shows the day's list"
+
+        # A choice made on a phone must not follow the reader to a screen
+        # that has no day strip to change it with: the week grid fits there,
+        # and a hidden day list is work done for nobody. The choice is kept,
+        # not cleared — going back to phone width still shows it.
+        app.d.set_window_size(1500, 1000)
+        app.d.refresh()
+        app.wait_css(".week-grid")
+        assert not app.css_all(".day-list"), \
+            "a wide screen shows the week, whatever the phone had chosen"
+        assert app.d.execute_script(
+            "return JSON.parse(localStorage.getItem('cmitt.v1.prefs')).plan_view;") is not None, \
+            "and it must not have thrown the phone's choice away"
+
+        app.d.set_window_size(420, 850)
+        app.d.refresh()
+        app.wait_css(".toolbar .seg[aria-label='Day view']")
+        assert checked() == picked, f"back on a phone: expected {picked}, got {checked()}"
+    finally:
+        app.d.set_window_size(1500, 1000)
+
+
+def t113_the_shortening_service_you_picked_is_the_one_you_come_back_to(app):
+    """The same bug in another place, found by sweeping for it: the chosen
+    shortener lived only in memory. A reader who prefers da.gd was handed
+    TinyURL again after every reload — and since each service remembers its
+    own links, they were shown a different service's link than the one they
+    had been using."""
+    app.boot("/", selection=["TOC", "RDBM"])
+    _open_shorten(app)
+
+    def picked():
+        return app.css(".shorten-opt:has(input:checked) .shorten-opt-name").text
+
+    assert picked().startswith("TinyURL"), picked()
+    app.css_all(".shorten-opt input")[1].click()
+    WebDriverWait(app.d, 5).until(lambda d: picked().startswith("da.gd"))
+
+    app.d.refresh()
+    app.wait_css(".header h1")
+    _open_shorten(app)
+    assert picked().startswith("da.gd"), \
+        f"a refresh put the service back to {picked()!r}"
+
+
+def _serve_dir(directory, port):
+    """A server for one directory on one port — the update tests need to swap
+    what a single origin serves, which is the whole point of them.
+
+    Tracks every accepted socket, for the same reason t74 does: Chrome holds
+    keep-alive (and speculative) connections open, and `server_close()` only
+    closes the LISTENER. Without severing them, the "no network" phase is
+    still quietly being served — which is exactly how this test first passed
+    the wrong way, reporting "this is the newest version" while pretending to
+    be offline.
+    """
+    class Quiet(http.server.SimpleHTTPRequestHandler):
+        def log_message(self, *args):
+            pass
+
+        def end_headers(self):
+            # Chrome's own HTTP cache would otherwise hand the second build's
+            # request the first build's index.html, and the test would be
+            # measuring the cache rather than the app.
+            self.send_header("Cache-Control", "no-store")
+            super().end_headers()
+
+    class Tracked(http.server.ThreadingHTTPServer):
+        def __init__(self, *a, **kw):
+            super().__init__(*a, **kw)
+            self.accepted = []
+
+        def get_request(self):
+            sock, addr = super().get_request()
+            self.accepted.append(sock)
+            return sock, addr
+
+    server = Tracked(
+        ("127.0.0.1", port),
+        lambda *a, **kw: Quiet(*a, directory=directory, **kw),
+    )
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return server
+
+
+def _really_stop(server):
+    """Stop listening AND sever every connection already open."""
+    server.shutdown()
+    server.server_close()
+    for sock in getattr(server, "accepted", []):
+        try:
+            sock.shutdown(socket.SHUT_RDWR)
+            sock.close()
+        except OSError:
+            pass
+
+
+def _next_build(src):
+    """A copy of the built app that is a DIFFERENT build.
+
+    The stylesheet is renamed — content untouched, so its SRI hash still
+    matches — and every reference to it rewritten, including the service
+    worker's precache list and its cache name. That is exactly what a real
+    deploy looks like to the update check: the shell names different files.
+    """
+    dst = tempfile.mkdtemp(prefix="cmitt-next-build-")
+    shutil.copytree(src, dst, dirs_exist_ok=True)
+    css = next(f for f in os.listdir(dst) if f.startswith("styles-") and f.endswith(".css"))
+    new_css = "styles-00ff00ff00ff00ff.css"
+    os.rename(os.path.join(dst, css), os.path.join(dst, new_css))
+    for name in ("index.html", "sw.js"):
+        path = os.path.join(dst, name)
+        if not os.path.exists(path):
+            continue
+        text = open(path, encoding="utf-8").read().replace(css, new_css)
+        # A new build is a new cache, or the worker would keep serving the old
+        # files out of the old one.
+        text = text.replace("cmitt-sw-", "cmitt-sw-next-")
+        open(path, "w", encoding="utf-8").write(text)
+    return dst, css, new_css
+
+
+def _shown_build(d):
+    return d.execute_script(
+        "return [...document.querySelectorAll('link[href]')]"
+        ".map(l => l.href).join(' ');")
+
+
+def t114_the_app_checks_whether_a_newer_version_of_itself_is_published(app):
+    """A tab left open for a week never learns that a new version was
+    deployed: browsers only look for a new service worker when a page is
+    navigated. So the app asks, itself — and the answer must be right in all
+    three cases: nothing new, something new, and no network at all.
+
+    Runs on its own port so its service worker and its update marker never
+    touch the origin the rest of the suite uses.
+    """
+    port = SW_PORT + 1
+    base = f"http://127.0.0.1:{port}"
+    d = app.d
+    server = _serve_dir(DIST, port)
+    nxt = None
+    try:
+        d.get(f"{base}/#/developer")
+        WebDriverWait(d, 20).until(
+            EC.presence_of_element_located((By.CSS_SELECTOR, "[data-update-check]")))
+        d.execute_script("localStorage.removeItem('cmitt.v1.update');")
+        first_build = _shown_build(d)
+
+        # 1. Nothing new: it says so, and changes nothing.
+        d.find_element(By.CSS_SELECTOR, "[data-update-check]").click()
+        app.wait_toast("newest version")
+        assert not app.css_all(".update-banner")
+        assert _shown_build(d) == first_build
+        app.dismiss_toasts()
+
+        # 2. No network: the check fails, says so plainly, and the app keeps
+        # working — everything it needs is already in this browser.
+        _really_stop(server)
+        d.find_element(By.CSS_SELECTOR, "[data-update-check]").click()
+        app.wait_toast("Couldn't reach the server")
+        assert not app.css_all(".update-banner"), "offline is not an update"
+        assert _shown_build(d) == first_build, "and it must never reload on a failure"
+        # Still a working app: a control still answers.
+        d.find_element(By.CSS_SELECTOR, "[data-update-check]").click()
+        app.wait_toast("Couldn't reach the server")
+        app.dismiss_toasts()
+
+        # 3. A new build appears on the same origin: the app takes it.
+        nxt, old_css, new_css = _next_build(DIST)
+        server = _serve_dir(nxt, port)
+        d.find_element(By.CSS_SELECTOR, "[data-update-check]").click()
+        WebDriverWait(d, 30).until(lambda drv: new_css in _shown_build(drv))
+        assert old_css not in _shown_build(d)
+        # And it says why the page reappeared, rather than leaving it eerie.
+        app.wait_toast("Updated to the newest version")
+        # The loop guard is spent, not left armed.
+        assert d.execute_script(
+            "return JSON.parse(localStorage.getItem('cmitt.v1.update')).reload_target;") is None
+    finally:
+        try:
+            _really_stop(server)
+        except Exception:
+            pass
+        if nxt:
+            shutil.rmtree(nxt, ignore_errors=True)
+        # Leave no worker behind on that origin for whatever runs next.
+        d.execute_async_script("""
+            const done = arguments[arguments.length - 1];
+            navigator.serviceWorker.getRegistrations()
+              .then(rs => Promise.all(rs.map(r => r.unregister())))
+              .then(() => done(null), () => done(null));
+        """)
+
+
+def t115_the_search_box_has_the_three_switches_every_editor_has(app):
+    """Match case, whole word, regular expression — beside the box, the way a
+    find bar does it. Each has to actually change the answer, an unfinished
+    pattern must never be read as "no search at all" (which would show the
+    whole catalog), and all three are filters like any other: they persist and
+    Ctrl+Z reaches them."""
+    app.boot("/", selection=["TOC"])
+    app.open_tab("Catalog")
+    section = app.wait_css("section[aria-label='Catalog']")
+
+    def switch(label):
+        return app.css(f"section[aria-label='Catalog'] "
+                       f".search-switch[aria-label='{label}']")
+
+    def on(label):
+        return switch(label).get_attribute("aria-pressed") == "true"
+
+    def type_search(text):
+        box = app.css("section[aria-label='Catalog'] .searchbox input")
+        box.clear()
+        box.send_keys(text)
+        time.sleep(0.35)
+
+    def rows():
+        return len(app.css_all("section[aria-label='Catalog'] .card"))
+
+    # Plain search: case-insensitive, matching inside words.
+    type_search("alg")
+    loose = rows()
+    assert loose > 0, "the fixture catalog has algebra courses"
+
+    # Whole word: 'alg' stops matching 'Algebra'.
+    switch("Whole word").click()
+    WebDriverWait(app.d, 5).until(lambda d: rows() < loose)
+    assert on("Whole word")
+    switch("Whole word").click()
+    WebDriverWait(app.d, 5).until(lambda d: rows() == loose)
+
+    # Match case: the same letters, told apart.
+    type_search("algebra")
+    lower = rows()
+    assert lower > 0
+    switch("Match case").click()
+    WebDriverWait(app.d, 5).until(lambda d: rows() < lower)
+    switch("Match case").click()
+    WebDriverWait(app.d, 5).until(lambda d: rows() == lower)
+
+    # A pattern, read as a pattern.
+    switch("Regular expression").click()
+    type_search("^alg")
+    anchored = rows()
+    assert anchored > 0, "^alg matches the courses whose code starts with ALG"
+    type_search("alg$")
+    assert rows() != anchored or anchored == 0, "an anchor at the other end is a different set"
+
+    # The case that matters most: a half-typed pattern must NOT be read as an
+    # empty search and show the whole catalog.
+    type_search("(unclosed")
+    bad = app.wait_css("section[aria-label='Catalog'] .searchbox-bad")
+    assert "not a pattern yet" in bad.text.lower(), bad.text
+    assert rows() == 0, "a broken pattern matches nothing, never everything"
+    assert app.css("section[aria-label='Catalog'] .searchbox input") \
+        .get_attribute("aria-invalid") == "true"
+
+    # Off again, the same text is just text — and the notice goes.
+    switch("Regular expression").click()
+    WebDriverWait(app.d, 5).until(
+        lambda d: not app.css_all("section[aria-label='Catalog'] .searchbox-bad"))
+
+    # A switch is a filter like any other: Ctrl+Z reaches it…
+    switch("Match case").click()
+    WebDriverWait(app.d, 5).until(lambda d: on("Match case"))
+    ActionChains(app.d).key_down(Keys.CONTROL).send_keys("z").key_up(Keys.CONTROL).perform()
+    WebDriverWait(app.d, 5).until(lambda d: not on("Match case"))
+
+    # …and it survives a reload. (In that order: the undo stack lives in
+    # memory by design, so a reload is the one thing Ctrl+Z cannot reach
+    # across — testing it the other way round tests the wrong thing.)
+    switch("Match case").click()
+    WebDriverWait(app.d, 5).until(lambda d: on("Match case"))
+    app.d.refresh()
+    app.wait_css("section[aria-label='Catalog']")
+    assert on("Match case"), "a switch the reader turned on must survive a reload"
+
+    # My courses has its own set, exactly like every other filter.
+    app.open_tab("My courses")
+    app.wait_css("section[aria-label='My courses']")
+    mine = app.css("section[aria-label='My courses'] "
+                   ".search-switch[aria-label='Match case']")
+    assert mine.get_attribute("aria-pressed") == "false"
+    assert section is not None
 
 
 def t105_arrow_keys_walk_the_tab_rail(app):
@@ -5700,6 +6068,10 @@ TESTS = [
     t109_nothing_is_sent_until_the_button_is_pressed,
     t110_a_shortener_that_cannot_be_reached_says_so_and_invents_nothing,
     t111_the_chosen_service_is_warmed_and_only_the_chosen_one,
+    t112_a_chosen_day_view_survives_a_refresh,
+    t113_the_shortening_service_you_picked_is_the_one_you_come_back_to,
+    t114_the_app_checks_whether_a_newer_version_of_itself_is_published,
+    t115_the_search_box_has_the_three_switches_every_editor_has,
     t106_the_wheel_over_the_rail_walks_the_sections,
 ]
 

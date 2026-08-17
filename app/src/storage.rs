@@ -24,6 +24,11 @@ pub const KEY_CONFLICTS: &str = "cmitt.v1.conflicts";
 /// still the student's, so "Delete all app data" takes it with everything
 /// else (that walks every `cmitt.` key, so this needs no line there).
 pub const KEY_SHORTLINKS: &str = "cmitt.v1.shortlinks";
+/// When the app last asked the server whether a newer build of ITSELF is
+/// published, and which build a reload was last taken for. Nothing about the
+/// student's timetable — it is the app's own housekeeping, and losing it
+/// costs one extra check. See `crate::update`.
+pub const KEY_UPDATE: &str = "cmitt.v1.update";
 
 fn raw() -> Option<web_sys::Storage> {
     web_sys::window()?.local_storage().ok().flatten()

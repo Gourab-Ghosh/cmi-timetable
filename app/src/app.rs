@@ -60,6 +60,12 @@ fn init_app() -> (App, bool) {
         snapshot = Snapshot::placeholder();
     }
 
+    let shorten_pick = prefs
+        .shorten_service
+        .as_deref()
+        .and_then(ttcore::shorten::service)
+        .map(|s| s.key);
+
     let sync = SyncMeta {
         fetched_at: snapshot.fetched_at,
         source: snapshot.source.clone(),
@@ -115,9 +121,17 @@ fn init_app() -> (App, bool) {
         dialog_dirty: RwSignal::new(false),
         confirm: RwSignal::new(None),
         shorten: RwSignal::new(crate::state::ShortenState::Idle),
-        shorten_service: RwSignal::new(ttcore::shorten::default_service().key),
+        // The service picked last time, if the app still offers it. An
+        // unknown key (a service dropped since) quietly becomes the default
+        // rather than a dead choice nothing in the list matches.
+        shorten_service: RwSignal::new(
+            shorten_pick.unwrap_or_else(|| ttcore::shorten::default_service().key),
+        ),
         shorten_seq: RwSignal::new(0),
         shortlinks: RwSignal::new(shortlinks),
+        phone_viewport: RwSignal::new(domx::is_phone_viewport()),
+        update_ready: RwSignal::new(None),
+        update_reloading: RwSignal::new(false),
         drag,
         // Derived here, at the root, for the same reason as CourseIndex
         // below: it outlives every cell that reads it. `drag` fires on every
@@ -417,6 +431,25 @@ fn install_routing(app: App) {
     closure.forget();
 }
 
+/// Keep `App::phone_viewport` true to the stylesheet.
+///
+/// A media-query listener rather than a resize handler: it fires only when the
+/// boundary is actually crossed, which is the only moment anything cares, and
+/// it is the same query the stylesheet uses so the two can never disagree.
+/// Rotating a phone crosses it — which is exactly the case that used to leave
+/// My timetable's day strip inert (R70).
+fn install_viewport_listener(app: App) {
+    let query = format!("(max-width: {}px)", domx::PHONE_MAX_PX);
+    if let Ok(Some(mql)) = domx::window().match_media(&query) {
+        app.phone_viewport.set(mql.matches());
+        let closure = Closure::<dyn FnMut(web_sys::MediaQueryListEvent)>::new(
+            move |ev: web_sys::MediaQueryListEvent| app.phone_viewport.set(ev.matches()),
+        );
+        let _ = mql.add_event_listener_with_callback("change", closure.as_ref().unchecked_ref());
+        closure.forget();
+    }
+}
+
 fn install_theme_listener(app: App) {
     if let Ok(Some(mql)) = domx::window().match_media("(prefers-color-scheme: dark)") {
         let closure = Closure::<dyn FnMut(web_sys::MediaQueryListEvent)>::new(
@@ -484,6 +517,7 @@ pub fn Root() -> impl IntoView {
 
     install_routing(app);
     install_theme_listener(app);
+    install_viewport_listener(app);
     dnd::install_global_handlers(app);
     apply_theme(app);
 
@@ -498,6 +532,10 @@ pub fn Root() -> impl IntoView {
     // Last: everything above may itself adopt a snapshot, and the listener
     // has nothing to say about writes this tab made.
     install_cross_tab_sync(app);
+    // And the app's own upkeep: once a day, is there a newer build of THIS
+    // app on the server it came from? A tab left open for a week would
+    // otherwise never find out. See `crate::update`.
+    crate::update::install(app);
 
     view! {
         // Before the first sync there is no tab rail, so the desktop grid

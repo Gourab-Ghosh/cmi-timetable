@@ -41,6 +41,15 @@ Your week as a grid — days down the left, CMI's time slots across the top.
   Drag one onto the grid, or open it and set a time.
 - **Clashes** are listed under the grid: one row per pair of courses, with
   every colliding time beside it.
+- **On a phone, one day at a time.** A week grid needs sideways scrolling on
+  a phone, so the timetable opens on today's classes instead — the question
+  you ask your phone is "what do I have today?". A strip above it switches
+  between **Week** and any single day.
+  **What you pick there stays picked**: choose Week, or Thursday, and a
+  refresh — tomorrow, next week — shows exactly that. Opening on today is
+  what happens when you have never chosen, not something the app keeps
+  deciding for you. A wider screen always shows the whole week, without
+  forgetting what your phone was set to.
 - **Your changes** lists everything you have altered (see below).
 - **Print** produces a poster-style sheet — see *Taking it with you*.
 
@@ -91,7 +100,16 @@ any hour of the week.
 
 Every course this semester, searchable and filterable.
 
-- Search by code, name or instructor.
+- Search by code, name or instructor — with the three switches every editor
+  has, at the right-hand end of the box:
+  **`Aa`** match case, **`ab`** whole word, **`.*`** regular expression.
+  Whole-word means what `\b` means, so it means the same thing whether or not
+  the pattern switch is on; a pattern can use the other two switches with it.
+  A pattern you are still typing is **never read as an empty search**: the box
+  says what is wrong with it so far (`Not a pattern yet — unclosed group`) and
+  shows nothing, rather than quietly showing the whole catalog. The switches
+  are filters like any other — they persist, they show in the chip line
+  (`/^ana/ (case)`), and Ctrl+Z takes them back.
 - Filter by **branch, instructor, day, time slot, hall, credits, course** and
   **flags** (optional courses, unscheduled ones, ones you have customised),
   plus a **"Fits my schedule"** switch that hides anything overlapping what
@@ -349,13 +367,16 @@ A link carrying your whole timetable is long. **Make this link short** — one
 button in the share dialog, and everything about shortening lives behind it —
 trades it for a short one through a free shortening service.
 
-- **Three services, no account needed by any of them**: TinyURL (suggested,
-  and the fastest), da.gd (the shortest links) and clck.ru. Each says where
-  your link is being sent before you send it.
+- **Three services, no account needed by any of them**: TinyURL (suggested —
+  the best known, and the least likely to be stripped out of an email), da.gd
+  (the shortest links) and clck.ru. Each says where your link is being sent
+  before you send it, and all three answer in about the same time.
 - **Nothing is sent until you press the button.** Opening the share dialog
-  shortens nothing; opening this popup shortens nothing. One press, one
-  request — this is the only action in the app that hands your timetable to
-  anyone else, and it says so in as many words.
+  shortens nothing; opening this popup shortens nothing. This is the only
+  action in the app that hands your timetable to anyone else, and it says so
+  in as many words. One press asks one service — and if that service is slow
+  to answer, the app quietly tries a helper site alongside it rather than
+  leaving you waiting, then tells you exactly who ended up seeing the link.
 - **Links you have made are kept**, for each service separately. Close the
   popup, close the browser, come back tomorrow: your short link is still
   there, and the service that made it is marked *link ready*. Nobody is
@@ -365,8 +386,8 @@ trades it for a short one through a free shortening service.
   address, so the one you made last week still opens last week's timetable —
   it is kept and clearly labelled, because you may already have sent it to
   someone, and a fresh one is one press away.
-- **The full link never leaves the screen**, so a service being down or slow
-  costs you nothing.
+- **The full link is always one tap away**, under *The full link, as it is
+  now*, so a service being down or slow costs you nothing.
 - **All three are equally quick.** Most of the wait for a short link is not
   the service thinking, it is your browser meeting it for the first time —
   looking up the name, opening the connection, agreeing on encryption. While
@@ -615,13 +636,37 @@ its own, never as a change CMI made.
 
 ---
 
+## Staying current, on its own
+
+The app checks **once a day**, while it is open, whether a newer version of
+itself has been published — and takes it.
+
+- **A tab left open for a week gets the fixes anyway.** Browsers only look for
+  a new version when a page is navigated, so a tab nobody reloads can run last
+  month's app indefinitely. This closes that.
+- **It updates at a moment that costs you nothing.** A tab you are not looking
+  at updates instantly and silently. A tab in the middle of something — unsaved
+  typing in a course form, a drag, a question you haven't answered — waits, and
+  says so in a banner with an **Update now** button if you would rather not
+  wait. Otherwise you get a word first and then the reload.
+- **Nothing you have done is lost by it.** Your timetable, your changes and
+  your preferences live in this browser, not in the page.
+- **No internet, no problem.** If the check cannot reach the server it changes
+  nothing at all, says nothing, and tries again in an hour — the app you are
+  using is already downloaded, and it keeps working exactly as it did.
+- **It works wherever the app is hosted.** The check asks the server the app
+  was loaded from, so moving it to another repository, another domain, a
+  sub-path, or off GitHub Pages entirely needs no change and no configuration.
+- Developer mode has a **Check for an update now** button, and shows the build
+  id the check compares.
+
 ## Comfort and control
 
 | | |
 |:--|:--|
 | **Theme** | Auto (follows your system), light, or dark — including the controls the browser draws for itself. Checkboxes, date and number fields and the scrollbars follow the theme too, so nothing on a dark page is left painted for a light one |
 | **Row height** | Roomy or tight in the Master grid. Until you choose, it follows the screen you opened it on — tight on a phone, where roomy rows push most of the week off the bottom edge, and roomy on a computer. Press the button once and that is your answer everywhere, on every screen and every reload; Reset in My data hands the decision back to the device |
-| **On a phone** | The timetable opens on today's classes (the whole week is one tap away), tap targets sized for fingers, a header that packs tight, and long-press to drag |
+| **On a phone** | The timetable opens on today's classes until you pick otherwise — and then it stays picked (the whole week is one tap away), tap targets sized for fingers, a header that packs tight, and long-press to drag |
 | **Motion** | Animations respect "reduce motion" |
 | **The wheel** | Scroll over any box with a step — credits, a meeting's start or end time, an export date, the reminder lead, or any dropdown — and it moves one step. Hovering is enough, no click first; while the wheel is over a box, the box takes the scroll and the page behind it stays put. The reminder lead nudges by single minutes on the wheel while its arrows jump by fives. A trackpad flick counts by full notches — a step or two per gesture, not ten — an empty box is never filled by a passing wheel, and the wheel never moves a value opposite to the way you scrolled |
 | **Enter** | Saves in the editor, downloads in Export, and dismisses the keyboard in a search box |
