@@ -6,7 +6,7 @@
 //! Drop targets are grid cells carrying `data-day` / `data-slot` attributes.
 
 use crate::domx;
-use crate::state::{App, DragSpec, DragState, MoveMode};
+use crate::state::{App, DragSpec, DragState, MoveMode, same_hall};
 use leptos::prelude::*;
 use std::cell::RefCell;
 use ttcore::model::{Day, Meeting, Slot};
@@ -184,12 +184,63 @@ pub fn perform_drop(
         where_label.push_str(&format!(" · {target}"));
     }
 
-    // Dropped back onto the official cell (and, in the Halls view, the
-    // official hall) → reset any override.
+    // Three questions, in this order. They used to be one, which is how a
+    // drop that changed nothing could still announce a move, delete a room
+    // change, or swallow the add it was supposed to perform.
+    //
+    // A cell only carries `data-hall` on the Halls tab, so `target_hall` is
+    // None everywhere else and says nothing about the room. Only the Halls
+    // tab may draw conclusions from it.
+    let hall_axis = target_hall.is_some();
+    let landed_on = |m: &Meeting| {
+        m.day == day
+            && m.slot == slot
+            // `temp_booking` is CMI's note about the room, not a position,
+            // and `to` always clears it — comparing it would call every
+            // no-op a change and quietly drop the "booked temporarily"
+            // badge. Halls are matched the same loose way the grid uses to
+            // decide which row a chip is drawn in, or a chip could fail to
+            // match the very cell it is sitting in.
+            && (!hall_axis || same_hall(m.hall.as_deref(), target_hall.as_deref()))
+    };
+
+    // 1. Does the SELECTION change? Asked FIRST: this add used to sit below
+    //    the "back to CMI's cell" test, so dragging an unselected course
+    //    onto its own official cell returned early and added nothing at all,
+    //    with no toast and no announcement.
+    if spec.from_master && !app.is_selected(&spec.code) {
+        let moved = !spec.current.as_ref().is_some_and(&landed_on);
+        app.select_and_override(
+            &spec.code,
+            spec.base.clone(),
+            to,
+            if moved {
+                format!("Added {} and moved it to {where_label}", spec.code)
+            } else {
+                // It went where CMI already had it, so there is no move to
+                // report — only the thing that actually happened.
+                format!("Added {} to your timetable", spec.code)
+            },
+        );
+        return true;
+    }
+
+    // 2. Does the MEETING change? If the class is already exactly here,
+    //    nothing is written, nothing is announced, and no undo step is
+    //    spent — the drop simply ends. This is the reported bug.
+    if spec.current.as_ref().is_some_and(&landed_on) {
+        return true;
+    }
+
+    // 3. Is the class back where CMI put it, in EVERY respect? Only then is
+    //    the override redundant and removable. The old test skipped the hall
+    //    comparison entirely off the Halls tab, so putting a chip down in
+    //    the cell it already occupied deleted a room change the user had
+    //    made — and said it had gone "back to CMI's time", which had never
+    //    been touched.
     if let Some(base) = &spec.base
-        && base.day == day
-        && base.slot == slot
-        && (target_hall.is_none() || base.hall == target_hall)
+        && landed_on(base)
+        && (hall_axis || same_hall_opt(base.hall.as_deref(), spec.current.as_ref()))
     {
         if let Some(id) = spec.ov_id {
             app.reset_override(id, Some(format!("Moved {} back to CMI's time", spec.code)));
@@ -197,24 +248,32 @@ pub fn perform_drop(
         return true;
     }
 
-    if spec.from_master && !app.is_selected(&spec.code) {
-        app.select_and_override(
-            &spec.code,
-            spec.base.clone(),
-            to,
-            format!("Added {} and moved it to {where_label}", spec.code),
-        );
-    } else {
-        app.apply_override(
-            &spec.code,
-            spec.ov_id,
-            spec.base.clone(),
-            to,
-            &format!("move {}", spec.code),
-            Some(format!("Moved {} to {where_label}", spec.code)),
-        );
-    }
+    app.apply_override(
+        &spec.code,
+        spec.ov_id,
+        spec.base.clone(),
+        to,
+        &format!("move {}", spec.code),
+        Some(if spec.current.is_none() {
+            // It had no time at all until now — "moved" would describe a
+            // journey from nowhere.
+            format!("Gave {} a time: {where_label}", spec.code)
+        } else {
+            format!("Moved {} to {where_label}", spec.code)
+        }),
+    );
     true
+}
+
+/// Off the Halls tab a drop carries no room, so the room the class keeps is
+/// the one it already had. CMI's cell is only fully restored when that room
+/// is CMI's room too — otherwise a room change would be thrown away by a
+/// gesture the user made about time.
+fn same_hall_opt(base_hall: Option<&str>, current: Option<&Meeting>) -> bool {
+    match current {
+        Some(m) => same_hall(base_hall, m.hall.as_deref()),
+        None => true,
+    }
 }
 
 fn on_pointer_move(app: App, ev: &web_sys::PointerEvent) {
@@ -489,7 +548,13 @@ fn on_key_down(app: App, ev: &web_sys::KeyboardEvent) {
                     // default: the cursor starts there. Saying "Dropped X."
                     // for it announced a move to a screen reader that no
                     // sighted user would have seen happen.
-                    let unmoved = mm.cursor == mm.start;
+                    // A chip from "No fixed slot yet" has nowhere it already
+                    // was, so it can never "stay" there: its cursor starts
+                    // on the grid's first cell only because the move has to
+                    // begin somewhere. Pressing Enter straight away really
+                    // does schedule it, and saying otherwise told a screen
+                    // reader the opposite of what the toast said.
+                    let unmoved = mm.cursor == mm.start && mm.spec.current.is_some();
                     if perform_drop(app, &mm.spec, mm.cursor.0, mm.cursor.1, None) {
                         if unmoved {
                             app.say(format!("{} stays where it was.", mm.spec.code));

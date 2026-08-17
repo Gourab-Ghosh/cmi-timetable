@@ -23,6 +23,27 @@ pub fn now_ms() -> f64 {
 /// stylesheet uses, or the two answers drift apart.
 pub const PHONE_MAX_PX: u32 = 640;
 
+/// Where the tab rail turns from a bar into a column — `@media (min-width:
+/// 900px)` in styles.css, which is a DIFFERENT number from `PHONE_MAX_PX` on
+/// purpose: between 641px and 899px the app is not a phone and the rail is
+/// still horizontal.
+///
+/// This constant may be used for ONE thing: the rail's `aria-orientation`,
+/// which is a hint. The arrow keys deliberately do not consult it — they
+/// accept both axes always — because a hint that drifts costs one wrong
+/// announcement, while a key that drifts is a key that does nothing.
+pub const TAB_RAIL_MIN_PX: u32 = 900;
+
+/// Whether the tab rail is currently drawn as a vertical column.
+pub fn tab_rail_is_vertical() -> bool {
+    window()
+        .match_media(&format!("(min-width: {TAB_RAIL_MIN_PX}px)"))
+        .ok()
+        .flatten()
+        .map(|m| m.matches())
+        .unwrap_or(false)
+}
+
 /// Whether the viewport is phone-sized, answered by the engine that
 /// evaluates `@media (max-width: 640px)` in styles.css.
 ///
@@ -226,6 +247,38 @@ pub fn cycle_on_wheel(ev: web_sys::WheelEvent) {
     }
 }
 
+/// Turn the wheel over the tab rail and it walks the sections.
+///
+/// Returns the direction to step, or `None` when the gesture should be left
+/// to the page. Deliberately NOT a global handler: the wheel only means this
+/// while the pointer is over the rail, so scrolling anywhere else — the week
+/// grid, the catalog, a dialog — is untouched.
+///
+/// Unlike the arrow keys, this does NOT wrap. A wheel is a continuous
+/// gesture rather than a discrete press, so coming off the end of the list
+/// and reappearing at the other end reads as a slip, not a choice.
+///
+/// `None` means "no step this time" — NOT "let the page scroll". The caller
+/// swallows the event either way, because a page that lurches while the
+/// pointer is resting on the rail is the thing this feature is for avoiding.
+pub fn wheel_step(ev: &web_sys::WheelEvent, rail: &web_sys::Element) -> Option<GroupStep> {
+    // A horizontal-only gesture on the phone's bottom bar is the user
+    // scrolling that bar sideways; leave it alone.
+    if ev.delta_y() == 0.0 {
+        return None;
+    }
+    // Trackpads deliver a stream of small deltas, so without this one flick
+    // would run the whole way from My timetable to Halls.
+    if !wheel_notch(ev, rail) {
+        return None;
+    }
+    Some(if ev.delta_y() < 0.0 {
+        GroupStep::Prev
+    } else {
+        GroupStep::Next
+    })
+}
+
 /// Enter in a box that filters as you type: put the keyboard away.
 ///
 /// There is nothing to submit — the list narrowed on every keystroke — but
@@ -245,13 +298,51 @@ pub fn blur_on_enter(ev: web_sys::KeyboardEvent) {
     }
 }
 
+/// Which way an arrow key walks a group of sibling controls.
+#[derive(Clone, Copy, PartialEq)]
+pub enum GroupStep {
+    Prev,
+    Next,
+    First,
+    Last,
+}
+
+/// The neighbour an arrow key should land on inside a group of sibling
+/// controls, wrapping at both ends.
+///
+/// Shared by the `.seg` radio groups and the tab rail rather than written
+/// twice, because of the one subtlety in it: **Leptos leaves comment markers
+/// between siblings**, so `next_sibling` lands on a comment and the group
+/// appears to end after its first member. Only the `*_element_*` walkers are
+/// safe here.
+pub fn group_neighbour(from: &web_sys::Element, step: GroupStep) -> Option<web_sys::HtmlElement> {
+    let parent = from.parent_element();
+    let found = match step {
+        GroupStep::Next => from
+            .next_element_sibling()
+            .or_else(|| parent.as_ref()?.first_element_child()),
+        GroupStep::Prev => from
+            .previous_element_sibling()
+            .or_else(|| parent.as_ref()?.last_element_child()),
+        GroupStep::First => parent.as_ref()?.first_element_child(),
+        GroupStep::Last => parent.as_ref()?.last_element_child(),
+    };
+    found.and_then(|el| el.dyn_into::<web_sys::HtmlElement>().ok())
+}
+
 /// One keydown for every `.seg` radio group: an arrow moves the focus AND
 /// makes the choice, the way radio buttons have always worked — Tab gets one
 /// stop, not six. Left/Up go back, Right/Down go forward, the ends wrap.
 pub fn seg_radio_keydown(ev: web_sys::KeyboardEvent) {
-    let forward = match ev.key().as_str() {
-        "ArrowRight" | "ArrowDown" => true,
-        "ArrowLeft" | "ArrowUp" => false,
+    // A held modifier belongs to the browser: Alt+Left is Back (⌘+Left on a
+    // Mac), and a group that swallowed it would take the Back button away
+    // from anyone whose focus happened to be resting in it.
+    if ev.ctrl_key() || ev.alt_key() || ev.meta_key() {
+        return;
+    }
+    let step = match ev.key().as_str() {
+        "ArrowRight" | "ArrowDown" => GroupStep::Next,
+        "ArrowLeft" | "ArrowUp" => GroupStep::Prev,
         _ => return,
     };
     let Some(button) = ev
@@ -261,22 +352,7 @@ pub fn seg_radio_keydown(ev: web_sys::KeyboardEvent) {
     else {
         return;
     };
-    // Element-only walking: Leptos leaves comment markers between siblings,
-    // and plain next_sibling would land on one.
-    let next = if forward {
-        button.next_element_sibling()
-    } else {
-        button.previous_element_sibling()
-    };
-    let next = next.or_else(|| {
-        let parent = button.parent_element()?;
-        if forward {
-            parent.first_element_child()
-        } else {
-            parent.last_element_child()
-        }
-    });
-    let Some(target) = next.and_then(|el| el.dyn_into::<web_sys::HtmlElement>().ok()) else {
+    let Some(target) = group_neighbour(&button, step) else {
         return;
     };
     // The arrow belongs to the group: not to the page (no scrolling), and

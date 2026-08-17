@@ -450,6 +450,30 @@ class App:
             f"//button[@role='tab' and normalize-space()='{label}']"
         ).click()
 
+    def confirm_text(self, timeout=10):
+        """The app's own confirmation, which replaced window.confirm. Waits
+        for it, because several of them are raised from an async file read."""
+        return WebDriverWait(self.d, timeout).until(
+            lambda d: (
+                el.text
+                if (el := d.find_element(By.CSS_SELECTOR, ".dialog.confirm"))
+                and el.is_displayed()
+                else None
+            )
+        )
+
+    def answer_confirm(self, yes):
+        """Press one of its two buttons. Cancel is found by its marker
+        attribute rather than its words, so the copy can change freely."""
+        box = self.wait_css(".dialog.confirm")
+        if yes:
+            # The confirming button is the one that is NOT cancel.
+            btn = box.find_element(
+                By.CSS_SELECTOR, ".actions button:not([data-confirm-cancel])")
+        else:
+            btn = box.find_element(By.CSS_SELECTOR, "[data-confirm-cancel]")
+        btn.click()
+
     def toasts_text(self):
         return " | ".join(t.text for t in self.css_all(".toasts .toast"))
 
@@ -3277,14 +3301,20 @@ def t64_a_half_written_form_is_not_thrown_away_by_a_stray_key(app):
     app.wait_css(".dialog .course-form")
     app.xpath("//div[@class='seg']//button[normalize-space()='2']").click()
     app.d.find_element(By.CSS_SELECTOR, "body").send_keys(Keys.ESCAPE)
-    alert = WebDriverWait(app.d, 5).until(EC.alert_is_present())
-    alert.dismiss()
+    # The app's own question now, not the browser's grey box — and it is
+    # asked ON TOP of the editor, which must still be mounted behind it or
+    # the answer "keep editing" would come back to an empty form.
+    assert "Close this form?" in app.confirm_text(), app.confirm_text()
+    assert app.css(".dialog .course-form"), "the editor was unmounted to ask"
+    app.answer_confirm(False)
+    app.wait_gone(".dialog.confirm")
     app.css(".dialog .course-form")  # still open, still holding the edit
 
     # A click on the dark area asks the same question.
     app.d.execute_script(
         "document.querySelector('.overlay').click();")
-    WebDriverWait(app.d, 5).until(EC.alert_is_present()).accept()
+    assert "Close this form?" in app.confirm_text(), app.confirm_text()
+    app.answer_confirm(True)
     app.wait_gone(".dialog")
 
 
@@ -4738,31 +4768,20 @@ def t97_a_planner_with_nothing_in_it_is_never_asked_what_to_replace(app):
     answer — so the timetable file applies straight away and the whole
     backup loads without a confirm. The moment anything IS set up, both ask
     again."""
-    from selenium.common.exceptions import NoAlertPresentException
-
     def assert_no_confirm():
-        try:
-            alert = app.d.switch_to.alert
-            text = alert.text
-            alert.dismiss()
-            raise AssertionError(f"a first-run import must not confirm: {text}")
-        except NoAlertPresentException:
-            pass
+        assert not app.css_all(".dialog.confirm"), \
+            f"a first-run import must not confirm: {app.css('.dialog.confirm').text}"
 
     def wait_for_confirm(seconds=10):
         """Reading the chosen file is asynchronous (FileReader), so the
-        confirm arrives a few ms after the path is handed over.
-        `WebDriverWait.until` ignores only NoSuchElementException, so a bare
-        `switch_to.alert` inside one raises straight through on the first
-        poll and never waits at all — it passed or failed on how busy the
-        machine was. Poll it by hand, and say what DID happen when nothing
-        comes, so a missing confirm is never a mystery."""
+        question arrives a few ms after the path is handed over. Say what DID
+        happen when nothing comes, so a missing confirm is never a mystery."""
         deadline = time.time() + seconds
         while time.time() < deadline:
-            try:
-                return app.d.switch_to.alert
-            except NoAlertPresentException:
-                time.sleep(0.2)
+            found = app.css_all(".dialog.confirm")
+            if found and found[0].is_displayed():
+                return found[0]
+            time.sleep(0.2)
         raise AssertionError(
             "a browser with courses in it must be asked before a backup "
             f"replaces them; toasts instead: {app.toasts_text()!r}")
@@ -4834,9 +4853,14 @@ def t97_a_planner_with_nothing_in_it_is_never_asked_what_to_replace(app):
     app.wait_gone(".dialog")
 
     open_share_and_import("Import everything…", backup_file)
-    alert = wait_for_confirm()
-    assert "replace everything saved here" in alert.text, alert.text
-    alert.dismiss()
+    ask = wait_for_confirm()
+    assert "Replace everything with this file?" in ask.text, ask.text
+    # The question now counts both sides of the trade rather than saying
+    # "your courses and settings" whatever the browser happens to hold.
+    assert "2 courses" in ask.text, ask.text
+    assert "1 course here is replaced" in ask.text, ask.text
+    app.answer_confirm(False)
+    app.wait_gone(".dialog.confirm")
     app.wait_css("button.chip[aria-label^='QCOM,']")
 
 
@@ -5182,6 +5206,202 @@ def t102_credit_note_names_what_your_own_number_replaced(app):
     assert "of the app's guess where it doesn't" in text, text
 
 
+def t103_putting_a_class_back_where_it_was_changes_nothing(app):
+    """A drop that moves nothing must say nothing. The check used to compare
+    the drop against CMI's OFFICIAL cell, so a class you had already moved
+    failed it and every re-drop announced a move, spent an undo step and
+    cleared the redo stack — for a chip that never left its cell."""
+    app.boot("/?c=TOC")
+    app.open_tab("Master grid")
+    app.wait_css("section[aria-label='Master grid'] table.tt")
+    app.xpath("//button[contains(.,'Edit layout')]").click()
+
+    # Move it once, for real.
+    app.drag(app.chip("TOC", "td[data-day='1'][data-slot='550']"),
+             app.cell(2, 1020))
+    app.wait_toast("Moved TOC")
+    changes_after_real_move = app.xpath("//button[contains(.,'change')]").text
+    app.dismiss_toasts()
+
+    # Now pick it up and put it straight back down in the SAME cell.
+    app.drag(app.chip("TOC", "td[data-day='2'][data-slot='1020']"),
+             app.cell(2, 1020))
+    time.sleep(0.6)
+    assert "Moved" not in app.toasts_text(), \
+        f"a drop that moved nothing must not report a move: {app.toasts_text()!r}"
+    assert app.xpath("//button[contains(.,'change')]").text == changes_after_real_move, \
+        "a no-op drop must not add a change"
+    # And it is still exactly where it was.
+    assert app.chips("TOC", "td[data-day='2'][data-slot='1020']"), \
+        "the chip must stay in the cell it was dropped back into"
+
+    # Redo survives too: `act` clears the redo stack, so a phantom change
+    # after an undo used to make the redo unreachable.
+    app.d.find_element(By.CSS_SELECTOR, "body").send_keys(Keys.CONTROL, "z")
+    app.wait_css("button.chip[aria-label^='TOC,']")
+    app.drag(app.chip("TOC", "td[data-day='1'][data-slot='550']"),
+             app.cell(1, 550))
+    time.sleep(0.5)
+    redo = app.xpath("//button[@aria-label='Redo']")
+    assert redo.is_enabled(), "a no-op drop must not clear the redo stack"
+
+
+def t104_catalog_row_can_delete_a_course(app):
+    """The catalog offers the stronger action beside Add/Remove: Delete takes
+    the course out of the catalog, the master grid and the timetable, and it
+    is recorded under Your changes so it can be put back."""
+    app.boot("/?c=TOC")
+    app.open_tab("Catalog")
+    app.wait_css("section[aria-label='Catalog'] .card")
+
+    def rows():
+        return app.css_all("section[aria-label='Catalog'] .card")
+
+    def catalog_row_for(code):
+        for r in rows():
+            if code in r.text:
+                return r
+        raise AssertionError(f"no catalog row for {code}")
+
+    qcom = catalog_row_for("QCOM")
+    delete = qcom.find_element(By.XPATH, ".//button[normalize-space()='Delete']")
+    assert "danger" in delete.get_attribute("class"), \
+        "anything that takes something away wears red"
+    # Its neighbour is untouched and still first.
+    assert qcom.find_elements(By.XPATH, ".//button[normalize-space()='Add']"), \
+        "Delete must sit beside Add, not replace it"
+    delete.click()
+
+    app.wait_toast("QCOM")
+    # Gone from the catalog it was listed in.
+    WebDriverWait(app.d, 10).until(
+        lambda d: all("QCOM" not in r.text for r in rows()),
+        message="a deleted course must leave the catalog")
+    # And recorded, so it can come back.
+    app.open_tab("My timetable")
+    panel = app.wait_css("[data-testid='your-changes']")
+    assert "QCOM" in panel.text, f"the deletion must be listed: {panel.text}"
+
+
+def t106_the_wheel_over_the_rail_walks_the_sections(app):
+    """Turning the wheel over the list of sections moves between them — and
+    while the pointer is there the page itself must not move at all, not
+    between notches and not at the ends of the list."""
+    app.boot("/", selection=["TOC", "RDBM", "SVA", "QCOM", "MFD"])
+    rail = app.wait_css("nav.tabs")
+
+    def selected():
+        return app.css("nav.tabs button[aria-selected='true']").text
+
+    def wheel(dy, times=1):
+        for _ in range(times):
+            app.d.execute_script(
+                """const el = arguments[0];
+                   const r = el.getBoundingClientRect();
+                   el.dispatchEvent(new WheelEvent('wheel', {
+                     deltaY: arguments[1], bubbles: true, cancelable: true,
+                     clientX: r.left + r.width / 2,
+                     clientY: r.top + r.height / 2}));""",
+                el_rail, dy)
+            time.sleep(0.15)
+
+    el_rail = rail
+    assert selected() == "My timetable"
+    wheel(120)
+    WebDriverWait(app.d, 5).until(lambda d: selected() == "My courses")
+    wheel(120)
+    WebDriverWait(app.d, 5).until(lambda d: selected() == "Master grid")
+    wheel(-120)
+    WebDriverWait(app.d, 5).until(lambda d: selected() == "My courses")
+
+    # Stops at the ends rather than wrapping — a wheel is a continuous
+    # gesture, so reappearing at the far end reads as a slip.
+    wheel(-120, times=4)
+    assert selected() == "My timetable", selected()
+    wheel(120, times=8)
+    assert selected() == "Halls", selected()
+
+    # And through all of that the page never moved. A tall tab so there IS
+    # something to scroll.
+    app.open_tab("Catalog")
+    app.wait_css("section[aria-label='Catalog']")
+    app.d.execute_script("window.scrollTo(0, 0);")
+    time.sleep(0.2)
+    el_rail = app.css("nav.tabs")
+    before = app.d.execute_script("return window.scrollY;")
+    wheel(150, times=6)
+    time.sleep(0.3)
+    after = app.d.execute_script("return window.scrollY;")
+    assert after == before, \
+        f"the page must not scroll while the wheel is over the rail: {before} -> {after}"
+
+
+def t105_arrow_keys_walk_the_tab_rail(app):
+    """The rail has always claimed role=tablist; now it behaves like one.
+    Both axes work (the rail is a column on a desktop and a bar on a phone),
+    Home/End jump to the ends, the whole rail is ONE Tab stop, and — the
+    thing the user worried about — arrows still scroll the page whenever a
+    tab is not the thing in focus."""
+    app.boot("/", selection=["TOC", "RDBM"])
+    app.wait_css("nav.tabs")
+
+    def selected():
+        return app.css("nav.tabs button[aria-selected='true']").text
+
+    def focus_selected_tab():
+        app.d.execute_script(
+            "document.querySelector(\"nav.tabs button[tabindex='0']\").focus();")
+
+    # Exactly one Tab stop, not five — this is what makes the arrows worth
+    # having rather than a duplicate of Tab.
+    stops = app.css_all("nav.tabs button[tabindex='0']")
+    assert len(stops) == 1, f"the rail must be one Tab stop, found {len(stops)}"
+    assert len(app.css_all("nav.tabs button")) == 5
+
+    focus_selected_tab()
+    assert selected() == "My timetable"
+
+    body = app.d.switch_to.active_element
+    body.send_keys(Keys.ARROW_DOWN)
+    WebDriverWait(app.d, 5).until(lambda d: selected() == "My courses")
+    # The other axis does the same thing, because the rail changes direction
+    # with the viewport and a dead key is worse than a redundant one.
+    app.d.switch_to.active_element.send_keys(Keys.ARROW_RIGHT)
+    WebDriverWait(app.d, 5).until(lambda d: selected() == "Master grid")
+    app.d.switch_to.active_element.send_keys(Keys.ARROW_UP)
+    WebDriverWait(app.d, 5).until(lambda d: selected() == "My courses")
+    app.d.switch_to.active_element.send_keys(Keys.ARROW_LEFT)
+    WebDriverWait(app.d, 5).until(lambda d: selected() == "My timetable")
+
+    # Wraps at both ends.
+    app.d.switch_to.active_element.send_keys(Keys.ARROW_UP)
+    WebDriverWait(app.d, 5).until(lambda d: selected() == "Halls")
+    app.d.switch_to.active_element.send_keys(Keys.ARROW_DOWN)
+    WebDriverWait(app.d, 5).until(lambda d: selected() == "My timetable")
+
+    app.d.switch_to.active_element.send_keys(Keys.END)
+    WebDriverWait(app.d, 5).until(lambda d: selected() == "Halls")
+    app.d.switch_to.active_element.send_keys(Keys.HOME)
+    WebDriverWait(app.d, 5).until(lambda d: selected() == "My timetable")
+
+    # Focus follows the choice, so the next arrow continues from here.
+    assert app.d.switch_to.active_element.text == "My timetable"
+
+    # THE thing the user was worried about: with focus anywhere else, the
+    # arrows still belong to the page. The handler lives on the nav, so it
+    # cannot even see this event.
+    app.open_tab("Catalog")
+    app.wait_css("section[aria-label='Catalog']")
+    app.d.execute_script("window.scrollTo(0, 0); document.body.focus();")
+    before = app.d.execute_script("return window.scrollY;")
+    app.d.find_element(By.TAG_NAME, "body").send_keys(Keys.ARROW_DOWN)
+    time.sleep(0.4)
+    after = app.d.execute_script("return window.scrollY;")
+    assert after >= before, "arrows outside the rail must still scroll the page"
+    assert selected() == "Catalog", \
+        "an arrow pressed outside the rail must not change tab"
+
+
 TESTS = [
     t01_header_sync_button_and_hidden_dev,
     t02_developer_endpoint_only,
@@ -5285,6 +5505,10 @@ TESTS = [
     t100_replacing_twice_with_one_file_is_one_change,
     t101_an_import_that_undeletes_a_course_says_so,
     t102_credit_note_names_what_your_own_number_replaced,
+    t103_putting_a_class_back_where_it_was_changes_nothing,
+    t104_catalog_row_can_delete_a_course,
+    t105_arrow_keys_walk_the_tab_rail,
+    t106_the_wheel_over_the_rail_walks_the_sections,
 ]
 
 

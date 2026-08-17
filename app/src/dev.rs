@@ -436,16 +436,22 @@ fn storage_inspector(app: App) -> impl IntoView {
                                     <button
                                         class="btn small danger"
                                         on:click=move |_| {
-                                            let confirmed = domx::window()
-                                                .confirm_with_message(
-                                                    &format!("Clear {clear_key}? A backup is not kept."),
-                                                )
-                                                .unwrap_or(false);
-                                            if confirmed {
-                                                storage::remove(&clear_key);
-                                                bump.update(|b| *b += 1);
-                                                app.toast("Cleared.");
-                                            }
+                                            app.ask(crate::state::ConfirmAsk {
+                                                title: "Clear this key?".into(),
+                                                lede: format!(
+                                                    "Everything stored under {clear_key} is \
+                                                     removed and the page reloads.",
+                                                ),
+                                                points: vec![
+                                                    "No backup is kept.".into(),
+                                                ],
+                                                confirm_label: "Clear it".into(),
+                                                danger: true,
+                                                irreversible: true,
+                                                action: crate::state::ConfirmAction::ClearStorageKey(
+                                                    clear_key.clone(),
+                                                ),
+                                            });
                                         }
                                     >
                                         "Clear"

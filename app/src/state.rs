@@ -236,6 +236,51 @@ pub struct Banner {
     pub sticky: bool,
 }
 
+/// A question the app asks before doing something it cannot take back —
+/// in its own voice, with its own type and colours, instead of the browser's
+/// grey box with a URL at the top.
+///
+/// The five things that used to call `window.confirm` all read the same way:
+/// a plain sentence saying what is about to happen, a list of what it
+/// touches, and a button labelled with the ACT rather than "OK", so the
+/// answer is readable without re-reading the question.
+#[derive(Clone, PartialEq)]
+pub struct ConfirmAsk {
+    pub title: String,
+    /// One plain sentence. What is about to happen, in the active voice.
+    pub lede: String,
+    /// One line per thing this touches. May be empty.
+    pub points: Vec<String>,
+    /// The word on the button that goes through with it — "Replace
+    /// everything", "Delete it all". Never "OK": a destructive answer should
+    /// name what it does, so nobody confirms by muscle memory.
+    pub confirm_label: String,
+    /// Draws the confirming button red and adds the warning rail.
+    pub danger: bool,
+    /// Prints "This cannot be undone." as its own line. Kept separate from
+    /// `lede` so it can never be buried mid-paragraph.
+    pub irreversible: bool,
+    pub action: ConfirmAction,
+}
+
+/// WHAT to do when the answer is yes — data, not a boxed closure, because
+/// `ConfirmAsk` has to stay `Clone + PartialEq` like everything else in a
+/// signal here. It is also the more honest shape: the question and the deed
+/// are inspectable together, and a test can assert on both.
+#[derive(Clone, PartialEq)]
+pub enum ConfirmAction {
+    /// The file's own text rides along, so nothing parsed has to survive the
+    /// question — on yes the import is simply run again from the top, this
+    /// time past the gate.
+    ImportBackup(String),
+    ClearSnapshot,
+    DeleteEverything,
+    /// Close the course editor and drop what was typed into it.
+    DiscardCourseEdits,
+    /// Developer panel: clear one storage key.
+    ClearStorageKey(String),
+}
+
 #[derive(Clone, PartialEq)]
 pub enum Dialog {
     /// Course details popover (any compact rendering opens this).
@@ -349,6 +394,14 @@ pub struct DragSpec {
     pub ov_id: Option<u64>,
     /// The official meeting being moved (None ⇒ unscheduled tray / created).
     pub base: Option<Meeting>,
+    /// Where the chip actually SITS — `base` once nothing has been changed,
+    /// the override's destination once something has.
+    ///
+    /// Without this a drop could only ask "is this CMI's cell?", never "did
+    /// anything move?", so putting an already-moved class back where it was
+    /// announced a move that never happened — and worse, took the paths
+    /// below it that delete a room change or rewrite a snapped time.
+    pub current: Option<Meeting>,
     /// Hall carried over into the drop (editable afterwards).
     pub hall: Option<String>,
     pub from_master: bool,
@@ -500,6 +553,12 @@ pub struct App {
     /// nothing is committed until Save. While this is true, those two
     /// dismissals ask first. Cleared whenever the dialog changes.
     pub dialog_dirty: RwSignal<bool>,
+    /// The app's own version of `window.confirm`. A LAYER, not a `Dialog`
+    /// variant: `dismiss_dialog` asks its question while the course editor
+    /// is still open, and swapping the one dialog slot would unmount that
+    /// form and destroy the very typing the question exists to protect. This
+    /// stacks on top instead, so whatever is underneath keeps its state.
+    pub confirm: RwSignal<Option<ConfirmAsk>>,
     pub drag: RwSignal<Option<DragState>>,
     /// The cell under the pointer, for the drop-target highlight. Derived
     /// from `drag` at the root (see `app.rs`) and deliberately NOT read off
@@ -635,16 +694,32 @@ impl App {
     /// one loss in this app that Undo cannot reach. So it asks, but only
     /// when there is something to lose.
     pub fn dismiss_dialog(&self) {
-        if self.dialog_dirty.get_untracked()
-            && !crate::domx::window()
-                .confirm_with_message(
-                    "Close this form and lose your changes? Nothing here has been saved yet.",
-                )
-                .unwrap_or(true)
-        {
+        if self.dialog_dirty.get_untracked() {
+            // Asked ON TOP of the editor, never in place of it: the answer
+            // "keep editing" has to leave the form exactly as it was, and a
+            // form that had been unmounted to make room for the question
+            // would come back empty.
+            self.ask(ConfirmAsk {
+                title: "Close this form?".into(),
+                lede: "Nothing in this form has been saved yet, so closing it now \
+                       loses what you have typed."
+                    .into(),
+                points: Vec::new(),
+                confirm_label: "Close and lose it".into(),
+                danger: true,
+                irreversible: true,
+                action: ConfirmAction::DiscardCourseEdits,
+            });
             return;
         }
         self.dialog.set(None);
+    }
+
+    /// Put a question on screen and stop. Nothing happens until it is
+    /// answered; the deed lives in `ConfirmAction`, carried out by the
+    /// confirm layer in `ui.rs`.
+    pub fn ask(&self, ask: ConfirmAsk) {
+        self.confirm.set(Some(ask));
     }
 
     /// Work in THIS tab that a snapshot arriving from another tab could

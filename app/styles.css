@@ -427,6 +427,13 @@ button {
     background: var(--glass);
     -webkit-backdrop-filter: blur(14px) saturate(1.4);
     backdrop-filter: blur(14px) saturate(1.4);
+    /* A sideways drag on the bar means "next section", so the browser must
+       not also pan the bar under the finger — the two would fight and the
+       swipe would land somewhere between them. `pan-y` keeps the vertical
+       page scroll, so a flick that begins on the bar still scrolls the page.
+       The selected tab is scrolled into view after each step, which is what
+       makes giving up the manual pan safe. */
+    touch-action: pan-y;
   }
   .app { grid-template-rows: auto 1fr auto; grid-template-columns: minmax(0, 1fr); }
   .tab { padding: 0.5rem 0.55rem; font-size: 0.8rem; min-height: 44px; }
@@ -1533,6 +1540,51 @@ details.facet .menu .menu-empty { margin: 0.2rem 0 0; }
   to { opacity: 1; transform: none; }
 }
 .dialog h2 { margin-bottom: 0.65rem; }
+
+/* The app's own confirmation, in place of the browser's grey box.
+   Stacks ABOVE .overlay (z-index 80) so it can be asked over an open
+   dialog — the course editor's "lose your changes?" is asked while that
+   form is still mounted behind it. */
+.confirm-layer { z-index: 90; background: rgba(10, 14, 22, 0.62); }
+.dialog.confirm {
+  width: min(30rem, 100%);
+  padding-bottom: 1.15rem;
+  /* Short enough that it never scrolls: if a question needs a scrollbar it
+     is asking too much to be read before answering. */
+  max-height: none;
+  overflow: visible;
+}
+/* A colour rail down the edge, so what kind of question it is registers
+   before a word of it is read — the same device the change groups use. */
+.dialog.confirm.confirm-danger { border-left: 3px solid var(--alarm); }
+.dialog.confirm h2 { margin-bottom: 0.5rem; }
+.confirm-lede { margin: 0 0 0.8rem; color: var(--text); }
+.confirm-points {
+  margin: 0 0 0.9rem;
+  padding: 0.7rem 0.9rem 0.7rem 2rem;
+  background: var(--surface-2);
+  border-radius: var(--r-sm);
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+.confirm-points li { margin: 0.22rem 0; }
+.confirm-final {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  margin: 0 0 0.2rem;
+  font-weight: 550;
+  font-size: 0.9rem;
+}
+/* The confirm's own actions row is not sticky — the dialog never scrolls,
+   and a sticky bar here would float over nothing. */
+.dialog.confirm .actions {
+  position: static;
+  background: none;
+  border-top: none;
+  padding: 0.9rem 0 0;
+  margin: 0;
+}
 .dialog .actions {
   display: flex;
   gap: 0.5rem;

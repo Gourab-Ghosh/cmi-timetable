@@ -2268,6 +2268,8 @@ fn catalog_row(app: App, course: Course) -> impl IntoView {
     let toggle_code = code.clone();
     let danger_code = code.clone();
     let click_code = code.clone();
+    let del_code = code.clone();
+    let del_show = code.clone();
     // See course_card: built out here so the markup borrows nothing.
     let branch_chips: Vec<_> = course
         .branches
@@ -2390,6 +2392,36 @@ fn catalog_row(app: App, course: Course) -> impl IntoView {
                     // attributes, so this is its last use either way.
                     {move || if app.is_selected(&code) { "Remove" } else { "Add" }}
                 </button>
+                // The stronger action, last in the row — where every card in
+                // the app keeps the one that takes something away.
+                //
+                // Withheld on a SHADOWED row: a code the student wrote before
+                // CMI listed it appears here from CMI's snapshot while
+                // `is_custom` is true, and `delete_course` would destroy their
+                // version and leave the row in place showing CMI's — a button
+                // labelled Delete that visibly deletes nothing. The details
+                // dialog has room to say "Delete my version and use CMI's" and
+                // offers exactly that, one click away through the chip.
+                //
+                // Inside a closure, not a `let`: rows live in a keyed <For>
+                // (see above) and a plain read here would freeze until reload.
+                {move || {
+                    (!app.is_custom(&del_show))
+                        .then(|| {
+                            let del_code = del_code.clone();
+                            view! {
+                                <button
+                                    class="btn small danger"
+                                    title="Takes this course off your timetable and out of \
+                                           the catalog and the master grid. You can restore \
+                                           it from Your changes."
+                                    on:click=move |_| app.delete_course(&del_code)
+                                >
+                                    "Delete"
+                                </button>
+                            }
+                        })
+                }}
             </div>
         </div>
     }

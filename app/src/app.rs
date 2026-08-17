@@ -109,6 +109,7 @@ fn init_app() -> (App, bool) {
         route: RwSignal::new(Route::Planner),
         dialog: RwSignal::new(None),
         dialog_dirty: RwSignal::new(false),
+        confirm: RwSignal::new(None),
         drag,
         // Derived here, at the root, for the same reason as CourseIndex
         // below: it outlives every cell that reads it. `drag` fires on every
@@ -504,6 +505,9 @@ pub fn Root() -> impl IntoView {
                 }}
             </main>
             <ui::DialogHost />
+            // After the dialog host, and above it: a question can be asked
+            // over an open dialog without unmounting it.
+            <ui::ConfirmHost />
             <ui::Toasts />
             <ui::DragGhost />
             <div class="sr-only" aria-live="polite">

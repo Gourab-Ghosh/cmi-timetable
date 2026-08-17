@@ -271,6 +271,18 @@ pub fn download_planner_backup(app: &App) {
 /// and reload, so the app boots from the imported state through the same
 /// code path as any other start.
 pub fn import_planner_backup_text(app: App, text: &str) {
+    import_planner_backup_inner(app, text, false);
+}
+
+/// The same import, resumed after the question in `ConfirmHost` was answered
+/// yes. The file's text is re-read from the top rather than carrying a
+/// half-parsed backup across the question: parsing is cheap, and it keeps
+/// the file on disk as the one source of truth.
+pub fn import_backup_confirmed(app: App, text: &str) {
+    import_planner_backup_inner(app, text, true);
+}
+
+fn import_planner_backup_inner(app: App, text: &str, already_asked: bool) {
     let mut backup = match ttcore::export::parse_planner_backup(text, domx::now_ms()) {
         Ok(b) => b,
         Err(e) => {
@@ -329,19 +341,68 @@ pub fn import_planner_backup_text(app: App, text: &str) {
     // that question: a sync fetches it again, and the pill says the data now
     // came from a file either way. Settings ARE part of the question — this
     // file replaces the theme, the row height and both filter bars too.
-    if !app.nothing_saved_to_lose() {
+    if !already_asked && !app.nothing_saved_to_lose() {
         let made = domx::fmt_local_date(backup.snapshot.fetched_at);
-        let ok = domx::window()
-            .confirm_with_message(&format!(
-                "Load this file and replace everything saved here? Your \
-                 courses, changes and settings in this browser will be \
-                 replaced by the ones in the file — its timetable was \
-                 downloaded from CMI on {made}. This cannot be undone."
-            ))
-            .unwrap_or(false);
-        if !ok {
-            return;
+        // Both sides of the trade, counted — what arrives and what it lands
+        // on. The old one-paragraph question said "your courses, changes and
+        // settings" whatever the browser actually held, so it read the same
+        // to somebody with one course as to somebody with a whole semester
+        // of work.
+        let n_in = selection.len();
+        let own_in = customs.courses.len();
+        let changes_in = overrides.items.len() + overrides.credits.len();
+        let here = app.selected_courses().len();
+        let changes_here = app.custom_change_count();
+
+        let plural = |n: usize, one: &str, many: &str| {
+            if n == 1 {
+                format!("{n} {one}")
+            } else {
+                format!("{n} {many}")
+            }
+        };
+        let mut arrives = plural(n_in, "course", "courses");
+        if own_in > 0 {
+            arrives.push_str(&format!(" ({own_in} added by hand)"));
         }
+        let mut points = vec![format!(
+            "The file holds {arrives}, and its copy of CMI's timetable was \
+             downloaded on {made}."
+        )];
+        if changes_in > 0 {
+            points.push(format!(
+                "It also brings {}.",
+                plural(changes_in, "change of its own", "changes of its own")
+            ));
+        }
+        points.push(match (here, changes_here) {
+            (0, 0) => "Nothing is on your timetable here yet, but your settings \
+                       are replaced too."
+                .to_string(),
+            (c, 0) => format!(
+                "{} here {} replaced, along with your settings.",
+                plural(c, "course", "courses"),
+                if c == 1 { "is" } else { "are" }
+            ),
+            (c, k) => format!(
+                "{} and {} here are replaced, along with your settings.",
+                plural(c, "course", "courses"),
+                plural(k, "change", "changes")
+            ),
+        });
+
+        app.ask(crate::state::ConfirmAsk {
+            title: "Replace everything with this file?".into(),
+            lede: "This is not a merge — everything saved in this browser is \
+                   swapped for what the file holds."
+                .into(),
+            points,
+            confirm_label: "Replace everything".into(),
+            danger: true,
+            irreversible: true,
+            action: crate::state::ConfirmAction::ImportBackup(text.to_string()),
+        });
+        return;
     }
 
     // The pill must say how THIS copy arrived, not how the exporter's did.

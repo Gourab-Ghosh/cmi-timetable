@@ -2,7 +2,8 @@
 //! dialog (course details, the course editor, conflicts, export, share).
 
 use crate::state::{
-    App, BannerKind, Dialog, DragSpec, EditedMeeting, EffMeeting, Filters, Route, Tab, ThemePref,
+    App, BannerKind, ConfirmAction, ConfirmAsk, Dialog, DragSpec, EditedMeeting, EffMeeting,
+    Filters, Route, Tab, ThemePref,
 };
 use crate::{dnd, domx, fetch, hues, storage};
 use leptos::prelude::*;
@@ -224,6 +225,7 @@ pub fn chip(app: App, p: ChipProps) -> impl IntoView {
         code: p.code.clone(),
         ov_id: p.eff.as_ref().and_then(|e| e.ov_id),
         base: p.eff.as_ref().and_then(|e| e.base.clone()),
+        current: p.eff.as_ref().map(|e| e.meeting.clone()),
         hall: p.eff.as_ref().and_then(|e| e.meeting.hall.clone()),
         from_master: p.from_master,
         label: p.code.clone(),
@@ -675,8 +677,99 @@ pub fn Tabs() -> impl IntoView {
 }
 
 fn tabs_nav(app: App) -> impl IntoView {
+    // The rail is a column on a desktop and a bar on a phone, and a screen
+    // reader coaches the user toward one axis or the other from this. It is
+    // the ONE place the 900px boundary is allowed to live — the keys below
+    // take both axes regardless, so a drifting media query can only ever
+    // mis-announce, never disable anything.
+    let vertical = RwSignal::new(domx::tab_rail_is_vertical());
+    if let Ok(Some(mq)) =
+        domx::window().match_media(&format!("(min-width: {}px)", domx::TAB_RAIL_MIN_PX))
+    {
+        let cb = Closure::<dyn FnMut(web_sys::MediaQueryListEvent)>::new(
+            move |ev: web_sys::MediaQueryListEvent| vertical.set(ev.matches()),
+        );
+        let _ = mq.add_event_listener_with_callback("change", cb.as_ref().unchecked_ref());
+        // Mounted once for the life of the page (Root, outside the route
+        // match), so this is a one-off, not a leak per mount.
+        cb.forget();
+    }
+
+    // A swipe across the rail steps one section. Set by the pointer handler
+    // and read by the tab's own click: a finger that travelled far enough to
+    // count as a swipe can still land on a button, and without this the tap
+    // would select the tab under the finger and undo the step.
+    let swiped = RwSignal::new(false);
+    let press = RwSignal::new(None::<(f64, f64)>);
+
     view! {
-        <nav class="tabs" role="tablist" aria-label="Views">
+        <nav
+            class="tabs"
+            role="tablist"
+            aria-label="Views"
+            aria-orientation=move || if vertical.get() { "vertical" } else { "horizontal" }
+            // On the NAV, never on the document: an arrow key cannot reach
+            // this handler unless a tab has focus, so scrolling the page
+            // with the arrows is untouched by construction rather than by a
+            // guard that might have a hole.
+            on:keydown=move |ev: web_sys::KeyboardEvent| tab_rail_keydown(app, &ev)
+            // Same containment for the wheel: it only means "change section"
+            // while the pointer is over the rail.
+            on:wheel=move |ev: web_sys::WheelEvent| {
+                let Some(rail) = ev
+                    .current_target()
+                    .and_then(|t| t.dyn_into::<web_sys::Element>().ok())
+                else {
+                    return;
+                };
+                // The wheel belongs to the rail for as long as the pointer is
+                // over it — ALWAYS, not only when a step happens. Letting the
+                // leftovers through meant the page lurched underneath while
+                // the rail was being used: between notches (a trackpad sends
+                // many small deltas per section) and at both ends of the
+                // list. Scrolling the page is what the other 95% of the
+                // window is for.
+                ev.prevent_default();
+                ev.stop_propagation();
+                if let Some(step) = domx::wheel_step(&ev, &rail) {
+                    step_tab(app, step, false);
+                }
+            }
+            on:pointerdown=move |ev: web_sys::PointerEvent| {
+                press.set(Some((ev.client_x() as f64, ev.client_y() as f64)));
+                swiped.set(false);
+            }
+            on:pointerup=move |ev: web_sys::PointerEvent| {
+                let Some((x0, y0)) = press.get_untracked() else {
+                    return;
+                };
+                press.set(None);
+                let dx = ev.client_x() as f64 - x0;
+                let dy = ev.client_y() as f64 - y0;
+                // Along the rail, and far enough to be meant. Requiring the
+                // travel to beat BOTH the threshold and the other axis is
+                // what keeps a page scroll that happens to begin on the bar
+                // from being read as a swipe.
+                let (along, across) = if vertical.get_untracked() {
+                    (dy, dx)
+                } else {
+                    (dx, dy)
+                };
+                if along.abs() < SWIPE_MIN_PX || along.abs() <= across.abs() {
+                    return;
+                }
+                // Drag left / up to go forward, the way a carousel moves:
+                // the content follows the finger.
+                let step = if along < 0.0 {
+                    domx::GroupStep::Next
+                } else {
+                    domx::GroupStep::Prev
+                };
+                if step_tab(app, step, true) {
+                    swiped.set(true);
+                }
+            }
+        >
             {Tab::ALL
                 .iter()
                 .map(|tab| {
@@ -685,12 +778,34 @@ fn tabs_nav(app: App) -> impl IntoView {
                         <button
                             class="tab"
                             role="tab"
+                            // Roving tabindex: the rail is ONE Tab stop, not
+                            // five, which is what makes the arrows worth
+                            // having — a keyboard user reaches the content
+                            // in one press instead of five.
+                            //
+                            // Deliberately NOT the aria-selected test below:
+                            // that one also requires Route::Planner, and the
+                            // rail is on screen on #/developer too, where no
+                            // tab is selected. Keying the Tab stop off it
+                            // would leave the rail unreachable from the
+                            // keyboard on the one route where it is the only
+                            // way back.
+                            tabindex=move || {
+                                if app.prefs.with(|p| p.tab) == tab { "0" } else { "-1" }
+                            }
                             aria-selected=move || {
                                 let active = app.route.get() == Route::Planner
                                     && app.prefs.with(|p| p.tab) == tab;
                                 if active { "true" } else { "false" }
                             }
                             on:click=move |_| {
+                                // A swipe that ended on a button still fires
+                                // a click here; taking it would select the
+                                // tab under the finger and cancel the step.
+                                if swiped.get_untracked() {
+                                    swiped.set(false);
+                                    return;
+                                }
                                 if app.route.get_untracked() == Route::Developer {
                                     app.goto_planner();
                                 }
@@ -706,6 +821,118 @@ fn tabs_nav(app: App) -> impl IntoView {
             // it is reached only via its URL endpoint, #/developer.
         </nav>
     }
+}
+
+/// How far a finger must travel along the rail before it counts as a swipe
+/// rather than a tap that wobbled.
+const SWIPE_MIN_PX: f64 = 40.0;
+
+/// Move the selection one section along the rail, for the gestures that are
+/// not keys. Returns whether it actually moved.
+///
+/// `stop_at_ends` is what separates the two gestures: a key press is
+/// discrete and wraps, while the wheel and a swipe are continuous and do
+/// not — running off the end and reappearing at the other reads as a slip.
+/// Refusing to move there also hands the gesture back to the page instead of
+/// swallowing it for nothing.
+fn step_tab(app: App, step: domx::GroupStep, scroll_into_view: bool) -> bool {
+    let here = app.prefs.with_untracked(|p| p.tab);
+    let Some(i) = Tab::ALL.iter().position(|t| *t == here) else {
+        return false;
+    };
+    let next = match step {
+        domx::GroupStep::Next if i + 1 < Tab::ALL.len() => i + 1,
+        domx::GroupStep::Prev if i > 0 => i - 1,
+        domx::GroupStep::First => 0,
+        domx::GroupStep::Last => Tab::ALL.len() - 1,
+        // At the end already: leave the gesture to the page.
+        _ => return false,
+    };
+    if next == i && app.route.get_untracked() == Route::Planner {
+        return false;
+    }
+    if app.route.get_untracked() == Route::Developer {
+        app.goto_planner();
+    }
+    app.set_tab(Tab::ALL[next]);
+    if scroll_into_view {
+        // On a phone the rail can be wider than the screen, so the section
+        // just moved to has to be brought into the bar.
+        if let Some(el) = domx::document()
+            .query_selector(&format!("nav.tabs button:nth-of-type({})", next + 1))
+            .ok()
+            .flatten()
+            .and_then(|el| el.dyn_into::<web_sys::HtmlElement>().ok())
+        {
+            // The options form of scrollIntoView is not in this build's
+            // web-sys feature set, and enabling it for one call is a poor
+            // trade; JS says the same thing. `nearest` on both axes so the
+            // bar slides only as far as it must and the PAGE is never
+            // scrolled to reach a sticky bar that is already on screen.
+            let _ = js_sys::Reflect::get(&el, &"scrollIntoView".into()).map(|f| {
+                if let Ok(f) = f.dyn_into::<js_sys::Function>() {
+                    let opts = js_sys::Object::new();
+                    let _ = js_sys::Reflect::set(&opts, &"block".into(), &"nearest".into());
+                    let _ = js_sys::Reflect::set(&opts, &"inline".into(), &"nearest".into());
+                    let _ = f.call1(&el, &opts);
+                }
+            });
+        }
+    }
+    true
+}
+
+/// Arrow keys along the tab rail — the ARIA tabs pattern the markup has
+/// claimed with `role="tablist"` since the day it was written.
+///
+/// Both axes, always. The rail is a column above 900px and a bar below it,
+/// but branching on that would be wrong between 641px and 899px (still a
+/// bar, not a phone), and would need a live media query to survive a resize.
+/// Accepting Up/Down/Left/Right costs nothing — with a tab focused there is
+/// no other meaning for any of them — while refusing an axis produces a dead
+/// key, which is the worse failure by far.
+fn tab_rail_keydown(app: App, ev: &web_sys::KeyboardEvent) {
+    // Alt+Left is Back, Ctrl+Home is top-of-document. The rail sits on every
+    // page and is far more likely than most things to be holding focus, so
+    // it must not take those away.
+    if ev.ctrl_key() || ev.alt_key() || ev.meta_key() {
+        return;
+    }
+    // While a chip is being moved by keyboard, the arrows belong to the
+    // move. Reachable: focus a chip, press `m`, then Shift+Tab into the rail
+    // — without this the same press would walk the chip AND change tab.
+    if app.move_mode.with_untracked(|m| m.is_some()) {
+        return;
+    }
+    let step = match ev.key().as_str() {
+        "ArrowRight" | "ArrowDown" => domx::GroupStep::Next,
+        "ArrowLeft" | "ArrowUp" => domx::GroupStep::Prev,
+        "Home" => domx::GroupStep::First,
+        "End" => domx::GroupStep::Last,
+        // Everything else keeps its native behaviour — Tab still leaves the
+        // rail, Enter and Space still activate the focused tab.
+        _ => return,
+    };
+    let Some(button) = ev
+        .target()
+        .and_then(|t| t.dyn_into::<web_sys::Element>().ok())
+        .and_then(|el| el.closest("button.tab").ok().flatten())
+    else {
+        return;
+    };
+    let Some(target) = domx::group_neighbour(&button, step) else {
+        return;
+    };
+    // Suppresses three things at once: scrolling the document, Home/End
+    // jumping to the top or bottom of it, and — on a phone, where `.tabs`
+    // carries `overflow-x: auto` — scrolling the rail's own bar sideways.
+    ev.prevent_default();
+    ev.stop_propagation();
+    let _ = target.focus();
+    // Click, not just focus: the tabs pattern selects as it moves, and going
+    // through the button's own handler keeps the Developer-route hop in one
+    // place rather than two.
+    target.click();
 }
 
 #[component]
@@ -1913,6 +2140,141 @@ pub fn DialogHost() -> impl IntoView {
                                 on:keydown=move |ev| trap_tab(&ev)
                             >
                                 {body}
+                            </div>
+                        </div>
+                    }
+                })
+        }}
+    }
+}
+
+/// The app's own confirmation, in place of `window.confirm`.
+///
+/// It is mounted AFTER `DialogHost` and sits at a higher layer, so it can be
+/// asked over an open dialog without unmounting it — which is the whole
+/// reason it is not a `Dialog` variant (see `App::confirm`).
+///
+/// Three things the browser's box could not do, and the reason this exists:
+/// the question is typed like the rest of the app instead of the system's
+/// grey; what is at stake is a LIST, not a run-on sentence; and the button
+/// says what it is about to do, so nobody agrees to "OK" out of habit.
+#[component]
+pub fn ConfirmHost() -> impl IntoView {
+    let app = App::use_ctx();
+
+    // Cancel is what lands under the fingers. Every one of these questions
+    // guards something destructive, and the safe answer is the one that
+    // should be a press of Enter away.
+    Effect::new(move |_| {
+        if app.confirm.with(|c| c.is_some()) {
+            gloo_timers::callback::Timeout::new(0, || {
+                if let Some(el) = domx::document()
+                    .query_selector(".confirm [data-confirm-cancel]")
+                    .ok()
+                    .flatten()
+                    .and_then(|el| el.dyn_into::<web_sys::HtmlElement>().ok())
+                {
+                    let _ = el.focus();
+                }
+            })
+            .forget();
+        }
+    });
+
+    let answer_no = move || app.confirm.set(None);
+
+    let answer_yes = move || {
+        let Some(ask) = app.confirm.get_untracked() else {
+            return;
+        };
+        app.confirm.set(None);
+        match ask.action {
+            // Read from the top, this time past the gate. Re-parsing costs a
+            // millisecond and means no half-parsed state had to survive the
+            // question — the file on disk is the single source of truth.
+            ConfirmAction::ImportBackup(text) => crate::export::import_backup_confirmed(app, &text),
+            ConfirmAction::ClearSnapshot => clear_downloaded_timetable(app),
+            ConfirmAction::DeleteEverything => delete_everything_saved(),
+            ConfirmAction::DiscardCourseEdits => {
+                app.dialog_dirty.set(false);
+                app.dialog.set(None);
+            }
+            ConfirmAction::ClearStorageKey(key) => {
+                storage::remove(&key);
+                // The developer panel's list is built at mount; reloading is
+                // how its sibling controls refresh it too.
+                let _ = domx::window().location().reload();
+            }
+        }
+    };
+
+    view! {
+        {move || {
+            app.confirm
+                .get()
+                .map(|ask| {
+                    let danger = ask.danger;
+                    view! {
+                        <div class="overlay confirm-layer" on:click=move |_| answer_no()>
+                            <div
+                                class="dialog confirm"
+                                class:confirm-danger=danger
+                                role="alertdialog"
+                                aria-modal="true"
+                                aria-labelledby="confirm-title"
+                                on:click=|ev| ev.stop_propagation()
+                                on:keydown=move |ev| {
+                                    trap_tab(&ev);
+                                    // Escape answers "no" HERE and must not
+                                    // fall through to the dialog underneath,
+                                    // which would close that too.
+                                    if ev.key() == "Escape" {
+                                        ev.stop_propagation();
+                                        ev.prevent_default();
+                                        answer_no();
+                                    }
+                                }
+                            >
+                                <h2 id="confirm-title">{ask.title.clone()}</h2>
+                                <p class="confirm-lede">{ask.lede.clone()}</p>
+                                {(!ask.points.is_empty())
+                                    .then(|| {
+                                        view! {
+                                            <ul class="confirm-points">
+                                                {ask.points
+                                                    .clone()
+                                                    .into_iter()
+                                                    .map(|p| view! { <li>{p}</li> })
+                                                    .collect_view()}
+                                            </ul>
+                                        }
+                                    })}
+                                {ask.irreversible
+                                    .then(|| {
+                                        view! {
+                                            <p class="confirm-final">
+                                                <span class="badge warn">"!"</span>
+                                                " This cannot be undone."
+                                            </p>
+                                        }
+                                    })}
+                                <div class="actions">
+                                    <button
+                                        class="btn"
+                                        data-confirm-cancel
+                                        on:click=move |_| answer_no()
+                                    >
+                                        "Cancel"
+                                    </button>
+                                    <button
+                                        class="btn"
+                                        class:danger=danger
+                                        class:primary=move || !danger
+                                        on:click=move |_| answer_yes()
+                                    >
+                                        {ask.confirm_label.clone()}
+                                    </button>
+                                </div>
                             </div>
                         </div>
                     }
@@ -3269,6 +3631,34 @@ fn import_courses_dialog(app: App, plan: crate::state::IncomingPlan) -> impl Int
     }
 }
 
+/// The deed behind `ConfirmAction::ClearSnapshot`, once it has been agreed
+/// to. Split out of the button so the question and the act can live in
+/// different places (see `ConfirmHost`).
+fn clear_downloaded_timetable(app: App) {
+    storage::remove(storage::KEY_SNAPSHOT);
+    app.sync.update(|s| {
+        s.fetched_at = 0.0;
+        s.source = SourceTier::None;
+    });
+    app.snapshot.set(Snapshot::placeholder());
+    app.what_changed.set(None);
+    // The questions those conflicts asked were about a snapshot that no
+    // longer exists — clear their stored copy too.
+    app.set_conflicts(Vec::new());
+    app.toast("Downloaded timetable cleared — fetch it again whenever you like.");
+}
+
+/// The deed behind `ConfirmAction::DeleteEverything`.
+fn delete_everything_saved() {
+    for (key, _) in storage::all_entries() {
+        storage::remove(&key);
+    }
+    // "The page reloads empty" — which it does not if the address bar still
+    // says `?c=TOC,RDBM`: the boot path would read that and put the
+    // selection straight back, saved again.
+    domx::reload_without_query();
+}
+
 fn my_data_dialog(app: App) -> impl IntoView {
     let clear_snapshot = move |_| {
         // Its neighbour, "Delete all app data", asks first — and this one
@@ -3277,56 +3667,58 @@ fn my_data_dialog(app: App) -> impl IntoView {
         // only in memory. It gets the same courtesy, and says what else
         // goes when there is something else to go.
         let pending = app.conflicts.with_untracked(|c| c.len());
-        let extra = match pending {
-            0 => String::new(),
-            1 => " One change from CMI that you haven't decided on yet will be \
-                  dropped, and the app won't ask about it again."
+        let mut points = vec![
+            "The courses you picked, and every change you made, stay exactly as \
+             they are."
                 .to_string(),
-            n => format!(
-                " {n} changes from CMI that you haven't decided on yet will be \
-                 dropped, and the app won't ask about them again."
+            "The app shows its welcome screen until you fetch the timetable again.".to_string(),
+        ];
+        match pending {
+            0 => {}
+            1 => points.push(
+                "One change from CMI you haven't decided on yet is dropped, and \
+                 the app won't ask about it again."
+                    .to_string(),
             ),
-        };
-        if !domx::window()
-            .confirm_with_message(&format!(
-                "Clear the timetable this app downloaded from CMI? Your courses \
-                 and your changes stay. The app shows its welcome screen until \
-                 you fetch the timetable again.{extra}"
-            ))
-            .unwrap_or(false)
-        {
-            return;
+            n => points.push(format!(
+                "{n} changes from CMI you haven't decided on yet are dropped, and \
+                 the app won't ask about them again."
+            )),
         }
-        storage::remove(storage::KEY_SNAPSHOT);
-        app.sync.update(|s| {
-            s.fetched_at = 0.0;
-            s.source = SourceTier::None;
+        app.ask(ConfirmAsk {
+            title: "Clear the downloaded timetable?".into(),
+            lede: "This throws away the copy of CMI's timetable saved in this \
+                   browser. Fetching it again brings it straight back."
+                .into(),
+            points,
+            confirm_label: "Clear it".into(),
+            danger: true,
+            // A sync fetches it again — the one destructive button here that
+            // is genuinely recoverable, so it does not claim otherwise.
+            irreversible: false,
+            action: ConfirmAction::ClearSnapshot,
         });
-        app.snapshot.set(Snapshot::placeholder());
-        app.what_changed.set(None);
-        // The questions those conflicts asked were about a snapshot that no
-        // longer exists — clear their stored copy too.
-        app.set_conflicts(Vec::new());
-        app.toast("Downloaded timetable cleared — fetch it again whenever you like.");
     };
 
     let delete_everything = move |_| {
-        let confirmed = domx::window()
-            .confirm_with_message(
-                "Delete everything this app has saved in this browser? Your courses, \
-                 your custom times, the downloaded timetable and your settings all \
-                 go. The page reloads empty. This cannot be undone.",
-            )
-            .unwrap_or(false);
-        if confirmed {
-            for (key, _) in storage::all_entries() {
-                storage::remove(&key);
-            }
-            // "The page reloads empty" — which it does not if the address
-            // bar still says `?c=TOC,RDBM`: the boot path would read that
-            // and put the selection straight back, saved again.
-            domx::reload_without_query();
-        }
+        app.ask(ConfirmAsk {
+            title: "Delete everything saved here?".into(),
+            lede: "This empties everything this app has stored in this browser \
+                   and reloads the page."
+                .into(),
+            points: vec![
+                "The courses you picked.".into(),
+                "Every change you made — moved classes, credits you set, courses \
+                 you added."
+                    .into(),
+                "The downloaded copy of CMI's timetable.".into(),
+                "Your settings, including the theme.".into(),
+            ],
+            confirm_label: "Delete it all".into(),
+            danger: true,
+            irreversible: true,
+            action: ConfirmAction::DeleteEverything,
+        });
     };
 
     view! {
