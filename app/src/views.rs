@@ -217,6 +217,28 @@ pub fn column_for(slot_grid: &[Slot], meeting: &Meeting) -> Option<u16> {
         .map(|s| s.start_min)
 }
 
+/// The columns a meeting COVERS beyond the one it renders in: every column
+/// whose slot overlaps the meeting's own time, except its home. This is what
+/// makes a 09:10–14:00 class visibly occupy 10:30 and 11:50 instead of
+/// leaving them looking free (R77).
+///
+/// Judged against the MEETING's slot with `Slot::overlaps` — the clash
+/// panel's exact predicate, half-open, so a meeting ending at 14:00 covers
+/// nothing of a 14:00 column — and never against the home column's slot: a
+/// synthetic column can be WIDER than the meeting that minted it
+/// (push_extra_column's same-start merge), and the home must be whatever
+/// `column_for` chose, whose nearest fallback can pick a column that does
+/// not even contain the meeting.
+pub fn covered_columns(slot_grid: &[Slot], meeting: &Meeting) -> Vec<u16> {
+    let home = column_for(slot_grid, meeting);
+    slot_grid
+        .iter()
+        .filter(|s| s.overlaps(&meeting.slot))
+        .map(|s| s.start_min)
+        .filter(|c| Some(*c) != home)
+        .collect()
+}
+
 fn grid_cell(
     app: App,
     day: Day,
@@ -309,8 +331,30 @@ fn my_timetable(app: App) -> impl IntoView {
         cells
     });
 
+    // Every LATER column a long meeting covers — its own memo beside
+    // `placed`, same one-pass shape, so the chips' PartialEq gate and every
+    // mounted chip stay untouched when only coverage changes.
+    let covered = Memo::new(move |_| {
+        let cols: Vec<Slot> = columns.get().into_iter().map(|(s, _)| s).collect();
+        let mut cells: HashMap<(Day, u16), Vec<(String, Slot)>> = HashMap::new();
+        for course in app.selected_courses() {
+            for eff in app.effective_meetings(&course) {
+                for col in covered_columns(&cols, &eff.meeting) {
+                    let entry = cells.entry((eff.meeting.day, col)).or_default();
+                    let pair = (course.code.clone(), eff.meeting.slot);
+                    // Two identical meetings (an official one and the same
+                    // course's arrival at the same time) cast ONE shadow.
+                    if !entry.contains(&pair) {
+                        entry.push(pair);
+                    }
+                }
+            }
+        }
+        cells
+    });
+
     let cell_chips = move |day: Day, slot: Slot| -> Vec<AnyView> {
-        placed.with(|cells| {
+        let mut out: Vec<AnyView> = placed.with(|cells| {
             cells
                 .get(&(day, slot.start_min))
                 .map(|chips| {
@@ -337,7 +381,34 @@ fn my_timetable(app: App) -> impl IntoView {
                         .collect()
                 })
                 .unwrap_or_default()
-        })
+        });
+        // Bands AFTER chips: the real classes in this slot lead, and the
+        // band wraps to its own full-width row beneath them. Delivered
+        // through this closure so the desktop grid, the phone day list and
+        // the print poster all learn it from the one computation.
+        covered.with(|cells| {
+            if let Some(list) = cells.get(&(day, slot.start_min)) {
+                for (code, mslot) in list {
+                    // The band reds exactly where the covered span fights
+                    // something: this cell holds another course's chip whose
+                    // time overlaps it, or another course's band crossing
+                    // the same cell. Same red, same rule, as the chips —
+                    // a conflict must not turn quiet just because one side
+                    // of it is a continuation.
+                    let clash = placed.with(|p| {
+                        p.get(&(day, slot.start_min)).is_some_and(|chips| {
+                            chips.iter().any(|(c2, eff2)| {
+                                !c2.eq_ignore_ascii_case(code) && eff2.meeting.slot.overlaps(mslot)
+                            })
+                        })
+                    }) || list
+                        .iter()
+                        .any(|(c2, s2)| !c2.eq_ignore_ascii_case(code) && s2.overlaps(mslot));
+                    out.push(crate::ui::covered_band(app, code.clone(), *mslot, clash).into_any());
+                }
+            }
+        });
+        out
     };
 
     let unscheduled = move || -> Vec<Course> {
@@ -523,11 +594,20 @@ fn my_timetable(app: App) -> impl IntoView {
                                 </thead>
                                 <tbody>
                                     {move || {
-                                        days.get()
-                                            .into_iter()
+                                        let rows = days.get();
+                                        // Today is marked on the WEEK view only, the same
+                                        // rule the halls table follows: a single-day view
+                                        // already says which day it is showing, and a
+                                        // marker on the only row on screen marks nothing.
+                                        // Read when the rows rebuild, like the day strip —
+                                        // a tab left open past midnight re-marks on its
+                                        // next change, not on the stroke of the clock.
+                                        let week = rows.len() > 1;
+                                        let today = crate::domx::today_local().weekday();
+                                        rows.into_iter()
                                             .map(|day| {
                                                 view! {
-                                                    <tr>
+                                                    <tr class:today=week && day == today>
                                                         <th class="rowhead" scope="row">{day.short()}</th>
                                                         {columns.get()
                                                             .into_iter()
@@ -1775,9 +1855,47 @@ fn master_grid(app: App) -> impl IntoView {
         cells
     });
 
+    // Every LATER column a long meeting covers — the same shadow My
+    // timetable casts, because a grid whose job is "when everything is"
+    // must not show a taken slot as open. Reads `filtered` and the
+    // overrides, never the selection: t90 pins that clicking a chip (a
+    // selection change) rebuilds no cell.
+    let covered = Memo::new(move |_| {
+        let slot_grid: Vec<Slot> = columns.get().into_iter().map(|(s, _)| s).collect();
+        let mut cells: HashMap<(Day, u16), Vec<(String, Slot)>> = HashMap::new();
+        for course in filtered.get() {
+            for eff in app.effective_meetings(&course) {
+                for col in covered_columns(&slot_grid, &eff.meeting) {
+                    let entry = cells.entry((eff.meeting.day, col)).or_default();
+                    let pair = (course.code.clone(), eff.meeting.slot);
+                    if !entry.contains(&pair) {
+                        entry.push(pair);
+                    }
+                }
+            }
+        }
+        cells
+    });
+
     let cell_chips = move |day: Day, slot: Slot| -> Vec<AnyView> {
-        placed.with(|cells| {
+        let bands: Vec<AnyView> = covered.with(|cells| {
             cells
+                .get(&(day, slot.start_min))
+                .map(|list| {
+                    list.iter()
+                        .map(|(code, mslot)| {
+                            // Never red here: the master grid's conflict
+                            // language is the ⚠ won't-fit mark on chips, and
+                            // its covered memo deliberately reads no
+                            // selection (t90's identity pin).
+                            crate::ui::covered_band(app, code.clone(), *mslot, false).into_any()
+                        })
+                        .collect()
+                })
+                .unwrap_or_default()
+        });
+        placed.with(|cells| {
+            let mut out: Vec<AnyView> = cells
                 .get(&(day, slot.start_min))
                 .map(|chips| {
                     chips
@@ -1823,7 +1941,13 @@ fn master_grid(app: App) -> impl IntoView {
                         })
                         .collect()
                 })
-                .unwrap_or_default()
+                .unwrap_or_default();
+            // Bands after the chipwrap+ⓘ pairs: a span can never fall
+            // between a chip and its ⓘ (t06 walks
+            // following-sibling::button), and the shadow reads as
+            // background to the real classes above it.
+            out.extend(bands);
+            out
         })
     };
 
@@ -1930,11 +2054,15 @@ fn master_grid(app: App) -> impl IntoView {
                     </thead>
                     <tbody>
                         {move || {
-                            days.get()
-                                .into_iter()
+                            let rows = days.get();
+                            // Week view only — the same rule my timetable and
+                            // the halls table follow (see the comment there).
+                            let week = rows.len() > 1;
+                            let today = crate::domx::today_local().weekday();
+                            rows.into_iter()
                                 .map(|day| {
                                     view! {
-                                        <tr>
+                                        <tr class:today=week && day == today>
                                             <th class="rowhead" scope="row">{day.short()}</th>
                                             {columns
                                                 .get()
@@ -2129,17 +2257,27 @@ fn catalog(app: App) -> impl IntoView {
                                 // what the box MEANS, so a probe without them
                                 // searches differently from the reader and
                                 // then blames a facet for a course that
-                                // "match case" is hiding (R71).
-                                let (case, word, rx) = app
+                                // "match case" is hiding (R71). The "Search
+                                // in" mask rides for the same reason (R77) —
+                                // without it the probe would find by name a
+                                // course the reader's code-only search cannot,
+                                // and promise that clearing a facet shows it.
+                                let (case, word, rx, skip) = app
                                     .with_filters_in(
                                         false,
-                                        |f| (f.match_case, f.whole_word, f.use_regex),
+                                        |f| (
+                                            f.match_case,
+                                            f.whole_word,
+                                            f.use_regex,
+                                            f.search_skip.clone(),
+                                        ),
                                     );
                                 let text_only = crate::state::Filters {
                                     text: search.clone(),
                                     match_case: case,
                                     whole_word: word,
                                     use_regex: rx,
+                                    search_skip: skip,
                                     ..Default::default()
                                 };
                                 // The borrow below is only safe while this
@@ -2821,31 +2959,61 @@ fn bookings_by_cell<'a>(
     by_hall
 }
 
+/// A booking that still means something in its cell: a bare TMP row books
+/// the room without naming a course, and a named booking stands until every
+/// code on it has been moved away or replaced.
+fn booking_stands(b: &IndexedBooking<'_>) -> bool {
+    b.booking.codes.is_empty()
+        || b.codes
+            .iter()
+            .any(|(_, state)| !matches!(state, BookingCell::Gone))
+}
+
 /// The grid's per-hall summary and the free-hall finder both ask through
 /// this, so "free" cannot come to mean two different things on one page.
+///
+/// It takes the hall's WHOLE week (not one cell) since R77, because a
+/// booking longer than its column keeps the room through every column it
+/// covers: a 09:00–14:00 booking used to read as "free" at 10:40 here while
+/// the continuation band said otherwise — a page disagreeing with itself.
 fn hall_cell_busy(
-    // The bookings already standing in THIS cell, each carrying what its
-    // codes resolve to. They arrive worked out (see `bookings_by_cell`)
-    // because the caller draws a grid: re-filtering CMI's whole allocation
-    // here — and re-deciding every booking a second time — meant doing it
-    // once per hall per day per slot.
-    cell: &[IndexedBooking<'_>],
+    // This hall's bookings, filed by (day, column) and already worked out
+    // (see `bookings_by_cell`): re-filtering CMI's whole allocation here
+    // meant doing it once per hall per day per slot.
+    cells: &CellBookings<'_>,
     placed: &[(String, u16, String, EffMeeting)],
     hall: &str,
+    day: Day,
+    slots: &[Slot],
     start: u16,
 ) -> bool {
-    let cmi_has_it = cell.iter().any(|b| {
-        // A bare TMP cell carries no codes at all (the halls page books
-        // the room without naming a course) — the room is taken.
-        b.booking.codes.is_empty()
-            || b.codes
-                .iter()
-                .any(|(_, state)| !matches!(state, BookingCell::Gone))
-    });
+    let empty: Vec<IndexedBooking> = Vec::new();
+    let cell = cells.get(&(day, start)).unwrap_or(&empty);
+    let cmi_has_it = cell.iter().any(booking_stands);
     let yours = placed
         .iter()
         .any(|(h, col, _, _)| h.trim().eq_ignore_ascii_case(hall.trim()) && *col == start);
-    cmi_has_it || yours
+    if cmi_has_it || yours {
+        return true;
+    }
+    // Nothing STARTS here — but something longer may still be running.
+    // Judged with Slot::overlaps against the meeting's own time, the same
+    // predicate the clash panel and the continuation bands use.
+    let Some(col_slot) = slots.iter().find(|s| s.start_min == start).copied() else {
+        return false;
+    };
+    let covered_by_booking = cells.iter().any(|((d, c), v)| {
+        *d == day
+            && *c != start
+            && v.iter()
+                .any(|b| booking_stands(b) && b.booking.slot.overlaps(&col_slot))
+    });
+    let covered_by_yours = placed.iter().any(|(h, col, _, eff)| {
+        h.trim().eq_ignore_ascii_case(hall.trim())
+            && *col != start
+            && eff.meeting.slot.overlaps(&col_slot)
+    });
+    covered_by_booking || covered_by_yours
 }
 
 /// How a row is dressed. The two layouts differ only here: in the merged
@@ -2961,6 +3129,45 @@ fn hall_row(
                     let has_arrivals = arrivals.iter().any(|(h, col, _, _)| {
                         h.trim().eq_ignore_ascii_case(hall.trim()) && *col == slot.start_min
                     });
+                    // A booking or arrival homed in an EARLIER column whose
+                    // real time runs through this one casts a continuation
+                    // band here — the same shadow the other two grids cast,
+                    // and the same overlap the busy summary now counts, so
+                    // the cell and the summary can never disagree (R77).
+                    // Label: the first code still standing, else CMI's bare
+                    // TMP row, which books the room without naming a course.
+                    let mut shadows: Vec<(String, Slot)> = Vec::new();
+                    for ((d, c), v) in cells.iter() {
+                        if *d != day || *c == slot.start_min {
+                            continue;
+                        }
+                        for b in v {
+                            if booking_stands(b) && b.booking.slot.overlaps(&slot) {
+                                let label = b
+                                    .codes
+                                    .iter()
+                                    .find(|(_, s)| !matches!(s, BookingCell::Gone))
+                                    .map(|(code, _)| code.clone())
+                                    .unwrap_or_else(|| "booked".to_string());
+                                let pair = (label, b.booking.slot);
+                                if !shadows.contains(&pair) {
+                                    shadows.push(pair);
+                                }
+                            }
+                        }
+                    }
+                    for (h, col, code, eff) in arrivals {
+                        if h.trim().eq_ignore_ascii_case(hall.trim())
+                            && *col != slot.start_min
+                            && eff.meeting.slot.overlaps(&slot)
+                        {
+                            let pair = (code.clone(), eff.meeting.slot);
+                            if !shadows.contains(&pair) {
+                                shadows.push(pair);
+                            }
+                        }
+                    }
+                    let has_shadows = !shadows.is_empty();
                     view! {
                         <td
                             data-day=day.index().to_string()
@@ -2983,7 +3190,7 @@ fn hall_row(
                             // them are empty, so an unconditional flex box
                             // was a few hundred elements the browser had to
                             // build, style and lay out to hold nothing.
-                            {(!bookings.is_empty() || has_arrivals)
+                            {(!bookings.is_empty() || has_arrivals || has_shadows)
                                 .then(|| {
                                     view! {
                             <div class="sidebyside">
@@ -3049,6 +3256,22 @@ fn hall_row(
                                     })
                                     .map(|(_, _, code, eff)| {
                                         hall_eff_chip(app, code, eff.clone(), slot)
+                                    })
+                                    .collect_view()}
+                                {shadows
+                                    .iter()
+                                    .map(|(label, mslot)| {
+                                        // Rooms don't clash — two bookings in
+                                        // one hall are CMI's business, and the
+                                        // user's own conflicts live on My
+                                        // timetable.
+                                        crate::ui::covered_band(
+                                            app,
+                                            label.clone(),
+                                            *mslot,
+                                            false,
+                                        )
+                                            .into_any()
                                     })
                                     .collect_view()}
                             </div>
@@ -3161,14 +3384,12 @@ fn hall_table(
                                         .map(|(day, placed)| {
                                             cols.iter()
                                                 .filter(|s| {
-                                                    let cell = cells
-                                                        .get(&(*day, s.start_min))
-                                                        .map(|v| v.as_slice())
-                                                        .unwrap_or(&[]);
                                                     hall_cell_busy(
-                                                        cell,
+                                                        cells,
                                                         placed,
                                                         &hall,
+                                                        *day,
+                                                        &cols,
                                                         s.start_min,
                                                     )
                                                 })
@@ -3419,13 +3640,8 @@ fn halls_view(app: App) -> impl IntoView {
                         .halls
                         .iter()
                         .filter(|hall| {
-                            let cell = by_hall
-                                .get(hall.as_str())
-                                .unwrap_or(&no_cells)
-                                .get(&(day, start))
-                                .map(|v| v.as_slice())
-                                .unwrap_or(&[]);
-                            !hall_cell_busy(cell, &placed, hall, start)
+                            let cells = by_hall.get(hall.as_str()).unwrap_or(&no_cells);
+                            !hall_cell_busy(cells, &placed, hall, day, &cols, start)
                         })
                         .cloned()
                         .collect();

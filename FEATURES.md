@@ -102,9 +102,18 @@ Every course this semester, searchable and filterable.
 
 - Search by code, name or instructor — with the three switches every editor
   has: **`Aa`** match case, **`ab`** whole word, **`.*`** regular expression.
-  They sit inside the right-hand end of the box, and on a phone, where the box
+  They sit inside the right-hand end of the box, drawn as small keys so they
+  read as pressable at a glance, and on a phone, where the box
   and the switches cannot both have the width they need, they move to their own
   line just under it rather than cutting the box short.
+- **Search in** — the dropdown joined onto the box's right end — decides
+  which of those three parts the search reads: all of them by default, or
+  just the ones you tick. Narrow it to *code* and typing a professor's name matches nothing, as
+  asked. The placeholder always says what the box currently reads ("Search by
+  code or name"), the menu wears a count while narrowed, and the last ticked
+  part can't be unticked — a search that reads nothing wouldn't be a search.
+  It is a filter like any other: per tab (My courses keeps its own), undone
+  by Ctrl+Z, and remembered across reloads.
   Whole-word means what `\b` means. With `.*` off it understands accented
   letters (`rào` finds *Raghavendra Rào*); with `.*` on, the pattern engine's
   own `\b` and case-folding are ASCII-only, so an accented word may stop
@@ -193,6 +202,19 @@ in a single form: every weekly meeting's day, time and hall, its credits, and
 - A course CMI hasn't scheduled opens with **no meetings and no row filled in
   on your behalf**, so you can change its credits or its name without it
   quietly acquiring a Monday morning class.
+- **A meeting longer than one slot visibly fills every slot it covers.** Give
+  a class a 09:10–14:00 time and its chip stays in the column it starts in —
+  while each later column it runs through carries a quiet band in the
+  course's own colour, "TOC · until 14:00", so 11:50 never looks free when it
+  isn't. The bands appear on My timetable, the Master grid, the phone's
+  per-day list, the halls table and the printed poster; they are labels, not
+  buttons — dragging, clicking and keyboard moves pass them by — and the
+  free-hall finder counts a room as taken through the whole span, so the
+  page never disagrees with itself. A meeting ending exactly at 14:00 leaves
+  the 14:00 slot free, the same arithmetic the clash panel uses. And a clash
+  inside the span is red exactly where it happens: the band sharing a cell
+  with the course it fights wears the chips' own ⚠ red, while the rest of
+  the span stays the course's quiet colour.
 
 ### Drag and drop, on purpose
 
@@ -697,11 +719,17 @@ itself has been published. If there is one, it **asks**.
 | **The wheel** | Scroll over any box with a step — credits, a meeting's start or end time, an export date, the reminder lead, or any dropdown — and it moves one step. Hovering is enough, no click first; while the wheel is over a box, the box takes the scroll and the page behind it stays put. The reminder lead nudges by single minutes on the wheel while its arrows jump by fives. A trackpad flick counts by full notches — a step or two per gesture, not ten — an empty box is never filled by a passing wheel, and the wheel never moves a value opposite to the way you scrolled |
 | **Enter** | Saves in the editor, downloads in Export, and dismisses the keyboard in a search box |
 | **Escape** | Cancels a drag, then a keyboard move, then an open filter menu, then a dialog — in that order |
+| **Popups own their scroll** | While a dialog is open the page behind it stands still: a wheel that runs past the popup's end stops there instead of carrying the app off somewhere else, and closing the popup finds the page exactly where you left it |
+| **Today, at a glance** | On every week table — My timetable, the Master grid, the halls — today's row wears the day-column accent bar, so the eye lands on the right line first. A single-day view marks nothing (it already says which day it is), and the printed poster stays timeless |
 
 ### Built to be used without a mouse, or without sight
 
-- Every dialog traps Tab, opens focused on its first **field** (not a toggle),
-  and hands focus back where it came from on close.
+- Every dialog traps Tab — in both directions, from the very first key — and
+  hands focus back where it came from on close, without yanking the page.
+- **Opening a dialog selects nothing.** Focus rests on the dialog itself: no
+  field is picked for you, no text is highlighted, Space scrolls a tall popup
+  instead of pressing something, and the first Tab walks to the first control
+  in reading order.
 - Live regions announce validation errors, clash lines and move confirmations
   — so a screen reader hears them rather than nothing.
 - Meaning is never carried by colour alone: a clash has a ⚠ and a word, a

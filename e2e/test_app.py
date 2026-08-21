@@ -11,8 +11,12 @@ Environment:
     CHROME_BIN  browser binary       (default: /usr/bin/chromium)
     PORT        local port           (default: 8977)
     CARGO_TARGET_DIR  target dir for the seed generator build
-                      (default: ~/.rust-target-e2e, so a running
-                      `trunk serve` can never race it)
+                      (default: ~/.rust-cache/timetable-e2e — inside
+                      ~/.rust-cache because ALL build artifacts live there
+                      (the user's cargo is a wrapper that enforces it), and
+                      its own subfolder so a running `trunk serve`, which
+                      the wrapper routes to ~/.rust-cache/timetable, can
+                      never race it)
 
 The app ships no timetable data, so the suite derives a snapshot from the
 committed test fixtures at startup (core's `snapshot_json` example) and seeds
@@ -95,6 +99,23 @@ TOC_OVR = {
     "credits": [{"course": "TOC", "credits": 3, "created_at": 1754000000000.0}],
 }
 
+# A LONG meeting: TOC's Tue class stretched to 09:10–14:00. The start sits ON
+# an official slot, so no synthetic column is minted (t36 pins that rule) and
+# the covered columns are exactly 630 and 710 — 840 is NOT covered, because
+# Slot::overlaps is half-open and the meeting ends exactly where that column
+# starts (the clash panel's own arithmetic).
+LONG_OVR = {
+    "next_id": 1,
+    "items": [{
+        "id": 0, "course": "TOC",
+        "base": {"day": "Tue", "slot": {"start_min": 550, "end_min": 625},
+                 "hall": "Lecture Hall 803", "temp_booking": False},
+        "to": {"day": "Tue", "slot": {"start_min": 550, "end_min": 840},
+               "hall": "Lecture Hall 803", "temp_booking": False},
+        "created_at": 1754000000000.0}],
+    "credits": [],
+}
+
 # Filled by build_seed() at startup: the snapshot as the app's own parser
 # produces it from the fixtures, ready to drop into localStorage.
 SEED_SNAPSHOT = None
@@ -107,7 +128,7 @@ def build_seed():
     global SEED_SNAPSHOT, SEED_SNAPSHOT_JSON
     env = dict(os.environ)
     env.setdefault(
-        "CARGO_TARGET_DIR", os.path.expanduser("~/.rust-target-e2e")
+        "CARGO_TARGET_DIR", os.path.expanduser("~/.rust-cache/timetable-e2e")
     )
     result = subprocess.run(
         [
@@ -850,24 +871,27 @@ def t16_facet_menus_close_each_other(app):
     app.open_tab("Catalog")
     app.wait_css("section[aria-label='Catalog'] .filterbar")
 
-    def facet(i):
-        return app.css_all(".filterbar details.facet")[i]
+    # By NAME, not by index: R77 put the "Search in" dropdown first in the
+    # bar, and any future insertion would silently retarget an index.
+    def facet_named(name):
+        for f in app.css_all(".filterbar details.facet"):
+            if f.find_element(By.CSS_SELECTOR, "summary").text.strip().startswith(name):
+                return f
+        raise AssertionError(f"no facet named {name!r} in the bar")
 
-    def summary(i):
-        return app.css_all(".filterbar details.facet > summary")[i]
-
-    summary(0).click()  # Branch
-    assert facet(0).get_attribute("open") is not None
+    branch, instructor = facet_named("Branch"), facet_named("Instructor")
+    branch.find_element(By.CSS_SELECTOR, "summary").click()
+    assert branch.get_attribute("open") is not None
     # A click inside the open menu must NOT close it.
-    facet(0).find_element(By.CSS_SELECTOR, ".menu label.opt input").click()
+    branch.find_element(By.CSS_SELECTOR, ".menu label.opt input").click()
     time.sleep(0.2)
-    assert facet(0).get_attribute("open") is not None, \
+    assert branch.get_attribute("open") is not None, \
         "clicking a checkbox inside the menu must not close it"
-    summary(1).click()  # Instructor — must close Branch
+    instructor.find_element(By.CSS_SELECTOR, "summary").click()  # closes Branch
     time.sleep(0.2)
-    assert facet(0).get_attribute("open") is None, \
+    assert branch.get_attribute("open") is None, \
         "opening the second menu must close the first"
-    assert facet(1).get_attribute("open") is not None
+    assert instructor.get_attribute("open") is not None
     # Clicking anywhere outside closes the open menu.
     app.css("section[aria-label='Catalog'] .toolbar h2").click()
     time.sleep(0.2)
@@ -875,9 +899,11 @@ def t16_facet_menus_close_each_other(app):
         f.get_attribute("open") is None
         for f in app.css_all(".filterbar details.facet")
     ), "outside click must close every open menu"
-    # Esc closes too.
-    summary(2).click()
-    assert facet(2).get_attribute("open") is not None
+    # Esc closes too — including the Search in menu, which is a facet to
+    # every global handler (that is why it wears the class).
+    searchin = facet_named("Search in")
+    searchin.find_element(By.CSS_SELECTOR, "summary").click()
+    assert searchin.get_attribute("open") is not None
     app.d.find_element(By.TAG_NAME, "body").send_keys(Keys.ESCAPE)
     time.sleep(0.2)
     assert all(
@@ -1094,7 +1120,9 @@ def t22_filter_menu_keeps_focus_and_scroll(app):
     app.boot("/")
     app.open_tab("Catalog")
     app.wait_css("section[aria-label='Catalog'] .filterbar")
-    app.css_all(".filterbar details.facet > summary")[1].click()  # Instructor
+    # By name, not index — see t16 (the Search in menu sits first since R77).
+    app.xpath("//div[contains(@class,'filterbar')]//details"
+              "[starts-with(normalize-space(summary), 'Instructor')]/summary").click()
     app.wait_css("details.facet[open] .menu")
     app.d.execute_script(
         "document.querySelector('details.facet[open] .menu').scrollTop = 150;"
@@ -1207,14 +1235,19 @@ def t27_filters_undo_redo(app):
     app.boot("/")
     app.open_tab("Catalog")
     app.wait_css("section[aria-label='Catalog'] .filterbar")
-    app.css_all(".filterbar details.facet > summary")[0].click()  # Branch
+    # By name, not index — see t16 (the Search in menu sits first since R77).
+    app.xpath("//div[contains(@class,'filterbar')]//details"
+              "[starts-with(normalize-space(summary), 'Branch')]/summary").click()
     app.wait_css("details.facet[open] .menu")
     app.css("details.facet[open] .menu label.opt input").click()
     app.wait_css(".filterchip")
     app.xpath("//button[@aria-label='Undo']").click()
     app.wait_toast("Undid: the")
     app.wait_gone(".filterchip")
-    assert not app.css_all("details.facet .menu input:checked")
+    # Not the Search in menu: its three boxes are CHECKED at rest (all parts
+    # read is the default), so sweeping every facet checkbox would fail on
+    # the one menu whose default is ticks.
+    assert not app.css_all("details.facet:not(.searchin) .menu input:checked")
     app.xpath("//button[@aria-label='Redo']").click()
     app.wait_css(".filterchip")
     # Search coalescing: several keystrokes, one undo.
@@ -6428,6 +6461,337 @@ def t117_the_shorten_popup_has_a_way_out_and_it_is_not_beside_the_send(app):
     WebDriverWait(app.d, 5).until(lambda d: not app.css_all(".dialog"))
 
 
+def t118_the_search_looks_only_where_you_tell_it(app):
+    """R77: a "Search in" dropdown before the facets decides which parts of a
+    course the box reads — code, name, instructor — all three by default.
+    The placeholder is the promise, so it changes with the mask; the LAST
+    ticked part cannot be unticked (a search that reads nothing is a control
+    that cannot act); and the mask is a filter like any other: per scope,
+    undoable, persisted."""
+    app.boot("/", selection=["TOC"])
+    app.open_tab("Catalog")
+    section = app.wait_css("section[aria-label='Catalog']")
+    box = section.find_element(By.CSS_SELECTOR, ".filterbar input[type='search']")
+
+    def searchin():
+        return app.xpath("//section[@aria-label='Catalog']"
+                         "//details[starts-with(normalize-space(summary), 'Search in')]")
+
+    def tickbox(label):
+        return searchin().find_element(
+            By.XPATH, f".//label[normalize-space()='{label}']/input")
+
+    def rows():
+        # Cards, not table rows — the catalog is a card list (t115 counts
+        # the same selector).
+        return app.css_all("section[aria-label='Catalog'] .card")
+
+    # The default: everything read, promised in the placeholder, no badge.
+    assert box.get_attribute("placeholder") == "Search by code, name or instructor"
+    assert not searchin().find_elements(By.CSS_SELECTOR, ".facet-count"), \
+        "all three parts on is the default and wears no badge"
+
+    # An instructor search finds TOC's course…
+    box.send_keys("Aiswarya")
+    WebDriverWait(app.d, 10).until(lambda d: len(rows()) == 1)
+
+    # …until Instructor is unticked, and then the SAME text finds nothing —
+    # and the placeholder stops promising instructors.
+    searchin().find_element(By.CSS_SELECTOR, "summary").click()
+    tickbox("Instructor").click()
+    WebDriverWait(app.d, 10).until(lambda d: len(rows()) == 0)
+    assert box.get_attribute("placeholder") == "Search by code or name"
+    badge = searchin().find_element(By.CSS_SELECTOR, ".facet-count")
+    assert badge.text.strip() == "2", badge.text
+
+    # The floor: with only one part left, that part's box is disabled and
+    # says why — never a checkbox that bounces back.
+    tickbox("Course name").click()
+    WebDriverWait(app.d, 5).until(
+        lambda d: box.get_attribute("placeholder") == "Search by code")
+    code_box = tickbox("Course code")
+    assert code_box.get_attribute("disabled"), \
+        "the last part still read must not be uncheckable"
+    assert "read something" in (code_box.get_attribute("title") or ""), \
+        "the disabled box owes the reason"
+    # A code search still works exactly as promised. (Select-all + type, not
+    # element.clear(): clear() sets the value without the input event the
+    # app listens for — the field-clip-probe lesson.)
+    box.send_keys(Keys.CONTROL, "a")
+    box.send_keys("TOC")
+    WebDriverWait(app.d, 10).until(lambda d: len(rows()) == 1)
+
+    # Undo reaches it like every filter change (header button — the box
+    # keeps focus, and Ctrl+Z in a field means the field's own undo).
+    app.d.find_element(By.TAG_NAME, "body").click()
+    app.xpath("//button[@aria-label='Undo']").click()  # the retyped text
+    app.xpath("//button[@aria-label='Undo']").click()  # unticking Name
+    WebDriverWait(app.d, 5).until(
+        lambda d: box.get_attribute("placeholder") == "Search by code or name")
+
+    # Persistence: the narrowed scope is part of the filters, so it survives
+    # a reload — same key, same blob, same synchronous write as t27 pins.
+    app.d.refresh()
+    app.wait_css("section[aria-label='Catalog'] .filterbar")
+    box = app.css("section[aria-label='Catalog'] .filterbar input[type='search']")
+    assert box.get_attribute("placeholder") == "Search by code or name"
+
+    # Per scope: My courses has its OWN mask, still reading everything.
+    app.open_tab("My courses")
+    my_box = app.wait_css("section[aria-label='My courses'] .filterbar input[type='search']")
+    assert my_box.get_attribute("placeholder") == "Search by code, name or instructor", \
+        "narrowing the Catalog's search must not narrow My courses'"
+
+
+def t119_today_is_marked_on_the_week_tables(app):
+    """R77: on a week view, today's row wears the same mark everywhere — the
+    accent bar and weight the halls table has carried since R74 — on My
+    timetable and the Master grid too. Single-day views mark nothing (the
+    view already says which day it shows), and the printed poster stays
+    timeless: it is read all term, and "today" is only true once."""
+    import datetime
+    weekday = datetime.datetime.now().weekday()  # Mon=0
+    day_short = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"][weekday]
+    app.boot("/", selection=["TOC", "RDBM", "MFD"])
+
+    for tab, label in (("My timetable", "My timetable"), ("Master grid", "Master grid")):
+        app.open_tab(tab)
+        app.wait_css(f"section[aria-label='{label}'] table.tt")
+        rows = app.css_all(f"section[aria-label='{label}'] table.tt tbody tr")
+        marked = app.css_all(f"section[aria-label='{label}'] table.tt tbody tr.today")
+        shown_days = [r.find_element(By.CSS_SELECTOR, "th.rowhead").text.strip()
+                      for r in rows]
+        if len(rows) > 1 and day_short in shown_days:
+            assert len(marked) == 1, \
+                f"{label}: expected exactly one today row, found {len(marked)}"
+            head = marked[0].find_element(By.CSS_SELECTOR, "th.rowhead")
+            assert head.text.strip() == day_short, head.text
+            # The mark is the halls table's language: an inset accent bar.
+            assert head.value_of_css_property("box-shadow") != "none", \
+                "the today rowhead must carry the inset bar"
+        else:
+            assert not marked, \
+                f"{label}: no today row should be marked ({shown_days})"
+
+    # The poster prints without it: emulate print media and the bar is gone.
+    # This pins the specificity trap the screen rule sets up — the print
+    # reset must repeat the screen selector's :not() or it silently loses.
+    if day_short in ("Mon", "Tue", "Wed", "Thu", "Fri"):
+        app.open_tab("My timetable")
+        today_heads = app.css_all(
+            "section[aria-label='My timetable'] table.tt tbody tr.today th.rowhead")
+        if today_heads:
+            app.d.execute_cdp_cmd("Emulation.setEmulatedMedia", {"media": "print"})
+            time.sleep(0.2)
+            shadow = today_heads[0].value_of_css_property("box-shadow")
+            app.d.execute_cdp_cmd("Emulation.setEmulatedMedia", {"media": ""})
+            assert shadow == "none", \
+                f"the today bar must not print (box-shadow: {shadow})"
+
+
+def t120_dialogs_open_hands_off_and_the_page_behind_stays_put(app):
+    """R77's two dialog-wide rules. (1) Opening a dialog selects NOTHING:
+    focus rests on the dialog itself — not a field, not a button, no text
+    selection — and the Tab trap still holds from there in both directions.
+    (2) While a dialog is open the page behind it gives up its scroll: a
+    wheel spun past the popup's end must not move the app underneath, and
+    closing the popup finds the page exactly where it was."""
+    app.boot("/", selection=["TOC", "RDBM", "MFD"])
+    app.open_tab("Catalog")  # tall page, so there is something to scroll
+    app.d.execute_script("window.scrollTo(0, 300);")
+    time.sleep(0.2)
+    assert app.d.execute_script("return window.scrollY") >= 200
+
+    app.xpath("//button[normalize-space()='Share or import']").click()
+    dialog = app.wait_css(".dialog")
+    time.sleep(0.4)
+
+    # (1) Hands off: the container has focus, nothing is selected.
+    assert app.d.execute_script(
+        "return document.activeElement === arguments[0];", dialog), \
+        "focus must rest on the dialog itself, not on a control inside it"
+    assert app.d.execute_script(
+        "const a = document.activeElement;"
+        "if (a && 'selectionStart' in a && a.selectionStart != null)"
+        "    return a.selectionStart === a.selectionEnd;"
+        "const s = getSelection(); return !s || s.isCollapsed;"), \
+        "no text may be selected by the act of opening a dialog"
+    # Shift+Tab first — the branch a forward walk never exercises: from the
+    # container the browser's native previous stop is the page behind the
+    # overlay, and trap_tab has to wrap it to the dialog's last control.
+    ActionChains(app.d).key_down(Keys.SHIFT).send_keys(Keys.TAB) \
+        .key_up(Keys.SHIFT).perform()
+    assert app.d.execute_script(
+        "return arguments[0].contains(document.activeElement)"
+        " && document.activeElement !== arguments[0];", dialog), \
+        "Shift+Tab from a fresh dialog escaped the trap"
+
+    # (2) The lock: body scroll is off, the page has not moved, and a real
+    # wheel over the dialog cannot reach the page even at its scroll end.
+    assert app.d.execute_script(
+        "return getComputedStyle(document.body).overflow") == "hidden"
+    before = app.d.execute_script("return window.scrollY")
+    origin = ScrollOrigin.from_element(dialog)
+    for _ in range(3):
+        ActionChains(app.d).scroll_from_origin(origin, 0, 1200).perform()
+    time.sleep(0.3)
+    assert app.d.execute_script("return window.scrollY") == before, \
+        "wheeling past the dialog's end moved the page behind it"
+
+    # Closing hands the scroll back, exactly where it was. Escape goes
+    # through ActionChains, NOT body.send_keys: WebDriver's element send_keys
+    # SCROLLS THE ELEMENT INTO VIEW first, and scrolling <body> into view is
+    # a jump to the top — a harness artefact that reads exactly like the
+    # scroll-restore bug this test exists to rule out.
+    ActionChains(app.d).send_keys(Keys.ESCAPE).perform()
+    WebDriverWait(app.d, 5).until(lambda d: not app.css_all(".dialog"))
+    assert app.d.execute_script(
+        "return getComputedStyle(document.body).overflow") != "hidden", \
+        "the scroll lock leaked past the dialog's close"
+    assert app.d.execute_script("return window.scrollY") == before
+    app.d.execute_script("window.scrollTo(0, 0);")
+
+
+def t121_a_long_meeting_visibly_fills_every_slot_it_covers(app):
+    """R77: a 09:10–14:00 class used to paint one chip in its starting column
+    and leave 10:30 and 11:50 looking free. Now every covered column carries a
+    continuation band — an inert half-chip in the course's own colour saying
+    "TOC · until 14:00" — on My timetable, the Master grid, the phone day
+    list and the halls table, and the free-hall finder counts the room as
+    taken through the whole span, so the page can never disagree with itself.
+
+    The 14:00 column stays FREE: coverage uses the clash panel's own
+    half-open overlap, and a meeting that ends at 14:00 is not in the 14:00
+    slot. That boundary is the easiest one to get wrong, so it is pinned."""
+    app.boot("/", selection=["TOC"], overrides=LONG_OVR)
+
+    # My timetable GRID: the chip count is untouched — Tue's home column and
+    # the ordinary Thu meeting, nothing cloned into the covered cells. Scoped
+    # to the grid because the Your-changes panel legitimately shows one more.
+    grid_chips = app.chips("TOC", container=".week-grid")
+    assert len(grid_chips) == 2, \
+        f"a long meeting must not clone its chip ({len(grid_chips)} on the grid)"
+    for start in (630, 710):
+        cell = app.cell(1, start)
+        bands = cell.find_elements(By.CSS_SELECTOR, "span.covered")
+        assert len(bands) == 1, f"col {start}: expected one band, got {len(bands)}"
+        assert bands[0].text.split() == ["TOC", "until", "14:00"], bands[0].text
+        assert "continues here" in bands[0].get_attribute("title")
+        # Inert: nothing pressable rides in a covered slot.
+        assert not cell.find_elements(By.CSS_SELECTOR, "button"), \
+            f"col {start}: a band must not be (or bring) a control"
+    assert not app.cell(1, 840).find_elements(By.CSS_SELECTOR, "span.covered"), \
+        "a meeting ending AT 14:00 does not cover the 14:00 column (half-open)"
+
+    # Master grid casts the same shadow.
+    app.open_tab("Master grid")
+    app.wait_css("section[aria-label='Master grid'] table.tt")
+    for start in (630, 710):
+        assert app.css_all(
+            f"section[aria-label='Master grid'] td[data-day='1']"
+            f"[data-slot='{start}'] span.covered"), f"master grid col {start}"
+
+    # Halls: the room is visibly held through the span, and the finder
+    # AGREES — it must not offer Lecture Hall 803 at 10:30 on Tuesday while
+    # the row above shows the band holding it.
+    app.open_tab("Halls")
+    section = app.wait_css("section[aria-label='Lecture halls']")
+    day_sel = section.find_element(By.CSS_SELECTOR, "select[aria-label='Day']")
+    slot_sel = section.find_element(By.CSS_SELECTOR, "select[aria-label='Time slot']")
+    day_sel.find_element(By.CSS_SELECTOR, "option[value='1']").click()
+    slot_sel.find_element(By.CSS_SELECTOR, "option[value='630']").click()
+    app.wait_css(".finder-result")
+    free = [li.text for li in app.css_all(".hall-list li")]
+    assert "Lecture Hall 803" not in free, \
+        f"the finder offered a hall a 09:10-14:00 booking is holding: {free}"
+    # The table opens on today; the long booking is Tuesday's — walk the
+    # strip there before reading the row. Scrolled into view first: the
+    # finder result that just rendered above can leave the strip under the
+    # sticky header, where a native click lands on the wrong element.
+    tue = app.xpath("//section[@aria-label='Lecture halls']"
+                    "//button[normalize-space()='Tue']")
+    app.d.execute_script(
+        "arguments[0].scrollIntoView({block: 'center'}); arguments[0].click();", tue)
+    bands = app.wait_css(
+        "section[aria-label='Lecture halls'] td[data-hall='Lecture Hall 803']"
+        "[data-slot='630'] span.covered")
+    assert bands, "the hall's own row must show the band holding the room"
+
+    # The phone day list learns it from the same computation.
+    app.d.execute_cdp_cmd("Emulation.setDeviceMetricsOverride", {
+        "width": 390, "height": 844, "deviceScaleFactor": 2, "mobile": True})
+    app.d.execute_cdp_cmd("Emulation.setTouchEmulationEnabled", {
+        "enabled": True, "maxTouchPoints": 5})
+    try:
+        app.open_tab("My timetable")
+        app.wait_css(".day-list, .week-grid")
+        # The strip opens on today; walk to Tuesday.
+        app.xpath("//section[@aria-label='My timetable']"
+                  "//button[normalize-space()='Tue']").click()
+        row = app.wait_css(".day-list .slotrow[data-day='1'][data-slot='630']")
+        assert row.find_elements(By.CSS_SELECTOR, "span.covered"), \
+            "the phone day list must cast the same shadow"
+    finally:
+        app.d.execute_cdp_cmd("Emulation.clearDeviceMetricsOverride", {})
+        app.d.execute_cdp_cmd("Emulation.setTouchEmulationEnabled", {"enabled": False})
+        app.d.set_window_size(1500, 1000)
+
+    # On the printed poster the covered slots stay visibly taken — the sheet
+    # is read all term, and a white 10:30 would be the same lie on paper.
+    app.open_tab("My timetable")
+    app.wait_css("section[aria-label='My timetable'] table.tt")
+    app.d.execute_cdp_cmd("Emulation.setEmulatedMedia", {"media": "print"})
+    time.sleep(0.2)
+    band = app.css("td[data-day='1'][data-slot='630'] span.covered")
+    bg = band.value_of_css_property("background-color")
+    app.d.execute_cdp_cmd("Emulation.setEmulatedMedia", {"media": ""})
+    assert bg not in ("rgba(0, 0, 0, 0)", "rgb(255, 255, 255)"), \
+        f"the band must print in its course's colour, got {bg}"
+
+    # And the shadow dies with its meeting: putting the class back on CMI's
+    # time clears every band (the mirror of the synthetic-column vanish pin,
+    # t36). The seeded override never entered the undo stack, so this goes
+    # through the Your-changes panel's own button, as a reader would.
+    app.xpath("//button[normalize-space()=\"Back to CMI's time\"]").click()
+    WebDriverWait(app.d, 5).until(
+        lambda d: not app.css_all("span.covered"),
+        message="ending the long meeting must clear its bands")
+
+
+def t122_a_clash_inside_the_covered_span_is_red_where_it_happens(app):
+    """R77 follow-up: AAT meets Tue 10:30 — inside TOC's 09:10–14:00 span.
+    Both CHIPS already wear the clash red (interval overlap has always been
+    the clash rule); the band in AAT's cell must wear it too, or the cell
+    shows a red chip beside a calm blue label and the conflict reads as
+    one-sided. The 11:50 cell holds no other course, so ITS band stays quiet:
+    the red marks where the fight is, not everywhere the span reaches."""
+    app.boot("/", selection=["TOC", "AAT"], overrides=LONG_OVR)
+
+    # The chips: the long meeting clashes like any other (pre-existing rule,
+    # pinned so it cannot regress out from under the band).
+    toc = app.chips("TOC", container=".week-grid")[0]
+    assert "clash" in toc.get_attribute("class"), "TOC's home chip must be red"
+    aat = [c for c in app.chips("AAT", container=".week-grid")
+           if "clash" in c.get_attribute("class")]
+    assert aat, "AAT's Tue chip sits inside TOC's span and must be red"
+
+    # The band beside AAT's chip is red, with the chips' own ⚠ language.
+    band_630 = app.cell(1, 630).find_element(By.CSS_SELECTOR, "span.covered")
+    assert "clash" in band_630.get_attribute("class"), \
+        "the covered band shares AAT's cell and must share the red"
+    # The 11:50 band fights nothing and stays the course's own quiet colour.
+    band_710 = app.cell(1, 710).find_element(By.CSS_SELECTOR, "span.covered")
+    assert "clash" not in band_710.get_attribute("class"), \
+        "a band only reds where the conflict actually is"
+
+    # And the clash panel names the pair with the REAL span, so the fix and
+    # the words agree.
+    assert any(
+        "09:10–14:00" in p.text and "AAT" in p.text
+        for p in app.css_all(".clash-line, [class*='clash']")
+    ), "the clash panel must carry the extended time"
+
+
 def t105_arrow_keys_walk_the_tab_rail(app):
     """The rail has always claimed role=tablist; now it behaves like one.
     Both axes work (the rail is a column on a desktop and a bar on a phone),
@@ -6611,6 +6975,11 @@ TESTS = [
     t115_the_search_box_has_the_three_switches_every_editor_has,
     t116_the_search_box_shows_its_whole_placeholder,
     t117_the_shorten_popup_has_a_way_out_and_it_is_not_beside_the_send,
+    t118_the_search_looks_only_where_you_tell_it,
+    t119_today_is_marked_on_the_week_tables,
+    t120_dialogs_open_hands_off_and_the_page_behind_stays_put,
+    t121_a_long_meeting_visibly_fills_every_slot_it_covers,
+    t122_a_clash_inside_the_covered_span_is_red_where_it_happens,
     t106_the_wheel_over_the_rail_walks_the_sections,
 ]
 

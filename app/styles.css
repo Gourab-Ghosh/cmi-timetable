@@ -495,6 +495,11 @@ button {
    hue arrives as an inline style (hues.rs already picks a neutral slate for
    these), and an inline custom property wins over anything written here. */
 .chip.neutral { --chip-sat: 10%; }
+/* The inverse of the affordance bug: only a chip you can PRESS may promise
+   it. The branch chips in a dialog and the drag ghost are <span>s that open
+   nothing, and the pointer cursor they inherited advertised a details popup
+   that never comes. */
+span.chip { cursor: default; }
 /* Long names WRAP inside the chip; the row grows to fit. Truncating with
    "…" was tried (R37) and read as unreadable: a hall called "Lecture Ha…"
    helps nobody, and a table's job is to be read. Nothing may ellipsize in
@@ -572,6 +577,51 @@ label.opt { min-height: 32px; }
 .chip.overridden::after { content: "✎"; font-size: 0.75rem; opacity: 0.9; }
 
 .chip.ghost-src { opacity: 0.35; }
+/* The continuation band: a meeting longer than its column casts this into
+   every later column it covers, so a 09:10–14:00 class never leaves 10:40
+   looking free (R77). Half a chip on purpose — the course's own hue at half
+   strength, a 3px rail pointing back toward the home chip, NO full border
+   (solid means chip, dashed means overridden — both taken) and a smaller
+   radius, type and text saturation than the chip it echoes. A <span>: it
+   opens nothing, drags nothing, takes no pointer cursor ("no controls that
+   cannot act"). Background lives HERE, on the child, where the row hover,
+   the halls banding and print's white-out cannot erase it — and without
+   !important, so the drag highlight stays the loudest thing in a cell. */
+.covered {
+  --hue: 210;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.3rem;
+  /* The whole slot is taken: say so full-width. In a clash cell the band
+     wraps to its own row under the real chips. */
+  flex: 1 1 100%;
+  min-width: 0;
+  padding: 0.14rem 0.45rem;
+  border-left: 3px solid hsl(var(--hue) var(--chip-sat) var(--chip-line-l));
+  border-radius: 4px;
+  background: hsl(var(--hue) var(--chip-sat) var(--chip-bg-l) / 0.5);
+  color: hsl(var(--hue) 45% var(--chip-text-l));
+  font-size: 0.72rem;
+}
+.covered .code {
+  font-family: var(--font-mono);
+  font-weight: 600;
+  min-width: 0;
+  overflow-wrap: anywhere; /* wraps to the next line; never "…" (R37) */
+}
+.covered .until { font-weight: 500; opacity: 0.85; white-space: nowrap; }
+/* Courses with no branch drain saturation, exactly like their chips. */
+.covered.neutral { --chip-sat: 10%; }
+/* A band in a cell it actually FIGHTS over wears the same red the chips do
+   (set per cell, My timetable only): a conflict must not turn quiet just
+   because one side of it is a continuation. Same ⚠-on-the-code language as
+   .chip.clash. */
+.covered.clash {
+  border-left-color: var(--alarm);
+  background: var(--alarm-wash);
+  color: var(--alarm);
+}
+.covered.clash .code::before { content: "⚠ "; }
 .chip.draggable { cursor: grab; }
 .chip.draggable:hover { transform: translateY(-1px); }
 .chip .wontfit { color: var(--warn); font-weight: 700; }
@@ -618,6 +668,17 @@ label.opt { min-height: 32px; }
 .badge.accent { border-color: transparent; color: var(--accent); background: var(--accent-wash); }
 /* "Added by you" — the second accent marks user-authored data. */
 .badge.custom { border-color: transparent; color: var(--accent2); background: var(--accent2-wash); }
+/* Exactly two badges in the app are BUTTONS — "Added by you" and the
+   shadowed-code warning on My-courses cards, both of which open the details
+   dialog. A pressable badge cannot wear the identical dress as fifteen
+   static ones: the ring in the badge's own colour is the mark that this one
+   answers. Written AFTER the variants and one class more specific, because
+   they set border-color: transparent and would win a tie. */
+button.badge.custom,
+button.badge.warn {
+  border-color: color-mix(in srgb, currentColor 45%, transparent);
+  cursor: pointer;
+}
 
 /* ==========================================================================
    Grids: time slots across the top, days/halls down the left. Sticky both.
@@ -746,6 +807,18 @@ table.tt.halls-merged tr.today th.dayhead {
   font-weight: 700;
   box-shadow: inset 2px 0 0 var(--accent);
 }
+/* The same mark, in the same place, on the other two week tables (My
+   timetable and the Master grid): their day gutter is the row's only
+   `.rowhead`. Scoped away from halls-merged, whose `.rowhead` is ALSO the
+   hall-name cell — painting a room accent would say the room is special,
+   when it is the day that is. A row wash was tried and rejected: chips
+   already colour the busy cells, and a tinted band under them makes today
+   the loudest row on a page the reader looks at every day. */
+table.tt:not(.halls-merged) tbody tr.today > th.rowhead {
+  color: var(--accent);
+  font-weight: 700;
+  box-shadow: inset 2px 0 0 var(--accent);
+}
 /* Alternate halls carry a faint band so a block reads as one thing, and a
    rule marks where the next room starts. */
 table.tt.halls-merged tr.alt td:not(.extra),
@@ -836,6 +909,8 @@ table.tt td.kbd-cursor { box-shadow: inset 0 0 0 2px var(--accent); }
   .density-compact .chip { min-height: 40px; }
 }
 .density-compact .chip .hall { display: none; }
+/* Tight rows shrink the band with the chips; it stays one quiet line. */
+.density-compact .covered { font-size: 0.66rem; padding: 0.06rem 0.35rem; }
 
 /* Drag ghost */
 .drag-ghost {
@@ -1271,6 +1346,28 @@ label.opt.alarm-lead input { width: 5rem; }
    "Search by code, name or instructor", then handed 6.4rem of it to the
    switches, and the placeholder was cut off mid-word ("…name or in"). Room
    for text and room for buttons are not the same room. */
+/* The search box and its "Search in" menu are ONE control: the menu decides
+   what typing in the box means, so it is joined onto the box's right end —
+   adjoining corners squared, a single shared seam — instead of floating in
+   the facet row looking like one more filter. */
+.search-group {
+  display: inline-flex;
+  align-items: stretch;
+}
+.search-group > .searchbox > input[type="search"] {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+.search-group > details.searchin > summary {
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+  /* One seam, not two borders: the summary's left edge sits ON the input's
+     right edge. When the menu opens its accent ring paints over the seam,
+     which is right — the ring says "this is what you are adjusting". */
+  margin-left: -1px;
+  height: 100%;
+  box-shadow: none;
+}
 .searchbox {
   --switch: 26px;
   --switch-gap: 0.12rem;
@@ -1323,19 +1420,38 @@ label.opt.alarm-lead input { width: 5rem; }
   height: 26px;
   display: grid;
   place-items: center;
-  border: 1px solid transparent;
+  /* The border was transparent, and users read the three labels as
+     decoration — nothing marked them as buttons until one was already on.
+     Painting the border that was always in the box (it is inside the 26px,
+     so nothing t116 measures moves) turns the strip into three small keys.
+     The resting face keeps the field's own background: the outline alone is
+     the "you can press this" signal, and anything heavier makes three
+     always-on-screen controls louder than the text they act on. */
+  border: 1px solid var(--line);
   border-radius: calc(var(--r-sm) - 2px);
-  background: transparent;
+  background: var(--surface);
   color: var(--muted);
   font-family: var(--font-mono);
   font-size: 0.74rem;
   font-weight: 600;
   line-height: 1;
   cursor: pointer;
-  transition: background 120ms var(--ease), color 120ms var(--ease),
-    border-color 120ms var(--ease);
+  /* background and color only — NOT border-color. Cross-fading a 1px
+     rounded border leaves stray anti-aliased pixels at the corners on some
+     zoom levels (reported as a small dot flickering at a corner after
+     hover); a border that snaps paints cleanly. background-clip keeps the
+     fill inside the border line for the same reason. */
+  background-clip: padding-box;
+  transition: background 120ms var(--ease), color 120ms var(--ease);
 }
-.search-switch:hover { background: var(--surface-2); color: var(--fg); }
+.search-switch:hover {
+  background: var(--surface-2);
+  /* var(--text), not var(--fg): --fg exists nowhere in this stylesheet, and
+     an undefined custom property invalidates the declaration at
+     computed-value time — the old hover was silently not changing colour. */
+  color: var(--text);
+  border-color: var(--muted);
+}
 /* On is a filled, bordered chip — legible without colour (the border and the
    weight change too), which is the same rule the chips and the tab rail
    follow. */
@@ -1386,6 +1502,22 @@ label.opt.alarm-lead input { width: 5rem; }
   /* The box is the full width of the bar here, so it needs no minimum of its
      own — but it still needs the strip's room, which the calc keeps. */
   .searchbox { display: flex; width: 100%; --search-text: 0px; }
+  /* The joined "Search in" UNJOINS here, not at 439px: sharing the row with
+     the summary costs the placeholder ~110px exactly where the box has
+     stopped reserving a minimum, and at 441-540px that clipped it mid-word
+     (caught by field-clip-probe, the R73 bug class). Below 640 the box takes
+     the whole row and the menu drops beneath it, whole again — squared
+     corners with nothing to join onto read as a rendering mistake. */
+  .search-group { width: 100%; flex-wrap: wrap; }
+  .search-group > .searchbox { flex: 1 1 100%; }
+  .search-group > .searchbox > input[type="search"] { border-radius: var(--r-sm); }
+  .search-group > details.searchin { margin-top: 0.3rem; margin-right: auto; }
+  .search-group > details.searchin > summary {
+    border-radius: var(--r-sm);
+    margin-left: 0;
+    height: auto;
+    box-shadow: var(--shadow-sm);
+  }
 }
 /* Below this width the strip and the placeholder cannot both fit, and something
    has to give. Measured, not guessed (.workagents/field-clip-probe.py): at
@@ -1415,6 +1547,7 @@ label.opt.alarm-lead input { width: 5rem; }
   /* The ✕ stays IN the cluster rather than being pushed to the far left of the
      row: four controls under the field's right edge read as belonging to the
      field, while a lone glyph at the opposite end reads as something else's. */
+
 }
 details.facet { position: relative; }
 details.facet > summary {
@@ -1468,6 +1601,20 @@ details.facet .menu {
 }
 /* Wrapped labels align to the checkbox's first line, not its middle. */
 details.facet .menu label.opt { align-items: flex-start; }
+/* "Search in": three fixed rows under one quiet sentence — narrower than a
+   facet's list, and nothing else. A disabled row is the floor, not a fault:
+   the one part still ticked cannot come off, and the cursor says so. */
+.searchin-menu { min-width: 13rem; }
+.searchin-lede {
+  margin: 0 0 0.4rem;
+  line-height: 1.4;
+  /* The muted-small look without the .muted class: the filter bar's first
+     `.muted` element is how t28 finds the "N courses match" line, and this
+     paragraph sits earlier in the DOM. */
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+.searchin-menu label.opt:has(input:disabled) { cursor: not-allowed; }
 details.facet .menu label.opt input { margin-top: 0.2rem; flex: none; }
 /* Per-menu search + All/None — sticky so they stay usable while the option
    list scrolls underneath. */
@@ -1702,12 +1849,18 @@ details.facet .menu .menu-empty { margin: 0.2rem 0 0; }
   align-self: center;
 }
 /* No border and no fill: it is the third thing in a row of three, and it is
-   not an answer to the question — it is a decision about the question. */
+   not an answer to the question — it is a decision about the question. The
+   underline is what still says "you can press this": with border and fill
+   both stripped, a grey sentence after two real buttons read as a footnote,
+   and this button is the one place the whole feature can be turned off. */
 .banner-actions .btn.ghost {
   border-color: transparent;
   background: transparent;
   color: var(--muted);
   box-shadow: none;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  text-decoration-color: color-mix(in srgb, currentColor 55%, transparent);
 }
 .banner-actions .btn.ghost:hover:not(:disabled),
 .banner-actions .btn.ghost:focus-visible {
@@ -1794,6 +1947,12 @@ details.facet .menu .menu-empty { margin: 0.2rem 0 0; }
 .toast button { color: inherit; font-weight: 700; text-decoration: underline; }
 
 /* Dialogs */
+/* While anything modal is up (set by an effect in app.rs, keyed on the dialog
+   AND the confirm), the page gives up its scroll: a wheel that runs past a
+   popup's end otherwise keeps going into the page, and closing the popup
+   finds the app somewhere else. Overflow, never position: fixed — that
+   variant zeroes window.scrollY on every open. */
+body.modal-open { overflow: hidden; }
 .overlay {
   position: fixed;
   inset: 0;
@@ -1820,6 +1979,9 @@ details.facet .menu .menu-empty { margin: 0.2rem 0 0; }
   max-height: min(85vh, 720px);
   max-height: min(85dvh, 720px);
   overflow: auto;
+  /* Belt to the body lock above: even if the lock is ever off, a wheel that
+     reaches this scroller's end stops here instead of chaining to the page. */
+  overscroll-behavior: contain;
   /* The sticky actions bar floats over the content, so anything scrolled
      to (focus, scrollIntoView) must stop clear of it — otherwise the last
      control lands underneath and can't be tapped. */
@@ -1972,7 +2134,16 @@ details.facet .menu .menu-empty { margin: 0.2rem 0 0; }
 
 .shorten-why { line-height: 1.45; }
 .shorten-long { margin: 0; }
-.shorten-long summary { cursor: pointer; padding: 0.3rem 0; }
+/* Underlined because the triangle alone was the only mark this could be
+   pressed — muted small grey text otherwise reads as a caption (R77's
+   affordance sweep). Dotted, the way "more on this if you ask" reads,
+   rather than a link's solid line. */
+.shorten-long summary {
+  cursor: pointer;
+  padding: 0.3rem 0;
+  text-decoration: underline dotted;
+  text-underline-offset: 3px;
+}
 .shorten-long .fieldrow { margin: 0.35rem 0 0; }
 .shorten-long input { flex: 1; min-width: 0; font-family: var(--font-mono); }
 
@@ -2115,10 +2286,10 @@ details.facet .menu .menu-empty { margin: 0.2rem 0 0; }
 .dialog .fieldrow > select,
 .dialog .fieldrow .hall-pick > select { min-width: 12rem; }
 .dialog .dialog-lede { margin: -0.25rem 0 0.9rem; }
-/* The body of a dialog whose first button acts (the import question) takes
-   focus itself so Space scrolls instead of answering. It is not a control,
-   so it draws no focus ring — the ring belongs on whatever Tab reaches. */
-.dialog [data-autofocus]:focus { outline: none; }
+/* Every dialog opens with focus on its own container (R77) — no field, no
+   button, nothing selected. The container is not a control, so it draws no
+   focus ring: the ring belongs on whatever Tab reaches. */
+.dialog:focus { outline: none; }
 /* Free-hall answer: the count leads, then the rooms as a scannable list.
    A sentence of fifteen comma-separated room names is not readable. */
 .finder-result { margin-top: 0.85rem; }
@@ -2801,6 +2972,18 @@ pre.devpre {
   .app { display: block; }
   .header, .tabs, .toolbar, .toasts, .banner, .tray, .overlay,
   .filterbar, .chip-info, .noprint { display: none !important; }
+  /* The poster is printed once and read all term — "today" is only true on
+     the day it left the printer, so the mark stays on screen. The selector
+     REPEATS the screen rule's `:not()` on purpose: `table.tt tr.today >
+     th.rowhead` alone is one class short, loses the cascade, and the bar
+     prints — the same silent-specificity trap R76 hit with the shorten
+     footer. */
+  table.tt:not(.halls-merged) tbody tr.today > th.rowhead,
+  table.tt.halls-merged tr.today th.dayhead {
+    color: inherit;
+    font-weight: inherit;
+    box-shadow: none;
+  }
   .main { padding: 0; max-width: none; }
   .print-only { display: block; }
 
@@ -2938,6 +3121,25 @@ pre.devpre {
     text-align: center;
     white-space: normal;
     overflow-wrap: anywhere;
+  }
+  /* The continuation band prints: the poster is read all term, and a covered
+     slot that prints white is the same lie on paper the band exists to kill
+     on screen. Colours restated with !important like the chip's, since print
+     forces every td white; lighter than the chip so the real classes lead. */
+  .covered {
+    flex: 1 1 100%;
+    padding: 1px 4px;
+    font-size: 9px;
+    border-left: 2.5px solid hsl(var(--hue) 42% 60%) !important;
+    background: hsl(var(--hue) 55% 95%) !important;
+    color: hsl(var(--hue) 60% 28%) !important;
+  }
+  /* The clash red survives print like the chips' does — the ⚠ glyph rides
+     in ::before, so grayscale printers keep the meaning too. */
+  .covered.clash {
+    border-left-color: #c22f41 !important;
+    background: #fbe9ec !important;
+    color: #c22f41 !important;
   }
   /* Clash: alarm red — the one thing red is reserved for — plus the ⚠
      glyph so grayscale printers keep the meaning. It sits on the code's

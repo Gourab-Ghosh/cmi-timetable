@@ -9,7 +9,7 @@ multi-clash sheet — into e2e/shots/ (gitignored).
     .venv/bin/python shoot.py
 
 Environment knobs: DIST_DIR, CHROME_BIN, PORT, CARGO_TARGET_DIR (for the
-seed generator; defaults to ~/.rust-target-e2e). Like the e2e tests, the
+seed generator; defaults to ~/.rust-cache/timetable-e2e). Like the e2e tests, the
 browser blackholes all non-localhost DNS — nothing touches the network, so
 the app is always in its "CMI unreachable" state and runs on the seed.
 """
@@ -38,7 +38,7 @@ os.makedirs(OUT, exist_ok=True)
 
 # Seed snapshot from the fixtures (the app ships no data).
 env = dict(os.environ)
-env.setdefault("CARGO_TARGET_DIR", os.path.expanduser("~/.rust-target-e2e"))
+env.setdefault("CARGO_TARGET_DIR", os.path.expanduser("~/.rust-cache/timetable-e2e"))
 gen = subprocess.run(
     [
         "cargo", "run", "-q", "-p", "cmi-timetable-core",

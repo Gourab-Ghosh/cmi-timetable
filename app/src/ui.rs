@@ -72,6 +72,59 @@ impl ChipProps {
     }
 }
 
+/// The continuation band: a meeting longer than its column casts this into
+/// every LATER column it covers, so a 09:10–14:00 class never leaves 10:40
+/// looking free (R77). Half a chip on purpose — the course's own hue at half
+/// strength, a rail pointing back toward the home chip — and a `<span>`,
+/// never a button: it opens nothing and drags nothing, and a control that
+/// cannot act may not look like one. It carries visible words ("TOC · until
+/// 14:00") because phones never show a tooltip; the title adds the full span
+/// for a desktop hover. The title deliberately never begins "{code}," — that
+/// is the chip selector's namespace (`[aria-label^='CODE,']`), and the tests
+/// count chips by it.
+/// `clash` is decided by the CALLER, per cell: a band reds only where the
+/// covered span actually fights something — the cell that holds the other
+/// course's chip (or another course's band) — not in every cell it crosses.
+pub fn covered_band(
+    app: App,
+    code: String,
+    slot: ttcore::model::Slot,
+    clash: bool,
+) -> impl IntoView {
+    let index =
+        use_context::<crate::app::CourseIndex>().expect("CourseIndex is provided at the root");
+    // Hue and neutrality resolve exactly like the chip's identity memo, and
+    // for the same reason: deleting a custom that shadowed a CMI code changes
+    // the right colour without a remount.
+    let identity = {
+        let code = code.clone();
+        Memo::new(move |_| {
+            let own = app.customs.with(|cs| cs.get(&code).is_some());
+            if own {
+                (hues::branch_hue(&code), false)
+            } else {
+                index
+                    .0
+                    .with(|map| map.get(&code).map(|(_, h, n)| (*h, *n)))
+                    .unwrap_or((hues::course_hue(&[]), true))
+            }
+        })
+    };
+    let title = format!("{code} continues here ({})", slot.label());
+    view! {
+        <span
+            class="covered"
+            class:clash=clash
+            class:neutral=move || identity.with(|(_, n)| *n)
+            style=move || format!("--hue:{}", identity.with(|(h, _)| *h))
+            title=title
+        >
+            <span class="code">{code}</span>
+            <span class="until">{format!("until {}", slot.end_label())}</span>
+        </span>
+    }
+}
+
 pub fn chip(app: App, p: ChipProps) -> impl IntoView {
     // Identity — name, hue, whether this is one of the user's own courses —
     // is a memo for the same reason selection and clash are (below): a chip
@@ -1185,6 +1238,136 @@ fn facet_checkbox(
     }
 }
 
+/// The parts of a course the search box reads: a stable key for
+/// `Filters::search_skip`, and the word a reader sees beside the checkbox.
+/// This list IS the haystack — `course_matches` builds its search string
+/// from exactly these three parts, so a fourth entry here without a fourth
+/// `hay.push_str` there would be a checkbox that changes nothing.
+const SEARCH_PARTS: [(&str, &str); 3] = [
+    ("code", "Course code"),
+    ("name", "Course name"),
+    ("instructor", "Instructor"),
+];
+
+/// "Search in" — which parts of a course the search box reads.
+///
+/// A `details.facet` like the real facets on purpose: it opens and closes
+/// with them, Esc and outside clicks reach it through the same handlers
+/// (dnd.rs keys both on `details.facet`), and it wears their dress. But the
+/// list is three fixed rows, so none of facet_menu's furniture — a search
+/// box over three checkboxes and All/None beside them is bloat.
+///
+/// The LAST ticked box cannot be unticked: a search that reads nothing is a
+/// control that cannot act, and the app doesn't offer those. The box is
+/// disabled rather than bounced back, and its title says why.
+fn search_in_menu(app: App, scope: FilterScope) -> impl IntoView {
+    let enabled = Memo::new(move |_| {
+        app.with_filters_in(scope.mine(), |f| {
+            SEARCH_PARTS.iter().filter(|(k, _)| f.searches(k)).count()
+        })
+    });
+    let rows = SEARCH_PARTS
+        .map(|(key, label)| {
+            let node = NodeRef::<leptos::html::Input>::new();
+            let initial = untrack(|| app.with_filters_in(scope.mine(), |f| f.searches(key)));
+            Effect::new(move |_| {
+                // Filters read hoisted above node.get(), like facet_checkbox:
+                // NodeRef is a signal, and the prefs borrow must be closed
+                // before a second signal is read.
+                let checked = app.with_filters_in(scope.mine(), |f| f.searches(key));
+                if let Some(input) = node.get() {
+                    input.set_checked(checked);
+                }
+            });
+            let undo_label = format!("what the search reads{}", scope.undo_suffix());
+            view! {
+                <label class="opt">
+                    <input
+                        node_ref=node
+                        type="checkbox"
+                        prop:checked=initial
+                        // The floor: the one box still ticked cannot come off.
+                        disabled=move || {
+                            enabled.get() == 1
+                                && app.with_filters_in(scope.mine(), |f| f.searches(key))
+                        }
+                        title=move || {
+                            if enabled.get() == 1
+                                && app.with_filters_in(scope.mine(), |f| f.searches(key))
+                            {
+                                "The search has to read something — tick another \
+                                 part first."
+                            } else {
+                                ""
+                            }
+                        }
+                        on:change=move |ev| {
+                            let on = event_target_checked(&ev);
+                            app.act_filters_in(
+                                scope.mine(),
+                                &undo_label,
+                                false,
+                                move |f| {
+                                    if on {
+                                        f.search_skip.retain(|s| s != key);
+                                    } else if f.searches(key) {
+                                        f.search_skip.push(key.to_string());
+                                    }
+                                },
+                            );
+                        }
+                    />
+                    <span>{label}</span>
+                </label>
+            }
+        })
+        .to_vec();
+    view! {
+        <details
+            class="facet searchin"
+            on:toggle=move |ev| {
+                use wasm_bindgen::JsCast;
+                if let Some(el) = ev
+                    .target()
+                    .and_then(|t| t.dyn_into::<web_sys::Element>().ok())
+                    && el.has_attribute("open")
+                {
+                    crate::domx::close_open_facets(Some(&el));
+                }
+            }
+        >
+            <summary aria-label=move || {
+                let n = enabled.get();
+                if n == SEARCH_PARTS.len() {
+                    "Search in, reading everything".to_string()
+                } else {
+                    format!("Search in, reading {n} of {} parts", SEARCH_PARTS.len())
+                }
+            }>
+                "Search in"
+                // The badge appears only when the reader has narrowed the
+                // scope — the count of parts still read, matching what the
+                // placeholder now says. All three on is the default and
+                // wears nothing, like every facet at rest.
+                {move || {
+                    let n = enabled.get();
+                    (n < SEARCH_PARTS.len())
+                        .then(|| view! { <span class="facet-count">{format!(" {n}")}</span> })
+                }}
+            </summary>
+            <div class="menu searchin-menu">
+                // Muted by its OWN class, not by `.muted`: t28 reads the
+                // filter bar's first `.muted` as the "N courses match" line,
+                // and this paragraph sits earlier in the DOM.
+                <p class="searchin-lede">
+                    "What typing in the search box is matched against."
+                </p>
+                {rows}
+            </div>
+        </details>
+    }
+}
+
 fn toggle_vec<T: PartialEq>(v: &mut Vec<T>, item: T, on: bool) {
     if on {
         if !v.contains(&item) {
@@ -1716,10 +1899,13 @@ pub fn filter_bar(app: App, scope: FilterScope, result_count: Signal<usize>) -> 
 
     view! {
         <div class="filterbar" role="group" aria-label="Filters">
-            // The search box and its three switches are one control, the way
-            // an editor's find bar is: the box owns the row, the switches sit
-            // inside its right edge, and nothing about the layout moves when
-            // one is turned on.
+            // The search box, its three switches AND the "Search in" menu are
+            // one control, the way an editor's find bar is: the box owns the
+            // row, the switches sit inside its right edge, and the menu that
+            // decides what typing MEANS is joined onto the box's right end —
+            // squared corners, one shared seam — so nobody has to guess that
+            // the two belong together.
+            <div class="search-group">
             <div
                 class="searchbox"
                 class:bad=move || matcher.with(Option::is_some)
@@ -1731,12 +1917,43 @@ pub fn filter_bar(app: App, scope: FilterScope, result_count: Signal<usize>) -> 
                     // Both placeholders have to fit the room the box reserves
                     // beside the switches (see `--search-text` in styles.css),
                     // so the pattern one names its two examples and stops.
+                    // When the "Search in" menu narrows the scope, the
+                    // placeholder says what the box reads NOW — the promise
+                    // must never be wider than the search. Every narrowed
+                    // string is shorter than the full one, so the fit that
+                    // t116 measures still holds.
                     placeholder=move || {
-                        if app.with_filters_in(scope.mine(), |f| f.use_regex) {
-                            "Pattern: ^ana or algebra|analysis"
-                        } else {
-                            "Search by code, name or instructor"
-                        }
+                        app.with_filters_in(scope.mine(), |f| {
+                            let all = f.search_scope_is_default();
+                            if all && f.use_regex {
+                                return "Pattern: ^ana or algebra|analysis".to_string();
+                            }
+                            if all {
+                                return "Search by code, name or instructor".to_string();
+                            }
+                            let parts: Vec<&str> = [
+                                ("code", "code"),
+                                ("name", "name"),
+                                ("instructor", "instructor"),
+                            ]
+                            .iter()
+                            .filter(|(k, _)| f.searches(k))
+                            .map(|(_, word)| *word)
+                            .collect();
+                            let list = match parts.as_slice() {
+                                [a] => (*a).to_string(),
+                                [a, b] => format!("{a} or {b}"),
+                                // Unreachable from the UI (the menu keeps one
+                                // ticked); a hand-edited blob lands here.
+                                _ => return "The search reads nothing — see Search in"
+                                    .to_string(),
+                            };
+                            if f.use_regex {
+                                format!("Pattern for {list}")
+                            } else {
+                                format!("Search by {list}")
+                            }
+                        })
                     }
                     aria-label="Search courses"
                     aria-invalid=move || {
@@ -1824,6 +2041,11 @@ pub fn filter_bar(app: App, scope: FilterScope, result_count: Signal<usize>) -> 
                         |f, on| f.use_regex = on,
                     )}
                 </div>
+            </div>
+            // Joined onto the box, not merely near it: this menu changes what
+            // typing MEANS, the way the three switches do, and R77's review
+            // found that as a separate pill it read as one more facet.
+            {search_in_menu(app, scope)}
             </div>
             // A pattern the reader is still typing is not an error to be
             // scolded for — it is a half-finished thought. Said quietly,
@@ -2233,62 +2455,48 @@ pub fn DialogHost() -> impl IntoView {
                 });
             }
             gloo_timers::callback::Timeout::new(0, || {
-                // A FIELD first, and only then a button. Space is how people
-                // scroll a tall dialog, and the course editor's first button
-                // is a credits toggle — landing there turned a scroll into
-                // "this course is worth 0 credits". A form's first field is
-                // also simply where you want to start.
-                //
-                // The fallback skips the toggles and chips for the same
-                // reason: one of CMI's courses with no meetings has no field
-                // at all — no name, no code, no row — so the credits "0"
-                // would be the first button on screen, and it is now an
-                // ordinary thing to open that form just to set the credits.
-                //
-                // `.nofocus` opts a field out. The what-changed digest is
-                // something you READ, and its one field decides what is in
-                // the list — landing there would turn the same scrolling
-                // Space press into "hide most of this". Tab still reaches
-                // it first; nothing lands on it uninvited.
-                //
-                // `[data-autofocus]` is the same opt-out from the other end:
-                // a dialog whose first button DOES something on the way in
-                // (the import question's "Add it to my timetable") names the
-                // element to land on instead — its own body, which takes
-                // focus without being a control, so Space scrolls and Tab
-                // still reaches the answers in order.
+                // The DIALOG ITSELF takes focus — never a field, never a
+                // button. This used to hunt for the first field, which put a
+                // caret (and, on the Share link, a full text selection)
+                // where nobody had asked for one, on every open. The
+                // container is the hands-off middle that keeps every
+                // accessibility property the hunt existed for: focus is
+                // INSIDE the popup, so the Tab trap holds and a screen
+                // reader announces the dialog; the container is also the
+                // dialog's own scroller, so Space scrolls a tall popup
+                // instead of pressing something; and the first Tab walks to
+                // the first control in reading order. `tabindex="-1"` on the
+                // element is what lets a div take focus without joining the
+                // Tab order. Focusing NOTHING is not an option — focus would
+                // still be on the button behind the overlay, Tab would walk
+                // the page under the popup, and Escape-in-the-dialog
+                // semantics would depend on where the click came from.
                 let doc = domx::document();
                 if let Some(el) = doc
-                    .query_selector(
-                        ".dialog [data-autofocus], .dialog input:not(.nofocus), \
-                         .dialog select, .dialog textarea",
-                    )
+                    .query_selector(".dialog")
                     .ok()
                     .flatten()
-                    .or_else(|| {
-                        doc.query_selector(
-                            ".dialog button:not(.seg button):not(.chip), .dialog [href]",
-                        )
-                        .ok()
-                        .flatten()
-                    })
                     .and_then(|el| el.dyn_into::<web_sys::HtmlElement>().ok())
                 {
                     let _ = el.focus();
-                    // Focusing a text box with a value longer than itself
-                    // leaves the caret at the end, so the box opens showing
-                    // the MIDDLE of the value — the Share dialog's first
-                    // field greeted every reader with a link beginning
-                    // "tp://127.0.0.1…", which looks broken and is the one
-                    // thing that field exists to show whole.
-                    el.set_scroll_left(0);
                 }
             })
             .forget();
         } else if was_open {
             PREV_FOCUS.with(|p| {
                 if let Some(el) = p.borrow_mut().take() {
-                    let _ = el.focus();
+                    // preventScroll, because Chrome scrolls to the element's
+                    // LAYOUT position, not where it is painted — and the
+                    // header is sticky, so its buttons lay out at the top of
+                    // the document while being visible at every scroll. The
+                    // restore was yanking the page to the top every time a
+                    // dialog opened from the header closed while the reader
+                    // was scrolled down (found by t120, R77). If the trigger
+                    // has genuinely scrolled away, focus is restored where it
+                    // is and the page stays where the reader left it.
+                    let opts = web_sys::FocusOptions::new();
+                    opts.set_prevent_scroll(true);
+                    let _ = el.focus_with_options(&opts);
                 }
             });
         }
@@ -2324,6 +2532,10 @@ pub fn DialogHost() -> impl IntoView {
                                 class="dialog"
                                 role="dialog"
                                 aria-modal="true"
+                                // Focusable (not tabbable): the open effect
+                                // above focuses THIS element, not a control
+                                // inside it — see the comment there.
+                                tabindex="-1"
                                 on:click=|ev| ev.stop_propagation()
                                 on:keydown=move |ev| trap_tab(&ev)
                             >
@@ -2506,7 +2718,17 @@ fn trap_tab(ev: &web_sys::KeyboardEvent) {
             n.is_same_node(Some(a))
         })
     };
-    if ev.shift_key() && is_active(&first) {
+    // A dialog opens with focus on its CONTAINER (see DialogHost) — the
+    // element this handler is attached to, matched by no selector above.
+    // From there, forward Tab enters the first control natively; Shift+Tab's
+    // native answer is the element BEFORE the dialog, which is the page
+    // behind the overlay — so it has to be wrapped to the last control by
+    // hand, or the very first key a keyboard user presses escapes the trap.
+    let container_active = matches!(&active, Some(a) if {
+        let a: &web_sys::Node = a.as_ref();
+        dialog.is_same_node(Some(a))
+    });
+    if ev.shift_key() && (is_active(&first) || container_active) {
         ev.prevent_default();
         if let Some(el) = last.and_then(|n| n.dyn_into::<web_sys::HtmlElement>().ok()) {
             let _ = el.focus();
@@ -3769,11 +3991,11 @@ fn import_courses_dialog(app: App, plan: crate::state::IncomingPlan) -> impl Int
     let join_plan = plan.clone();
     let replace_plan = plan;
     view! {
-        // Focus lands HERE, not on the first answer. Both answers change the
-        // timetable, and this dialog can outgrow a phone screen — bill,
-        // chips, notes, two two-line buttons — so the Space press that
-        // scrolls a long question would otherwise answer it.
-        <div data-autofocus tabindex="-1">
+        // This div used to carry `data-autofocus` so focus would land on the
+        // question's body rather than its first answer. Since R77 every
+        // dialog opens with focus on its own container — the same property,
+        // for all of them — so this wrapper is structure only.
+        <div>
             <h2>"A timetable from a file"</h2>
             <p class="muted small dialog-lede">
                 "Here is what the file holds. Nothing has changed yet."
@@ -4577,16 +4799,29 @@ fn course_editor_dialog(app: App, code: Option<String>, prefill: Option<String>)
     let credits = RwSignal::new(start_credits);
     let credits_other = RwSignal::new(start_credits > 4);
     let credits_text = RwSignal::new(start_credits.to_string());
-    // The "Other…" box takes focus the moment it appears: it is where the
-    // typing was going to happen anyway. (The wheel no longer needs the
-    // focus — since R46 hovering is enough, see domx.rs — this is purely a
-    // typing convenience now.) The `autofocus` attribute cannot do this:
-    // it applies at page load, and this box is inserted long after.
+    // The "Other…" box takes focus the moment the READER makes it appear: it
+    // is where the typing was going to happen anyway. (The wheel no longer
+    // needs the focus — since R46 hovering is enough, see domx.rs — this is
+    // purely a typing convenience now.) The `autofocus` attribute cannot do
+    // this: it applies at page load, and this box is inserted long after.
+    //
+    // But a course that already counts more than 4 credits mounts the box
+    // TOGETHER with the dialog, and focusing it then is the dialog picking a
+    // field for the reader — the pattern R77 removed from every dialog. The
+    // first run of this effect is that mount; it only stays hands-off when
+    // the box was already there.
     let credits_box = NodeRef::<leptos::html::Input>::new();
-    Effect::new(move |_| {
-        if let Some(input) = credits_box.get() {
+    Effect::new(move |prev: Option<bool>| {
+        let Some(input) = credits_box.get() else {
+            return false;
+        };
+        if prev.is_none() && start_credits > 4 {
+            return true;
+        }
+        if prev != Some(true) {
             let _ = input.focus();
         }
+        true
     });
     let official_credits = cmi_course.as_ref().map(|c| c.effective_credits());
     let official_credits_assumed = cmi_course.as_ref().is_some_and(|c| c.credits_assumed());
@@ -6848,7 +7083,6 @@ fn what_changed_dialog(app: App) -> impl IntoView {
                         title="Hides changes to courses you haven't picked"
                     >
                         <input
-                            class="nofocus"
                             type="checkbox"
                             prop:checked=move || app.prefs.with(|p| p.changes_mine_only)
                             on:change=move |ev| {

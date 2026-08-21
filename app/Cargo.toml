@@ -42,6 +42,7 @@ features = [
   "FileList",
   "FileReader",
   "FocusEvent",
+  "FocusOptions",
   "ServiceWorker",
   "ServiceWorkerContainer",
   "ServiceWorkerRegistration",

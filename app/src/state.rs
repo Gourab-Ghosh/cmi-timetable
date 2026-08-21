@@ -94,6 +94,15 @@ pub struct Filters {
     pub whole_word: bool,
     #[serde(default)]
     pub use_regex: bool,
+    /// Which parts of a course the search box reads — stored the OFF way
+    /// round (the `update_checks_off` precedent): each entry names a part
+    /// the search SKIPS (`"code"`, `"name"`, `"instructor"`), so every prefs
+    /// blob written before this field existed loads as "search everything".
+    /// The UI never lets all three in here at once (a search that reads
+    /// nothing is a control that cannot act); a hand-edited blob that does
+    /// it anyway matches nothing, which is at least what it says.
+    #[serde(default)]
+    pub search_skip: Vec<String>,
     /// "Fits my schedule": hide anything overlapping the current selection.
     pub fits: bool,
 }
@@ -123,6 +132,22 @@ impl Filters {
     /// to weigh (see `App::nothing_saved_to_lose`).
     pub fn switches_are_default(&self) -> bool {
         !self.match_case && !self.whole_word && !self.use_regex
+    }
+
+    /// Does the search box read this part of a course? (`"code"`, `"name"`,
+    /// `"instructor"`.) Absent from the skip list means yes — see
+    /// `search_skip`.
+    pub fn searches(&self, part: &str) -> bool {
+        !self.search_skip.iter().any(|s| s == part)
+    }
+
+    /// Is the search reading everything, the way a fresh profile does?
+    /// Separate from `is_empty` for the same reason as
+    /// `switches_are_default`: a narrowed scope hides nothing by itself,
+    /// but it is a choice the reader made, and "is there anything here to
+    /// lose?" has to weigh it.
+    pub fn search_scope_is_default(&self) -> bool {
+        self.search_skip.is_empty()
     }
 }
 
@@ -1144,6 +1169,8 @@ impl App {
                     && p.my_filters.is_empty()
                     && p.filters.switches_are_default()
                     && p.my_filters.switches_are_default()
+                    && p.filters.search_scope_is_default()
+                    && p.my_filters.search_scope_is_default()
             })
     }
 
@@ -3190,6 +3217,11 @@ pub fn course_matches(
         // `join` plus a lowercased copy (three allocations per course before
         // the matcher even looked at it). The fields stay joined — a reader
         // searching "toc theory" means the code and the name together.
+        //
+        // Only the parts the reader's "Search in" menu has ticked go in: the
+        // mask is what the box MEANS now, exactly like the three switches.
+        // With everything unticked (unreachable from the UI) the haystack is
+        // empty and a non-empty query matches nothing — never everything.
         let mut hay = String::with_capacity(
             course.code.len()
                 + course.name.len()
@@ -3200,12 +3232,22 @@ pub fn course_matches(
                     .sum::<usize>()
                 + 2,
         );
-        hay.push_str(&course.code);
-        hay.push(' ');
-        hay.push_str(&course.name);
-        for instructor in &course.instructors {
-            hay.push(' ');
-            hay.push_str(instructor);
+        if f.searches("code") {
+            hay.push_str(&course.code);
+        }
+        if f.searches("name") {
+            if !hay.is_empty() {
+                hay.push(' ');
+            }
+            hay.push_str(&course.name);
+        }
+        if f.searches("instructor") {
+            for instructor in &course.instructors {
+                if !hay.is_empty() {
+                    hay.push(' ');
+                }
+                hay.push_str(instructor);
+            }
         }
         if !text.matches(&hay) {
             return false;

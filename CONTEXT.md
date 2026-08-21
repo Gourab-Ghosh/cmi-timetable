@@ -155,18 +155,26 @@ FEATURES.md  the user-facing feature list (written R39). README is the
   listing the user's own courses. It is the **storage inspector** now. Use
   "storage"/"persistence" for the subsystem, "cached snapshot" for the one
   thing that is one.
+- **Build artifacts live in `~/.rust-cache` (or `/tmp`) and NOWHERE else**
+  (user order, R77): the user's `cargo` (`~/.cargo/bin/cargo`, first on
+  PATH) is a wrapper that, when `CARGO_TARGET_DIR` is unset, exports
+  `CARGO_TARGET_DIR="$HOME/.rust-cache/<workspace-dir-name>"` — for this
+  repo, `~/.rust-cache/timetable`. Never set `CARGO_TARGET_DIR` to a path
+  outside `~/.rust-cache/` or `/tmp`; never leave a `target/` in the tree.
+  The old `~/.rust-target-e2e` convention (R1–R76) is retired and deleted.
 - **Build isolation:** `trunk serve` (bg task) races other builds via the
-  shared target dir. ALL manual builds/tests use
-  `CARGO_TARGET_DIR=~/.rust-target-e2e`, app builds to `--dist dist-e2e`.
+  shared target dir (the wrapper's `~/.rust-cache/timetable`). ALL manual
+  builds/tests therefore use `CARGO_TARGET_DIR=~/.rust-cache/timetable-e2e`,
+  app builds to `--dist dist-e2e`.
   **Never build a `git worktree` into that same target dir.** The worktree
   is the same workspace under a different absolute path, so its
   `cmi-timetable-core` lands on the SAME artifact filenames and clobbers
   the main tree's. The symptom is a source file that plainly contains
   `pub mod combine;` while the app insists `could not find combine in
   ttcore` — and `cargo clean -p cmi-timetable-core`, with or without
-  `--target`, does not fix it. Only `rm -rf ~/.rust-target-e2e` does.
+  `--target`, does not fix it. Only removing that target dir does.
   A worktree baseline (the perf method, R58/R61) must therefore use its
-  OWN target dir: `CARGO_TARGET_DIR=~/.rust-target-base`.
+  OWN target dir: `CARGO_TARGET_DIR=~/.rust-cache/timetable-base`.
 - **Edition 2024** (workspace-wide, `resolver = "3"`). Its one real trap:
   an `impl Trait` return now captures every lifetime in scope, so a view
   helper taking `&str`/`&Course` and returning `impl IntoView` must say
@@ -738,14 +746,14 @@ FEATURES.md  the user-facing feature list (written R39). README is the
 
 ```sh
 # native tests (168; the html feature comes from core's self dev-dependency)
-CARGO_TARGET_DIR=~/.rust-target-e2e RUSTFLAGS="" cargo test --workspace
+CARGO_TARGET_DIR=~/.rust-cache/timetable-e2e RUSTFLAGS="" cargo test --workspace
 # app build for e2e (never plain dist while trunk serve runs).
 # RUSTFLAGS="" on purpose: a global ~/.cargo/config.toml carrying
 # `-C target-cpu=native` reaches the wasm target too, drops its default
 # features, and wasm-bindgen then dies on a missing
 # `__wbindgen_externref_table_alloc`. Emptying it for this build restores
 # the wasm defaults without touching anything outside the repo.
-cd app && RUSTFLAGS="" CARGO_TARGET_DIR=~/.rust-target-e2e trunk build --release --dist dist-e2e
+cd app && RUSTFLAGS="" CARGO_TARGET_DIR=~/.rust-cache/timetable-e2e trunk build --release --dist dist-e2e
 # e2e (116 tests; self-generates seed via core example, needs cargo on PATH)
 cd e2e && DIST_DIR=../app/dist-e2e .venv/bin/python test_app.py
 # ...or just a few, by name fragment
@@ -778,9 +786,9 @@ regenerates the .ics golden.
   selected course with no time is part of the timetable, not a footnote.
 - "Your changes" groups are headed by `.cg-head` (colour rail + small caps
   + count), coloured by `OwnChange::tone()`. See §4.
-- Tests: 169 native + 116/116 e2e green (as of R75, the deploy round; the
-  169 was counted from `deploy.sh`'s own in-container run —
-  49+18+3+9+25+27+28+10). Meeting removals: `MeetingOverride.to`
+- Tests: 169 native + 122/122 e2e green (as of R77; the native count from
+  `deploy.sh`'s own in-container run — 49+18+3+9+25+27+28+10).
+  Meeting removals: `MeetingOverride.to`
   is `Option<Meeting>` (None = removed; legacy JSON/share payloads still
   load — present meeting ⇒ Some). Out-of-grid times: **all three tables grow
   synthetic `.extra` columns**, each from its own source, all built by the
@@ -5001,6 +5009,162 @@ t117 also pins the keyboard order (Back, Close, primary), sent to whatever has
 focus rather than to `<body>` — `send_keys` focuses what it is called on, and
 tabbing via the body walks focus out of the dialog and then reports a break that
 is not there. dialog-a11y documents that trap; it does not cover this popup.
+
+### R77 — six features, two fleets, and the app-wide bug found by measuring
+
+The round arrived in pieces over one long turn: (1) the Aa/ab/.* switches
+don't look clickable — box them, and sweep the app for the same class; (2) no
+dialog may auto-select a field or any element on open — find every such
+pattern; (3) a popup scrolled to its end must not scroll the page behind it —
+test the whole app for this; (4) highlight today on the week tables, "think
+smartly when to highlight and when not"; (5) checkboxes deciding what the
+search box reads (code/name/instructor), default all on, per box; (6) mid-turn:
+a course moved to 9:00–14:00 must visibly fill all the slots it covers; plus
+"the search box and Search in look unrelated — join them", a flickering red
+dot at a switch corner, and a standing order that all build artifacts live in
+`~/.rust-cache` (§2, §5 — the old `~/.rust-target-e2e` is deleted).
+
+Two scout fleets ran (10 agents total, `.workagents/r77-scouts.json` and
+`r77-multislot-design.json`) and their collision lists were the round's real
+capital — nearly every edit below lands where a scout said it must.
+
+**Switches (1):** the resting border was already IN the 26px box, transparent
+— painting it (`var(--line)` + surface face) is geometry-free, so nothing t116
+measures moves. The affordance sweep confirmed only two more genuine cases,
+both fixed: the update banner's ghost button ("Stop checking for updates") now
+carries an underline, and the two badge BUTTONS on My-courses cards ("Added by
+you", the shadowed-code warning) wear a ring in their own colour — 15+ static
+badges stay unmarked. Plus the inverse defect: `span.chip` (branch chips, the
+drag ghost) inherited `cursor: pointer` while opening nothing — now
+`cursor: default`. And a real find: `.search-switch:hover` said `var(--fg)`,
+a token that exists nowhere — the declaration was invalid at computed-value
+time and the hover never changed colour. It is `var(--text)` now.
+
+**Focus (2):** DialogHost's field-hunt is gone. Every dialog opens focused on
+its own CONTAINER (`tabindex="-1"`, `.dialog:focus { outline: none }`): focus
+is inside (trap holds, screen reader announces), nothing is selected, Space
+scrolls, first Tab reaches the first control. THE TRAP GREW A BRANCH:
+Shift+Tab from the container natively goes to the page behind the overlay, so
+trap_tab wraps it to the last control — proven by breaking it (t120 caught the
+escape). `.nofocus` and `[data-autofocus]` are retired (attributes removed,
+selector gone); the editor's credits-box effect now skips its MOUNT firing (a
+course opening with >4 credits was an auto-focused field — the complaint
+class) while the user-pressed "Other…" still focuses (t62 pins it). ConfirmHost
+still focuses its Cancel — deliberate: Enter answering "no" on a danger
+question is a safety feature, and a button is not a text box. And the focus
+RESTORE on close now passes `preventScroll` — Chrome scrolls to a focused
+element's LAYOUT position, the header is sticky so its buttons lay out at the
+document top, and closing any header-opened dialog while scrolled down yanked
+the page to the top. Pre-existing for many rounds; t120 found it.
+
+**Scroll (3):** one Effect in Root mirrors `dialog.is_some() || confirm.is_some()`
+into `body.modal-open { overflow: hidden }` (both layers — the confirm can
+stand over a dialog and each host sees half the state), plus
+`overscroll-behavior: contain` on `.dialog` as belt. Overflow, never
+`position: fixed` — that zeroes window.scrollY, and the suite's scroll
+choreography (and the reader's place on the page) assumes it survives.
+Measured before shipping: scrollY 300 → locked → 300 → unlocked → 300.
+
+**Today (4):** the halls table has carried `tr.today` since R74 — the same
+mark (accent dayhead, weight 700, inset 2px rail) now lands on My timetable
+and the Master grid, week view only (`rows.len() > 1`): a single-day view
+already says which day it is. One new CSS rule scoped
+`table.tt:not(.halls-merged)` because halls' `.rowhead` is ALSO its hall-name
+cell. The print reset REPEATS the screen rule's `:not()` — one class short
+and it loses the cascade and the bar prints (R76's silent-specificity trap;
+t119 pins it via print-media emulation). A row wash was tried and rejected:
+chips already colour the busy cells.
+
+**Search in (5):** `Filters::search_skip: Vec<String>` — stored the OFF way
+round (the `update_checks_off` precedent), so every old prefs blob loads as
+"search everything". The haystack builder in `course_matches` consults it;
+the empty-state text-only probe carries it exactly as it carries the switches
+(R71's rule — without that the probe finds by name a course a code-only
+search cannot, and promises that clearing a facet shows it). The placeholder
+is the promise, so it re-says what the box reads ("Search by code or name");
+every narrowed string is shorter than the full one, so t116's fit holds. The
+menu is a `details.facet` (Esc/outside-close/close-others all key on that
+class) with three fixed rows and none of facet_menu's furniture; the LAST
+ticked part cannot be unticked — disabled with the reason in its title.
+Per-scope, undoable, persisted, counted in `nothing_saved_to_lose`, NOT in
+`active_count` (the switch precedent: it hides nothing by itself). Joined
+onto the search box (user follow-up): `.search-group` squares the adjoining
+corners with a −1px seam; ≤439px it unjoins onto the second row, whole again.
+Three test collisions the scouts predicted, all real: t16/t22/t27 selected
+facets BY INDEX (now by name), t27 swept `input:checked` across all facet
+menus (the one menu whose default is ticks is excluded), and t28 read the
+bar's first `.muted` as the course count (the menu's lede has its own class).
+
+**Covered slots (6):** `covered_columns(slot_grid, meeting)` sits under
+`column_for` — columns whose slot `Slot::overlaps` the MEETING's own time
+(the clash panel's predicate, half-open: ending at 14:00 covers nothing of
+the 14:00 column), minus the home column, judged never against the home
+column's slot (a synthetic column can be wider than the meeting that minted
+it). Each grid files shadows in a memo BESIDE its `placed` (the chips'
+PartialEq gate stays untouched; the master grid's reads no selection — t90
+pins that a selection click rebuilds no cell) and delivers them through the
+same `cell_chips` stream, which is why the phone day list and the print
+poster get them for free. The band itself (`ui::covered_band`) is an inert
+`<span class="covered">` — half a chip: the course's hue at half strength, a
+3px rail, no full border (solid means chip, dashed means overridden), visible
+words "CODE · until END" (phones never show tooltips), title
+"{code} continues here (span)" which deliberately never begins "{code}," —
+that is the chip selector's namespace and the tests count chips by it. Halls:
+its own home rule (`hall_col_for_slot`), shadows from bookings and arrivals
+in the cell builder, the empty-cell perf gate widened — and `hall_cell_busy`
+now takes the hall's whole week and ORs coverage in, because the free-hall
+finder used to offer a room at 10:40 during a 09:00–14:00 booking, and a page
+that shades the cell while offering the room is a page disagreeing with
+itself. Print restates the band's colours `!important` like the chip's (print
+whites out every td). Rejected, with the scouts' receipts: colspan (deletes
+the td cells drops land on), td background tints (row hover outguns them,
+print erases them, the day list has no td), repeating the chip (flips ~15
+pinned negatives), a ghost button (a dead control), dashed borders (taken),
+inset box-shadow (the kbd cursor's channel), absolute bridges (tds are
+overflow:hidden).
+
+**The red dot:** `.search-switch`'s transition cross-faded `border-color` on
+a 1px rounded border — stray anti-aliased corner pixels on some zoom levels.
+The transition now moves background and colour only, with
+`background-clip: padding-box`. Best-supported hypothesis, said so honestly.
+
+**Clash inside the span (user follow-up):** the chips were ALREADY red — the
+clash rule has always been interval overlap, so a 09:10–14:00 TOC reddens
+AAT's 10:30 chip and the panel says "Tuesday · 09:10–14:00 / 10:30–11:45".
+What stayed calm was the BAND beside the red chip. `covered_band` now takes a
+per-cell `clash` bool — true only where the covered span actually fights
+something (another course's chip in that cell whose time overlaps, or another
+course's band crossing it), never everywhere the span reaches. My timetable
+only: the master grid's conflict language is the ⚠ won't-fit mark and its
+covered memo deliberately reads no selection (t90), and rooms don't clash.
+`.covered.clash` wears the chips' alarm tokens and the ⚠-on-the-code glyph,
+restated `!important` in print. t122 pins the red band at 10:30, the QUIET
+band at 11:50, and the panel carrying the extended time.
+
+**A correction the probe forced:** the joined group first unjoined at 439px,
+and field-clip-probe caught the placeholder clipped mid-word at phone widths —
+sharing the row with the summary costs ~110px exactly where the box stops
+reserving a minimum (`--search-text: 0` under 640px). The join now exists
+only ABOVE 640px; below, the box takes the whole row and the menu drops
+beneath it, whole again. The R73 lesson, relearned in the same round it was
+being quoted: a fix verified at one width is not a fix.
+
+Gates: **122/122 e2e** (t118 search-in incl. the disabled floor and per-scope
+independence; t119 today incl. the print reset; t120 hands-off dialogs + the
+scroll lock + the Shift+Tab wrap, each verified by breaking it; t121 covered
+slots across all four surfaces + the finder agreement + the half-open
+boundary + bands dying with their meeting; t122 the red band beside the red
+chip and the quiet band one column later), 169 native, fmt + clippy clean on
+both targets. Screenshots in `.workagents/shots-r77/` — looked at, not
+assumed: the joined group measured a −1px seam at equal heights, the Fri row
+wears the bar, the covered bands read as the same course as their chip.
+
+Two e2e harness traps found on the way, both now comments in the tests:
+WebDriver's element `send_keys` SCROLLS THE ELEMENT INTO VIEW first, so
+`body.send_keys(Escape)` is a jump to the top that reads exactly like a
+scroll-restore bug (t120 uses ActionChains); and a seeded override never
+enters the undo stack, so t121 clears it through the Your-changes panel's own
+button, as a reader would.
 
 ## 8. Open bugs — found, confirmed, NOT fixed (do not delete)
 

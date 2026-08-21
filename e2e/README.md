@@ -15,13 +15,13 @@ python3 -m venv .venv && .venv/bin/pip install selenium   # driver auto-managed
 
 # if `trunk serve` is running, build to a separate dist and target dir so the
 # watcher can't race the test build (truncated wasm / mismatched hashes):
-(cd ../app && CARGO_TARGET_DIR=~/.rust-target-e2e trunk build --release --dist dist-e2e)
+(cd ../app && CARGO_TARGET_DIR=~/.rust-cache/timetable-e2e trunk build --release --dist dist-e2e)
 DIST_DIR=../app/dist-e2e .venv/bin/python test_app.py
 ```
 
 Environment knobs: `CHROME_BIN` (default `/usr/bin/chromium`), `DIST_DIR`,
 `PORT`, `CARGO_TARGET_DIR` (for the seed generator; defaults to
-`~/.rust-target-e2e`).
+`~/.rust-cache/timetable-e2e`).
 
 Covered flows (102 tests): Sync-now header + hidden developer mode (URL
 endpoint only), `?c=` selection + clash badges/panel (any casing), unknown-

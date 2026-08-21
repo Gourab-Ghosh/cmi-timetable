@@ -544,6 +544,27 @@ pub fn Root() -> impl IntoView {
     dnd::install_global_handlers(app);
     apply_theme(app);
 
+    // While anything modal is up, the page behind it gives up its scroll:
+    // a wheel that reaches a popup's end otherwise keeps going into the page,
+    // and closing the popup finds the app somewhere else. One class on <body>
+    // (`body.modal-open { overflow: hidden }`), keyed on BOTH layers — the
+    // confirm can be open over a dialog, and each host alone sees only half
+    // the state. Lives here beside apply_theme because it is the same kind of
+    // write: one document-level fact mirrored from a signal. Overflow, never
+    // `position: fixed` — that variant zeroes window.scrollY on every open,
+    // and the app (and the whole e2e suite's scroll choreography) assumes the
+    // page stays where it was.
+    Effect::new(move |_| {
+        let open = app.dialog.with(|d| d.is_some()) || app.confirm.with(|c| c.is_some());
+        if let Some(body) = domx::document().body() {
+            let _ = if open {
+                body.class_list().add_1("modal-open")
+            } else {
+                body.class_list().remove_1("modal-open")
+            };
+        }
+    });
+
     if corrupt {
         dev::corrupt_data_banner(app);
     }
