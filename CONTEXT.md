@@ -810,12 +810,19 @@ regenerates the .ics golden.
   permanent "sync every few days" hint next to Sync now (own row ≤899px).
 - **ALL FIVE tabs print (R80), each as its own sheet and only itself** — one
   tab is mounted at a time, and `t126` pins that plus a Print button in every
-  section's toolbar. The button prints a COPY, in a window of its own
+  section's toolbar. The button prints a COPY, in a TAB of its own
   (`domx::print_sheet` → `public/print.html`), because `window.print()` holds
   the calling document in print media for the whole dialog — 8.8s of the app
-  repainted as a white sheet, measured in Brave. `t127` pins that the live
-  document is never the one printed. Ctrl+P still prints the page directly and
-  is briefly visible; that is the browser's to own, not ours. `views::print_masthead` and `views::print_footnote` are
+  repainted as a white sheet, measured in Brave. Two details of that tab are
+  load-bearing and both were wrong once (R81): `window.open` is called with
+  **no features string**, because a features string makes it a popup this code
+  has to size and Chromium's preview is then whatever is left beside its ~380px
+  settings panel (1100px wide → a ~610px preview, the cramped dialog the
+  reporter photographed); and **`print.html` calls `print()` on itself** when
+  the sheet lands, because `win.print()` from the app draws the dialog over the
+  app's own tab and blocks it. `t127` pins the features argument, the injection,
+  and the tab printing itself. Ctrl+P still prints the page directly and is
+  briefly visible; that is the browser's to own, not ours. `views::print_masthead` and `views::print_footnote` are
   the single definitions; adding a sheet means calling them, never copying
   them. Two rules the print block must keep: **nothing rounded, translucent,
   shadowed, gradient-filled or transformed survives print** (the `*` reset at
@@ -5611,6 +5618,96 @@ DOM. Until R80 only My timetable had a Print button at all.
 
 Gates: **127/127 e2e**, 169 native, clippy + fmt clean, and all 8 pages of all
 five sheets rendered to PNG and read by eye.
+
+**What R80 shipped here was a sized POPUP that called `print()` from the app.
+R81 replaced both halves of that. Read R81 before touching any of it.**
+
+### R81 — the print dialog the reader already knows
+
+> "I see the first image when I click the print button, but when I press
+> ctrl+p, I see the second image. The first one looks very ugly. Test these
+> things yourself and fix them... make sure it looks good on all the browsers,
+> including brave, google chrome and chromium." — and, decisively: "I know that
+> this is possible to fix because in one of the commits before, it was fixed
+> but it came back afterwards."
+
+R80's white-background fix was right about the mechanism and wrong about the
+container. Two screenshots from the reporter's own Brave, at 2560x1600 with the
+desktop at ~1.5x scale, show what the Print button was actually raising, and
+two separate mistakes made it:
+
+* **The features string.** `window.open(url, name, "width=1100,height=830")`
+  makes it a *popup* — a window whose size this code has guessed. Chromium's
+  print dialog is a ~380px settings panel plus whatever is left for the
+  preview, so 1100px left the preview about 610px: a stamp-sized sheet, a
+  scrollbar and a large empty area beside a full-height panel. Ctrl+P looked
+  right for one reason only — it ran in the window the reader had already
+  sized. (The reporter's 1100x830 popup measures ~1650x1245 device px in their
+  screenshot, which is how the 1.5x scale was inferred.)
+* **The opener raised the dialog.** `win.print()` from the app is one document's
+  script printing another window. Brave draws that dialog over the *calling*
+  tab — the reporter's screenshot 1 has the app's own `?c=...` URL in the
+  address bar and no browser chrome above the preview — and it blocks the app
+  for the life of the dialog.
+
+The fix, in two lines and one file each. `domx::print_sheet` opens
+`print.html` with **no features string at all**, so it is a tab in the window
+the reader sized; there is no width left to get wrong on any screen. And
+`print.html` **prints itself**: a `MutationObserver` on `#sheet` fires when the
+app injects the sheet, waits 90ms (coalescing the clear-then-append into one
+dialog) and calls its own `window.print()`, then `window.close()` on
+`afterprint`. Nothing in the app calls `print()` or `close()` any more, so
+nothing in the app blocks — the reader can keep working while the dialog is up.
+
+Measured with `probes/print_dialog_look.py` — real Brave 151.1.93.137 and real
+Chromium 151.0.7922.169, each on its own Xvfb at **2560x1600** with
+`--force-device-scale-factor=1.5`, a real `xdotool` click on the app's own
+Print button, screenshots at 0.45s / 0.9s / 3.0s and again after Escape:
+
+| | Print button (after) | Ctrl+P (baseline) |
+|---|---|---|
+| dialog card | 410,113 → 2150,1267 device px | **the same box, to the pixel** |
+| opener in print media | **never** | 20ms, then 13ms, then off |
+| opener body | `rgb(14,16,20)` throughout | flips to `rgb(255,255,255)` twice |
+| tabs afterwards | 1 → 1, the print tab closed itself | 1 → 1 |
+
+Google Chrome is **not installed on this machine**, so it was not run. Brave
+and Chromium here are both Chromium 151 and share the print-preview
+implementation Chrome ships; that is the honest scope of "tested in three
+browsers".
+
+Three smaller things that came with it:
+
+* `print.html` now takes its **screen** colours from the reader's theme, read
+  straight out of `cmitt.v1.prefs` by an inline script before first paint, so a
+  dark-theme reader gets no white flash from the new tab. It sets
+  **`data-appearance`, deliberately NOT `data-theme`**: the app's whole
+  stylesheet is copied into that document and keys its palette off
+  `data-theme`, which stays `light` there because the sheet is going on paper.
+* A **second press refills the same named tab**, so the injected `<style>` is
+  reused by id (`cmitt-app-css`) and `#sheet` is emptied first. Without the
+  emptying the paper gets both sheets.
+* The wait for `print.html` to arrive before falling back to printing the app
+  went 2s → **5s**. The fallback is the white flash; a slow cold load is not a
+  reason to inflict it.
+
+`t127` is rewritten around the two mistakes rather than around the old shape.
+It asserts the features argument is **`null`** — the reporter's "it was fixed
+before and came back" is exactly this regression, and now a features string
+fails the suite — that the sheet *and* ~73KB of stylesheet actually arrive in
+the print tab, that the tab printed *itself* (its own status line is the
+evidence), and that a second press leaves one sheet and one `<style>` rather
+than two.
+
+One question the reporter asked and answered: could the dialog open in the
+**same** tab? No — printing in the same tab *is* `window.print()` on the app,
+which is the 8.8s white repaint above. Offered the choice between the tab, a
+separate full-size window, and the same tab with the white app, they chose the
+tab.
+
+Gates: 127/127 e2e, 169 native, clippy + fmt clean, and the dialog read off
+screenshots in both browsers, at 1.0x and 1.5x, on My timetable, the Catalog
+(2 pages) and Halls (3 pages), in both themes.
 
 ## 8. Open bugs — found, confirmed, NOT fixed (do not delete)
 

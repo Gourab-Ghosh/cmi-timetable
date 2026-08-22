@@ -7184,15 +7184,27 @@ def t127_printing_never_repaints_the_app(app):
     sheet; under print emulation the page measures 243-252/255 brightness even
     in the dark theme.
 
-    So the button prints a copy in a window of its own (`domx::print_sheet`).
-    This test pins the two halves of that: the window is asked for, and the
-    live document is never printed. A hidden iframe was tried first and does
-    NOT work — Chromium sets the printing state across the frame tree — so the
-    assertion is specifically that a separate top-level context is opened.
+    So the button prints a copy in a context of its own (`domx::print_sheet`).
+    This test pins three things about that context, each of which has been
+    wrong once:
+
+    * it is a separate TOP-LEVEL context. A hidden iframe was tried first and
+      does NOT work — Chromium sets the printing state across the frame tree.
+    * it is opened with NO features string. A features string makes it a popup
+      sized by this code, and on a 2560px screen the guessed 1100px left
+      Chromium's preview about 610px wide beside its ~380px settings panel: a
+      postage-stamp sheet, a scrollbar, a white void. Without features it is a
+      tab in the window the reader already sized, so the dialog is the Ctrl+P
+      dialog. Verified by screenshot in real Brave and real Chromium at
+      2560x1600 (`probes/print_dialog_look.py`); pinned here so it cannot come
+      back silently.
+    * the sheet and the app's stylesheet actually arrive in it — an empty or
+      unstyled print tab prints a blank page, and nothing in the app's own DOM
+      would show it.
 
     Headless has no print dialog, so `print()` here is close to a no-op; what
     it does still do is fire `beforeprint` at whichever window is printed,
-    which is the signal this reads."""
+    which is the signal the second assertion reads."""
     app.boot("/", selection=["TOC", "RDBM"])
     try:
         app.dismiss_toasts()
@@ -7203,29 +7215,87 @@ def t127_printing_never_repaints_the_app(app):
         window.__beforePrint = 0;
         window.addEventListener('beforeprint', () => { window.__beforePrint++; });
         const real = window.open.bind(window);
-        window.open = (u, t, f) => { window.__openCalls.push(t); return real(u, t, f); };
+        window.open = (u, t, f) => {
+          window.__openCalls.push([t, f === undefined ? null : String(f)]);
+          return (window.__printWin = real(u, t, f));
+        };
     """)
-    before_handles = len(app.d.window_handles)
+    app_handle = app.d.current_window_handle
     btn = next(b for b in app.css_all(
         "section[aria-label='My timetable'] .toolbar button")
         if b.text.strip() == "Print")
     btn.click()
-    # The implementation waits for the new window to report itself ready
-    # before printing, so give it longer than that.
-    time.sleep(2.5)
+    # The implementation waits for the new tab to report itself ready before
+    # filling it, so give it longer than that.
+    time.sleep(3.0)
 
-    app.d.switch_to.window(app.d.window_handles[0])
+    app.d.switch_to.window(app_handle)
     calls = app.d.execute_script("return window.__openCalls;")
-    assert calls == ["cmitt-print"], \
-        f"Print must open its own window; window.open calls were {calls!r}"
+    assert calls == [["cmitt-print", None]], (
+        "Print must open its own tab and pass NO window features (a features "
+        f"string is a popup this code has to size): calls were {calls!r}")
     fired = app.d.execute_script("return window.__beforePrint;")
     assert fired == 0, \
         ("the live document was printed — beforeprint fired on it "
          f"{fired} time(s), so the app repaints as the sheet while the "
          "dialog is open")
-    # And nothing is left behind: the print window closes itself.
-    assert len(app.d.window_handles) == before_handles, \
-        f"a print window was left open: {app.d.window_handles}"
+
+    # What the print tab is holding, read THROUGH the opener's own reference
+    # to it: same origin, so no tab switch and no race with the tab closing
+    # itself. It may already have closed — its `afterprint` handler does that —
+    # and that is itself the answer, since only printing gets it there.
+    got = app.d.execute_script("""
+        const w = window.__printWin;
+        if (!w) return {opened: false};
+        if (w.closed) return {opened: true, closed: true};
+        const d = w.document;
+        const sheet = d.getElementById('sheet');
+        const css = d.getElementById('cmitt-app-css');
+        return {
+          opened: true, closed: false,
+          url: d.location.pathname,
+          title: d.title,
+          status: (d.getElementById('status') || {}).textContent,
+          sheets: sheet ? sheet.children.length : -1,
+          mine: !!(sheet && sheet.querySelector(
+              'section[aria-label="My timetable"] .print-masthead')),
+          css: css ? css.textContent.length : 0,
+        };
+    """)
+    assert got.get("opened"), "Print opened nothing at all"
+    if not got.get("closed"):
+        assert str(got.get("url", "")).endswith("print.html"), \
+            f"the tab Print opened is not print.html: {got!r}"
+        assert got["sheets"] == 1 and got["mine"], \
+            f"the sheet did not arrive in the print tab: {got!r}"
+        assert got["css"] > 10000, \
+            f"the app's stylesheet did not arrive in the print tab: {got!r}"
+        # The print header prints document.title, so it has to be the app's
+        # name rather than "print.html".
+        assert got["title"] == "CMI Timetable Planner", \
+            f"the print tab is titled {got['title']!r}"
+        # And it raised the dialog itself rather than waiting to be printed
+        # from the app — its own status line is the evidence.
+        assert "Printing" in str(got["status"]) or "Printed" in str(got["status"]), \
+            f"the print tab never printed itself: status {got['status']!r}"
+
+        # Press it again. The tab is named, so this one refills the same tab —
+        # and it has to REPLACE the sheet, not stack a second one under it.
+        btn.click()
+        time.sleep(3.0)
+        again = app.d.execute_script("""
+            const d = window.__printWin.document;
+            const sheet = d.getElementById('sheet');
+            return {sheets: sheet ? sheet.children.length : -1,
+                    styles: d.querySelectorAll('#cmitt-app-css').length};
+        """)
+        assert again == {"sheets": 1, "styles": 1}, \
+            f"a second press stacked things up in the print tab: {again!r}"
+
+        for handle in [h for h in app.d.window_handles if h != app_handle]:
+            app.d.switch_to.window(handle)
+            app.d.close()
+        app.d.switch_to.window(app_handle)
 
 
 TESTS = [

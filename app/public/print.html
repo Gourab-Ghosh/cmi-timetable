@@ -6,8 +6,25 @@
   <!-- The browser's print header prints `document.title`, so this window
        carries the app's name rather than the file's. -->
   <title>CMI Timetable Planner</title>
+  <!-- Before first paint, so a dark-theme reader never gets a white flash.
+       `data-appearance`, NOT `data-theme`: the app's whole stylesheet is copied
+       into this document and keys its palette off `data-theme`, which stays
+       "light" here because the sheet below it is going on paper. This attribute
+       is read by nothing but the rules in this file. -->
+  <script>
+    (function () {
+      var pref = "Auto";
+      try {
+        pref = JSON.parse(localStorage.getItem("cmitt.v1.prefs") || "{}").theme
+          || "Auto";
+      } catch (e) { /* no prefs, or not ours: light it is */ }
+      var dark = pref === "Dark" || (pref === "Auto"
+        && window.matchMedia("(prefers-color-scheme: dark)").matches);
+      document.documentElement.dataset.appearance = dark ? "dark" : "light";
+    })();
+  </script>
   <style>
-    /* The window the Print button opens.
+    /* The tab the Print button opens.
 
        It exists so the app itself is never the document being printed:
        `window.print()` holds the calling document in `print` media for as long
@@ -15,22 +32,44 @@
        as a white sheet. A separate top-level context does not have that
        problem — see `domx::print_sheet`.
 
-       Everything below is about the fraction of a second before the print
-       dialog covers this window, and about what sits behind that dialog while
-       the reader chooses a filename. A blank white window with "about:blank" in
-       its bar reads as something having gone wrong; this reads as a print
-       window, which is what it is.
+       It is a TAB rather than a sized popup so the print dialog gets exactly
+       the room Ctrl+P gets: the reader's own window. A popup at some width this
+       code chose left Chromium's preview about 610px wide next to its 380px
+       settings panel, which is the cramped, ugly dialog this replaces.
 
-       `!important` on the two rules that matter: the app's whole stylesheet is
+       Everything below is about the fraction of a second before the print
+       dialog covers this tab, and about what sits behind that dialog while the
+       reader chooses a filename. A blank white page reads as something having
+       gone wrong; this reads as a print window in their own theme, which is
+       what it is.
+
+       `!important` on the rules that matter: the app's whole stylesheet is
        copied into this document (so the sheet is laid out by exactly the rules
        that lay it out anywhere else) and lands in the same cascade as this
        block. Order between them is not worth depending on. */
-    :root { color-scheme: light; }
+    :root {
+      color-scheme: light;
+      --ground: #f3f4f7;
+      --card: #ffffff;
+      --edge: #e2e5eb;
+      --ink: #10131b;
+      --muted: #5d6675;
+      --lift: 0 10px 30px rgba(16, 19, 27, 0.08);
+    }
+    :root[data-appearance="dark"] {
+      color-scheme: dark;
+      --ground: #0e1014;
+      --card: #171a21;
+      --edge: #272d3a;
+      --ink: #e8eaf0;
+      --muted: #9aa4b4;
+      --lift: 0 12px 34px rgba(0, 0, 0, 0.45);
+    }
     html, body { margin: 0; padding: 0; }
     @media screen {
       body {
-        background: #f3f4f7 !important;
-        color: #10131b;
+        background: var(--ground) !important;
+        color: var(--ink);
         font-family: "Segoe UI Variable Display", "Segoe UI", Inter, system-ui,
           -apple-system, "Helvetica Neue", Arial, sans-serif;
         -webkit-font-smoothing: antialiased;
@@ -50,10 +89,10 @@
         align-items: center;
         gap: 0.85rem;
         padding: 1.15rem 1.5rem 1.15rem 1.25rem;
-        background: #fff;
-        border: 1px solid #e2e5eb;
+        background: var(--card);
+        border: 1px solid var(--edge);
         border-radius: 14px;
-        box-shadow: 0 10px 30px rgba(16, 19, 27, 0.08);
+        box-shadow: var(--lift);
       }
       /* The app's own mark, in the app's own gradient: a week frame with one
          class placed on it. Same shape as the favicon and the header logo, so
@@ -86,7 +125,9 @@
         border-radius: 2px;
       }
       .t { margin: 0; font-size: 0.95rem; font-weight: 700; letter-spacing: -0.01em; }
-      .s { margin: 0.15rem 0 0; font-size: 0.84rem; color: #5d6675; }
+      .s { margin: 0.15rem 0 0; font-size: 0.84rem; color: var(--muted); }
+      .s a { color: #6f8bff; }
+      :root[data-appearance="light"] .s a { color: #3f5bd9; }
       @media (prefers-reduced-motion: no-preference) {
         .card { animation: rise 220ms cubic-bezier(0.22, 0.61, 0.36, 1) both; }
         @keyframes rise {
@@ -114,20 +155,58 @@
   <!-- Filled by the app with a copy of the section being printed. -->
   <div id="sheet"></div>
   <script>
-    // This page is opened BY the planner, which fills #sheet and prints it.
-    // Reached any other way — a bookmark, the offline cache, curiosity — it
-    // would otherwise sit saying "getting your sheet ready" for ever. No page
-    // in this app is a dead end, including this one.
-    setTimeout(function () {
-      if (document.getElementById("sheet").children.length) return;
-      var s = document.getElementById("status");
-      s.textContent = "This page is what the planner prints from. ";
-      var a = document.createElement("a");
-      a.href = "./";
-      a.textContent = "Open the planner";
-      a.style.color = "#3f5bd9";
-      s.appendChild(a);
-    }, 4000);
+    (function () {
+      var sheet = document.getElementById("sheet");
+      var status = document.getElementById("status");
+      var beat = null;
+
+      // THIS tab raises its own print dialog, rather than the app calling
+      // `print()` on it from outside. Two things follow from that, and both are
+      // the difference between the dialog the reader knows and the one they
+      // complained about: the dialog belongs to this tab (title bar, address
+      // bar, the reader's own window size — the Ctrl+P dialog, because this is
+      // the same thing Ctrl+P does), and the app is never blocked waiting for
+      // it.
+      //
+      // A MutationObserver rather than a one-shot: press Print twice and the
+      // app refills this same named tab, and the second sheet has to print
+      // too. The timeout coalesces the clear-then-append into one dialog.
+      new MutationObserver(function () {
+        if (!sheet.children.length) return;
+        clearTimeout(beat);
+        beat = setTimeout(function () {
+          status.textContent = "Printing…";
+          window.print();
+        }, 90);
+      }).observe(sheet, { childList: true });
+
+      // Fires whether they saved the PDF or cancelled, so the tab always goes
+      // away by itself. `close()` is permitted: this window was opened by
+      // script. If a browser ever refuses, the reader is left with a tab that
+      // says what it is and how to get back — see below.
+      window.addEventListener("afterprint", function () {
+        window.close();
+        // Only reached if the browser refused to close it — a document that
+        // closes takes its timers with it. Then the tab has to say what it is,
+        // because the reader is looking at it again.
+        setTimeout(function () {
+          status.textContent = "Printed. You can close this tab.";
+        }, 250);
+      });
+
+      // This page is opened BY the planner, which fills #sheet and prints it.
+      // Reached any other way — a bookmark, the offline cache, curiosity — it
+      // would otherwise sit saying "getting your sheet ready" for ever. No page
+      // in this app is a dead end, including this one.
+      setTimeout(function () {
+        if (sheet.children.length) return;
+        status.textContent = "This page is what the planner prints from. ";
+        var a = document.createElement("a");
+        a.href = "./";
+        a.textContent = "Open the planner";
+        status.appendChild(a);
+      }, 4000);
+    })();
   </script>
 </body>
 </html>

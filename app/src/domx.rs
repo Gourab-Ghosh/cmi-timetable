@@ -744,7 +744,7 @@ pub fn keep_number_with_word(name: &str) -> String {
     }
 }
 
-/// Print the current sheet from a window of its own, so the app the reader is
+/// Print the current sheet from a tab of its own, so the app the reader is
 /// looking at is never the document being printed.
 ///
 /// # The bug this exists for
@@ -777,21 +777,46 @@ pub fn keep_number_with_word(name: &str) -> String {
 /// sets the printing state across the frame tree, not per frame — and it makes
 /// no difference whether the frame is focused first.
 ///
-/// A **popup is a separate top-level context**, and that does work: measured,
-/// the opener stays at `printMedia: false`, `rgb(14,16,20)`, tabs visible,
-/// right through the dialog and after it closes. It must be opened from a real
-/// click, though: a `window.open` from script has no transient activation and
-/// Brave blocks it — which, the first time, looked exactly like perfect
-/// isolation and was actually nothing being printed at all.
+/// A **separate top-level context** does work: measured, the opener stays at
+/// `printMedia: false`, `rgb(14,16,20)`, tabs visible, right through the dialog
+/// and after it closes. It must be opened from a real click, though: a
+/// `window.open` from script has no transient activation and Brave blocks it —
+/// which, the first time, looked exactly like perfect isolation and was
+/// actually nothing being printed at all.
+///
+/// # Why a TAB, and why nothing here calls `print()`
+///
+/// Two details of that separate context decide whether the reader gets the
+/// dialog they know or a cramped imitation of it, and both were wrong once:
+///
+/// **Sized popup vs tab.** `window.open` with a features string
+/// (`width=1100,height=830`) opens a *popup* — a window whose size this code
+/// has guessed. Chromium's print dialog is a fixed ~380px settings panel plus
+/// whatever is left for the preview, so on a 2560px screen that guess left the
+/// preview about 610px wide: a postage-stamp sheet, a scrollbar and a large
+/// white void, next to a full-height panel. Ctrl+P looked right for the only
+/// reason that matters — it ran in the window the reader had already sized.
+/// So no features string. The tab inherits their window, and the dialog is
+/// then the same dialog at the same proportions, by construction, on any
+/// screen. There is no width to get wrong.
+///
+/// **Who raises the dialog.** `win.print()` from here is the *opener's* script
+/// printing another window: the opener blocks for the life of the dialog, and
+/// Brave draws that dialog over a chromeless frame — no title bar, no address
+/// bar — which is what "awkward and ugly" was. `print.html` therefore prints
+/// *itself*, the moment the sheet lands in it (a `MutationObserver`, see that
+/// file), and closes itself on `afterprint`. Nothing in this function calls
+/// `print()` or `close()`, so nothing here waits: the app is responsive the
+/// whole time, and the dialog belongs to the tab it is printing.
 ///
 /// # Why the window is a real page, and the stylesheet copied rather than linked
 ///
-/// The window opens `print.html`, a build file, for three reasons: a popup
-/// shows its address, and `about:blank` there reads as something having gone
-/// wrong; a build file is precached by the service worker like everything
-/// else, so this works offline; and it can carry its own screen design — the
-/// app's mark and one line of status — for the moment before the print dialog
-/// covers it and for however long it sits behind it.
+/// The window opens `print.html`, a build file, for three reasons: a tab shows
+/// its address, and `about:blank` there reads as something having gone wrong; a
+/// build file is precached by the service worker like everything else, so this
+/// works offline; and it can carry its own screen design — the app's mark, one
+/// line of status, the reader's own theme — for the moment before the print
+/// dialog covers it and for however long it sits behind it.
 ///
 /// The app's rules are copied in as TEXT rather than linked. They are already
 /// in memory, so there is no request to make, nothing to wait for and nothing
@@ -836,6 +861,10 @@ fn collect_css() -> String {
     out
 }
 
+/// The `<style>` in the print tab that holds the app's rules. An id, so a
+/// second press replaces those rules instead of appending a second copy.
+const APP_CSS_ID: &str = "cmitt-app-css";
+
 fn try_print_in_own_window() -> Option<()> {
     let doc = document();
     let app = doc.query_selector(".app").ok()??;
@@ -846,14 +875,19 @@ fn try_print_in_own_window() -> Option<()> {
     let sheet = app.clone_node_with_deep(true).ok()?;
 
     // A real page rather than `about:blank`, and a named window so a second
-    // press reuses the first. `print.html` is a build file, so the popup shows
-    // a sensible address instead of "about:blank", the service worker precaches
+    // press reuses the first. `print.html` is a build file, so the tab shows a
+    // sensible address instead of "about:blank", the service worker precaches
     // it along with everything else, and it carries its own screen design —
     // what the reader sees in the moment before the dialog covers it, and
     // behind the dialog while they choose a filename. Relative, so it resolves
     // under a project-Pages sub-path as readily as at the root.
+    //
+    // NO features string, and that is the fix for a cramped dialog rather than
+    // a style choice: features make it a popup this code has to size, and any
+    // size it picks is wrong on somebody's screen. Without them it is a tab in
+    // the window the reader sized themselves. See the doc comment above.
     let win = window()
-        .open_with_url_and_target_and_features("print.html", "cmitt-print", "width=1100,height=830")
+        .open_with_url_and_target("print.html", "cmitt-print")
         .ok()??;
 
     leptos::task::spawn_local(async move {
@@ -863,19 +897,20 @@ fn try_print_in_own_window() -> Option<()> {
         // somewhere the navigation is about to throw away. `#sheet` is the
         // proof that the right document has arrived.
         let mut host = None;
-        for _ in 0..80 {
+        // Five seconds: generous on purpose. The alternative below prints the
+        // app, and a slow cold load is not a reason to inflict that.
+        for _ in 0..200 {
             gloo_timers::future::TimeoutFuture::new(25).await;
-            if let Some(pdoc) = win.document() {
-                if pdoc.ready_state() == "complete" {
-                    if let Some(h) = pdoc.get_element_by_id("sheet") {
-                        host = Some((pdoc, h));
-                        break;
-                    }
-                }
+            if let Some(pdoc) = win.document()
+                && pdoc.ready_state() == "complete"
+                && let Some(h) = pdoc.get_element_by_id("sheet")
+            {
+                host = Some((pdoc, h));
+                break;
             }
         }
         let Some((pdoc, host)) = host else {
-            // Two seconds and the window never became the page we asked for.
+            // Five seconds and the tab never became the page we asked for.
             // Print the app itself instead: the reader pressed Print, and a
             // background that blinks beats a button that does nothing.
             let _ = win.close();
@@ -884,24 +919,30 @@ fn try_print_in_own_window() -> Option<()> {
         };
 
         // The app's rules, copied as text — nothing to fetch, so nothing to
-        // wait on before printing. See the doc comment.
-        if let (Ok(style), Some(head)) = (pdoc.create_element("style"), pdoc.head()) {
-            style.set_text_content(Some(&css));
-            let _ = head.append_child(&style);
-        }
+        // wait on before printing. See the doc comment. Reused by id, because
+        // the tab may be one an earlier press left open.
+        let style = pdoc.get_element_by_id(APP_CSS_ID).or_else(|| {
+            pdoc.create_element("style").ok().and_then(|el| {
+                el.set_id(APP_CSS_ID);
+                pdoc.head()?.append_child(&el).ok()?;
+                Some(el)
+            })
+        });
+        let Some(style) = style else {
+            // An unstyled sheet is not worth printing.
+            let _ = win.close();
+            return;
+        };
+        style.set_text_content(Some(&css));
+        // Empty first: a second press on a tab that never reloaded would
+        // otherwise print this sheet AND the last one.
+        host.set_inner_html("");
         let _ = host.append_child(&sheet);
-
-        // A beat before printing, and it is not decoration: called on the turn
-        // the window opened, `print()` did nothing at all and `close()` ran
-        // straight after it — the button appeared broken while the app,
-        // correctly, never entered print media. A new window needs a few
-        // frames before it can raise a dialog.
-        gloo_timers::future::TimeoutFuture::new(120).await;
+        // `print.html` takes it from here — it watches for the sheet, prints
+        // itself and closes itself. Deliberately not `win.print()`: see the
+        // doc comment. `focus()` matters only when the tab was already open,
+        // as a new one arrives focused.
         let _ = win.focus();
-        // Blocks until the dialog is dismissed, which is why the window is
-        // closed on the line after rather than on a timer.
-        let _ = win.print();
-        let _ = win.close();
     });
     Some(())
 }
