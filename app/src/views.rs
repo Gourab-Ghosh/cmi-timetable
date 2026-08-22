@@ -117,9 +117,10 @@ fn print_button(nothing: Option<(&'static str, Signal<bool>)>) -> impl IntoView 
                     Some("Print this section — or save it as a PDF")
                 }
             }
-            on:click=move |_| {
-                let _ = crate::domx::window().print();
-            }
+            // Not `window.print()`: that would put the app the reader is
+            // looking at into print media for as long as the dialog is open —
+            // see `domx::print_sheet`, which measured 8.8 seconds of it.
+            on:click=move |_| crate::domx::print_sheet()
         >
             "Print"
         </button>
@@ -1357,7 +1358,7 @@ fn my_courses(app: App) -> impl IntoView {
         // printed sheet has none. Its own `Option` and its own `noprint` <li>,
         // so nothing has to recognise it by its wording later.
         let fix_it =
-            (guessed > 0).then(|| "If you know the real number, set it with Edit this course.");
+            (guessed > 0).then_some("If you know the real number, set it with Edit this course.");
         // What your number replaced is not always CMI's. Where CMI lists no
         // credits, the thing it stands in for is the app's own guess — the
         // course's card says exactly that, and this line used to disagree

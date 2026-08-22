@@ -593,6 +593,15 @@ rather not have the browser's date and address line over the masthead, untick
 **Headers and footers** in the print dialog. **Background graphics** you can
 leave alone: the sheets keep their colours either way.
 
+**Print opens a window of its own**, and that is deliberate. A web page that
+asks to be printed stays "in print" for as long as the dialog is open, which
+means the app you are looking at is repainted as a white sheet with no
+sidebar — for as long as you take to choose a filename. Printing a copy in its
+own small window keeps your app exactly as it was, in whatever theme you chose;
+the window shows the app's mark while it gets your sheet ready, and closes
+itself when you are done. Ctrl+P still prints the page directly, which is
+briefly visible and then puts itself right.
+
 ---
 
 ## Keeping up with CMI

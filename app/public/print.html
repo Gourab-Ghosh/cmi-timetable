@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <!-- The browser's print header prints `document.title`, so this window
+       carries the app's name rather than the file's. -->
+  <title>CMI Timetable Planner</title>
+  <style>
+    /* The window the Print button opens.
+
+       It exists so the app itself is never the document being printed:
+       `window.print()` holds the calling document in `print` media for as long
+       as the dialog is open (8.8s measured in Brave), which repaints a dark app
+       as a white sheet. A separate top-level context does not have that
+       problem — see `domx::print_sheet`.
+
+       Everything below is about the fraction of a second before the print
+       dialog covers this window, and about what sits behind that dialog while
+       the reader chooses a filename. A blank white window with "about:blank" in
+       its bar reads as something having gone wrong; this reads as a print
+       window, which is what it is.
+
+       `!important` on the two rules that matter: the app's whole stylesheet is
+       copied into this document (so the sheet is laid out by exactly the rules
+       that lay it out anywhere else) and lands in the same cascade as this
+       block. Order between them is not worth depending on. */
+    :root { color-scheme: light; }
+    html, body { margin: 0; padding: 0; }
+    @media screen {
+      body {
+        background: #f3f4f7 !important;
+        color: #10131b;
+        font-family: "Segoe UI Variable Display", "Segoe UI", Inter, system-ui,
+          -apple-system, "Helvetica Neue", Arial, sans-serif;
+        -webkit-font-smoothing: antialiased;
+      }
+      /* The sheet is for paper. On screen it would render as a second copy of
+         the app, which is exactly the confusion this window exists to avoid. */
+      #sheet { display: none !important; }
+      .prep {
+        min-height: 100vh;
+        display: grid;
+        place-items: center;
+        padding: 2rem;
+        box-sizing: border-box;
+      }
+      .card {
+        display: flex;
+        align-items: center;
+        gap: 0.85rem;
+        padding: 1.15rem 1.5rem 1.15rem 1.25rem;
+        background: #fff;
+        border: 1px solid #e2e5eb;
+        border-radius: 14px;
+        box-shadow: 0 10px 30px rgba(16, 19, 27, 0.08);
+      }
+      /* The app's own mark, in the app's own gradient: a week frame with one
+         class placed on it. Same shape as the favicon and the header logo, so
+         this window is recognisably part of the same thing. */
+      .mark {
+        flex: none;
+        width: 38px;
+        height: 38px;
+        border-radius: 10px;
+        background: linear-gradient(120deg, #3f5bd9, #8a46c8);
+        position: relative;
+      }
+      .mark::before,
+      .mark::after {
+        content: "";
+        position: absolute;
+        background: #fff;
+      }
+      .mark::before {
+        inset: 9px;
+        border-radius: 3px;
+        background: none;
+        border: 1.4px solid rgba(255, 255, 255, 0.92);
+      }
+      .mark::after {
+        left: 20px;
+        top: 20px;
+        width: 9px;
+        height: 9px;
+        border-radius: 2px;
+      }
+      .t { margin: 0; font-size: 0.95rem; font-weight: 700; letter-spacing: -0.01em; }
+      .s { margin: 0.15rem 0 0; font-size: 0.84rem; color: #5d6675; }
+      @media (prefers-reduced-motion: no-preference) {
+        .card { animation: rise 220ms cubic-bezier(0.22, 0.61, 0.36, 1) both; }
+        @keyframes rise {
+          from { opacity: 0; transform: translateY(6px); }
+          to { opacity: 1; transform: none; }
+        }
+      }
+    }
+    /* On paper this window is only the sheet. */
+    @media print {
+      .prep { display: none !important; }
+    }
+  </style>
+</head>
+<body>
+  <div class="prep" role="status">
+    <div class="card">
+      <span class="mark" aria-hidden="true"></span>
+      <span>
+        <p class="t">CMI Timetable Planner</p>
+        <p class="s" id="status">Getting your sheet ready to print&hellip;</p>
+      </span>
+    </div>
+  </div>
+  <!-- Filled by the app with a copy of the section being printed. -->
+  <div id="sheet"></div>
+  <script>
+    // This page is opened BY the planner, which fills #sheet and prints it.
+    // Reached any other way — a bookmark, the offline cache, curiosity — it
+    // would otherwise sit saying "getting your sheet ready" for ever. No page
+    // in this app is a dead end, including this one.
+    setTimeout(function () {
+      if (document.getElementById("sheet").children.length) return;
+      var s = document.getElementById("status");
+      s.textContent = "This page is what the planner prints from. ";
+      var a = document.createElement("a");
+      a.href = "./";
+      a.textContent = "Open the planner";
+      a.style.color = "#3f5bd9";
+      s.appendChild(a);
+    }, 4000);
+  </script>
+</body>
+</html>

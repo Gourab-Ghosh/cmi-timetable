@@ -743,3 +743,165 @@ pub fn keep_number_with_word(name: &str) -> String {
         _ => name.to_string(),
     }
 }
+
+/// Print the current sheet from a window of its own, so the app the reader is
+/// looking at is never the document being printed.
+///
+/// # The bug this exists for
+///
+/// `window.print()` puts the LIVE document into `print` media and — because
+/// the call sits on the stack for as long as the modal is open — leaves it
+/// there. Measured in real Brave 151 with the app in its dark theme
+/// (`.workagents/print-r80/probes/brave_print_repro.py`):
+///
+/// ```text
+/// via the Print button   print media ON for 8.8s — the whole dialog
+/// via Ctrl+P             print media ON for 17ms, then 10ms, then off
+/// ```
+///
+/// Ctrl+P is browser-initiated: Blink switches media only to lay the preview
+/// out and switches straight back. `window.print()` cannot, because the script
+/// that called it has to be resumed afterwards. So for as long as the reader
+/// takes to choose a filename, their dark app is a document with a white
+/// ground and no chrome — and any repaint in that window paints it. Measured
+/// under print emulation, the page comes out at 243–252/255 brightness even in
+/// the dark theme (`probes/print_repaint.py`).
+///
+/// CSS cannot reach this. The white ground is what makes the PAPER white, and
+/// on-screen-while-printing is the same document in the same media.
+///
+/// # What does not work, so nobody tries it twice
+///
+/// A hidden same-origin **iframe** does not isolate it. Printing one still
+/// flipped the parent's own `print` media query for the full 8.8s — Chromium
+/// sets the printing state across the frame tree, not per frame — and it makes
+/// no difference whether the frame is focused first.
+///
+/// A **popup is a separate top-level context**, and that does work: measured,
+/// the opener stays at `printMedia: false`, `rgb(14,16,20)`, tabs visible,
+/// right through the dialog and after it closes. It must be opened from a real
+/// click, though: a `window.open` from script has no transient activation and
+/// Brave blocks it — which, the first time, looked exactly like perfect
+/// isolation and was actually nothing being printed at all.
+///
+/// # Why the window is a real page, and the stylesheet copied rather than linked
+///
+/// The window opens `print.html`, a build file, for three reasons: a popup
+/// shows its address, and `about:blank` there reads as something having gone
+/// wrong; a build file is precached by the service worker like everything
+/// else, so this works offline; and it can carry its own screen design — the
+/// app's mark and one line of status — for the moment before the print dialog
+/// covers it and for however long it sits behind it.
+///
+/// The app's rules are copied in as TEXT rather than linked. They are already
+/// in memory, so there is no request to make, nothing to wait for and nothing
+/// to race: a `<link>` appended here would have to be waited on before
+/// printing, and printing a document whose stylesheet has not arrived yet
+/// produces a correct, complete, entirely unstyled sheet.
+///
+/// Falls back to a plain `window.print()` if the popup cannot be opened. A
+/// reader who cannot print at all is worse off than one whose background
+/// blinks.
+pub fn print_sheet() {
+    if try_print_in_own_window().is_none() {
+        let _ = window().print();
+    }
+}
+
+/// Every rule of every stylesheet this document has, as text.
+///
+/// Same-origin, so `cssRules` is readable; a cross-origin sheet would throw on
+/// access and is skipped rather than allowed to abandon the whole sheet.
+fn collect_css() -> String {
+    let sheets = document().style_sheets();
+    let mut out = String::with_capacity(64 * 1024);
+    for i in 0..sheets.length() {
+        let Some(sheet) = sheets
+            .item(i)
+            .and_then(|s| s.dyn_into::<web_sys::CssStyleSheet>().ok())
+        else {
+            continue;
+        };
+        // `css_rules()` on a sheet from another origin is a SecurityError.
+        let Ok(rules) = sheet.css_rules() else {
+            continue;
+        };
+        for j in 0..rules.length() {
+            if let Some(rule) = rules.item(j) {
+                out.push_str(&rule.css_text());
+                out.push('\n');
+            }
+        }
+    }
+    out
+}
+
+fn try_print_in_own_window() -> Option<()> {
+    let doc = document();
+    let app = doc.query_selector(".app").ok()??;
+    let css = collect_css();
+    if css.is_empty() {
+        return None;
+    }
+    let sheet = app.clone_node_with_deep(true).ok()?;
+
+    // A real page rather than `about:blank`, and a named window so a second
+    // press reuses the first. `print.html` is a build file, so the popup shows
+    // a sensible address instead of "about:blank", the service worker precaches
+    // it along with everything else, and it carries its own screen design —
+    // what the reader sees in the moment before the dialog covers it, and
+    // behind the dialog while they choose a filename. Relative, so it resolves
+    // under a project-Pages sub-path as readily as at the root.
+    let win = window()
+        .open_with_url_and_target_and_features("print.html", "cmitt-print", "width=1100,height=830")
+        .ok()??;
+
+    leptos::task::spawn_local(async move {
+        // Wait for the window to actually BE print.html. `win.document()`
+        // straight after `open` is the initial empty document, not the page
+        // that is on its way — injecting into that one puts the sheet
+        // somewhere the navigation is about to throw away. `#sheet` is the
+        // proof that the right document has arrived.
+        let mut host = None;
+        for _ in 0..80 {
+            gloo_timers::future::TimeoutFuture::new(25).await;
+            if let Some(pdoc) = win.document() {
+                if pdoc.ready_state() == "complete" {
+                    if let Some(h) = pdoc.get_element_by_id("sheet") {
+                        host = Some((pdoc, h));
+                        break;
+                    }
+                }
+            }
+        }
+        let Some((pdoc, host)) = host else {
+            // Two seconds and the window never became the page we asked for.
+            // Print the app itself instead: the reader pressed Print, and a
+            // background that blinks beats a button that does nothing.
+            let _ = win.close();
+            let _ = window().print();
+            return;
+        };
+
+        // The app's rules, copied as text — nothing to fetch, so nothing to
+        // wait on before printing. See the doc comment.
+        if let (Ok(style), Some(head)) = (pdoc.create_element("style"), pdoc.head()) {
+            style.set_text_content(Some(&css));
+            let _ = head.append_child(&style);
+        }
+        let _ = host.append_child(&sheet);
+
+        // A beat before printing, and it is not decoration: called on the turn
+        // the window opened, `print()` did nothing at all and `close()` ran
+        // straight after it — the button appeared broken while the app,
+        // correctly, never entered print media. A new window needs a few
+        // frames before it can raise a dialog.
+        gloo_timers::future::TimeoutFuture::new(120).await;
+        let _ = win.focus();
+        // Blocks until the dialog is dismissed, which is why the window is
+        // closed on the line after rather than on a timer.
+        let _ = win.print();
+        let _ = win.close();
+    });
+    Some(())
+}

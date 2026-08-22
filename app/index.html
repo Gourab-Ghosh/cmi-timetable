@@ -48,6 +48,10 @@
   </script>
   <link data-trunk rel="css" href="styles.css" />
   <link data-trunk rel="copy-file" href="public/404.html" />
+  <!-- The window the Print button opens. A real page rather than
+       about:blank: the popup shows its address, and a build file is also
+       precached by the service worker, so printing works offline. -->
+  <link data-trunk rel="copy-file" href="public/print.html" />
   <!-- The --enable-* flags match the wasm features rustc emits by default
        (bulk memory, sign-ext, etc.); older wasm-opt builds reject the module
        without them. -->

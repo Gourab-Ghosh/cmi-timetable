@@ -7171,6 +7171,63 @@ def t126_every_section_prints_itself_and_only_itself(app):
         f"a disabled Print must say why, got {btn.get_attribute('title')!r}"
 
 
+def t127_printing_never_repaints_the_app(app):
+    """Pressing Print must not put the page you are looking at into print
+    media.
+
+    `window.print()` does exactly that, and — because the call sits on the
+    stack until the modal closes — leaves it there. Measured in real Brave 151
+    (`.workagents/print-r80/probes/brave_print_repro.py`): 8.8 seconds of a
+    dark app repainted as a white sheet with no chrome, against 17ms for the
+    same print started with Ctrl+P, which the browser can switch back out of
+    immediately. Anything that forces a repaint in that window paints the
+    sheet; under print emulation the page measures 243-252/255 brightness even
+    in the dark theme.
+
+    So the button prints a copy in a window of its own (`domx::print_sheet`).
+    This test pins the two halves of that: the window is asked for, and the
+    live document is never printed. A hidden iframe was tried first and does
+    NOT work — Chromium sets the printing state across the frame tree — so the
+    assertion is specifically that a separate top-level context is opened.
+
+    Headless has no print dialog, so `print()` here is close to a no-op; what
+    it does still do is fire `beforeprint` at whichever window is printed,
+    which is the signal this reads."""
+    app.boot("/", selection=["TOC", "RDBM"])
+    try:
+        app.dismiss_toasts()
+    except Exception:
+        pass
+    app.d.execute_script("""
+        window.__openCalls = [];
+        window.__beforePrint = 0;
+        window.addEventListener('beforeprint', () => { window.__beforePrint++; });
+        const real = window.open.bind(window);
+        window.open = (u, t, f) => { window.__openCalls.push(t); return real(u, t, f); };
+    """)
+    before_handles = len(app.d.window_handles)
+    btn = next(b for b in app.css_all(
+        "section[aria-label='My timetable'] .toolbar button")
+        if b.text.strip() == "Print")
+    btn.click()
+    # The implementation waits for the new window to report itself ready
+    # before printing, so give it longer than that.
+    time.sleep(2.5)
+
+    app.d.switch_to.window(app.d.window_handles[0])
+    calls = app.d.execute_script("return window.__openCalls;")
+    assert calls == ["cmitt-print"], \
+        f"Print must open its own window; window.open calls were {calls!r}"
+    fired = app.d.execute_script("return window.__beforePrint;")
+    assert fired == 0, \
+        ("the live document was printed — beforeprint fired on it "
+         f"{fired} time(s), so the app repaints as the sheet while the "
+         "dialog is open")
+    # And nothing is left behind: the print window closes itself.
+    assert len(app.d.window_handles) == before_handles, \
+        f"a print window was left open: {app.d.window_handles}"
+
+
 TESTS = [
     t01_header_sync_button_and_hidden_dev,
     t02_developer_endpoint_only,
@@ -7298,6 +7355,7 @@ TESTS = [
     t125_print_stays_light_whatever_the_theme,
     t106_the_wheel_over_the_rail_walks_the_sections,
     t126_every_section_prints_itself_and_only_itself,
+    t127_printing_never_repaints_the_app,
 ]
 
 

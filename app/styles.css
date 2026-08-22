@@ -3341,6 +3341,23 @@ pre.devpre {
     width: auto;
     min-width: 46px;
   }
+  /* A printed sheet must not depend on the size of the window it was printed
+     from. Two narrow-width rules reach printed content, and a reader printing
+     from a phone silently got a different sheet from the same button: the
+     640px block hides the halls sheet's "N booked slots" line — on a page
+     whose whole job is finding a free room, that is the one fact worth
+     printing — and shrinks both its gutters. Restated here at print sizes, so
+     paper is paper at every viewport. (The Print button prints from a copy at
+     a stated width, so it never saw this; Ctrl+P prints the live document and
+     did.) */
+  table.tt.halls-merged { --hall-gutter: 11rem; --day-gutter: 3.6rem; }
+  section[aria-label="Lecture halls"] table.tt th.hallhead .hall-load {
+    display: block;
+  }
+  /* And a meeting row keeps its columns: at 640px it collapses to one, so
+     WHEN and WHERE stack instead of lining up down the sheet. */
+  .sheet-list ul.meetings li { grid-template-columns: auto 1fr; }
+
   /* The corner cells carry "Hall" and "Day" on the halls sheet. Without an
      explicit colour, `table.tt th.rowhead` (two classes) out-specifies
      `table.tt thead th` (one) and paints them #232a3a — dark ink on the dark

@@ -786,7 +786,7 @@ regenerates the .ics golden.
   selected course with no time is part of the timetable, not a footnote.
 - "Your changes" groups are headed by `.cg-head` (colour rail + small caps
   + count), coloured by `OwnChange::tone()`. See §4.
-- Tests: 169 native + 126/126 e2e green (as of R80; the native count from
+- Tests: 169 native + 127/127 e2e green (as of R80; the native count from
   `deploy.sh`'s own in-container run — 49+18+3+9+25+27+28+10).
 - While a popup is open the toast stack sits at the TOP of the screen and the
   overlay reserves its measured height: `ui::Toasts` publishes `--toast-band`
@@ -810,7 +810,12 @@ regenerates the .ics golden.
   permanent "sync every few days" hint next to Sync now (own row ≤899px).
 - **ALL FIVE tabs print (R80), each as its own sheet and only itself** — one
   tab is mounted at a time, and `t126` pins that plus a Print button in every
-  section's toolbar. `views::print_masthead` and `views::print_footnote` are
+  section's toolbar. The button prints a COPY, in a window of its own
+  (`domx::print_sheet` → `public/print.html`), because `window.print()` holds
+  the calling document in print media for the whole dialog — 8.8s of the app
+  repainted as a white sheet, measured in Brave. `t127` pins that the live
+  document is never the one printed. Ctrl+P still prints the page directly and
+  is briefly visible; that is the browser's to own, not ours. `views::print_masthead` and `views::print_footnote` are
   the single definitions; adding a sheet means calling them, never copying
   them. Two rules the print block must keep: **nothing rounded, translucent,
   shadowed, gradient-filled or transformed survives print** (the `*` reset at
@@ -5530,20 +5535,64 @@ and print's 16px row inverted it**, so a hall with one booking printed a block
 half again as tall as a hall with sixteen. Two heights in one table read as two
 tables.
 
-**"The app turns white when I print" — measured, and it is the browser.** Two
-probes, because the first could not answer it: headless says the live document
-reports `printMedia: false` inside `beforeprint`, but headless Chrome has no
-print dialog. So `probes/print_headed_screen.py` runs a real headed Chromium on
-its own Xvfb display, opens the dialog for real, and photographs the root
-window — once via the app's Print button and once via a genuine **Ctrl+P
-delivered by `xdotool` to the browser window**, which matters because CDP and
-WebDriver key events go to the *page* and a browser accelerator is handled by
-the browser UI, which never sees them. Both pictures
-(`.workagents/print-r80/shots/headed-2-dialog.png`, `headed-3-ctrlp.png`) show
-the app behind the dialog **still dark** — sidebar, "Theme: dark", dark grid,
-all intact. The white is Chromium's print-preview pane showing the paper;
-Brave is Chromium, so it is the same preview, and there is nothing in the
-stylesheet to fix. Two things only that photograph revealed: Chromium's
+**"The app turns white when I print" — I got this wrong twice before getting
+it right, and the wrong versions are why the right one exists.** First verdict:
+"not the app". Headless said the live document reports `printMedia: false`
+inside `beforeprint`, and `probes/print_headed_screen.py` — a real headed
+Chromium on its own Xvfb display, photographed with the dialog open, once via
+the button and once via a genuine **Ctrl+P delivered by `xdotool`** (CDP and
+WebDriver key events go to the *page*; a browser accelerator is handled by the
+browser UI, which never sees them) — showed the app behind the dialog still
+dark. **Both were insufficient.** Headless has no print dialog, so
+`window.print()` there is nearly a no-op; and a screenshot taken 3s after the
+click cannot tell "white for 10ms" from "white until dismissed", which under
+software compositing with nothing moving is a repaint that never happens.
+
+The user then supplied the detail that broke it: **it happens on the Print
+button and not on Ctrl+P**, where it is a flash that fixes itself. That
+asymmetry is measurable, and `probes/brave_print_repro.py` measures it in real
+Brave 151 from handlers armed before anything can block:
+
+| path | print media on the LIVE document | duration |
+|---|---|---|
+| the Print button (`window.print()`) | t=5885 → t=14675 | **8.8s — the whole dialog** |
+| Ctrl+P | 5907→5924, 5931→5941 | **17ms + 10ms, then off** |
+
+While it is on, `body` computes to `rgb(255,255,255)`, `.tabs` to `none`, the
+wash to `none`. `window.print()` cannot switch back because the script that
+called it has to be resumed afterwards; Ctrl+P is browser-initiated and
+switches out at once. Whether the reader SEES it depends on a repaint —
+`probes/print_repaint.py` measures the paint at **243–252/255 brightness even
+in the dark theme**, which is what a GPU-composited maximised window gets.
+
+CSS cannot reach it: the white ground is what makes the paper white, and
+on-screen-while-printing is the same document in the same media. **A hidden
+same-origin iframe does not isolate it either** — printing one still flipped
+the parent's media query for the full 8.8s, focused or not, because Chromium
+sets the printing state across the frame tree. What does work is a **separate
+top-level context**: with `domx::print_sheet` the opener stays at
+`printMedia: false`, `rgb(14,16,20)`, tabs visible, right through the dialog
+(`probes/popup_print_check.py`, real click through `xdotool`). It opens
+`print.html` — a real build file, so the window shows an address instead of
+`about:blank`, the service worker precaches it, and it carries its own screen
+design: the app's mark and "Getting your sheet ready to print…" for the moment
+before the dialog covers it. The app's rules are copied in as text rather than
+linked, so nothing is fetched and the first offline print is not an unstyled
+sheet. Falls back to `window.print()` if the popup is refused. `t127` pins it.
+
+Three traps that cost real time, all worth keeping: a **scripted
+`window.open` is blocked** (no transient activation — the first popup run
+reported perfect isolation because nothing printed at all); **`window.screenY +
+(outerHeight - innerHeight)` is not the viewport origin** under Xvfb with no
+window manager (~4px reported against ~200px of real chrome — getting it wrong
+clicked "Export to calendar" and produced a clean-looking result, so ask X for
+the window box); a **stale Xvfb on the same display number** silently gives a
+screen of the wrong size, so the window hangs off its right edge and the click
+lands one button over; and **no WebDriver command may be issued while a print
+dialog is open** — the renderer is blocked, so the command waits for a page
+waiting for a dialog only a keypress can dismiss. Two runs deadlocked there.
+
+Two things the photograph of the dialog revealed: Chromium's
 "Headers and footers" is ticked by default and prints the date, title and URL
 over our masthead (unticking it is the cleaner sheet, and the app cannot turn
 it off) — and that footer is where the **page number** comes from, which is why
@@ -5560,7 +5609,7 @@ section offers exactly one enabled Print button in its own toolbar, its
 masthead names its own sheet, and the other four sections are absent from the
 DOM. Until R80 only My timetable had a Print button at all.
 
-Gates: **126/126 e2e**, 169 native, clippy + fmt clean, and all 8 pages of all
+Gates: **127/127 e2e**, 169 native, clippy + fmt clean, and all 8 pages of all
 five sheets rendered to PNG and read by eye.
 
 ## 8. Open bugs — found, confirmed, NOT fixed (do not delete)
