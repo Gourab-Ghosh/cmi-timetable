@@ -383,6 +383,7 @@ re-triggers serving without rebuilding.
 
 The full 15-point checklist from the build spec (fresh-browser share links,
 offline first load, fail-closed updates, touch drag, conflict dialog,
-keyboard-only operation, print to one landscape A4, Lighthouse a11y ≥ 95,
+keyboard-only operation, all five sections printing to landscape A4 with no
+blank pages, Lighthouse a11y ≥ 95,
 cross-browser) lives in the spec and should be run against a deployed build
 before each semester rollover.

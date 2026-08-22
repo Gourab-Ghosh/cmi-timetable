@@ -7099,6 +7099,78 @@ def t105_arrow_keys_walk_the_tab_rail(app):
         "an arrow pressed outside the rail must not change tab"
 
 
+def t126_every_section_prints_itself_and_only_itself(app):
+    """Every one of the five sections is printable, offers its own Print
+    button, and puts exactly ONE sheet on the paper.
+
+    Both halves were asked for. Until R80 only My timetable had a Print
+    button, so the other four could be printed only by knowing about Ctrl+P —
+    and three of them (My courses, Master grid, Catalog) had no print design
+    at all: no title, no term, no provenance, and every row carrying its
+    buttons. A 13-page Catalog printout with nothing on any page saying what
+    it was is why "it concatenates everything into one PDF" is a reasonable
+    thing to conclude from the output.
+
+    It never did. Only one tab is mounted at a time, which is what the
+    cross-section assertion below pins: whatever else changes, printing the
+    Master grid can never also print the Catalog."""
+    sections = {
+        "My timetable": "My timetable",
+        "My courses": "My courses",
+        "Master grid": "Master grid",
+        "Catalog": "Catalog",
+        "Halls": "Hall bookings",   # the sheet's title is not the tab's label
+    }
+    app.boot("/", selection=["TOC", "RDBM", "MFD"])
+    try:
+        app.dismiss_toasts()
+    except Exception:
+        pass
+    for label, sheet_title in sections.items():
+        app.open_tab(label)
+        sel = "Lecture halls" if label == "Halls" else label
+        app.wait_css(f"section[aria-label='{sel}']")
+
+        # Its own Print button, and a live one — every section has something
+        # to print in this state.
+        buttons = [b for b in app.css_all(
+            f"section[aria-label='{sel}'] .toolbar button")
+            if b.text.strip() == "Print"]
+        assert len(buttons) == 1, \
+            f"{label}: expected exactly one Print button, found {len(buttons)}"
+        assert buttons[0].is_enabled(), f"{label}: Print is disabled"
+
+        # Its own masthead, naming this sheet. `print-only` means it is
+        # `display: none` on screen, so read the DOM rather than `.text`.
+        titles = app.d.execute_script("""
+            return [...document.querySelectorAll('.print-masthead .pm-title')]
+                .map((e) => e.textContent.trim());
+        """)
+        assert titles == [sheet_title], \
+            f"{label}: masthead titles {titles!r}, expected [{sheet_title!r}]"
+
+        # And nothing else is on the page to print. This is the assertion that
+        # keeps one section's sheet from ever becoming five.
+        others = [o for o in sections if o != label]
+        for other in others:
+            osel = "Lecture halls" if other == "Halls" else other
+            assert not app.css_all(f"section[aria-label='{osel}']"), \
+                f"printing {label} would also print {other}"
+
+    # A section with nothing in it says so instead of offering a blank sheet —
+    # the rule the Export button beside it already followed.
+    app.boot("/", selection=[])
+    app.open_tab("My courses")
+    app.wait_css("section[aria-label='My courses']")
+    btn = next(b for b in app.css_all(
+        "section[aria-label='My courses'] .toolbar button")
+        if b.text.strip() == "Print")
+    assert not btn.is_enabled(), \
+        "Print must be disabled with nothing on the timetable"
+    assert "nothing to print" in (btn.get_attribute("title") or ""), \
+        f"a disabled Print must say why, got {btn.get_attribute('title')!r}"
+
+
 TESTS = [
     t01_header_sync_button_and_hidden_dev,
     t02_developer_endpoint_only,
@@ -7225,6 +7297,7 @@ TESTS = [
     t124_cancelling_a_confirm_returns_focus_to_what_asked,
     t125_print_stays_light_whatever_the_theme,
     t106_the_wheel_over_the_rail_walks_the_sections,
+    t126_every_section_prints_itself_and_only_itself,
 ]
 
 

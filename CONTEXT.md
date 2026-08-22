@@ -786,7 +786,7 @@ regenerates the .ics golden.
   selected course with no time is part of the timetable, not a footnote.
 - "Your changes" groups are headed by `.cg-head` (colour rail + small caps
   + count), coloured by `OwnChange::tone()`. See §4.
-- Tests: 169 native + 125/125 e2e green (as of R79; the native count from
+- Tests: 169 native + 126/126 e2e green (as of R80; the native count from
   `deploy.sh`'s own in-container run — 49+18+3+9+25+27+28+10).
 - While a popup is open the toast stack sits at the TOP of the screen and the
   overlay reserves its measured height: `ui::Toasts` publishes `--toast-band`
@@ -808,6 +808,20 @@ regenerates the .ics golden.
   my_timetable) is a designed poster: accent-rule masthead, dark time band,
   branch-colored chips filling cells, colorized legend. Header carries a
   permanent "sync every few days" hint next to Sync now (own row ≤899px).
+- **ALL FIVE tabs print (R80), each as its own sheet and only itself** — one
+  tab is mounted at a time, and `t126` pins that plus a Print button in every
+  section's toolbar. `views::print_masthead` and `views::print_footnote` are
+  the single definitions; adding a sheet means calling them, never copying
+  them. Two rules the print block must keep: **nothing rounded, translucent,
+  shadowed, gradient-filled or transformed survives print** (the `*` reset at
+  the top of the block — it is what took 47 216 Bézier curves, 39 transparency
+  groups and 15 soft masks out of the five sheets, so a new `border-radius` or
+  `opacity` written *after* it with `!important` is a regression), and **any
+  rule written for a grid cell must be SCOPED to one** (`table.tt td .chip`,
+  not `.chip`) — a global `.chip { flex: 1 1 44% }` is what printed a
+  three-letter code as a 700px balloon on the three list tabs. `vh` units and
+  `position: fixed` are both page-relative in paged media: `min-height: 100vh`
+  spilled a blank page, and a fixed pseudo-element repeated on every one.
   Note: headless Chrome clamps launch `--window-size` width to 500 — use
   `set_window_size()` for true phone-width screenshots.
 - Fixture facts used by tests: TOC Tue+Thu 09:10–10:25 slot 550 LH803,
@@ -5448,6 +5462,106 @@ already in the notes: restructuring the update banner's three sentences
 (a paragraph where a phone reader's Monday should be), the credits control
 painting an *assumed* 4 as a chosen segment, and bolding only the half of a
 "moved" digest line that actually differs.
+
+### R80 — the printed sheets: cheap to draw, and five of them instead of two
+
+The order: "My pc is struggling to render the pdfs generated when I try to
+print a page in the app. Make some optimizations so that the pdfs are light
+weight and any device can easily render them. Also make sure that the pdf of
+all the sections, including My timetable, My courses, Master grid, Catalog and
+Halls ... all of them should look as beautiful, user-friendly, easily readable
+and easily understandable as possible ... Verify them visually." Then, mid
+round: every section must print only itself; the app background must not turn
+white while a PDF is being saved (checked for Ctrl+P too, and reported from
+Brave); and a standing bar — "all the works done should be of top quality and
+should look as user-friendly, easily understandable and beautiful as possible
+... Apply this for all the future prompts."
+
+**The measurement first, because file size was the wrong number.** The
+complaint was about *rendering*, so `.workagents/print-r80/probes/print_all.py`
+prints all five tabs at one seed and weighs what a rasteriser actually pays
+for. Before: 26 pages, 1 420 KB, **47 216 Bézier curves**, 39 transparency
+groups, 15 soft masks, and no raster images anywhere. After: **8 pages, 835 KB,
+0 curves, 0 groups, 0 masks, no blank pages.** Per sheet, pages went 1/2/3/13/7
+-> 1/1/1/2/3.
+
+What the bytes and the buffers actually were:
+
+* **`body::before` printed on every page of every sheet.** It is `position:
+  fixed` with two rgba radial gradients, and a fixed element repeats on every
+  printed page — so it was the soft masks in all five PDFs, two transparency
+  groups each, the pale wash that was the *whole* of Master grid page 1, and
+  the band behind the halls explainer. One `display: none` removed all of it.
+* **`border-radius` survived print**, and every corner is a curve — a rounded
+  box with a border draws its outline twice. The Catalog alone drew 24 944.
+* `opacity` and `rgba()` survived too: the worst was `table.tt thead th`'s
+  `rgba(255,255,255,.22)` divider, once per header cell per table per page.
+* **`background-clip: text` with `color: transparent`** on `.cs-num` was the
+  last alpha soft mask AND a correctness bug: the fill is transparent, so
+  anything not honouring the clip prints the credit total — the largest number
+  on the My courses sheet — as *nothing*.
+* `.app { min-height: 100vh }`: in paged media a `vh` is a PAGE, so every sheet
+  was at least one page tall and a sub-pixel rounding of that exact boundary
+  spilled — a wholly blank page 2 on the Master grid and page 4 on Halls. The
+  `.sr-only` live region (absolute, 1px, negative margin) was the deepest thing
+  in the document and did the same.
+* Font subsets: Chrome embeds one per (typeface, 256-glyph block), so the print
+  block's seven font-weights pulled Segoe UI Semibold in beside Regular and
+  Bold. Collapsed to 400/700: 11 subsets on the poster -> 6.
+
+**And the larger half: three of the five sheets had no print design at all.**
+The Catalog ran to 13 pages at ~5 courses a page with an "Add" and a "Delete"
+button on every row; My courses printed "Edit this course" and "Remove" on
+every card; the Master grid wasted page 1 entirely and printed an instruction
+that was all about clicking and dragging. Worse, **the R79 print block was
+written for two tabs and its selectors were global**: `.chip { flex: 1 1 44% }`
+is how a chip fills a grid *cell*, and on the list tabs it stretched a
+three-letter code into a 700px balloon — print CSS that was *actively worse*
+than none. Cell geometry is scoped to cells now.
+
+What the five sheets are: one masthead helper (`views::print_masthead`) and one
+footnote helper (`views::print_footnote`), so a student who prints the lot gets
+one document in five parts. My courses and the Catalog are dense two-column
+lists (hairlines between entries, not a box around each); the Master grid and
+Halls are paginated tables with the header row repeating; the poster is
+unchanged in design. Halls also got its rows evened out — **`tr.quiet { height:
+30px }` exists to SHRINK an empty day on screen, where a booked row is 54px,
+and print's 16px row inverted it**, so a hall with one booking printed a block
+half again as tall as a hall with sixteen. Two heights in one table read as two
+tables.
+
+**"The app turns white when I print" — measured, and it is the browser.** Two
+probes, because the first could not answer it: headless says the live document
+reports `printMedia: false` inside `beforeprint`, but headless Chrome has no
+print dialog. So `probes/print_headed_screen.py` runs a real headed Chromium on
+its own Xvfb display, opens the dialog for real, and photographs the root
+window — once via the app's Print button and once via a genuine **Ctrl+P
+delivered by `xdotool` to the browser window**, which matters because CDP and
+WebDriver key events go to the *page* and a browser accelerator is handled by
+the browser UI, which never sees them. Both pictures
+(`.workagents/print-r80/shots/headed-2-dialog.png`, `headed-3-ctrlp.png`) show
+the app behind the dialog **still dark** — sidebar, "Theme: dark", dark grid,
+all intact. The white is Chromium's print-preview pane showing the paper;
+Brave is Chromium, so it is the same preview, and there is nothing in the
+stylesheet to fix. Two things only that photograph revealed: Chromium's
+"Headers and footers" is ticked by default and prints the date, title and URL
+over our masthead (unticking it is the cleaner sheet, and the app cannot turn
+it off) — and that footer is where the **page number** comes from, which is why
+these sheets deliberately do NOT carry page numbers of their own. Also:
+"Background graphics" is *unticked* by default and the sheets keep their colour
+anyway, because `print-color-adjust: exact` on `body` is inherited by
+everything and overrides that box.
+
+Every section already printed only itself — one tab is mounted at a time, and
+checking every baseline PDF for the other sections' markers found none. What
+made a printout look like a dump of the whole app was the 13-page Catalog with
+nothing on any page saying what it was. **`t126` now pins both halves**: each
+section offers exactly one enabled Print button in its own toolbar, its
+masthead names its own sheet, and the other four sections are absent from the
+DOM. Until R80 only My timetable had a Print button at all.
+
+Gates: **126/126 e2e**, 169 native, clippy + fmt clean, and all 8 pages of all
+five sheets rendered to PNG and read by eye.
 
 ## 8. Open bugs — found, confirmed, NOT fixed (do not delete)
 

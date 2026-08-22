@@ -20,7 +20,7 @@ server to trust, and nothing to install.
 | **Change anything** | Move a class, change its room, add a meeting, strike one out, set its credits — CMI's pages are never touched, your copy is |
 | **Nothing is lost** | Every change is listed in one place, every change is undoable, and nothing is committed until you say so |
 | **Clashes are shown, never blocked** | You are told immediately and clearly; you decide |
-| **Take it with you** | Share links, `.ics` calendar export, and a print sheet that fits one page |
+| **Take it with you** | Share links, `.ics` calendar export, and a printed sheet for every section |
 | **Works offline** | The app itself opens with no connection after one normal visit, and your timetable is already in the browser — only syncing with CMI needs the internet |
 | **Private by construction** | 100% client-side, no accounts, no analytics, no cookies, nothing sent anywhere |
 
@@ -51,7 +51,8 @@ Your week as a grid — days down the left, CMI's time slots across the top.
   deciding for you. A wider screen always shows the whole week, without
   forgetting what your phone was set to.
 - **Your changes** lists everything you have altered (see below).
-- **Print** produces a poster-style sheet — see *Taking it with you*.
+- **Print** produces a poster-style sheet — see *Taking it with you*, where
+  every one of the five sections has one of its own.
 
 ### 📚 My courses
 
@@ -531,7 +532,23 @@ in.)
 
 ### Print
 
-A proper poster sheet, not a screenshot of a web page:
+**Every section prints, each as its own sheet.** My timetable, My courses, the
+Master grid, the Catalog and the Halls all have a **Print** button in their own
+toolbar, and printing one prints only that one — never a stack of everything.
+The five share a masthead, a dark header band, hairline rules and a closing
+line, so a term's worth of printing comes out as one document in five parts
+rather than five screenshots of an app.
+
+They are also built to be **light to open**. Paper has no use for a rounded
+corner, a drop shadow, a gradient or a half-transparent fill, and those are
+exactly what makes a PDF slow to draw — so print strips all of them. The five
+sheets together went from 26 pages and 47,216 curved paths to 8 pages and
+none, with no blank pages anywhere: they open instantly on a phone or an old
+laptop.
+
+Sheet by sheet:
+
+**My timetable** — a proper poster, not a screenshot of a web page:
 
 - Masthead with the semester and the date you last synced.
 - Framed grid with a dark time band and chips in their branch colours, the
@@ -543,11 +560,38 @@ A proper poster sheet, not a screenshot of a web page:
 - The legend names **only the marks that are on the sheet** — an untouched
   timetable prints no note about ✎, and a clash-free one none about ⚠.
 - A dense 12-course semester fits on **one page**, with nothing clipped.
-- The **Halls** tab prints as its own sheet, with the same masthead and the
-  same "check it against CMI's announcements" line the poster carries — a
-  hall sheet on a wall says which term it is and when it was synced. Its
-  on-screen instruction to drag a course is left off the paper, and the ✓
-  key appears only when there is a ✓ on the sheet.
+
+**My courses** — the same list you read on screen, as a reference sheet: the
+credit total and its breakdown as one line, then two columns of courses with
+name, instructor, credits, branches and every meeting time, and each changed
+class showing CMI's original struck through beneath your version. The buttons
+stay behind: "Edit this course" is not something you can do to paper, and the
+app's own advice about setting a credit figure is left on the screen where the
+control is.
+
+**Master grid** — every course CMI has given a time, the whole week on a
+single page, with ✓ against the ones already on your timetable and ⚠ against
+the ones that would clash. The on-screen instruction about clicking and
+dragging is left off, since neither can be done to a sheet of paper.
+
+**Catalog** — everything CMI lists, as a dense two-column reference: code,
+name, instructor, times and branches, one line or two per course. 75 courses
+land on two pages rather than the thirteen a page of screen cards would take,
+and no row carries its Add or Delete button.
+
+**Halls** — CMI's room allocation, hall by hall down the page, with a rule
+where each new room begins and every row the same height whether the room is
+booked solid or free all week. It carries the same masthead and the same
+"check it against CMI's announcements" line the poster does — a hall sheet on
+a wall should say which term it is and when it was synced. Its on-screen
+instruction to drag a course is left off the paper, and the ✓ key appears only
+when there is a ✓ on the sheet.
+
+Page numbers come from your browser's own print footer, which is why the
+sheets don't add their own — two numbers on a page is worse than none. If you'd
+rather not have the browser's date and address line over the masthead, untick
+**Headers and footers** in the print dialog. **Background graphics** you can
+leave alone: the sheets keep their colours either way.
 
 ---
 

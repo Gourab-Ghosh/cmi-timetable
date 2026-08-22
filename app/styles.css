@@ -3035,10 +3035,23 @@ pre.devpre {
 .shadow-note p { margin: 0; flex: 1; min-width: 12rem; font-size: 0.85rem; }
 
 /* ==========================================================================
-   Print: "My timetable" on one landscape A4 — a poster-style sheet. Chips
-   fill their cells in their branch colors (pastel fills print well and stay
-   readable in grayscale); semantic marks (✎, *, doubled border) never rely
-   on color alone.
+   Print — five sheets, one document.
+
+   Every tab prints: My timetable as a poster, My courses and the Catalog as
+   dense two-column lists, the Master grid and Halls as paginated tables. They
+   share a masthead, a dark header band, hairline rules and a footnote, so a
+   student who prints the lot gets one stack rather than five screenshots.
+   Chips keep their branch colors (pastel fills print well and stay readable in
+   grayscale); semantic marks (✎, *, ⚠, doubled border) never rely on color
+   alone.
+
+   AND they are built to be CHEAP TO DRAW, which is a design constraint here
+   and not an afterthought. The R80 complaint was not about file size — it was
+   a machine struggling to *render* — so the reset below removes what a
+   rasteriser actually pays for. The five sheets began at 47 216 Bézier curves,
+   1 944 alpha switches, 39 transparency groups, 15 soft masks and 26 pages;
+   `.workagents/print-r80/probes/print_all.py` is the scale that says so, and
+   the numbers after the work are in the CONTEXT.md R80 entry.
    ========================================================================== */
 
 .print-only { display: none; }
@@ -3047,6 +3060,61 @@ pre.devpre {
 @page { size: A4 landscape; margin: 11mm 12mm; }
 
 @media print {
+  /* --- The paint reset. Ink, straight lines, no compositing. ---
+
+     Each line here is one of the four things a PDF viewer spends its time on:
+
+     * `border-radius` — every corner is a Bézier curve, and a rounded box WITH
+       a border draws its outline twice. This one declaration took 47 216
+       curves out of the five sheets. Nothing on paper carries meaning in a
+       rounded corner.
+     * `opacity` and the rgba fills it stands in for — each distinct alpha is
+       an ExtGState switch, and a partly-transparent element can force an
+       offscreen buffer. Print restates the few that carry hierarchy (the quiet
+       hall days, the chip's hall line) as real, darker INK further down, which
+       is also the only version that survives a photocopy.
+     * `box-shadow` / `filter` / `backdrop-filter` — rasterised or masked.
+     * `transform` — a transformed subtree is composited.
+
+     `!important` throughout: this has to beat ~68 radius declarations and 51
+     shadows written for the screen, and losing silently to any one of them
+     would put the curves back. */
+  *,
+  *::before,
+  *::after {
+    border-radius: 0 !important;
+    box-shadow: none !important;
+    text-shadow: none !important;
+    filter: none !important;
+    -webkit-backdrop-filter: none !important;
+    backdrop-filter: none !important;
+    opacity: 1 !important;
+    transform: none !important;
+    transition: none !important;
+    animation: none !important;
+    /* Scrollbars are a screen affordance; a `scrollbar-gutter` reservation
+       prints as a stripe of empty paper down the side of a table. */
+    scrollbar-gutter: auto !important;
+  }
+  /* The app's ambient wash: `position: fixed`, two rgba radial gradients, and
+     therefore painted on EVERY PAGE OF EVERY SHEET — the soft masks in all
+     five PDFs, two transparency groups each, and the pale empty box that was
+     the whole of Master grid page 1 and the band behind the halls explainer.
+     Decoration nobody has ever wanted on paper. */
+  body::before { display: none !important; }
+  /* A control is something you press. None of them mean anything on paper, and
+     the Catalog printed 280 of them — an "Add" and a "Delete" on all ~140
+     rows, each a bordered box. `.chip` is deliberately NOT included: it is a
+     <button> in the grid, but what it prints is a class in a slot. */
+  .btn,
+  .linklike,
+  .add-own-card,
+  .seg,
+  .filterchip,
+  input,
+  select,
+  textarea,
+  details.facet { display: none !important; }
   :root,
   :root[data-theme="dark"] {
     /* Print always renders on the light palette, whatever the theme.
@@ -3062,7 +3130,10 @@ pre.devpre {
     --bg: #fff;
     --surface: #fff;
     --surface-2: #f8f9fb;
-    --glass: rgba(255, 255, 255, 0.82);
+    /* Opaque, like every other token here: a translucent fill is an alpha
+       switch and possibly a compositing buffer, and paper has nothing to
+       show through to. */
+    --glass: #fff;
     --line: #e2e5eb;
     --line-strong: #c9ced8;
     --text: #000;
@@ -3087,6 +3158,24 @@ pre.devpre {
     --shadow-sm: none;
     --shadow-md: none;
     --shadow-lg: none;
+    /* The brand gradient, off at the source. It is decoration in every place
+       it appears, and on paper it costs a shading pattern per use — one on the
+       welcome card's top rule, one behind every gradient-clipped heading. One
+       token turns off all of them. */
+    --grad: none;
+  }
+  /* And the gradient-CLIPPED text needs the clip turned off too, not just the
+     gradient: `background-clip: text` with `color: transparent` is an alpha
+     soft mask — the last compositing buffer left in these sheets — and it is
+     a correctness risk as well as a cost. The fill is transparent, so
+     anything that does not honour the clip prints the single largest number
+     on the My courses sheet, its credit total, as NOTHING at all. */
+  .cs-num,
+  .welcome-card h2,
+  .aoc-plus {
+    -webkit-background-clip: border-box !important;
+    background-clip: border-box !important;
+    color: #10131b !important;
   }
   html { scroll-padding-top: 0; }
   body {
@@ -3096,7 +3185,21 @@ pre.devpre {
     -webkit-print-color-adjust: exact;
     print-color-adjust: exact;
   }
-  .app { display: block; }
+  .app {
+    display: block;
+    /* `min-height: 100vh` fills the window on screen. In paged media a `vh`
+       is a PAGE, so it guaranteed every sheet was at least one page tall and
+       then let a sub-pixel rounding of that exact boundary spill — which is
+       what put a wholly blank page 2 on the Master grid and page 4 on Halls,
+       both of them pure white paper. Nothing on paper wants a minimum
+       height. */
+    min-height: 0;
+  }
+  /* The live region at the end of the app: `position: absolute`, 1px, and a
+     negative margin — invisible, and the deepest thing in the document, so
+     it hung a pixel past the last page's edge. Nobody reads a printed page
+     with a screen reader; announcements are a screen affordance. */
+  .sr-only { display: none !important; }
   .header, .tabs, .toolbar, .toasts, .banner, .tray, .overlay,
   .filterbar, .chip-info, .noprint { display: none !important; }
   /* The poster is printed once and read all term — "today" is only true on
@@ -3111,7 +3214,7 @@ pre.devpre {
     /* 750 = the print rowhead weight below. `inherit` took the ROW's 400
        and printed today THINNER than the other days — the mark removed
        and then inverted (final sweep, found twice). */
-    font-weight: 750;
+    font-weight: 700;
     box-shadow: none;
   }
   .main { padding: 0; max-width: none; }
@@ -3131,7 +3234,7 @@ pre.devpre {
   .pm-title {
     display: block;
     font-size: 22px;
-    font-weight: 800;
+    font-weight: 700;
     letter-spacing: -0.02em;
     line-height: 1.05;
     color: #10131b;
@@ -3154,31 +3257,37 @@ pre.devpre {
      filling their cells in course colors. --- */
   .grid-scroll {
     border: none;
-    border-radius: 0;
     overflow: visible;
     max-height: none;
     box-shadow: none;
-    /* Right for the poster, which is one page by design. */
-    break-inside: avoid;
+    /* Break where it must. The header row repeats on every page, so a
+       fragmented grid still arrives with its column headings. */
+    break-inside: auto;
   }
-  /* WRONG for the halls sheet, which is always taller than a page: refusing to
-     break inside it pushed the whole table off page 1 (leaving the masthead
-     and one sentence alone on it), and 13 halls came out as EIGHT pages with
-     two of them blank — one holding nothing but the decorative wash. Let it
-     break where it must; the header row repeats on every page anyway. */
-  section[aria-label="Lecture halls"] .grid-scroll { break-inside: auto; }
+  /* `avoid` is right for exactly ONE grid — the poster, which is one page by
+     design — and it was written on plain `.grid-scroll`, then exempted for
+     halls by hand when that sheet came out as EIGHT pages with two blank. The
+     Master grid never got the exemption, so it repeated the whole defect: its
+     table could not break, so it was pushed off page 1 entirely, leaving three
+     lines of explainer and the decorative wash alone on the first sheet a
+     reader sees. Scoped to the poster now, which is the only sheet that can
+     honestly make the promise. */
+  section[aria-label="My timetable"] .grid-scroll { break-inside: avoid; }
   /* And a fragmented table must not draw a frame around the paper it did not
      fill: the outer border ran on to the bottom margin past the last row and
      stopped, leaving an empty ruled well at the foot of every continuation
-     page. The rows carry their own rules, which is what the reader reads. */
-  section[aria-label="Lecture halls"] table.tt { border: none; }
+     page. The rows carry their own rules, which is what the reader reads.
+     Same reasoning, same fix, for the Master grid — which had the same well. */
+  section[aria-label="Lecture halls"] table.tt,
+  section[aria-label="Master grid"] table.tt { border: none; }
   /* The helper sentence was the third-largest thing on this sheet — bigger
      than the column headings and every booking on a page whose whole job is
      the table. Annotation size, like the poster's footnote. */
-  section[aria-label="Lecture halls"] > p.muted.small {
+  section[aria-label="Lecture halls"] > p.muted.small,
+  section[aria-label="Master grid"] > p.muted.small {
     font-size: 9px;
     color: #464b55 !important;
-    margin-bottom: 2mm;
+    margin: 0 0 2mm;
   }
   .week-grid { display: block !important; }
   .day-list { display: none !important; }
@@ -3187,7 +3296,6 @@ pre.devpre {
     width: 100%;
     table-layout: fixed;
     border: 1.4px solid #232a3a;
-    border-radius: 0;
   }
   table.tt th, table.tt td {
     border: none !important;
@@ -3204,12 +3312,16 @@ pre.devpre {
     background: #232a3a !important;
     color: #fff !important;
     font-size: 9.5px;
-    font-weight: 600;
+    font-weight: 700;
     letter-spacing: 0.05em;
     text-align: center;
     padding: 6px 4px;
     border-bottom: none !important;
-    border-right: 0.5px solid rgba(255, 255, 255, 0.22) !important;
+    /* Solid, not `rgba(255,255,255,0.22)`. The divider between column
+       headings was the single most-repeated alpha in these sheets — once per
+       header cell, per table, per page — and this slate is what that rgba
+       resolves to over the band anyway. Same picture, no ExtGState. */
+    border-right: 0.5px solid #454d63 !important;
   }
   table.tt th.rowhead {
     position: static;
@@ -3217,7 +3329,7 @@ pre.devpre {
     background: #fff !important;
     color: #232a3a !important;
     font-size: 11.5px;
-    font-weight: 750;
+    font-weight: 700;
     text-align: center;
     border-right: 1px solid #232a3a !important;
     vertical-align: middle;
@@ -3253,18 +3365,47 @@ pre.devpre {
   table.tt tbody tr { break-inside: avoid; }
   table.tt tbody tr:hover td { background: #fff !important; }
 
-  /* Chips fill the whole cell: code large and centered, hall beneath.
-     Several chips in one cell (clashes) share it: two sit side by side,
-     three or more wrap onto extra lines, and the CELL grows to hold them
-     — text is never chopped by the cell border or shortened with "…". */
+  /* --- Chips. Every chip prints in its course's own colour; only the
+     GEOMETRY differs by where it sits, and getting that split wrong is what
+     made three of these five sheets unreadable before R80.
+
+     `flex: 1 1 44%` is how a chip fills a grid cell, and until now it was set
+     on plain `.chip` — so on My courses and the Catalog, where a chip sits in
+     a text row rather than a cell, a three-letter code stretched into a 700px
+     balloon and each branch chip into another one. Print CSS written for two
+     tabs, inherited by five. Cell geometry is scoped to cells from here on;
+     everything outside one is intrinsic width, as on screen. */
+  .chip {
+    background: hsl(var(--hue) 60% 91%) !important;
+    color: hsl(var(--hue) 70% 20%) !important;
+    border: 1px solid hsl(var(--hue) 42% 60%) !important;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    /* The default is the one in a TEXT ROW: as small as a word, and it must
+       not force the line taller than the sentence it sits in. */
+    min-height: 0;
+    padding: 0.5px 4px;
+    font-size: 9.5px;
+    line-height: 1.35;
+  }
+
+  /* In a grid cell: fill it, code large and centered, hall beneath. Several
+     chips in one cell (clashes) share it: two sit side by side, three or more
+     wrap onto extra lines, and the CELL grows to hold them — text is never
+     chopped by the cell border or shortened with "…". */
   table.tt td .sidebyside {
     min-height: 100%;
     gap: 2px;
     flex-wrap: wrap;
     align-content: stretch;
   }
-  .chipwrap { display: flex; flex: 1 1 44%; height: auto; min-width: 0; }
-  .chip {
+  table.tt td .chipwrap {
+    display: flex;
+    flex: 1 1 44%;
+    height: auto;
+    min-width: 0;
+  }
+  table.tt td .chip {
     position: relative;
     display: flex;
     flex-direction: column;
@@ -3276,19 +3417,16 @@ pre.devpre {
     height: auto;
     min-height: 26px;
     padding: 2px 4px;
-    border-radius: 7px;
-    background: hsl(var(--hue) 60% 91%) !important;
-    color: hsl(var(--hue) 70% 20%) !important;
-    border: 1px solid hsl(var(--hue) 42% 60%) !important;
-    box-shadow: none !important;
     font-size: 12.5px;
-    font-weight: 750;
-    letter-spacing: 0.02em;
+    line-height: 1.15;
   }
   .chip .hall {
     font-size: 7.8px;
-    font-weight: 500;
-    opacity: 0.85;
+    font-weight: 400;
+    /* Real ink, not `opacity: 0.85` over the code's colour. The faded version
+       was one alpha switch per chip — hundreds a sheet — and a photocopier
+       loses it; this is the same step down in emphasis, made of pigment. */
+    color: hsl(var(--hue) 45% 34%) !important;
     max-width: 100%;
     /* Wraps like on screen — a printed hall name must be whole. Centred with
        it: the chip's first line is centred, so a wrapped "802" left-aligned
@@ -3344,7 +3482,7 @@ pre.devpre {
      black-and-white printer. */
   .chip .sel-mark {
     font-size: 8px;
-    font-weight: 800;
+    font-weight: 700;
     color: #232a3a !important;
   }
 
@@ -3356,7 +3494,6 @@ pre.devpre {
     padding: 1.5mm 3mm;
     border: 1px solid #c22f41;
     border-left: 3.5px solid #c22f41;
-    border-radius: 4px;
     background: #fceef0 !important;
     font-size: 9px;
     color: #7c1d2a;
@@ -3369,7 +3506,7 @@ pre.devpre {
   .print-legend h3 { break-after: avoid; }
   .print-legend h3 {
     font-size: 8.5px;
-    font-weight: 750;
+    font-weight: 700;
     letter-spacing: 0.18em;
     text-transform: uppercase;
     color: #5a6170;
@@ -3401,7 +3538,7 @@ pre.devpre {
   .pc-item:first-child { border-top: 0; }
   .pc-body { min-width: 0; }
   .pc-top { font-size: 9.6px; line-height: 1.35; color: #10131b; }
-  .pc-name { font-weight: 650; }
+  .pc-name { font-weight: 700; }
   .pc-inst { color: #5a6170; }
   .pc-cr { color: #5a6170; white-space: nowrap; font-size: 8.8px; }
   .pc-meets {
@@ -3419,11 +3556,28 @@ pre.devpre {
     font-weight: 700;
     font-size: 9.5px;
     padding: 1px 7px 2px;
-    border-radius: 5px;
     background: hsl(var(--hue) 60% 91%);
     color: hsl(var(--hue) 70% 20%);
     border: 1px solid hsl(var(--hue) 42% 60%);
   }
+  /* Two weights per family on paper, and no more. Chrome embeds one font
+     subset per (typeface, 256-glyph block), so asking for 500, 550, 600 AND
+     650 as well as 400 and 700 pulls Segoe UI Semibold in beside Regular and
+     Bold — a third face and a fourth subset, carried on every page of the
+     sheet. The screen's finer gradations are not legible at 9px on paper
+     anyway: at annotation size the distinction that reads is colour and
+     italics, which is what these sheets use instead. */
+  .badge,
+  .cs-cap,
+  .cs-pill,
+  .filtered-note,
+  .hall-load,
+  .covered .until,
+  .pc-inst,
+  .pc-cr,
+  .print-footnote { font-weight: 400; }
+  .cs-pill b { font-weight: 700; }
+
   .print-footnote {
     /* 8px at #8a909c measured 4.0:1 on white — fine on a screen, thin on
        paper and hopeless on a photocopy. */
@@ -3435,5 +3589,218 @@ pre.devpre {
     display: flex;
     justify-content: space-between;
     gap: 8mm;
+    break-inside: avoid;
+  }
+
+  /* ------------------------------------------------------------------
+     The two LIST sheets — My courses and the Catalog.
+
+     Both were, until R80, a stack of screen cards printed one to a strip:
+     ~5 courses to a page, so the Catalog ran to THIRTEEN pages, and every
+     row carried its "Add" and "Delete" buttons. What a list wants on paper
+     is the opposite of what a card wants on a screen — hairlines instead of
+     boxes, two columns instead of one, and the same line height all the way
+     down so the eye can run a finger down the codes.
+     ------------------------------------------------------------------ */
+  .sheet-list .card {
+    /* A rule between entries, not a box around each: 140 boxes is 140 framed
+       objects to draw and a page that reads as bubble wrap. */
+    background: none !important;
+    border: none !important;
+    border-top: 0.5px solid #d9dde4 !important;
+    /* 0.8mm, and the tenths matter: at 1.1mm the 75-course catalog spilled its
+       LAST entry onto a third page, alone with the footnote. The saving is
+       2.3px an entry, which is 43px a column — one more entry per column than
+       the sheet needed. Vertical padding is the right thing to spend, too:
+       the type stays the size it was, so the sheet gets denser without
+       getting smaller. */
+    padding: 0.8mm 0 !important;
+    margin: 0 !important;
+    /* An entry must not be split across a column or a page: half a course is
+       not an entry, and in a two-column flow the split is invisible until
+       someone tries to read it. */
+    break-inside: avoid;
+  }
+  .sheet-list .card:first-of-type { border-top: none !important; }
+  /* Two columns. A catalog row needs about 95mm to say code, name,
+     instructor and times; a landscape A4 gives 273mm, so one column wasted
+     nearly two thirds of every line — which is most of where the thirteen
+     pages went. */
+  .sheet-list .print-cols {
+    column-count: 2;
+    column-gap: 9mm;
+    column-rule: 0.5px solid #e6e9ee;
+  }
+  .sheet-list .card .row {
+    gap: 0 1.6mm;
+    align-items: baseline;
+    font-size: 9.4px;
+    line-height: 1.35;
+  }
+  /* The name block: it is the one part that may take the width it needs, so
+     the flexible middle of the screen row stays the flexible middle here. */
+  .sheet-list .card .row > div[style] { min-width: 0 !important; }
+  .sheet-list .card strong { font-weight: 700; color: #10131b; }
+  .sheet-list .card .muted { color: #4b5361 !important; }
+  .sheet-list .card .small { font-size: 8.7px; }
+  /* Badges become plain annotations. Fifteen pill shapes down a printed
+     column read as controls; the words are what carry the fact. */
+  .sheet-list .badge {
+    background: none !important;
+    border: none !important;
+    padding: 0 !important;
+    font-size: 8.4px;
+    font-style: italic;
+    color: #5a6170 !important;
+  }
+  .sheet-list .badge::before { content: "· "; font-style: normal; }
+  .sheet-list .badge.warn, .sheet-list .badge.alarm { color: #7d5f08 !important; }
+  /* Meeting lists inside a card: one line, not a stack of rows with their
+     own rules — the card is already the entry. */
+  .sheet-list ul.meetings { margin: 0.3mm 0 0; }
+  .sheet-list ul.meetings > li {
+    padding: 0 !important;
+    border: none !important;
+    font-size: 8.7px;
+    line-height: 1.4;
+  }
+  /* The credit total: a headline fact, so it keeps its size — but as type on
+     paper, not a tinted card with a gradient in it. */
+  .sheet-list .credit-summary {
+    background: #fff !important;
+    border: none !important;
+    border-bottom: 1px solid #d9dde4 !important;
+    padding: 0 0 1.6mm !important;
+    margin: 0 0 2mm !important;
+    gap: 0 4mm;
+    align-items: baseline;
+  }
+  .sheet-list .cs-num { font-size: 15px; font-weight: 700; color: #10131b; }
+  .sheet-list .cs-cap, .sheet-list .cs-pills { font-size: 9px; color: #4b5361; }
+  /* No bullets. Each note is already on its own line, and at 8.6px a disc is
+     a 2px dot sitting a wide indent away from the sentence it belongs to — it
+     reads as a speck on the paper rather than a list marker. (It was also,
+     after everything else, the last curved path left in these five sheets:
+     two glyphs, sixteen Béziers.) */
+  .sheet-list .cs-note {
+    font-size: 8.6px;
+    color: #5a6170;
+    margin: 0.6mm 0 0;
+    padding-left: 0;
+    list-style: none;
+  }
+  .sheet-list .cs-pills .badge { font-style: normal; }
+  /* The breakdown pills lose their boxes. On screen a bordered pill says "this
+     is one item of several"; printed at 9px beside a headline number, two
+     rectangles read as two buttons on a sheet that has no buttons. The middot
+     does the separating that the borders were doing. */
+  .sheet-list .cs-pills {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0 2.6mm;
+  }
+  .sheet-list .cs-pill {
+    background: none !important;
+    border: none !important;
+    padding: 0 !important;
+  }
+  .sheet-list .cs-pill + .cs-pill::before { content: "· "; color: #9aa1ad; }
+  /* The branch chips sit on their own row in a course card, which is right on
+     screen and costs a line per course on paper — where a five-course sheet
+     spends five lines on 0.3rem of screen rhythm. `!important` because the
+     margin is an inline style at the call site. */
+  .sheet-list .card .row + .row { margin-top: 0.3mm !important; }
+
+  /* ------------------------------------------------------------------
+     Master grid — the same poster table, but a sheet that is honestly
+     several pages long.
+     ------------------------------------------------------------------ */
+  /* The instruction line is entirely about pressing and dragging, and the ⓘ
+     key points at a popover. None of it can be done to a piece of paper.
+     What DOES survive is ✓ and ⚠, and those move to the footnote with every
+     other mark this stylesheet explains. */
+  section[aria-label="Master grid"] .grid-legend { display: none !important; }
+  /* Tighter than the poster: this grid holds every course CMI schedules, not
+     five, so a cell can carry a dozen chips and the sheet's job is to fit the
+     week on as few pages as it honestly can. */
+  section[aria-label="Master grid"] table.tt td {
+    height: auto;
+    padding: 2px;
+  }
+  section[aria-label="Master grid"] table.tt td .chip {
+    min-height: 0;
+    padding: 1px 3px;
+    font-size: 9px;
+  }
+
+  /* ------------------------------------------------------------------
+     Halls — 13 halls × 5 days is 65 rows, and most of them are empty.
+     ------------------------------------------------------------------ */
+  /* The poster's 54px row is a design decision about a sheet with 30 cells on
+     it. Here it bought two halls a page and left the bottom half of page 1
+     blank: an empty row does not need to be as tall as a full one to be
+     readable, it needs to be tall enough to hold a chip. */
+  /* A FIXED height, not `auto`, and this is the difference between a grid and
+     a list of rows that happen to be adjacent. `height` on a cell is a
+     minimum, and a hall's name cell spans five of them — so with `auto` the
+     browser handed the leftover height of a two-line name to the five rows
+     beside it, and a quiet hall got 31px rows while a busy one got 17px. Same
+     table, two row heights, and the eye reads that as two different tables.
+     Pinned to the tallest thing a row can hold, every row matches. */
+  section[aria-label="Lecture halls"] table.tt td {
+    height: 16px;
+    min-height: 0;
+    padding: 1px 3px;
+  }
+  section[aria-label="Lecture halls"] table.tt th.dayhead {
+    padding: 1px 4px;
+    font-size: 8.8px;
+  }
+  /* And the same height for a QUIET row, which needs saying because the screen
+     rule for those says 30px — a rule whose whole purpose is to SHRINK an
+     empty day, since on screen a booked row is 54px. Print made the booked row
+     16px and left this untouched, so the rule inverted: every empty day came
+     out nearly twice the height of a busy one, and a hall with one booking
+     printed a block half again as tall as a hall with sixteen. Two heights in
+     one table read as two tables. (It also out-specifies the rule above —
+     three classes to two — which is why matching it needs saying HERE and not
+     by editing that one.) */
+  section[aria-label="Lecture halls"] table.tt.halls-merged tr.quiet td,
+  section[aria-label="Lecture halls"] table.tt.halls-merged tr.quiet th.dayhead {
+    height: 16px;
+    padding-top: 1px;
+    padding-bottom: 1px;
+  }
+  /* Where one hall ends and the next begins. The screen draws a 2px rule for
+     this, and print's blanket `border: none !important` on every cell erased
+     it — so 14 rooms ran together as 70 identical rows with the room names the
+     only clue. On a sheet whose entire job is "which room", the boundary
+     between rooms is not decoration. */
+  section[aria-label="Lecture halls"] table.tt tbody tr.group-start:not(:first-child) > th,
+  section[aria-label="Lecture halls"] table.tt tbody tr.group-start:not(:first-child) > td {
+    border-top: 1.2px solid #232a3a !important;
+  }
+  /* 13px is the floor, and it is set by the type rather than chosen: a 9.5px
+     code plus a hairline border and a pixel of padding IS 13px, so an empty
+     row is exactly as tall as a booked one and the week still reads as a
+     grid. Anything less would shrink the words, not the whitespace. */
+  section[aria-label="Lecture halls"] table.tt td .chip {
+    min-height: 13px;
+    font-size: 9.5px;
+    padding: 0 3px;
+  }
+  /* A hall's five days are one thing to read. `avoid` on the row would only
+     protect one day; this keeps the name cell with the rows it spans, so a
+     hall never arrives with its label on the page before. */
+  section[aria-label="Lecture halls"] table.tt th.hallhead {
+    break-inside: avoid;
+    padding: 2px 6px;
+  }
+  section[aria-label="Lecture halls"] table.tt th.hallhead .hall-name {
+    font-size: 10px;
+  }
+  section[aria-label="Lecture halls"] table.tt th.hallhead .hall-load {
+    font-size: 8.4px;
+    color: #5a6170 !important;
   }
 }

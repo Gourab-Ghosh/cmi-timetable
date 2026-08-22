@@ -41,6 +41,110 @@ pub fn planner(app: App) -> impl IntoView {
     }
 }
 
+/// The masthead every printed sheet opens with: what this is and how much of
+/// it, over on the left; which semester and where it came from, on the right.
+///
+/// One definition for all five tabs, and that is the point. A student who
+/// prints the timetable, their courses, the master grid, the catalog and the
+/// halls should end up with one document in five parts, not five screenshots
+/// of an app — so the title block, the accent rule under it and the
+/// provenance line are literally the same markup every time. It also stops
+/// the drift that had already started: R79 gave My timetable and Halls a
+/// masthead each, by hand, and the two had begun to disagree about what the
+/// subtitle says.
+///
+/// `stats` is the one line that differs, so it stays a closure: every sheet
+/// counts something different, and all of them count it reactively.
+///
+/// `aria-hidden`, always: on screen this is `display: none`, and a heading
+/// read aloud from an invisible block is a heading nobody can navigate to.
+/// The visible `<h2>` in each toolbar is the one screen readers get.
+fn print_masthead(
+    app: App,
+    title: &'static str,
+    stats: impl Fn() -> String + Send + Sync + 'static,
+) -> impl IntoView {
+    view! {
+        <div class="print-masthead print-only" aria-hidden="true">
+            <div class="pm-left">
+                <span class="pm-title">{title}</span>
+                <span class="pm-stats">{stats}</span>
+            </div>
+            <div class="pm-right">
+                <span class="pm-sem">
+                    {move || app.snapshot.with(|s| s.semester_label_display())}
+                </span>
+                <span class="pm-meta">
+                    {move || {
+                        format!(
+                            "cmi.ac.in · synced {}",
+                            crate::domx::fmt_local_date(app.snapshot.with(|s| s.fetched_at)),
+                        )
+                    }}
+                </span>
+            </div>
+        </div>
+    }
+}
+
+/// "made with the CMI Timetable Planner" — the tail every sheet's stats line
+/// ends with, so the sheet says what made it wherever it is pinned up.
+const MADE_WITH: &str = "made with the CMI Timetable Planner";
+
+/// The Print button, one per printable section.
+///
+/// All five sections print — each as its own sheet, and only itself, because
+/// only one tab is ever mounted — but until R80 only My timetable offered a
+/// button, so the other four could be printed only by knowing about Ctrl+P.
+/// A section that is designed to be printed should say so.
+///
+/// `nothing` is why there is nothing to print yet, or `None` when there always
+/// is: the catalog, the master grid and the halls sheet come from CMI's pages
+/// and are never empty once there is a snapshot, while My timetable and My
+/// courses are empty until the reader picks something. A disabled button with
+/// no explanation is a dead end, which is the mistake this signature exists to
+/// make impossible.
+fn print_button(nothing: Option<(&'static str, Signal<bool>)>) -> impl IntoView {
+    let empty = move || nothing.is_some_and(|(_, sig)| sig.get());
+    view! {
+        <button
+            class="btn"
+            disabled=empty
+            title=move || {
+                if empty() {
+                    nothing.map(|(why, _)| why)
+                } else {
+                    Some("Print this section — or save it as a PDF")
+                }
+            }
+            on:click=move |_| {
+                let _ = crate::domx::window().print();
+            }
+        >
+            "Print"
+        </button>
+    }
+}
+
+/// The line every printed sheet closes with: what its marks mean, on the left,
+/// and on the right the one caveat the whole app rests on.
+///
+/// `marks` returns the empty string when the sheet carries no marks, and the
+/// rule R79 paid for is that it MUST: a footnote explaining a ✎ that is
+/// nowhere on the paper sends the reader hunting the sheet for it. So every
+/// caller assembles its list from what is actually printed, and an empty left
+/// half simply leaves the caveat alone on the line.
+fn print_footnote(marks: impl Fn() -> String + Send + Sync + 'static) -> impl IntoView {
+    view! {
+        <p class="print-footnote print-only">
+            <span>{marks}</span>
+            <span>
+                "Check this against CMI's official announcements before you rely on it."
+            </span>
+        </p>
+    }
+}
+
 /// The first-run screen: the app stores nothing about CMI's pages, so before
 /// the first sync there is no timetable to plan with — just the offer to
 /// fetch one.
@@ -449,45 +553,24 @@ fn my_timetable(app: App) -> impl IntoView {
 
     view! {
         <section aria-label="My timetable">
-            // Print-only masthead: title + stats left, semester + provenance
-            // right, over one accent rule.
-            <div class="print-masthead print-only" aria-hidden="true">
-                <div class="pm-left">
-                    <span class="pm-title">"My timetable"</span>
-                    <span class="pm-stats">
-                        {move || {
-                            let courses = app.selected_courses();
-                            let total: u32 = courses
-                                .iter()
-                                .map(|c| u32::from(app.course_credits(c)))
-                                .sum();
-                            format!(
-                                "{} course{} · {} credit{} · made with the CMI \
-                                 Timetable Planner",
-                                courses.len(),
-                                if courses.len() == 1 { "" } else { "s" },
-                                total,
-                                if total == 1 { "" } else { "s" },
-                            )
-                        }}
-                    </span>
-                </div>
-                <div class="pm-right">
-                    <span class="pm-sem">
-                        {move || app.snapshot.with(|s| s.semester_label_display())}
-                    </span>
-                    <span class="pm-meta">
-                        {move || {
-                            format!(
-                                "cmi.ac.in · synced {}",
-                                crate::domx::fmt_local_date(
-                                    app.snapshot.with(|s| s.fetched_at),
-                                ),
-                            )
-                        }}
-                    </span>
-                </div>
-            </div>
+            {print_masthead(
+                app,
+                "My timetable",
+                move || {
+                    let courses = app.selected_courses();
+                    let total: u32 = courses
+                        .iter()
+                        .map(|c| u32::from(app.course_credits(c)))
+                        .sum();
+                    format!(
+                        "{} course{} · {} credit{} · {MADE_WITH}",
+                        courses.len(),
+                        if courses.len() == 1 { "" } else { "s" },
+                        total,
+                        if total == 1 { "" } else { "s" },
+                    )
+                },
+            )}
             <div class="toolbar noprint">
                 <h2 style="margin:0">"My timetable"</h2>
                 <div class="grow"></div>
@@ -549,20 +632,10 @@ fn my_timetable(app: App) -> impl IntoView {
                 // Disabled on an empty timetable, like the Export button beside it:
                 // printing a blank grid is not something anyone asked for, and
                 // the two buttons had different answers to the same question.
-                <button
-                    class="btn"
-                    disabled=move || app.selection.with(|s| s.is_empty())
-                    title=move || {
-                        app.selection
-                            .with(|s| s.is_empty())
-                            .then_some("Add a course first — there is nothing to print yet.")
-                    }
-                    on:click=move |_| {
-                        let _ = crate::domx::window().print();
-                    }
-                >
-                    "Print"
-                </button>
+                {print_button(Some((
+                    "Add a course first — there is nothing to print yet.",
+                    Signal::derive(move || app.selection.with(|s| s.is_empty())),
+                )))}
             </div>
 
             {move || {
@@ -1279,9 +1352,12 @@ fn my_courses(app: App) -> impl IntoView {
                 notes.push("Anything else counts as 4, the usual figure.".to_string());
             }
         }
-        if guessed > 0 {
-            notes.push("If you know the real number, set it with Edit this course.".to_string());
-        }
+        // Held apart from the facts above rather than pushed in with them: it
+        // is the one note that is an INSTRUCTION, it names a button, and the
+        // printed sheet has none. Its own `Option` and its own `noprint` <li>,
+        // so nothing has to recognise it by its wording later.
+        let fix_it =
+            (guessed > 0).then(|| "If you know the real number, set it with Edit this course.");
         // What your number replaced is not always CMI's. Where CMI lists no
         // credits, the thing it stands in for is the app's own guess — the
         // course's card says exactly that, and this line used to disagree
@@ -1326,7 +1402,7 @@ fn my_courses(app: App) -> impl IntoView {
                     </span>
                 </div>
                 <div class="cs-pills">{pills}</div>
-                {(!notes.is_empty())
+                {(!notes.is_empty() || fix_it.is_some())
                     .then(|| {
                         view! {
                             <ul class="cs-note">
@@ -1334,6 +1410,7 @@ fn my_courses(app: App) -> impl IntoView {
                                     .into_iter()
                                     .map(|n| view! { <li>{n}</li> })
                                     .collect_view()}
+                                {fix_it.map(|n| view! { <li class="noprint">{n}</li> })}
                             </ul>
                         }
                     })}
@@ -1362,10 +1439,37 @@ fn my_courses(app: App) -> impl IntoView {
     let hidden = move || app.selection.with(|s| s.len()).saturating_sub(shown.get());
 
     view! {
-        <section aria-label="My courses">
-            <div class="toolbar">
+        <section aria-label="My courses" class="sheet-list">
+            // Counts what is ON THE SHEET, not what is selected: this page has
+            // a filter bar, the filter bar does not print, and a printout
+            // headed "5 courses" listing three is a sheet that lies about
+            // itself. The note under the credit total already explains the
+            // difference for the reader who is looking at the screen.
+            {print_masthead(
+                app,
+                "My courses",
+                move || {
+                    let courses = filtered.get();
+                    let total: u32 = courses
+                        .iter()
+                        .map(|c| u32::from(app.course_credits(c)))
+                        .sum();
+                    format!(
+                        "{} course{} · {} credit{} · {MADE_WITH}",
+                        courses.len(),
+                        if courses.len() == 1 { "" } else { "s" },
+                        total,
+                        if total == 1 { "" } else { "s" },
+                    )
+                },
+            )}
+            <div class="toolbar noprint">
                 <h2 style="margin:0">"My courses"</h2>
                 <div class="grow"></div>
+                {print_button(Some((
+                    "Add a course first — there is nothing to print yet.",
+                    Signal::derive(move || app.selection.with(|s| s.is_empty())),
+                )))}
             </div>
             {credit_summary}
             // The bar earns its place only once there is something to
@@ -1460,10 +1564,22 @@ fn my_courses(app: App) -> impl IntoView {
                     }
                         .into_any()
                 } else {
-                    courses
-                        .into_iter()
-                        .map(|course| course_card(app, course))
-                        .collect_view()
+                    // The wrapper exists for print, where it becomes two
+                    // columns (see `.sheet-list .print-cols`): a course entry
+                    // needs about a third of a landscape A4's width to say
+                    // everything it says, and one column a line wasted the
+                    // rest. On screen it is an ordinary block and changes
+                    // nothing — the cards keep their own margins, and every
+                    // selector that reaches them, in CSS and in the suite, is
+                    // a descendant selector.
+                    view! {
+                        <div class="print-cols">
+                            {courses
+                                .into_iter()
+                                .map(|course| course_card(app, course))
+                                .collect_view()}
+                        </div>
+                    }
                         .into_any()
                 }
             }}
@@ -1564,6 +1680,30 @@ fn my_courses(app: App) -> impl IntoView {
                         }
                     })
             }}
+            // Same three marks the poster explains, chosen the same way: only
+            // the ones this sheet actually carries. `*` rides on the credit
+            // figures and `✎` on the times, so both predicates ask about the
+            // courses that are ON the sheet — the filtered ones.
+            {print_footnote(move || {
+                let courses = filtered.get();
+                let mut parts: Vec<&str> = Vec::new();
+                if courses.iter().any(|c| {
+                    app.credits_custom(&c.code).is_some()
+                        || app.effective_meetings(c).iter().any(|e| e.overridden)
+                }) {
+                    parts.push("✎ you changed this");
+                }
+                if courses
+                    .iter()
+                    .any(|c| app.credits_custom(&c.code).is_none() && c.credits_assumed())
+                {
+                    parts.push("* credits the app guessed (CMI doesn't list them)");
+                }
+                if !app.clashes().is_empty() {
+                    parts.push("⚠ marks a clash");
+                }
+                parts.join(" \u{b7} ")
+            })}
         </section>
     }
 }
@@ -1658,26 +1798,50 @@ fn course_card(app: App, course: Course) -> impl IntoView {
                 } else if let Some(span) = &cr_duration {
                     Some(format!(
                         "* CMI doesn't list credits for this course. It runs {span}, so \
-                         the app counts one credit per month. Set your own number with \
-                         Edit this course."
+                         the app counts one credit per month."
                     ))
                 } else if cr_seminar {
                     Some(
                         "* CMI doesn't list credits for this seminar, so the app counts \
-                         0 — seminars don't usually carry credit. Set your own number \
-                         with Edit this course."
+                         0 — seminars don't usually carry credit."
                             .to_string(),
                     )
                 } else if cr_assumed {
                     Some(
                         "* CMI doesn't list credits for this course, so the app counts \
-                         the usual 4. Set your own number with Edit this course."
+                         the usual 4."
                             .to_string(),
                     )
                 } else {
                     None
                 };
-                sentence.map(|s| view! { <p class="muted small cr-note">{s}</p> })
+                // The generic case does not print, the specific ones do. "It
+                // runs Oct–Nov, so the app counts one credit per month" is a
+                // fact about the COURSE and belongs on a sheet someone may be
+                // checking against a notice board. "The app counts the usual 4"
+                // is a fact about the app, and the sheet already says it twice
+                // — once in the credit summary's own note, once in the footnote
+                // that explains the `*`. Three times on one page, and four
+                // times over on a five-course sheet, is not emphasis.
+                let generic = cr_assumed && cr_duration.is_none() && !cr_seminar;
+                // The offer to fix it is a separate, non-printing sentence.
+                // Where the number CAME FROM is worth having on paper — "it
+                // runs Oct–Nov, so one credit a month" is the reasoning behind
+                // a figure the reader may be checking against a notice board.
+                // "Set your own number with Edit this course" is not: it names
+                // a button, and the printed sheet has none. It was also the
+                // second half of this sentence on every card, so a five-course
+                // sheet repeated the same instruction five times.
+                sentence.map(|s| {
+                    view! {
+                        <p class="muted small cr-note" class:noprint=generic>
+                            {s}
+                            <span class="noprint">
+                                " Set your own number with Edit this course."
+                            </span>
+                        </p>
+                    }
+                })
             }}
             <div class="row" style="margin-top:0.3rem">
                 {is_custom
@@ -2033,7 +2197,19 @@ fn master_grid(app: App) -> impl IntoView {
 
     view! {
         <section aria-label="Master grid">
-            <div class="toolbar" style="margin-bottom:0.25rem">
+            // `count` is what the filter bar reports and what the grid draws,
+            // so the sheet's own headline number agrees with its own contents.
+            {print_masthead(
+                app,
+                "Master grid",
+                move || {
+                    let n = count.get();
+                    format!(
+                        "every course CMI has given a time · {n} shown · {MADE_WITH}",
+                    )
+                },
+            )}
+            <div class="toolbar noprint" style="margin-bottom:0.25rem">
                 <h2 style="margin:0">"Master grid"</h2>
                 <div class="grow"></div>
                 {custom_changes_pill(app)}
@@ -2062,6 +2238,7 @@ fn master_grid(app: App) -> impl IntoView {
                         Density::Compact => "Rows: tight",
                     }}
                 </button>
+                {print_button(None)}
             </div>
             // A legend, not a sentence strung on middots: one symbol, one
             // plain line. ("Rearrange" read as reordering what you already
@@ -2073,7 +2250,12 @@ fn master_grid(app: App) -> impl IntoView {
             // stop the only signal that the row had changed register — and the
             // keys, being asked to parallel a sentence, didn't parallel each
             // other. Instruction above, key below.
-            <p class="muted small" style="margin:0 0 0.4rem">
+            // `noprint`: every word of this is an instruction to press or drag
+            // something, and paper cannot be pressed. On the printed sheet it
+            // was also the widest line on a page whose whole job is the grid.
+            // The two marks that DO survive — ✓ and ⚠ — are named in the
+            // print footnote at the foot of the section.
+            <p class="muted small noprint" style="margin:0 0 0.4rem">
                 "Click a course to add it to your timetable. Click it again to remove \
                  it. Turn on ✎ Edit layout to drag one straight into the slot you \
                  want — dropping it there adds it too."
@@ -2191,6 +2373,19 @@ fn master_grid(app: App) -> impl IntoView {
                         }
                     })
             }}
+            // This grid's marks, and the instruction line above it does NOT
+            // print — every word of that one was about pressing and dragging,
+            // which is not something a sheet of paper can be asked to do.
+            {print_footnote(move || {
+                let mut parts: Vec<&str> = Vec::new();
+                if !app.selection.with(|s| s.is_empty()) {
+                    parts.push("✓ already on your timetable");
+                }
+                if !app.clashes().is_empty() {
+                    parts.push("⚠ clashes with a course you have");
+                }
+                parts.join(" \u{b7} ")
+            })}
         </section>
     }
 }
@@ -2248,8 +2443,19 @@ fn catalog(app: App) -> impl IntoView {
     let count = Signal::derive(move || filtered.get().len());
 
     view! {
-        <section aria-label="Catalog">
-            <div class="toolbar">
+        <section aria-label="Catalog" class="sheet-list">
+            {print_masthead(
+                app,
+                "Catalog",
+                move || {
+                    let n = count.get();
+                    format!(
+                        "{n} course{} · {MADE_WITH}",
+                        if n == 1 { "" } else { "s" },
+                    )
+                },
+            )}
+            <div class="toolbar noprint">
                 <h2 style="margin:0">"Catalog"</h2>
                 <span class="muted small">
                     {move || {
@@ -2275,12 +2481,19 @@ fn catalog(app: App) -> impl IntoView {
                 >
                     "＋ Add your own course"
                 </button>
+                // Always live: the catalog is CMI's own list, so once there is
+                // a snapshot there is always something on this sheet.
+                {print_button(None)}
             </div>
             {filter_bar(app, FilterScope::Everything, count)}
             {deleted_note(app)}
             // Keyed list: rows persist across filter changes, so the page
             // keeps its scroll position and focus while filtering. The key
             // fingerprints the content so a sync remounts changed rows.
+            //
+            // `print-cols` wraps it for the printed sheet's two columns — see
+            // My courses, where the same wrapper carries the same note.
+            <div class="print-cols">
             <For
                 each=move || filtered.get()
                 // A fingerprint, not a printout: the key must change when
@@ -2294,6 +2507,7 @@ fn catalog(app: App) -> impl IntoView {
                 }
                 children=move |course| catalog_row(app, course)
             />
+            </div>
             {move || {
                 filtered
                     .with(|c| c.is_empty())
@@ -2536,6 +2750,17 @@ fn catalog(app: App) -> impl IntoView {
                         }
                     })
             }}
+            // The catalog prints EFFECTIVE times, so a row can be showing the
+            // reader's own edit while reading like CMI's listing — which is
+            // exactly why `catalog_row` marks those rows, and why the mark has
+            // to be explained on the paper it appears on.
+            {print_footnote(move || {
+                if app.overrides.with(|o| o.items.is_empty()) {
+                    String::new()
+                } else {
+                    "✎ times you set yourself, not CMI's".to_string()
+                }
+            })}
         </section>
     }
 }
@@ -3556,32 +3781,29 @@ fn halls_view(app: App) -> impl IntoView {
             // a class is in — and it printed with no title, no term, no date and
             // no caveat, while the timetable poster beside it on the same wall
             // carried all four. Same masthead, same disclaimer, its own words.
-            <div class="print-masthead print-only" aria-hidden="true">
-                <div class="pm-left">
-                    <span class="pm-title">"Hall bookings"</span>
-                    // Just the provenance tail the poster carries: the first
-                    // half said what the sentence 30px below says ("This is
-                    // CMI's room allocation"), so the reader's eye travelled
-                    // down to be told the same fact in different words — and
-                    // with a different noun for it.
-                    <span class="pm-stats">"made with the CMI Timetable Planner"</span>
-                </div>
-                <div class="pm-right">
-                    <span class="pm-sem">
-                        {move || app.snapshot.with(|s| s.semester_label_display())}
-                    </span>
-                    <span class="pm-meta">
-                        {move || {
-                            format!(
-                                "cmi.ac.in · synced {}",
-                                crate::domx::fmt_local_date(
-                                    app.snapshot.with(|s| s.fetched_at),
-                                ),
-                            )
-                        }}
-                    </span>
-                </div>
-            </div>
+            //
+            // The stats line counts HALLS, and says so: on a sheet that runs to
+            // several pages, "13 halls" is what tells a reader holding page 3
+            // whether they have the whole thing. The provenance tail is all it
+            // carried before — the first half of a fuller line said what the
+            // sentence 30px below says ("This is CMI's room allocation"), so the
+            // eye travelled down to be told the same fact in different words.
+            {print_masthead(
+                app,
+                "Hall bookings",
+                move || {
+                    // Exactly the rows the table below draws: CMI's halls plus
+                    // the places the student invented (see `hall_table`). A
+                    // count that disagreed with the rows would be worse than
+                    // no count at all.
+                    let halls = app.snapshot.with(|s| s.halls.len()) + own_halls.get().len();
+                    format!(
+                        "{} hall{} · {MADE_WITH}",
+                        halls,
+                        if halls == 1 { "" } else { "s" },
+                    )
+                },
+            )}
             <div class="toolbar">
                 <h2 style="margin:0">"Halls"</h2>
                 <div
@@ -3651,6 +3873,10 @@ fn halls_view(app: App) -> impl IntoView {
                 <div class="grow"></div>
                 {custom_changes_pill(app)}
                 {edit_toggle(app)}
+                // Always live, like the catalog's and the master grid's: this
+                // sheet is CMI's own room allocation, so it has something on
+                // it whenever there is a snapshot at all.
+                {print_button(None)}
             </div>
             // The ✓ clause only when there is a ✓ to explain, and the drag
             // instruction only on screen: on paper nobody turns on Edit layout,
@@ -3882,13 +4108,11 @@ fn halls_view(app: App) -> impl IntoView {
             // more here: this sheet's claim — which room a class is in — is the
             // most checkable thing the app prints. Same sentence as the
             // poster's footnote, so there is no second wording to keep true.
-            <p class="print-footnote print-only">
-                <span></span>
-                <span>
-                    "Check this against CMI's official announcements \
-                     before you rely on it."
-                </span>
-            </p>
+            // Left half deliberately empty: this sheet's one mark is explained
+            // by the key line above the table, which already prints only when
+            // there is a selection to mark. Saying it twice on one page would
+            // be worse than saying it once in the wrong place.
+            {print_footnote(String::new)}
         </section>
     }
 }
