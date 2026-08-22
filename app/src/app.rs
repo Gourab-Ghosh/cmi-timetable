@@ -244,6 +244,30 @@ fn apply_url_state(app: App) {
     }
     let state = ttcore::share::resolve_url_state(c.as_deref(), s.as_deref());
 
+    // An s= that would not decode is a damaged link, not an empty timetable.
+    // Falling through used to apply the empty fallback and silently wipe the
+    // selection (final sweep, share-import-1). With a readable c= beside it
+    // the codes still open — core's tested fallback — but the reader is told
+    // either way, because whatever the s= carried (times, credits, own
+    // courses) is gone and silence would look like success.
+    if state.damaged {
+        app.set_banner_sticky(
+            crate::state::BannerKind::Warn,
+            if c.is_some() {
+                "Part of this link could not be read, so only its course codes \
+                 were used. Any custom times or courses it carried were lost — \
+                 ask for a fresh link."
+            } else {
+                "This link could not be read, so nothing was changed. \
+                 Ask for a fresh link and open it again."
+            },
+        );
+        if c.is_none() {
+            app.sync_url();
+            return;
+        }
+    }
+
     // If the URL merely mirrors the stored selection (the app writes ?c= on
     // every change), keep the stored state as-is — a selected course that
     // vanished upstream must stay visible with its badge, not get stripped

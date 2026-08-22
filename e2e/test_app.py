@@ -799,6 +799,13 @@ def t12_undo_redo(app):
     app.xpath("//button[@aria-label='Redo']").click()
     app.wait_css("td[data-day='1'][data-slot='550'] button.chip[aria-label^='TOC,']")
 
+    # A profile that never made a custom course must not grow the key from a
+    # mere undo walk: an empty store persists as NO store, or every backup
+    # carries a `{"courses":[]}` husk (final sweep, core-flows-1).
+    assert app.d.execute_script(
+        "return localStorage.getItem('cmitt.v1.custom');") is None, \
+        "undo must not materialize an empty cmitt.v1.custom"
+
 
 def t13_reload_persists_state(app):
     """Selection and custom times survive a reload (saved in the browser)."""
@@ -2599,6 +2606,15 @@ def t50_halls_all_days_one_table(app):
         "each hall's name must span its days"
     assert len({n.find_element(By.CSS_SELECTOR, ".hall-name").text
                 for n in names}) == len(names), "one name per hall, no repeats"
+
+    # The weekly load line reads in the UI face — its token used to be the
+    # undefined --font-sans, and the whole line fell back to the table's
+    # mono (final sweep, css-audit-1).
+    load_face = app.d.execute_script(
+        "const l = document.querySelector('th.hallhead .hall-load');"
+        "return l ? getComputedStyle(l).fontFamily : '';")
+    assert load_face.split(",")[0].strip().strip('"') == "Inter", \
+        f"hall loads must use the UI face, got {load_face}"
     first = rows[:len(days)]
     assert [r.find_element(By.CSS_SELECTOR, "th.dayhead").text
             for r in first] == days
@@ -6542,6 +6558,29 @@ def t118_the_search_looks_only_where_you_tell_it(app):
     assert my_box.get_attribute("placeholder") == "Search by code, name or instructor", \
         "narrowing the Catalog's search must not narrow My courses'"
 
+    # The joined band's tightest fit: at 641–683px the menu used to render a
+    # facet's 19rem — its own 13rem lost the cascade — clip past the right
+    # viewport edge and mint a page scrollbar (final sweep, search-in-1).
+    app.d.set_window_size(660, 900)
+    try:
+        app.open_tab("Catalog")
+        app.wait_css("section[aria-label='Catalog'] .filterbar")
+        app.xpath("//section[@aria-label='Catalog']"
+                  "//details[starts-with(normalize-space(summary), 'Search in')]"
+                  "/summary").click()
+        menu = app.wait_css("section[aria-label='Catalog'] .searchin-menu")
+        right = app.d.execute_script(
+            "return arguments[0].getBoundingClientRect().right;", menu)
+        vw = app.d.execute_script(
+            "return document.documentElement.clientWidth;")
+        assert right <= vw, f"the open menu must fit the viewport ({right} > {vw})"
+        assert not app.d.execute_script(
+            "const e = document.documentElement;"
+            "return e.scrollWidth > e.clientWidth;"), \
+            "an open Search-in menu must not mint a page scrollbar"
+    finally:
+        app.d.set_window_size(1500, 1000)
+
 
 def t119_today_is_marked_on_the_week_tables(app):
     """R77: on a week view, today's row wears the same mark everywhere — the
@@ -6791,6 +6830,197 @@ def t122_a_clash_inside_the_covered_span_is_red_where_it_happens(app):
         for p in app.css_all(".clash-line, [class*='clash']")
     ), "the clash panel must carry the extended time"
 
+    # The words ARE the warning: dimmed to .85 the red band's time composited
+    # under the 4.5:1 floor on the alarm wash (the final sweep measured
+    # 3.96:1 light / 4.32:1 dark, twice, independently) — a clash band shows
+    # its time at full strength. Quiet bands keep the dim.
+    until = band_630.find_element(By.CSS_SELECTOR, ".until")
+    assert app.d.execute_script(
+        "return getComputedStyle(arguments[0]).opacity;", until) == "1", \
+        "the clash band's time must not be dimmed below the contrast floor"
+
+
+def t123_a_damaged_link_changes_nothing(app):
+    """A share link whose s= payload will not decode is a DAMAGED link, not
+    an instruction. Opened with no readable c= beside it, it changes nothing
+    and says so — the empty fallback used to be applied as if the link asked
+    for an empty timetable, and the selection silently vanished (final
+    sweep, share-import-1). With a readable c=, the codes still open (core's
+    tested fallback), and the banner still owns up to what was lost."""
+    app.boot("/", selection=["TOC", "RDBM"])
+    app.wait_css(".week-grid button.chip")
+
+    def stored_selection():
+        return sorted(app.d.execute_script(
+            "return JSON.parse(localStorage.getItem('cmitt.v1.selection'));"))
+
+    # Garbage s=, no c=: nothing changes, and the app says why.
+    app.d.get(f"{BASE}/?s=!!!not-a-payload!!!")
+    app.wait_css(".header h1")
+    assert stored_selection() == ["RDBM", "TOC"], \
+        "a damaged link must not touch the selection"
+    assert app.chips("TOC", container=".week-grid"), \
+        "the timetable still shows the courses"
+    banner = app.wait_css(".banner.warn")
+    assert "could not be read" in banner.text, banner.text
+    assert "nothing was changed" in banner.text, banner.text
+
+    # An EMPTY s= is as unreadable as garbage.
+    app.d.get(f"{BASE}/?s=")
+    app.wait_css(".header h1")
+    assert stored_selection() == ["RDBM", "TOC"]
+    assert "nothing was changed" in app.wait_css(".banner.warn").text
+
+    # With a readable c= the codes still open — but never silently: whatever
+    # the s= carried (times, credits, own courses) is gone, and a link that
+    # half-worked while looking whole would be blamed on the app.
+    app.d.get(f"{BASE}/?c=MFD&s=!!!")
+    app.wait_css(".header h1")
+    WebDriverWait(app.d, 10).until(lambda d: stored_selection() == ["MFD"])
+    assert "course codes" in app.wait_css(".banner.warn").text
+
+
+def t124_cancelling_a_confirm_returns_focus_to_what_asked(app):
+    """The confirm layer hands focus back the way the dialogs do. Cancelling
+    a confirm raised from INSIDE a dialog puts focus back in that dialog —
+    it used to fall to body, and Tab then walked the header buttons hidden
+    BEHIND the modal overlay, so Enter pressed an invisible control (final
+    sweep, dialogs-focus-1). And a dialog whose opener disabled itself while
+    it worked — Sync now, whose click starts the fetch that raises the
+    Conflicts dialog — still hands focus back to that opener on Escape: the
+    browser drops focus to body the instant a focused button is disabled,
+    so the restore has to remember where focus GENUINELY was
+    (dialogs-focus-2)."""
+    app.boot("/", selection=["TOC"])
+
+    # Part 1: confirm over a dialog. My data → "Delete all app data" → Esc.
+    app.xpath("//button[normalize-space()='My data']").click()
+    dlg = app.wait_css(".dialog")
+    btn = dlg.find_element(
+        By.XPATH, ".//button[contains(normalize-space(),'Delete all app data')]")
+    app.d.execute_script("arguments[0].scrollIntoView({block:'center'});", btn)
+    time.sleep(0.2)
+    btn.click()
+    app.wait_css(".dialog.confirm")
+    time.sleep(0.3)
+    ActionChains(app.d).send_keys(Keys.ESCAPE).perform()
+    WebDriverWait(app.d, 5).until(
+        lambda d: not d.find_elements(By.CSS_SELECTOR, ".dialog.confirm"))
+    time.sleep(0.3)
+    dlg = app.css(".dialog")
+    assert app.d.execute_script(
+        "return arguments[0].contains(document.activeElement);", dlg), \
+        "cancelling the confirm must put focus back inside the dialog"
+    # …and the Tab trap holds again: the next Tab stays inside.
+    ActionChains(app.d).send_keys(Keys.TAB).perform()
+    assert app.d.execute_script(
+        "return arguments[0].contains(document.activeElement);", dlg), \
+        "Tab after the cancel must not reach the page behind the overlay"
+    ActionChains(app.d).send_keys(Keys.ESCAPE).perform()
+    app.wait_gone(".dialog")
+
+    # Part 2: the Conflicts dialog's opener disabled itself.
+    cached, overrides, gone = cache_from_before_cmi_moved_toc()
+    serve_cmi()
+    try:
+        app.boot("/", selection=["TOC", gone], overrides=overrides,
+                 raw_snapshot=cached)
+        app.xpath("//button[normalize-space()='Sync now']").click()
+        app.wait_css(".dialog", timeout=30)
+        time.sleep(0.4)
+        ActionChains(app.d).send_keys(Keys.ESCAPE).perform()
+        app.wait_gone(".dialog")
+        time.sleep(0.3)
+        assert app.d.execute_script(
+            "const a = document.activeElement;"
+            "return a && a.tagName === 'BUTTON'"
+            " && a.textContent.trim() === 'Sync now';"), \
+            "Escape must hand focus back to the Sync now that started this"
+    finally:
+        stop_serving_cmi()
+
+
+def t125_print_stays_light_whatever_the_theme(app):
+    """The print stylesheet promises paper. Its bare :root token reset
+    silently LOST to the stamped dark theme's selector — every OS-dark
+    reader printed near-black cards, a dark halls panel and legend marks in
+    near-white-on-white (final sweep, theme-print-1) — and two smaller print
+    lies rode along: hall NAMES letter-stacked inside a 46px clamp sized for
+    day names, and today's rowhead printed THINNER than its siblings because
+    the today-reset said `inherit` and took the row's 400."""
+    import datetime
+    app.boot("/", selection=["TOC", "RDBM", "MFD"])
+    # Stamp dark exactly the way the boot script does. Navigation happens
+    # with print OFF — the tab rail is display:none on paper — and every
+    # measurement with print ON.
+    app.d.execute_script("document.documentElement.dataset.theme = 'dark';")
+
+    def print_media(on):
+        app.d.execute_cdp_cmd(
+            "Emulation.setEmulatedMedia", {"media": "print" if on else ""})
+
+    try:
+        print_media(True)
+        # The tokens resolve to the light palette even under the stamp.
+        surface = app.d.execute_script(
+            "return getComputedStyle(document.documentElement)"
+            ".getPropertyValue('--surface').trim();")
+        assert surface in ("#fff", "#ffffff"), \
+            f"print must reset the dark surface, got {surface}"
+        muted = app.d.execute_script(
+            "return getComputedStyle(document.documentElement)"
+            ".getPropertyValue('--muted').trim();")
+        assert muted == "#5d6675", \
+            f"print must reset EVERY dark token, not just the big three ({muted})"
+
+        # Legend marks print in ink, not the dark theme's near-white.
+        print_media(False)
+        app.open_tab("Master grid")
+        app.wait_css("section[aria-label='Master grid'] table.tt")
+        print_media(True)
+        mark_rgb = app.d.execute_script(
+            "const m = document.querySelector('span.legend-mark');"
+            "const c = getComputedStyle(m).color;"
+            "return c.match(/\\d+/g).slice(0, 3).map(Number);")
+        assert sum(mark_rgb) < 400, \
+            f"legend marks must print dark on white, got rgb{tuple(mark_rgb)}"
+
+        # Today's rowhead prints the SAME weight as the other days (only on
+        # a weekday — the seed's grid has no weekend rows to mark).
+        if datetime.datetime.now().weekday() < 5:
+            weights = app.d.execute_script(
+                "return [...document.querySelectorAll("
+                "  \"section[aria-label='Master grid'] table.tt tbody tr\")]"
+                ".map(r => [r.classList.contains('today'),"
+                "  getComputedStyle(r.querySelector('th.rowhead')).fontWeight]);")
+            today = [w for is_today, w in weights if is_today]
+            others = {w for is_today, w in weights if not is_today}
+            assert today and today[0] in others, \
+                f"today must print the siblings' weight, got {today} vs {others}"
+
+        # Hall names get their width back: no nine-line letter stack.
+        print_media(False)
+        app.open_tab("Halls")
+        section = app.wait_css("section[aria-label='Lecture halls']")
+        section.find_element(
+            By.XPATH, ".//div[@aria-label='Day']//button[normalize-space()='All']"
+        ).click()
+        app.wait_css("section[aria-label='Lecture halls'] table.tt th.hallhead")
+        print_media(True)
+        # A rowspan-5 hall cell is legitimately tall; what letter-stacking
+        # actually looks like is the hall NAME wrapping to many lines.
+        stacked = app.d.execute_script(
+            "return [...document.querySelectorAll("
+            "  \"section[aria-label='Lecture halls'] table.tt"
+            "   th.rowhead .hall-name\")]"
+            ".map(n => n.getBoundingClientRect().height /"
+            "  (parseFloat(getComputedStyle(n).lineHeight) || 16))"
+            ".filter(lines => lines > 2.5).length;")
+        assert stacked == 0, \
+            f"{stacked} hall names letter-stack in the print clamp"
+    finally:
+        app.d.execute_cdp_cmd("Emulation.setEmulatedMedia", {"media": ""})
+
 
 def t105_arrow_keys_walk_the_tab_rail(app):
     """The rail has always claimed role=tablist; now it behaves like one.
@@ -6980,6 +7210,9 @@ TESTS = [
     t120_dialogs_open_hands_off_and_the_page_behind_stays_put,
     t121_a_long_meeting_visibly_fills_every_slot_it_covers,
     t122_a_clash_inside_the_covered_span_is_red_where_it_happens,
+    t123_a_damaged_link_changes_nothing,
+    t124_cancelling_a_confirm_returns_focus_to_what_asked,
+    t125_print_stays_light_whatever_the_theme,
     t106_the_wheel_over_the_rail_walks_the_sections,
 ]
 

@@ -619,6 +619,12 @@ timetable.
 - **Opening a share link in a fresh browser never invents a conflict.** A
   browser that has never synced has no history to compare, so the first sync
   asks nothing — the link's changes simply apply.
+- **A damaged link changes nothing.** A link whose payload won't decode (cut
+  short by a chat app, mangled in an email) leaves your timetable exactly as
+  it was and says so in a banner, instead of being mistaken for a request
+  for an empty one. If readable course codes ride beside the broken payload
+  they still open — with the banner owning up that the custom times and
+  courses the link carried were lost in transit.
 - **What changed leads with your own week.** The banner says what happened to
   *your* courses first, by name — "CMI changed 2 of your courses — TOC,
   QCOM" — and keeps the campus-wide count as a tail. When none of the change

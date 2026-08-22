@@ -786,7 +786,7 @@ regenerates the .ics golden.
   selected course with no time is part of the timetable, not a footnote.
 - "Your changes" groups are headed by `.cg-head` (colour rail + small caps
   + count), coloured by `OwnChange::tone()`. See §4.
-- Tests: 169 native + 122/122 e2e green (as of R77; the native count from
+- Tests: 169 native + 125/125 e2e green (as of R78; the native count from
   `deploy.sh`'s own in-container run — 49+18+3+9+25+27+28+10).
   Meeting removals: `MeetingOverride.to`
   is `Option<Meeting>` (None = removed; legacy JSON/share payloads still
@@ -5166,6 +5166,106 @@ scroll-restore bug (t120 uses ActionChains); and a seeded override never
 enters the undo stack, so t121 clears it through the Your-changes panel's own
 button, as a reader would.
 
+### R78 — the final sweep before the deploy: 27 agents, 17 findings, one left standing
+
+The order: a final test of the whole app before it goes live — new features
+harder than old, "as many agents as possible", and every worker's work
+restorable across session-limit deaths. The machinery mattered as much as the
+testing, so both are recorded. `.workagents/final-sweep/PLAN.md` is the live
+status board: central gates first (fresh `dist-e2e` build; the full e2e
+suite; native + clippy + fmt — all green before any worker ran), then one
+workflow of 18 probe workers — 7 on the R77 features (bands core/surfaces/
+clash, search-in, dialog focus, scroll lock, today+affordance), 7 on old
+features, 4 cross-cutting (responsive, a static review of the R77 diff, a
+CSS audit, dist integrity) — each verified by ONE batched adversarial
+verifier per worker-with-findings (the R74 lesson: per-finding fan-out blew
+that session).
+
+**The fleet died TWICE on session limits and lost nothing.** Every worker's
+first duty was a recovery file (`final-sweep/<key>.md`, STATUS discipline,
+appended after every probe); the relaunch added a RESTORE MODE block to the
+shared preamble ("read your predecessor's file, trust its covered list,
+append '--- restored, continuing ---', finish the remainder") and resumed
+the SAME workflow with `resumeFromRunId` and byte-identical prompts, so
+finished agents replayed from cache. Run 1: 0/18 finished, 46 probes and 16
+notes files survived. Run 2: 15/23. Run 3: 27/27, with the run-2 work
+genuinely continued, not redone.
+
+The verdict: 18/18 workers complete, 17 findings, **all 17 confirmed** by
+independent re-reproduction, **zero blockers**. The R77 features came out
+almost clean (two cosmetic items); the real crop grew at the seams nobody
+had measured — print, and the cascade. Fixed, each pinned:
+
+- **A damaged share link no longer empties the timetable** (the sweep's one
+  real data-scare, share-import-1): `?s=<garbage>` or `?s=` with no `c=`
+  used to resolve to the empty fallback and get applied as if the link asked
+  for an empty selection — silently, undoable but invisible.
+  `UrlState.damaged` (core) now marks an undecodable `s=`; the app refuses
+  the link with a sticky banner when nothing readable rides beside it, and
+  keeps core's tested c=-fallback (announced) when codes do. Pinned by t123
+  and new url_tests asserts.
+- **Cancelling a confirm returns focus to what asked** (dialogs-focus-1,
+  the sweep's worst bug): ConfirmHost cleared the signal and left focus on
+  body — over an open dialog, Tab then walked header buttons hidden BEHIND
+  the overlay, so Enter pressed an invisible control. CONFIRM_PREV now
+  captures/restores (preventScroll), and a focusin-fed LAST_FOCUS fallback
+  fixes the sibling miss (dialogs-focus-2): the Conflicts dialog's opener
+  ("Sync now") disables itself for the fetch, the browser drops focus to
+  body at that instant, and the old capture remembered body. Pinned by t124.
+- **Print stays light whatever the theme** (theme-print-1 + css-audit-4 +
+  today-affordance-1/css-audit-2 + theme-print-2, one print block): the
+  `@media print` token reset said `:root` and silently LOST to the stamped
+  `:root[data-theme="dark"]` — `@media` adds no specificity — so every
+  OS-dark reader printed near-black cards and white-on-white legend marks;
+  it also reset only three tokens, leaving dark `--muted` gray-on-paper.
+  The reset now names both selectors and every dark-redefined token. In the
+  same block: the today-reset's `font-weight: inherit` took the ROW's 400
+  and printed today THINNER than its 750 siblings (found independently by
+  two workers) — now 750; and hall NAMES letter-stacked nine lines tall in
+  the 46px rowhead clamp sized for "Mon" — halls rowheads are now
+  content-sized in print. All pinned by t125.
+- **The clash band's time reads at full strength** (bands-clash-1 /
+  theme-print-3, found independently twice): `.covered .until { opacity:
+  .85 }` composited the red band's "until 14:00" to 3.96:1/4.32:1 — under
+  the 4.5:1 floor its own `.code` clears. `.covered.clash .until` is now
+  full-opacity: re-measured 4.93:1 light / 5.41:1 dark. Pinned in t122.
+- **The Search-in menu fits the viewport** (search-in-1 / css-audit-3, one
+  cause): `.searchin-menu { min-width: 13rem }` lost to `details.facet
+  .menu { min-width: 19rem }` — the authored width was DEAD, and at
+  641–683px (667 = landscape iPhone SE) the open menu clipped past the
+  right edge and minted a page scrollbar. `details.facet .searchin-menu`
+  wins the tie on source order. Pinned in t118 at 660px.
+- **`--font-sans` never existed** (css-audit-1): the halls' weekly load
+  line fell back to the table's mono. The audit found one site; the fix
+  found a second (`.search-clear`). Both now `var(--font-ui)`; pinned in
+  t50.
+- **An undo walk no longer materializes `{"courses":[]}`** where
+  `cmitt.v1.custom` never existed (core-flows-1): `persist_customs` removes
+  the key when the store is empty. Pinned in t12.
+- Housekeeping: five selectors matching nothing were deleted
+  (`.chip.ghost-src`, `.cellstack` ×2, `.diff-add`/`.diff-del`,
+  `.data-row`), and `index.html` gained the two media-keyed `theme-color`
+  metas the dist never had (dist-sanity-2).
+
+Deliberately NOT fixed: Chrome's once-per-load "integrity attribute is
+ignored" preload warning → §8.21.
+
+The specificity-bug family now has four members (R76's footer, the
+searchin-menu, the print token reset, the print today-reset). The print one
+is the nastiest of the class: a reset that comes later in the file and looks
+authoritative still loses to ANY stamped-attribute selector, because
+`@media` adds nothing — and it fails only on paper, where nobody is
+measuring.
+
+Gates after the fix round: **125/125 e2e** (three new: t123, t124, t125 —
+t125's own first draft failed twice honestly: the tab rail is display:none
+under print emulation, and a rowspan-5 hall cell is legitimately 270px tall,
+so it navigates with print off and asserts on the hall NAME's line count),
+**169 native** (+5 asserts in url_tests), fmt + clippy clean, and the
+sweep's own contrast probe re-run to watch the numbers flip. All sweep
+artifacts, probes, verdicts and the restore machinery: `.workagents/
+final-sweep/` (PLAN.md first).
+
 ## 8. Open bugs — found, confirmed, NOT fixed (do not delete)
 
 Rules for this section: entries stay until the bug is actually fixed and a
@@ -5255,6 +5355,20 @@ What a fix must come with, or it will pass while the bug survives: an assertion
 that `scrollingElement.scrollWidth <= documentElement.clientWidth` at 320 and
 360px, taken **with the tray on screen** — i.e. with a selected course that has
 no time (the fixture has one: SVA is unscheduled).
+
+### 8.21 Deliberate non-bug — Chrome warns "integrity attribute is ignored" once per page load
+
+Trunk emits `<link rel="preload" as="fetch">` for the wasm with an
+`integrity` attribute; Chrome logs a WARNING (crbug.com/981419: preload
+integrity is not implemented for as=fetch) exactly once per document load.
+DevTools-only, zero user impact — the integrity on the consuming request
+still verifies. Found and confirmed by the R78 final sweep (dist-sanity-1;
+the verifier's note: "minor borders polish — if a correction is wanted,
+downgrade; do not upgrade"). Fixing means post-processing trunk's emitted
+`index.html` to strip the attribute from the preload only — a build-pipeline
+patch carrying real risk to buy a quieter DevTools tab. If trunk grows a
+flag for it, use the flag. Console-cleanliness checks must keep filtering
+WARNINGs (they assert on SEVERE), or this line will read as a regression.
 
 ### 8.6 Deliberate non-bug — do not "fix" this
 

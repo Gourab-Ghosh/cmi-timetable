@@ -576,7 +576,6 @@ label.opt { min-height: 32px; }
 .chip.overridden { border-style: dashed; border-width: 1.5px; }
 .chip.overridden::after { content: "✎"; font-size: 0.75rem; opacity: 0.9; }
 
-.chip.ghost-src { opacity: 0.35; }
 /* The continuation band: a meeting longer than its column casts this into
    every later column it covers, so a 09:10–14:00 class never leaves 10:40
    looking free (R77). Half a chip on purpose — the course's own hue at half
@@ -621,6 +620,11 @@ label.opt { min-height: 32px; }
   background: var(--alarm-wash);
   color: var(--alarm);
 }
+/* Full strength where the words ARE the warning: dimmed to .85 the time
+   composited to 3.96:1 (light) / 4.32:1 (dark) on the alarm wash — under
+   the 4.5:1 small-text floor the code beside it clears (final sweep,
+   found by two workers independently). Quiet bands keep the dim. */
+.covered.clash .until { opacity: 1; }
 .covered.clash .code::before { content: "⚠ "; }
 .chip.draggable { cursor: grab; }
 .chip.draggable:hover { transform: translateY(-1px); }
@@ -782,7 +786,7 @@ table.tt.halls-merged th.hallhead .hall-name {
 table.tt.halls-merged th.hallhead .hall-load {
   display: block;
   margin-top: 0.15rem;
-  font-family: var(--font-sans);
+  font-family: var(--font-ui);
   font-size: 0.68rem;
   font-weight: 500;
   color: var(--muted);
@@ -884,11 +888,6 @@ table.tt td {
   overflow: hidden;
 }
 table.tt tbody tr:hover td { background: var(--surface-2); }
-table.tt td .cellstack {
-  display: flex;
-  flex-direction: column;
-  gap: 0.25rem;
-}
 .sidebyside { display: flex; flex-wrap: wrap; gap: 0.25rem; min-width: 0; }
 table.tt td.drop-ok {
   background: var(--accent-wash) !important;
@@ -1469,7 +1468,7 @@ label.opt.alarm-lead input { width: 5rem; }
    of a label, and a wider gap after it than between the three switches, which
    is what groups them without drawing a rule. */
 .search-clear {
-  font-family: var(--font-sans);
+  font-family: var(--font-ui);
   font-size: 0.92rem;
   /* The switches are 600 because they are labels; a glyph at 600 in the sans
      face reads heavier than the three beside it and pulls the eye to the one
@@ -1603,8 +1602,13 @@ details.facet .menu {
 details.facet .menu label.opt { align-items: flex-start; }
 /* "Search in": three fixed rows under one quiet sentence — narrower than a
    facet's list, and nothing else. A disabled row is the floor, not a fault:
-   the one part still ticked cannot come off, and the cursor says so. */
-.searchin-menu { min-width: 13rem; }
+   the one part still ticked cannot come off, and the cursor says so.
+   `details.facet` repeated on purpose: as a lone class this LOST to
+   `details.facet .menu { min-width: 19rem }` above and the menu rendered
+   304px — wide enough to clip past the right viewport edge and mint a
+   page scrollbar at 641–683px, exactly the joined-layout band (final
+   sweep, search-in-1). Same silent-specificity trap as R76's footer. */
+details.facet .searchin-menu { min-width: 13rem; }
 .searchin-lede {
   margin: 0 0 0.4rem;
   line-height: 1.4;
@@ -2590,9 +2594,6 @@ body.modal-open { overflow: hidden; }
 .diff-lines.changes li::before { content: none; }
 .diff-lines.changes li + li { border-top: none; }
 
-.diff-add { color: var(--ok); }
-.diff-del { color: var(--alarm); }
-
 /* Developer mode */
 .devlog {
   width: 100%;
@@ -2939,9 +2940,6 @@ pre.devpre {
 }
 .shadow-note p { margin: 0; flex: 1; min-width: 12rem; font-size: 0.85rem; }
 
-/* My-data rows for customs. */
-.data-row { align-items: center; gap: 0.5rem; padding: 0.25rem 0; }
-
 /* ==========================================================================
    Print: "My timetable" on one landscape A4 — a poster-style sheet. Chips
    fill their cells in their branch colors (pastel fills print well and stay
@@ -2955,11 +2953,46 @@ pre.devpre {
 @page { size: A4 landscape; margin: 11mm 12mm; }
 
 @media print {
-  :root {
-    /* Print always renders on the light palette, whatever the theme. */
+  :root,
+  :root[data-theme="dark"] {
+    /* Print always renders on the light palette, whatever the theme.
+       BOTH selectors, deliberately: the boot script always stamps
+       data-theme (auto resolves to dark or light), and the dark block's
+       (0,2,0) outranks a bare :root's (0,1,0) — with `:root` alone here
+       the dark tokens won in print, and an OS-dark reader got near-black
+       cards, a dark halls panel and white-on-white legend marks (final
+       sweep, theme-print-1). And EVERY token the dark block redefines is
+       reset, not just the big three: a leftover dark --muted printed the
+       hall loads as 2.5:1 gray on the forced-white paper (css-audit-4). */
+    color-scheme: light;
     --bg: #fff;
     --surface: #fff;
+    --surface-2: #f8f9fb;
+    --glass: rgba(255, 255, 255, 0.82);
+    --line: #e2e5eb;
+    --line-strong: #c9ced8;
     --text: #000;
+    --muted: #5d6675;
+    --accent: #3f5bd9;
+    --accent-strong: #3049b8;
+    --accent-ink: #ffffff;
+    --accent2: #8a46c8;
+    --accent2-wash: #f3ebfb;
+    --alarm: #c22f41;
+    --warn: #7d5f08;
+    --chip-sat: 55%;
+    --chip-bg-l: 90%;
+    --chip-text-l: 22%;
+    --chip-line-l: 68%;
+    --alarm-wash: #fceef0;
+    --accent-wash: #eaeefc;
+    --warn-wash: #faf3dd;
+    --ok-wash: #e8f5ec;
+    --ok: #22713c;
+    --ctl-ring: #8a93a6;
+    --shadow-sm: none;
+    --shadow-md: none;
+    --shadow-lg: none;
   }
   html { scroll-padding-top: 0; }
   body {
@@ -2981,7 +3014,10 @@ pre.devpre {
   table.tt:not(.halls-merged) tbody tr.today > th.rowhead,
   table.tt.halls-merged tr.today th.dayhead {
     color: inherit;
-    font-weight: inherit;
+    /* 750 = the print rowhead weight below. `inherit` took the ROW's 400
+       and printed today THINNER than the other days — the mark removed
+       and then inverted (final sweep, found twice). */
+    font-weight: 750;
     box-shadow: none;
   }
   .main { padding: 0; max-width: none; }
@@ -3069,6 +3105,13 @@ pre.devpre {
     border-right: 1px solid #232a3a !important;
     vertical-align: middle;
   }
+  /* 46px fits Mon–Fri; the halls tables' rowheads are hall NAMES, and
+     "Seminar Hall · 1 booked slot" letter-stacked nine lines tall inside
+     the clamp (final sweep, theme-print-2). Content-sized, as on screen. */
+  section[aria-label="Lecture halls"] table.tt th.rowhead {
+    width: auto;
+    min-width: 46px;
+  }
   table.tt thead th.corner { background: #232a3a !important; }
   /* Cells stay generous — the sheet should read pinned to a wall. The
      height is a MINIMUM: a cell holding several clashing chips grows, and
@@ -3082,7 +3125,7 @@ pre.devpre {
      Several chips in one cell (clashes) share it: two sit side by side,
      three or more wrap onto extra lines, and the CELL grows to hold them
      — text is never chopped by the cell border or shortened with "…". */
-  table.tt td .cellstack, table.tt td .sidebyside {
+  table.tt td .sidebyside {
     min-height: 100%;
     gap: 2px;
     flex-wrap: wrap;

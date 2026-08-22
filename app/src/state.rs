@@ -941,6 +941,15 @@ impl App {
     }
 
     pub fn persist_customs(&self) {
+        // An empty store is the same fact as no store — remove the key
+        // instead of writing `{"courses":[]}`. An undo walk used to
+        // materialize that husk in localStorage (and so in every backup)
+        // on profiles that never had a custom course (final sweep,
+        // core-flows-1).
+        if self.customs.with_untracked(|cs| cs.courses.is_empty()) {
+            storage::remove(storage::KEY_CUSTOM);
+            return;
+        }
         let r = storage::save(storage::KEY_CUSTOM, &self.customs.get_untracked());
         self.persisted("own courses", r);
     }

@@ -2427,12 +2427,48 @@ thread_local! {
     /// The element that had focus when a dialog opened — restored on close.
     static PREV_FOCUS: std::cell::RefCell<Option<web_sys::HtmlElement>> =
         const { std::cell::RefCell::new(None) };
+    /// The last element that GENUINELY held focus, kept by a focusin
+    /// listener. `active_element()` at dialog-open time reads BODY when the
+    /// opener disabled itself an instant earlier — the Conflicts dialog
+    /// opens after "Sync now" goes disabled for the fetch, and the browser
+    /// drops focus to body the moment a focused control is disabled. Body
+    /// is nowhere to return a keyboard user to (final sweep,
+    /// dialogs-focus-2).
+    static LAST_FOCUS: std::cell::RefCell<Option<web_sys::HtmlElement>> =
+        const { std::cell::RefCell::new(None) };
+    /// The element that had focus when a CONFIRM opened. The confirm is a
+    /// layer above dialogs, so this is its own slot: cancelling a confirm
+    /// raised from inside a dialog must put focus back INSIDE the dialog,
+    /// or Tab walks the page hidden behind the overlay (final sweep,
+    /// dialogs-focus-1).
+    static CONFIRM_PREV: std::cell::RefCell<Option<web_sys::HtmlElement>> =
+        const { std::cell::RefCell::new(None) };
 }
 
 #[component]
 pub fn DialogHost() -> impl IntoView {
     use wasm_bindgen::JsCast;
     let app = App::use_ctx();
+
+    // Keep LAST_FOCUS current (see the thread_local's comment for why the
+    // active element alone is not enough). Mounted once, lives as long as
+    // the app.
+    {
+        let cb = wasm_bindgen::closure::Closure::<dyn FnMut(web_sys::FocusEvent)>::new(
+            |ev: web_sys::FocusEvent| {
+                if let Some(el) = ev
+                    .target()
+                    .and_then(|t| t.dyn_into::<web_sys::HtmlElement>().ok())
+                    && el.tag_name() != "BODY"
+                {
+                    LAST_FOCUS.with(|p| *p.borrow_mut() = Some(el));
+                }
+            },
+        );
+        let _ = domx::document()
+            .add_event_listener_with_callback("focusin", cb.as_ref().unchecked_ref());
+        cb.forget();
+    }
 
     // Every dialog starts with nothing to lose; the course editor says so
     // for itself the moment anything in it is touched.
@@ -2449,9 +2485,14 @@ pub fn DialogHost() -> impl IntoView {
         if open {
             if !was_open {
                 PREV_FOCUS.with(|p| {
-                    *p.borrow_mut() = domx::document()
+                    // Body means "focus was dropped", not "return here":
+                    // fall back to the element that last truly held it —
+                    // the disabled-opener case (see LAST_FOCUS).
+                    let active = domx::document()
                         .active_element()
-                        .and_then(|el| el.dyn_into::<web_sys::HtmlElement>().ok());
+                        .and_then(|el| el.dyn_into::<web_sys::HtmlElement>().ok())
+                        .filter(|el| el.tag_name() != "BODY");
+                    *p.borrow_mut() = active.or_else(|| LAST_FOCUS.with(|l| l.borrow().clone()));
                 });
             }
             gloo_timers::callback::Timeout::new(0, || {
@@ -2564,9 +2605,23 @@ pub fn ConfirmHost() -> impl IntoView {
 
     // Cancel is what lands under the fingers. Every one of these questions
     // guards something destructive, and the safe answer is the one that
-    // should be a press of Enter away.
-    Effect::new(move |_| {
-        if app.confirm.with(|c| c.is_some()) {
+    // should be a press of Enter away. And the way BACK matters as much:
+    // the confirm sits over whatever raised it — often an open dialog — so
+    // on close, focus returns to the exact element that asked. Without
+    // that, cancelling left focus on body and Tab walked the header
+    // buttons hidden BEHIND the modal overlay (final sweep,
+    // dialogs-focus-1).
+    Effect::new(move |prev: Option<bool>| {
+        let open = app.confirm.with(|c| c.is_some());
+        let was_open = prev.unwrap_or(false);
+        if open && !was_open {
+            CONFIRM_PREV.with(|p| {
+                let active = domx::document()
+                    .active_element()
+                    .and_then(|el| el.dyn_into::<web_sys::HtmlElement>().ok())
+                    .filter(|el| el.tag_name() != "BODY");
+                *p.borrow_mut() = active.or_else(|| LAST_FOCUS.with(|l| l.borrow().clone()));
+            });
             gloo_timers::callback::Timeout::new(0, || {
                 if let Some(el) = domx::document()
                     .query_selector(".confirm [data-confirm-cancel]")
@@ -2578,7 +2633,21 @@ pub fn ConfirmHost() -> impl IntoView {
                 }
             })
             .forget();
+        } else if !open && was_open {
+            CONFIRM_PREV.with(|p| {
+                if let Some(el) = p.borrow_mut().take() {
+                    // If the confirmed action also closed the dialog the
+                    // element lived in, this focus is a no-op on a detached
+                    // node and DialogHost's own restore takes over.
+                    // preventScroll for the same sticky-header reason as
+                    // DialogHost.
+                    let opts = web_sys::FocusOptions::new();
+                    opts.set_prevent_scroll(true);
+                    let _ = el.focus_with_options(&opts);
+                }
+            });
         }
+        open
     });
 
     let answer_no = move || app.confirm.set(None);

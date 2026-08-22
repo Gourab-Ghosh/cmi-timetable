@@ -154,9 +154,16 @@ fn malformed_s_falls_back_to_c() {
     let state = resolve_url_state(Some("TOC,QCOM"), Some("!!!not-a-payload!!!"));
     assert_eq!(state.selection, codes(&["TOC", "QCOM"]));
     assert!(state.overrides.is_none());
+    assert!(state.damaged, "an unreadable s= must be reported");
 
     let state = resolve_url_state(None, Some("!!!"));
     assert!(state.selection.is_empty());
+    assert!(state.damaged);
+
+    // An empty s= is as unreadable as garbage — it decodes to nothing.
+    let state = resolve_url_state(None, Some(""));
+    assert!(state.selection.is_empty());
+    assert!(state.damaged);
 }
 
 #[test]
@@ -164,6 +171,10 @@ fn no_params_is_empty_state() {
     let state = resolve_url_state(None, None);
     assert!(state.selection.is_empty());
     assert!(state.overrides.is_none());
+    assert!(!state.damaged, "absent params are not a damaged link");
+
+    // A plain c= link is whole too.
+    assert!(!resolve_url_state(Some("TOC"), None).damaged);
 }
 
 /// Removals (`to: null`) survive the share round trip, and pre-removal data

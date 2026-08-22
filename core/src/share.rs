@@ -129,10 +129,16 @@ pub struct UrlState {
     pub overrides: Option<OverridesStore>,
     /// Custom courses carried by an `s=` payload (empty for `c=`-only URLs).
     pub customs: Vec<Course>,
+    /// An `s=` was present but could not be decoded. The caller must not
+    /// treat the fallback as the link's true content: with no `c=` beside it
+    /// the fallback is an EMPTY selection, and applying that wiped the
+    /// reader's timetable while looking like a no-op (final sweep,
+    /// share-import-1).
+    pub damaged: bool,
 }
 
 /// Resolve the two query parameters into one state. A malformed `s=` falls
-/// back to `c=` rather than breaking anything.
+/// back to `c=` rather than breaking anything — and says so via `damaged`.
 pub fn resolve_url_state(c: Option<&str>, s: Option<&str>) -> UrlState {
     if let Some(encoded) = s
         && let Some(payload) = decode_share(encoded)
@@ -154,11 +160,13 @@ pub fn resolve_url_state(c: Option<&str>, s: Option<&str>) -> UrlState {
                 hidden: payload.d,
             }),
             customs: payload.x,
+            damaged: false,
         };
     }
     UrlState {
         selection: c.map(parse_c_param).unwrap_or_default(),
         overrides: None,
         customs: Vec::new(),
+        damaged: s.is_some(),
     }
 }
