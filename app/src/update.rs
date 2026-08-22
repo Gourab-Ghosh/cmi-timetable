@@ -330,9 +330,18 @@ async fn check(app: App, forced: bool) {
         );
         if forced {
             app.toast(
+                // Not "the app will try again tomorrow": this toast answers
+                // "Check now", which is the button that makes updates usable
+                // with daily checking OFF — exactly the reader for whom that
+                // promise is false.
+                // "Try again tomorrow", not "press Check now again": the guard
+                // that raises this toast holds for a full day, so pressing the
+                // button again says exactly this again. Imperative, so it is
+                // also true for a reader who has daily checks switched off —
+                // which the old "the app will try again tomorrow" was not.
                 "A newer version is on the server, but reloading didn't reach it — \
-                 something between here and it is serving an old copy. The app will \
-                 try again tomorrow.",
+                 something between this browser and the server is serving an old \
+                 copy. Try again tomorrow.",
             );
         }
         return;
@@ -350,7 +359,13 @@ async fn check(app: App, forced: bool) {
     // and a modal covers the banner it just raised, so pressing it looked like
     // nothing at all happened. Only said when something is actually in the way.
     if forced && app.dialog.with_untracked(|d| d.is_some()) {
-        app.toast("A newer version is ready — close this to see it.");
+        // "it" had nothing to attach to — you cannot see a version. Names the
+        // thing actually waiting, in the words R52 settled for pointing at
+        // that banner without using the word "banner".
+        app.toast(
+            "A newer version is ready — close this to see the message at the top \
+             of the page.",
+        );
     }
 }
 
@@ -521,10 +536,20 @@ pub fn update_banner(app: App) -> impl IntoView {
                                     "A newer version of the app is ready."
                                 </p>
                                 <p class="banner-note">
+                                    // The one paragraph whose whole job is
+                                    // reassurance: "come back with it" made the
+                                    // reader carry "the page" across a semicolon
+                                    // and a three-item list, and "Only Undo
+                                    // starts over" first reads as if Undo were
+                                    // the thing that starts you over.
+                                    // Under 193 characters, measured: at 208 this
+                                    // note took a FIFTH line at every width a phone
+                                    // or a half-screen window has, and it is the
+                                    // first thing the app says on that screen.
                                     "It won't install itself. “Update now” reloads the page
-                                     and takes a moment; your courses, your changes and
-                                     your filters are saved in this browser and come back
-                                     with it. Only Undo starts over."
+                                     and takes a moment. Your courses, changes and filters
+                                     are saved in this browser and survive the reload.
+                                     Only the undo history starts over."
                                 </p>
                             </div>
                             <div class="banner-actions">

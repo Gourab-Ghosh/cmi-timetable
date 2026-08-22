@@ -16,7 +16,7 @@
   /* The browser's own widgets — checkboxes, date and number inputs, the
      scrollbars — are painted by the browser, not by these tokens. Without
      this they stay in their light-mode colours whatever the page does, and
-     the "Fits my schedule" checkbox sat on the dark filter bar as a solid
+     the "Fits my timetable" checkbox sat on the dark filter bar as a solid
      white square, brighter than anything else on the page. */
   color-scheme: light;
 
@@ -122,6 +122,17 @@ body {
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
+}
+/* With scripting off nothing mounts, so the <noscript> line in index.html is
+   the entire page: centre it and give it a reading measure. The theme script
+   is JavaScript too, so `data-theme` is never set here and the light tokens
+   above are what it gets — deliberately, since they are the readable pair on
+   a browser default background. */
+.noscript-note {
+  max-width: 34rem;
+  margin: 4rem auto;
+  padding: 0 1.5rem;
+  text-align: center;
 }
 /* Soft two-tone ambience behind everything — color without noise. A fixed
    pseudo-element, not body background-attachment (iOS ignores that), so
@@ -268,6 +279,20 @@ button {
   background: linear-gradient(120deg, var(--accent), var(--accent2));
   border-color: var(--accent-strong);
   color: var(--accent-ink);
+}
+/* A disabled primary is still the button the reader must eventually press —
+   "Apply" waits while they answer three questions — and fading the whole button
+   took its white label to 2.03:1 against its own fill, because `opacity` pulls
+   the text and the fill toward the same page white together. So the disabled
+   state changes the FILL instead of dimming everything: no gradient, no shadow,
+   muted ink. Still unmistakably unavailable, and now legible while they decide
+   (4.5:1 in light, 5.3:1 in dark, measured off the tokens). */
+.btn.primary:disabled {
+  opacity: 1;
+  background: var(--accent-wash);
+  border-color: var(--line);
+  color: var(--muted);
+  box-shadow: none;
 }
 .btn.primary:hover:not(:disabled) {
   background: linear-gradient(120deg, var(--accent-strong), var(--accent2));
@@ -1240,7 +1265,11 @@ input[type="checkbox"], input[type="radio"] {
   height: 1.05rem;
   flex: none;
   margin: 0;
-  border: 1px solid var(--line-strong);
+  /* `--muted`, not `--line-strong`: an unchecked box has no fill to speak of,
+     so this rule IS the control, and at --line-strong it measured 1.40:1
+     against the toolbar ground in light and 1.93:1 in dark — under the 3:1
+     floor a non-text control needs to be seen at all. Now 3.9:1 / 4.4:1. */
+  border: 1px solid var(--muted);
   background: var(--surface);
   border-radius: 5px;
   display: inline-grid;
@@ -1248,6 +1277,13 @@ input[type="checkbox"], input[type="radio"] {
   cursor: pointer;
   transition: background 120ms var(--ease), border-color 120ms var(--ease);
 }
+/* A middot that introduces monospaced text takes the monospaced face, so the
+   three separators on a catalog row read as three of a kind: in the UI face
+   this one sat tight against its neighbours while the two inside the meeting
+   text were airy, which made the separator dividing the two KINDS of fact
+   (who teaches it / when it meets) the weakest break of the three. It is not
+   `.mono` on purpose — see the note at its call site. */
+.dot-sep { font-family: var(--font-mono); }
 input[type="radio"] { border-radius: 50%; }
 input[type="checkbox"]:hover, input[type="radio"]:hover { border-color: var(--accent); }
 input[type="checkbox"]:checked, input[type="radio"]:checked {
@@ -1612,6 +1648,10 @@ details.facet .searchin-menu { min-width: 13rem; }
 .searchin-lede {
   margin: 0 0 0.4rem;
   line-height: 1.4;
+  /* Two lines either way in a 13rem menu, but unbalanced it breaks after
+     "the" and leaves a dangling article at the fold; balanced it measures
+     136/122px and breaks after "course". */
+  text-wrap: balance;
   /* The muted-small look without the .muted class: the filter bar's first
      `.muted` element is how t28 finds the "N courses match" line, and this
      paragraph sits earlier in the DOM. */
@@ -1912,6 +1952,34 @@ details.facet .menu .menu-empty { margin: 0.2rem 0 0; }
   pointer-events: none;
 }
 @media (min-width: 900px) { .toasts { bottom: 1.2rem; } }
+/* While a popup is open, the stack moves to the top of the screen. Toasts
+   outrank the overlay on purpose (z-index 90 over 80) so a message raised
+   during a sync is still readable — but both are anchored bottom-centre, so
+   the stack was landing exactly on the popup's row of buttons: a sync that
+   finished while the conflicts question was open put three toasts over the
+   action row — measured, that is "Decide later" on a desktop and, at phone
+   width, Apply AND both radio buttons, so the question could not be
+   answered at all. (The tell was in our own tests, which dismiss toasts
+   before pressing a footer button.) At the top they stay readable and
+   nothing the reader needs to press is behind them. */
+body.modal-open .toasts { top: 0.8rem; bottom: auto; }
+/* Moving them there stopped the collision with the action row and started one
+   with the QUESTION: at 1500x640 the conflicts title read "CMI cha" and at
+   412px the title and half the paragraph were behind the stack. So the popup
+   now gives up exactly the band the stack occupies. `--toast-band` is the
+   stack's measured height and `toasts-live` is set by the stack itself
+   (`ui::Toasts`) only while it holds something — a popup with nothing over it
+   stays centred, which is why this is not simply `align-items: flex-start`.
+   Measured beats guessed here: one toast is 40px and the local-network one is
+   four lines, so any fixed reservation is wrong for most of the cases. */
+body.modal-open.toasts-live .overlay {
+  align-items: flex-start;
+  padding-top: calc(var(--toast-band, 0px) + 1.4rem);
+}
+body.modal-open.toasts-live .dialog {
+  max-height: calc(100vh - var(--toast-band, 0px) - 2.8rem);
+  max-height: min(calc(100dvh - var(--toast-band, 0px) - 2.8rem), 800px);
+}
 .toast {
   position: relative;
   background: var(--text);
@@ -1980,12 +2048,27 @@ body.modal-open { overflow: hidden; }
   width: min(640px, 100%);
   /* dvh where supported: the layout viewport lies when a phone keyboard is
      up, and the actions row must stay reachable. */
-  max-height: min(85vh, 720px);
-  max-height: min(85dvh, 720px);
+  /* 800, not 720: at 720 the two longest popups both ended mid-sentence on a
+     1000px-tall window — the share dialog's "As a full backup" paragraph was
+     sliced through a line, and the shorten popup hid its "The full link, as it
+     is now" disclosure entirely, with a 1px scrollbar as the only hint that
+     either had more to say. The reader can still scroll, but a dialog that
+     *looks* finished and is not is a dialog whose last section does not exist.
+     85dvh still governs every window shorter than ~940px. */
+  max-height: min(85vh, 800px);
+  max-height: min(85dvh, 800px);
   overflow: auto;
   /* Belt to the body lock above: even if the lock is ever off, a wheel that
      reaches this scroller's end stops here instead of chaining to the page. */
   overscroll-behavior: contain;
+  /* The action row at the bottom is sticky, so whatever the browser scrolls to
+     this container's bottom edge is delivered UNDERNEATH it — which is what
+     Tab does to a control near the end of a long dialog: the focus ring lands
+     behind the bar. Reserving the bar's height in the scroller keeps a
+     keyboard reader's target in sight. (It does not change a mouse click on a
+     control already in view but covered; that is the reader's own scroll to
+     make, and the suite scrolls the same way before pressing one.) */
+  scroll-padding-bottom: 5rem;
   /* The sticky actions bar floats over the content, so anything scrolled
      to (focus, scrollIntoView) must stop clear of it — otherwise the last
      control lands underneath and can't be tapped. */
@@ -2184,8 +2267,9 @@ body.modal-open { overflow: hidden; }
   margin-left: auto;
   /* One footprint for all three labels, so the button does not resize under
      the finger that just pressed it. Measured, not assumed: without this the
-     primary is 147px saying "Generate short link" and 143px saying "Ask
-     TinyURL again" — a 4px twitch, small — but the label it wears WHILE the
+     primary was 147px saying "Generate short link" (now the shorter "Make it
+     short") and 143px saying "Ask TinyURL again" — a 4px twitch, small — but
+     the label it wears WHILE the
      request is out is "Asking…", which is far narrower again, and that is the
      one the reader is watching. 9.4rem clears the widest of them with a little
      headroom, since no webfont is ever loaded and the real face is whatever
@@ -2682,6 +2766,10 @@ pre.devpre {
   max-width: 30rem;
   color: var(--muted);
   line-height: 1.6;
+  /* Unbalanced this sets 465/454/475/17px — the word "to." alone on a
+     fourth line, dead centre of the first screen anyone ever sees.
+     Balanced: 361/342/369/339px, every break on a clause boundary. */
+  text-wrap: balance;
 }
 .welcome-status { margin: 0.7rem 0 0; min-height: 1.3em; }
 .welcome-note {
@@ -2845,6 +2933,12 @@ pre.devpre {
     flex-basis: 100%;
     min-width: 0;
   }
+  /* At 412px a grid chip's content box is ~76px and "Lecture Hall 803" needs
+     ~104px at 0.72rem, so it must wrap — but it was wrapping between the two
+     words that name one room, leaving "Lecture" alone on a line where it
+     reads as a word before it reads as half a hall name. At 0.66rem
+     "Lecture Hall" measures ~72px and only the number wraps. */
+  .chip .hall { font-size: 0.66rem; }
 }
 /* A course name is long — "Topics in Algebraic Number Theory" is a normal one
    — and an unsized text input is about 24 characters wide, so the reader was
@@ -3042,7 +3136,7 @@ pre.devpre {
     line-height: 1.05;
     color: #10131b;
   }
-  .pm-stats { display: block; font-size: 9px; color: #5a6170; margin-top: 1.4mm; }
+  .pm-stats { display: block; font-size: 10px; color: #5a6170; margin-top: 1.4mm; }
   .pm-sem {
     display: block;
     font-size: 14px;
@@ -3051,7 +3145,10 @@ pre.devpre {
     text-align: right;
     color: #3f5bd9;
   }
-  .pm-meta { display: block; font-size: 8px; color: #8a909c; text-align: right; margin-top: 1mm; }
+  /* Measured on the printed page, not the screenshot: at 8px/#8a909c the
+     darkest stroke was rgb(147,151,163) — 3.24:1 on white, 2.69:1 over the
+     wash — and this is the only line that says when the sheet was synced. */
+  .pm-meta { display: block; font-size: 9.5px; color: #5d6675; text-align: right; margin-top: 1mm; }
 
   /* --- The week grid: dark header band, hairline inner rules, chips
      filling their cells in course colors. --- */
@@ -3061,7 +3158,27 @@ pre.devpre {
     overflow: visible;
     max-height: none;
     box-shadow: none;
+    /* Right for the poster, which is one page by design. */
     break-inside: avoid;
+  }
+  /* WRONG for the halls sheet, which is always taller than a page: refusing to
+     break inside it pushed the whole table off page 1 (leaving the masthead
+     and one sentence alone on it), and 13 halls came out as EIGHT pages with
+     two of them blank — one holding nothing but the decorative wash. Let it
+     break where it must; the header row repeats on every page anyway. */
+  section[aria-label="Lecture halls"] .grid-scroll { break-inside: auto; }
+  /* And a fragmented table must not draw a frame around the paper it did not
+     fill: the outer border ran on to the bottom margin past the last row and
+     stopped, leaving an empty ruled well at the foot of every continuation
+     page. The rows carry their own rules, which is what the reader reads. */
+  section[aria-label="Lecture halls"] table.tt { border: none; }
+  /* The helper sentence was the third-largest thing on this sheet — bigger
+     than the column headings and every booking on a page whose whole job is
+     the table. Annotation size, like the poster's footnote. */
+  section[aria-label="Lecture halls"] > p.muted.small {
+    font-size: 9px;
+    color: #464b55 !important;
+    margin-bottom: 2mm;
   }
   .week-grid { display: block !important; }
   .day-list { display: none !important; }
@@ -3112,7 +3229,22 @@ pre.devpre {
     width: auto;
     min-width: 46px;
   }
-  table.tt thead th.corner { background: #232a3a !important; }
+  /* The corner cells carry "Hall" and "Day" on the halls sheet. Without an
+     explicit colour, `table.tt th.rowhead` (two classes) out-specifies
+     `table.tt thead th` (one) and paints them #232a3a — dark ink on the dark
+     band, measured 1.01:1, i.e. two column headings that print as nothing. */
+  table.tt thead th.corner {
+    background: #232a3a !important;
+    color: #fff !important;
+  }
+  /* On screen a day with no bookings is dimmed with opacity; on paper 0.6
+     measures 4.0:1, the exact number this stylesheet rejects further down
+     for 8px type ("thin on paper and hopeless on a photocopy"), and the
+     halls sheet is the one that gets photocopied. Same hierarchy, real ink. */
+  table.tt.halls-merged tr.quiet:not(.today) th.dayhead {
+    opacity: 1;
+    color: #4a5160 !important;
+  }
   /* Cells stay generous — the sheet should read pinned to a wall. The
      height is a MINIMUM: a cell holding several clashing chips grows, and
      its row grows with it, because a poster whose classes are chopped off
@@ -3204,7 +3336,17 @@ pre.devpre {
     right: 4px;
     font-size: 8px;
   }
-  .chip .sel-mark { display: none; }
+  /* The ✓ PRINTS. It used to be dropped, which made the halls sheet's own
+     sentence ("✓ marks the courses on your timetable") false on paper in
+     every state — and left a printed hall sheet with no way at all to tell
+     the reader's own courses from the other 140 bookings, which is most of
+     why anyone prints it. Ink, not accent colour, so it survives a
+     black-and-white printer. */
+  .chip .sel-mark {
+    font-size: 8px;
+    font-weight: 800;
+    color: #232a3a !important;
+  }
 
   /* Clash strip under the grid — the poster equivalent of the on-screen
      Clashes panel. */
@@ -3239,16 +3381,24 @@ pre.devpre {
     column-count: 2;
     column-gap: 10mm;
     border-top: 1.2px solid #232a3a;
-    padding-top: 1mm;
+    /* 0, so column 2's first item butts against the heavy rule above and its
+       own hairline is drawn over instead of floating below it. */
+    padding-top: 0;
   }
+  /* Rules BETWEEN items, never after the last one: with `border-bottom` the
+     final item of each column drew a hairline into empty space — at one
+     course it stopped at 40% of the page width, three near-parallel rules
+     deep at the foot of the block. `:last-child` is not the fix; in a
+     two-column flow the DOM-last item is the bottom of the SECOND column. */
   .pc-item {
     break-inside: avoid;
     display: flex;
     align-items: flex-start;
     gap: 2.2mm;
     padding: 1.2mm 0;
-    border-bottom: 0.5px solid #d5d9e2;
+    border-top: 0.5px solid #d5d9e2;
   }
+  .pc-item:first-child { border-top: 0; }
   .pc-body { min-width: 0; }
   .pc-top { font-size: 9.6px; line-height: 1.35; color: #10131b; }
   .pc-name { font-weight: 650; }

@@ -398,7 +398,7 @@ pub fn enter_move_mode(app: App, spec: DragSpec, from: Option<Meeting>) {
             "Keyboard moving doesn't work here — this table is laid out by hall, \
              and the arrow keys only move through days and times. On this page, \
              drag a course with the mouse, or open it and edit its meeting. \
-             Keyboard moving works on My timetable and the Master grid.",
+             Keyboard moving works on My timetable and the master grid.",
         );
         return;
     }

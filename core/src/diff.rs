@@ -109,7 +109,9 @@ fn meetings_set(course: &Course) -> BTreeSet<(usize, u16, u16, Option<&str>)> {
 fn fmt_credits(credits: Option<u8>) -> String {
     match credits {
         Some(n) => n.to_string(),
-        None => "unstated".to_string(),
+        // The credits family says this as "CMI doesn't list credits"; nothing
+        // a reader sees anywhere else says "unstated".
+        None => "not listed".to_string(),
     }
 }
 
@@ -125,7 +127,13 @@ fn status_words(status: crate::model::ScheduleStatus) -> &'static str {
     match status {
         crate::model::ScheduleStatus::Scheduled => "on the timetable",
         crate::model::ScheduleStatus::UnscheduledListed => "listed without a time slot",
-        crate::model::ScheduleStatus::ScheduledNoBranch => "scheduled outside the branch grids",
+        // "branch grid" is parser vocabulary that appears on no screen, and
+        // this arm renders as a delta ("status: on the timetable → …"), so it
+        // has to keep "on the timetable" or the line reads as a course
+        // leaving the timetable. These are the app's own words for the state.
+        crate::model::ScheduleStatus::ScheduledNoBranch => {
+            "on the timetable, but not listed under any branch"
+        }
     }
 }
 

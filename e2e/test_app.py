@@ -620,7 +620,7 @@ def t04_unknown_code_warning(app):
     app.boot("/?c=TOC,XYZQ")
     banner = app.wait_css(".banner")
     title = banner.find_element(By.CSS_SELECTOR, ".banner-title").text
-    assert title == "One course in that link isn't in CMI's timetable, so it was left out", title
+    assert title == "One course in that link isn't in CMI's timetable, so it was left out.", title
     # The code is set as a code of its own, not as a word in the sentence.
     codes = [c.text for c in banner.find_elements(By.CSS_SELECTOR, ".unknown-code")]
     assert codes == ["XYZQ"], codes
@@ -634,7 +634,7 @@ def t04_unknown_code_warning(app):
     app.boot("/?c=TOC,XYZQ,NOPE1")
     banner = app.wait_css(".banner")
     title = banner.find_element(By.CSS_SELECTOR, ".banner-title").text
-    assert title == "2 courses in that link aren't in CMI's timetable, so they were left out", title
+    assert title == "2 courses in that link aren't in CMI's timetable, so they were left out.", title
     codes = [c.text for c in banner.find_elements(By.CSS_SELECTOR, ".unknown-code")]
     assert codes == ["XYZQ", "NOPE1"], codes
 
@@ -661,7 +661,7 @@ def t05_credits_default_four(app):
 
 def t06_master_grid_wont_fit_warning(app):
     """Unselected clashing courses carry the ⚠ marker in the master grid,
-    with 'Fits my schedule' OFF."""
+    with 'Fits my timetable' OFF."""
     app.boot("/?c=TOC")
     app.open_tab("Master grid")
     app.wait_css("section[aria-label='Master grid'] table.tt")
@@ -1061,7 +1061,7 @@ def t21_halls_drag_moves_hall_and_slot(app):
     app.open_tab("Halls")
     section = app.wait_css("section[aria-label='Lecture halls']")
     section.find_element(
-        By.XPATH, ".//div[@role='radiogroup'][@aria-label='Day']//button[normalize-space()='Tue']"
+        By.XPATH, ".//div[@role='radiogroup'][@aria-label='Day view']//button[normalize-space()='Tue']"
     ).click()
     src_cell = "td[data-hall='Lecture Hall 803'][data-slot='550']"
     dst_cell = "td[data-hall='Seminar Hall'][data-slot='840']"
@@ -1095,7 +1095,7 @@ def t21_halls_drag_moves_hall_and_slot(app):
     app.open_tab("Halls")
     section = app.wait_css("section[aria-label='Lecture halls']")
     section.find_element(
-        By.XPATH, ".//div[@role='radiogroup'][@aria-label='Day']//button[normalize-space()='Tue']"
+        By.XPATH, ".//div[@role='radiogroup'][@aria-label='Day view']//button[normalize-space()='Tue']"
     ).click()
     app.wait_css(f"{dst_cell} button.chip[aria-label^='TOC,']")
     assert not app.chips("TOC", src_cell)
@@ -1111,7 +1111,7 @@ def t21_halls_drag_moves_hall_and_slot(app):
     app.open_tab("Halls")
     section = app.wait_css("section[aria-label='Lecture halls']")
     section.find_element(
-        By.XPATH, ".//div[@role='radiogroup'][@aria-label='Day']//button[normalize-space()='Tue']"
+        By.XPATH, ".//div[@role='radiogroup'][@aria-label='Day view']//button[normalize-space()='Tue']"
     ).click()
     section.find_element(By.XPATH, ".//button[contains(.,'Edit layout')]").click()
     app.drag(app.chip("TOC", dst_cell), app.css(src_cell))
@@ -1600,7 +1600,7 @@ def t35_remove_meeting(app):
     assert "meeting you removed" in dialog_text.lower(), dialog_text[:300]
     assert "Tue 09:10" in dialog_text, dialog_text[:300]
     app.xpath("//div[@class='dialog']//button[normalize-space()='Put it back']").click()
-    app.wait_toast("TOC's meeting is back")
+    app.wait_toast("Put TOC's meeting back")
     app.d.find_element(By.CSS_SELECTOR, "body").send_keys(Keys.ESCAPE)
     assert app.chips("TOC", "td[data-day='1'][data-slot='550']"), \
         "Restore must bring the meeting back"
@@ -2393,7 +2393,7 @@ def t45_editor_survives_a_sync(app):
 def _halls_day(app, short):
     """Switch the Halls tab to a day by its short name."""
     app.xpath(
-        "//section[@aria-label='Lecture halls']//div[@role='radiogroup' and @aria-label='Day']"
+        "//section[@aria-label='Lecture halls']//div[@role='radiogroup' and @aria-label='Day view']"
         f"//button[normalize-space()='{short}']"
     ).click()
     time.sleep(0.3)
@@ -2401,7 +2401,7 @@ def _halls_day(app, short):
 
 def _halls_all(app):
     """Switch the Halls tab to every day at once."""
-    _halls_day(app, "All")
+    _halls_day(app, "Week")
 
 
 # One custom course that exercises both halves of the problem: an official
@@ -2598,7 +2598,7 @@ def t50_halls_all_days_one_table(app):
     # A hall is NAMED ONCE, in a cell spanning its days; the days run down a
     # gutter of their own, in order.
     days = [b.text for b in section.find_elements(
-        By.XPATH, ".//div[@aria-label='Day']//button")][1:]  # "All" comes first
+        By.XPATH, ".//div[@aria-label='Day view']//button")][1:]  # "All" comes first
     rows = table.find_elements(By.CSS_SELECTOR, "tbody tr")
     names = table.find_elements(By.CSS_SELECTOR, "tbody th.hallhead")
     assert len(rows) == len(names) * len(days), (len(rows), len(names))
@@ -3392,22 +3392,27 @@ def t65_my_courses_has_the_same_filters(app):
     WebDriverWait(app.d, 10).until(
         lambda d: not app.css_all("section[aria-label='My courses'] .card"))
     assert "None of your courses match these filters" in section.text, section.text
+    # Scoped to the empty panel on purpose: the filter bar above it now carries
+    # the same label (one action, one name), so an unscoped XPath would click
+    # the bar's button instead of the one this test is about.
     section.find_element(
-        By.XPATH, ".//button[normalize-space()='Clear the filters']").click()
+        By.XPATH,
+        ".//div[contains(@class,'empty')]//button[normalize-space()='Clear all filters']",
+    ).click()
     WebDriverWait(app.d, 10).until(
         lambda d: len(app.css_all("section[aria-label='My courses'] .card")) == 3)
 
-    # "Fits my schedule" is NOT offered here: it hides whatever overlaps your
+    # "Fits my timetable" is NOT offered here: it hides whatever overlaps your
     # selection, and everything on this page IS your selection, so the box
     # could never hide a card. It stays where it can act.
     section = app.css("section[aria-label='My courses']")
-    assert "Fits my schedule" not in section.text, section.text
+    assert "Fits my timetable" not in section.text, section.text
     app.open_tab("Catalog")
     cat = app.wait_css("section[aria-label='Catalog']")
-    assert "Fits my schedule" in cat.text, "the catalog keeps it"
+    assert "Fits my timetable" in cat.text, "the catalog keeps it"
     app.open_tab("Master grid")
     grid = app.wait_css("section[aria-label='Master grid']")
-    assert "Fits my schedule" in grid.text, "the master grid keeps it"
+    assert "Fits my timetable" in grid.text, "the master grid keeps it"
     app.open_tab("My courses")
     app.wait_css("section[aria-label='My courses'] .filterbar")
 
@@ -3658,7 +3663,7 @@ def t69_halls_marks_your_courses_even_without_a_meeting(app):
     app.boot("/", selection=["SVA"], raw_snapshot=snapshot_with_a_room_and_no_class())
     app.open_tab("Halls")
     app.wait_css("section[aria-label='Lecture halls']")
-    app.xpath("//div[@aria-label='Day']//button[normalize-space()='Mon']").click()
+    app.xpath("//div[@aria-label='Day view']//button[normalize-space()='Mon']").click()
     chip = app.wait_css("section[aria-label='Lecture halls'] "
                         "button.chip[aria-label^='SVA,']")
     assert chip.find_elements(By.CSS_SELECTOR, ".sel-mark"), \
@@ -3669,7 +3674,7 @@ def t69_halls_marks_your_courses_even_without_a_meeting(app):
     app.boot("/", raw_snapshot=snapshot_with_a_room_and_no_class())
     app.open_tab("Halls")
     app.wait_css("section[aria-label='Lecture halls']")
-    app.xpath("//div[@aria-label='Day']//button[normalize-space()='Mon']").click()
+    app.xpath("//div[@aria-label='Day view']//button[normalize-space()='Mon']").click()
     chip = app.wait_css("section[aria-label='Lecture halls'] "
                         "button.chip[aria-label^='SVA,']")
     assert not chip.find_elements(By.CSS_SELECTOR, ".sel-mark"), \
@@ -4548,7 +4553,7 @@ def t82_conflicts_apply_answers_only_what_you_answered(app):
         # …and the unanswered one is exactly as it was: still waiting, banner
         # counting one.
         banner = app.xpath("//div[contains(@class,'banner')][contains(.,'conflict')]")
-        assert "1 timetable change" in banner.text, banner.text
+        assert "One timetable change" in banner.text, banner.text
         stored = app.d.execute_script(
             "return JSON.parse(localStorage.getItem('cmitt.v1.conflicts'));")
         assert len(stored) == 1 and stored[0]["course"] == "ISS", stored
@@ -4690,7 +4695,7 @@ def t86_seg_groups_are_radio_groups_with_arrow_keys(app):
     app.open_tab("Halls")
     app.wait_css("section[aria-label='Lecture halls']")
     group = "//section[@aria-label='Lecture halls']" \
-            "//div[@role='radiogroup' and @aria-label='Day']"
+            "//div[@role='radiogroup' and @aria-label='Day view']"
     tue = app.xpath(group + "//button[normalize-space()='Tue']")
     tue.click()
     stops = app.d.find_elements(By.XPATH, group + "//button[@tabindex='0']")
@@ -5070,7 +5075,7 @@ def t96_a_disagreement_over_one_class_keeps_your_own(app):
     # Wednesday, and the reader's Friday is gone.
     import_file().find_element(
         By.XPATH, ".//button[contains(.,'Replace my timetable with it')]").click()
-    app.wait_toast("Your timetable now has exactly the 1 course from that file.")
+    app.wait_toast("Your timetable now has exactly the one course from that file.")
     app.d.find_element(By.TAG_NAME, "body").send_keys(Keys.ESCAPE)
     app.wait_css("td[data-day='2'][data-slot='1020'] button.chip[aria-label^='TOC,']")
     WebDriverWait(app.d, 10).until(
@@ -5490,7 +5495,7 @@ def t107_a_short_link_is_remembered_for_each_service(app):
     radios[2].click()
     WebDriverWait(app.d, 5).until(lambda d: app.css_all(".shorten-empty"))
     assert app.css(".shorten-dialog .actions button:last-child").text == \
-        "Generate short link", "a service with no link yet offers to make one"
+        "Make it short", "a service with no link yet offers to make one"
     radios[0].click()
     WebDriverWait(app.d, 5).until(
         lambda d: app.css(".shorten-have .shorten-short").get_attribute("value")
@@ -5523,7 +5528,7 @@ def t108_a_link_made_before_the_timetable_changed_is_not_offered_as_current(app)
     assert not app.css_all(".shorten-have"), "but never as the link for this timetable"
     assert "earlier" in app.css(".shorten-out").text.lower()
     assert app.css(".shorten-dialog .actions button:last-child").text == \
-        "Generate short link", "and the button offers to make the current one"
+        "Make it short", "and the button offers to make the current one"
     # No "link ready" badge either: the chooser must not claim a link this
     # timetable does not have.
     assert not app.css_all(".shorten-opt .shorten-ready")
@@ -6017,8 +6022,14 @@ def t114_the_app_asks_before_it_updates_itself(app):
         # Scoped to the dialog: the developer panel behind the modal carries the
         # same marker, and an unscoped find picks IT — then the click lands on
         # the overlay and the failure reads as a broken button.
-        d.find_element(By.CSS_SELECTOR, ".dialog [data-update-check]").click()
-        app.wait_toast("close this to see it", timeout=30)
+        # Scrolled to the middle first, the way the suite presses anything far
+        # down a long dialog: this one grew when the network lede became a
+        # three-item list, so "Check now" now starts life under the sticky
+        # action bar, and Chrome refuses a click it would land on the bar.
+        check_now = d.find_element(By.CSS_SELECTOR, ".dialog [data-update-check]")
+        d.execute_script("arguments[0].scrollIntoView({block: 'center'});", check_now)
+        check_now.click()
+        app.wait_toast("close this to see the message at the top", timeout=30)
         d.execute_script("""
             const b = [...document.querySelectorAll('.dialog button')]
               .find(x => x.textContent.trim() === 'Close');
@@ -6335,12 +6346,12 @@ def t117_the_shorten_popup_has_a_way_out_and_it_is_not_beside_the_send(app):
     # Left to right: two ways out, then the one thing this popup does.
     footer = app.css(".shorten-dialog .actions")
     assert [b.text for b in footer.find_elements(By.CSS_SELECTOR, "button")] == \
-        ["Back", "Close", "Generate short link"], \
+        ["Back", "Close", "Make it short"], \
         [b.text for b in footer.find_elements(By.CSS_SELECTOR, "button")]
     # Four other assertions in this file read the LAST child as the primary,
     # and t110 clicks it. Close must never take that place.
     assert app.css(".shorten-dialog .actions button:last-child").text == \
-        "Generate short link"
+        "Make it short"
     # "Back" keeps its visible word (speech control, and two xpaths here say
     # it) and gains the destination for anyone hearing the page read out.
     back = app.xpath("//div[contains(@class,'shorten-dialog')]"
@@ -6394,12 +6405,12 @@ def t117_the_shorten_popup_has_a_way_out_and_it_is_not_beside_the_send(app):
             "const a = document.activeElement;"
             "return a ? a.tagName + '|' + (a.textContent || '').trim() : '';")
         if label.startswith("BUTTON|") and label[7:] in (
-                "Back", "Close", "Generate short link"):
+                "Back", "Close", "Make it short"):
             if label[7:] not in seen:
                 seen.append(label[7:])
         if len(seen) == 3:
             break
-    assert seen == ["Back", "Close", "Generate short link"], (
+    assert seen == ["Back", "Close", "Make it short"], (
         f"the footer's keyboard order is {seen} — it must read the way it looks")
 
     # Close means gone — not back to the share dialog behind it.
@@ -6421,7 +6432,7 @@ def t117_the_shorten_popup_has_a_way_out_and_it_is_not_beside_the_send(app):
     WebDriverWait(app.d, 5).until(lambda d: not app.css_all(".dialog"))
 
     # One footprint for every label. "Ask TinyURL again" is a different
-    # sentence from "Generate short link"; if the button resizes with it, the
+    # sentence from "Make it short"; if the button resizes with it, the
     # sticky bar re-wraps the moment it is pressed and again when the link
     # lands — twice per request, under the reader's thumb.
     _plant_short_links(app, [
@@ -6432,7 +6443,7 @@ def t117_the_shorten_popup_has_a_way_out_and_it_is_not_beside_the_send(app):
     made = app.d.execute_script(GEOM)
     assert "again" in app.css(".shorten-dialog .actions button:last-child").text.lower()
     assert made["primary_w"] == wide["primary_w"], (
-        f"the primary is {wide['primary_w']}px saying 'Generate short link' and "
+        f"the primary is {wide['primary_w']}px saying 'Make it short' and "
         f"{made['primary_w']}px saying 'Ask TinyURL again' — min-width is not "
         "holding its footprint")
     assert made["footer_h"] == wide["footer_h"], (
@@ -6862,14 +6873,14 @@ def t123_a_damaged_link_changes_nothing(app):
     assert app.chips("TOC", container=".week-grid"), \
         "the timetable still shows the courses"
     banner = app.wait_css(".banner.warn")
-    assert "could not be read" in banner.text, banner.text
-    assert "nothing was changed" in banner.text, banner.text
+    assert "couldn't be read" in banner.text, banner.text
+    assert "nothing changed" in banner.text, banner.text
 
     # An EMPTY s= is as unreadable as garbage.
     app.d.get(f"{BASE}/?s=")
     app.wait_css(".header h1")
     assert stored_selection() == ["RDBM", "TOC"]
-    assert "nothing was changed" in app.wait_css(".banner.warn").text
+    assert "nothing changed" in app.wait_css(".banner.warn").text
 
     # With a readable c= the codes still open — but never silently: whatever
     # the s= carried (times, credits, own courses) is gone, and a link that
@@ -7003,7 +7014,7 @@ def t125_print_stays_light_whatever_the_theme(app):
         app.open_tab("Halls")
         section = app.wait_css("section[aria-label='Lecture halls']")
         section.find_element(
-            By.XPATH, ".//div[@aria-label='Day']//button[normalize-space()='All']"
+            By.XPATH, ".//div[@aria-label='Day view']//button[normalize-space()='Week']"
         ).click()
         app.wait_css("section[aria-label='Lecture halls'] table.tt th.hallhead")
         print_media(True)

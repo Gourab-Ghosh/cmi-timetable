@@ -931,7 +931,11 @@ impl App {
 
     pub fn persist_selection(&self) {
         let r = storage::save(storage::KEY_SELECTION, &self.selection.get_untracked());
-        self.persisted("courses", r);
+        // "course selection" is what a backup file calls this datum
+        // (core/src/export.rs), and the sibling banner next door says "your
+        // own courses" — two alarming banners a word apart on data the
+        // reader cannot fetch again.
+        self.persisted("course selection", r);
         self.sync_url();
     }
 
@@ -1320,13 +1324,17 @@ impl App {
         }
         if !stats.dropped_for_own_course.is_empty() {
             out.push_str(&format!(
-                " {} now {} a course added by hand, so the changes saved here \
-                 under that code went.",
+                " {} now {}, so the changes saved here under {} went.",
                 stats.dropped_for_own_course.join(", "),
                 if stats.dropped_for_own_course.len() == 1 {
-                    "names"
+                    "names a course added by hand"
                 } else {
-                    "name"
+                    "name courses added by hand"
+                },
+                if stats.dropped_for_own_course.len() == 1 {
+                    "that code"
+                } else {
+                    "those codes"
                 },
             ));
         }
@@ -1348,7 +1356,14 @@ impl App {
         let n = plan.known.len();
         let mut out = if replace {
             format!(
-                "Your timetable now has exactly the {n} {} from that file.",
+                // Spelled for one, because "the 1 course" reads as a count
+                // where the sentence means the whole of what the file listed.
+                "Your timetable now has exactly the {} {} from that file.",
+                if n == 1 {
+                    "one".to_string()
+                } else {
+                    n.to_string()
+                },
                 plural(n)
             )
         } else {
@@ -1410,35 +1425,44 @@ impl App {
         }
         if !stats.dropped_for_own_course.is_empty() {
             out.push_str(&format!(
-                " {} now {} a course added by hand, which carries its own \
-                 times, so the changes saved here under that code went.",
+                " {} now {}, so the changes saved here under {} went.",
                 stats.dropped_for_own_course.join(", "),
                 if stats.dropped_for_own_course.len() == 1 {
-                    "names"
+                    "names a course added by hand, which carries its own times"
                 } else {
-                    "name"
+                    "name courses added by hand, which carry their own times"
+                },
+                if stats.dropped_for_own_course.len() == 1 {
+                    "that code"
+                } else {
+                    "those codes"
                 },
             ));
         }
         if !plan.kept_yours.is_empty() {
             out.push_str(&format!(
-                " {} {} yours — the file's version was left out.",
+                " {} {} yours — the file's {} left out.",
                 plan.kept_yours.join(", "),
                 if plan.kept_yours.len() == 1 {
                     "is already a course of"
                 } else {
                     "are already courses of"
                 },
+                if plan.kept_yours.len() == 1 {
+                    "version was"
+                } else {
+                    "versions were"
+                },
             ));
         }
         if !plan.shadowed.is_empty() {
             out.push_str(&format!(
-                " CMI already lists {}, so the file's own version of {} left out.",
+                " CMI already lists {}, so the file's own {} left out.",
                 plan.shadowed.join(", "),
                 if plan.shadowed.len() == 1 {
-                    "it was"
+                    "version of it was"
                 } else {
-                    "them was"
+                    "versions of them were"
                 },
             ));
         }
@@ -1548,7 +1572,7 @@ impl App {
             sel.retain(|c| !c.eq_ignore_ascii_case(&code));
             ovs.hide(&code, was, now);
         });
-        self.toast_undo(format!("Deleted {code} — restore it from Your changes"));
+        self.toast_undo(format!("Deleted {code} — restore it from Your changes."));
     }
 
     /// Put a deleted course back, with every change you had made to it —
@@ -1607,17 +1631,27 @@ impl App {
         self.toast_undo(match back {
             0 => format!(
                 "{n} {} you deleted {} back in the catalog and the master \
-                 grid — none were on your timetable when you deleted them, so \
-                 add the ones you want.",
+                 grid — {}",
                 plural(n),
                 if n == 1 { "is" } else { "are" },
+                if n == 1 {
+                    "it wasn't on your timetable when you deleted it, so add \
+                     it when you want it."
+                } else {
+                    "none were on your timetable when you deleted them, so \
+                     add the ones you want."
+                },
             ),
             b if b == n => format!(
                 "{n} {} you deleted {} back — in the catalog, the master \
-                 grid, and on your timetable, where they were when you deleted \
-                 them.",
+                 grid, and on your timetable, {}",
                 plural(n),
                 if n == 1 { "is" } else { "are" },
+                if n == 1 {
+                    "where it was when you deleted it."
+                } else {
+                    "where they were when you deleted them."
+                },
             ),
             b => format!(
                 "{n} {} you deleted are back in the catalog and the master \

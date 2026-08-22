@@ -254,12 +254,18 @@ fn apply_url_state(app: App) {
         app.set_banner_sticky(
             crate::state::BannerKind::Warn,
             if c.is_some() {
+                // Kept under 175 characters: at 191 the banner grew to two rows
+                // and pushed Dismiss off the line every other banner keeps it
+                // on, and to four lines at phone width. "its own courses" also
+                // gave the link courses of its own — they are the sender's.
                 "Part of this link could not be read, so only its course codes \
-                 were used. Any custom times or courses it carried were lost — \
-                 ask for a fresh link."
+                 came through — not its times, credits or added courses. Ask \
+                 whoever sent it for a new link."
             } else {
-                "This link could not be read, so nothing was changed. \
-                 Ask for a fresh link and open it again."
+                // Contractions, like the rest of the app's messages: the
+                // two-passive version was the stiffest sentence on screen.
+                "This link couldn't be read, so nothing changed. \
+                 Ask whoever sent it for a new one."
             },
         );
         if c.is_none() {

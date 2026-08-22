@@ -67,7 +67,7 @@ fn welcome(app: App) -> impl IntoView {
                         });
                     }
                 >
-                    {move || if syncing() { "Syncing…" } else { "⟳ Fetch the timetable" }}
+                    {move || if syncing() { "Fetching…" } else { "⟳ Fetch the timetable" }}
                 </button>
                 <p class="welcome-status muted small" aria-live="polite">
                     {move || {
@@ -79,8 +79,8 @@ fn welcome(app: App) -> impl IntoView {
                                 s.progress
                             }
                         } else {
-                            "This takes a few seconds. After that the app keeps everything in this \
-                                 browser, so it works offline — you only need the internet to sync."
+                            "This takes a few seconds. After that the app works offline — you \
+                                 only need the internet to sync."
                                 .to_string()
                         }
                     }}
@@ -146,15 +146,27 @@ fn what_changed_panel(app: App) -> impl IntoView {
                     let mut heads: Vec<String> = Vec::new();
                     if !mine_changed.is_empty() {
                         heads.push(format!(
+                            // Spelled at one, a digit from two: the credits family
+                            // next door already reads that way, and the banner was
+                            // the only member printing a bare "1" beside its own
+                            // spelled "One other course on campus".
                             "CMI changed {} of your courses — {}.",
-                            mine_changed.len(),
+                            if mine_changed.len() == 1 {
+                                "one".to_string()
+                            } else {
+                                mine_changed.len().to_string()
+                            },
                             name_them(&mine_changed),
                         ));
                     }
                     if !mine_gone.is_empty() {
                         heads.push(format!(
                             "CMI no longer lists {} of your courses — {}.",
-                            mine_gone.len(),
+                            if mine_gone.len() == 1 {
+                                "one".to_string()
+                            } else {
+                                mine_gone.len().to_string()
+                            },
                             name_them(&mine_gone),
                         ));
                     }
@@ -162,17 +174,23 @@ fn what_changed_panel(app: App) -> impl IntoView {
                         // Nothing of theirs moved — say exactly that. It IS
                         // the news, and it saves opening the dialog at all.
                         format!(
-                            "CMI updated the timetable — nothing on your week changed. \
+                            "CMI updated the timetable — none of your courses changed. \
                              {total} course{} on campus {} affected.",
                             if total == 1 { "" } else { "s" },
                             if total == 1 { "was" } else { "were" },
                         )
                     } else {
                         let others = total - mine_changed.len() - mine_gone.len();
+                        // "change", not "changed": `total` counts changed +
+                        // added + removed, so this tail was calling an ADDED
+                        // course a changed one — the digest one click away
+                        // files it under "New courses". The union's own noun
+                        // is true whatever the remainder holds, and it is
+                        // shorter, which this banner needs at phone width.
                         let tail = match others {
                             0 => String::new(),
-                            1 => " One other course on campus changed too.".to_string(),
-                            n => format!(" {n} other courses on campus changed too."),
+                            1 => " One other change on campus.".to_string(),
+                            n => format!(" {n} other changes on campus."),
                         };
                         format!("{}{tail}", heads.join(" "))
                     };
@@ -444,11 +462,12 @@ fn my_timetable(app: App) -> impl IntoView {
                                 .map(|c| u32::from(app.course_credits(c)))
                                 .sum();
                             format!(
-                                "{} course{} · {} credits · made with the CMI \
+                                "{} course{} · {} credit{} · made with the CMI \
                                  Timetable Planner",
                                 courses.len(),
                                 if courses.len() == 1 { "" } else { "s" },
                                 total,
+                                if total == 1 { "" } else { "s" },
                             )
                         }}
                     </span>
@@ -550,7 +569,7 @@ fn my_timetable(app: App) -> impl IntoView {
                 if app.selection.with(|s| s.is_empty()) {
                     view! {
                         <div class="empty panel">
-                            <p class="big">"Your week is a blank grid."</p>
+                            <p class="big">"Nothing on your timetable yet."</p>
                             <p>
                                 "Add courses from the catalog. The app marks a clash as soon \
                                  as two of your courses overlap, and you can move any meeting \
@@ -772,9 +791,12 @@ fn my_timetable(app: App) -> impl IntoView {
                                 // nothing said so — the drag was the only
                                 // route and it had no hint at all.
                                 <p class="muted small tray-hint">
-                                    "Turn on ✎ Edit layout and drag one onto the grid, or \
-                                     use the “Edit this course” button to set its time — \
-                                     and its hall, credits or name while you're there."
+                                    // One connector, one job: the dash joins the two
+                                    // routes and the tail is a plain list, so the eye
+                                    // no longer reads ", and" as the end of it.
+                                    "Turn on ✎ Edit layout and drag one onto the grid — or \
+                                     press Edit this course to set its time, hall, credits \
+                                     or name."
                                 </p>
                                 <div class="items">
                                     {items
@@ -782,6 +804,7 @@ fn my_timetable(app: App) -> impl IntoView {
                                         .map(|course| {
                                             let code = course.code;
                                             let give_code = code.clone();
+                                            let label_code = code.clone();
                                             view! {
                                                 <span class="tray-item">
                                                     {chip(
@@ -804,6 +827,16 @@ fn my_timetable(app: App) -> impl IntoView {
                                                     // a button offering to schedule it.
                                                     <button
                                                         class="btn small"
+                                                        // One of these rows per course, every
+                                                        // button reading "Edit this course" with
+                                                        // an identical tooltip: a screen reader
+                                                        // heard the same name twice over with
+                                                        // nothing to tell them apart. The
+                                                        // visible label stays inside the
+                                                        // accessible name (WCAG 2.5.3).
+                                                        aria-label=format!(
+                                                            "Edit this course — {label_code}",
+                                                        )
                                                         title="Give it a time, or change its \
                                                                hall and credits — all in one \
                                                                place"
@@ -885,9 +918,18 @@ fn my_timetable(app: App) -> impl IntoView {
                                             let times = if c.a_slot == c.b_slot {
                                                 c.a_slot.label()
                                             } else {
+                                                // Each range wears its own
+                                                // code: "09:10–14:00 /
+                                                // 10:30–11:45" left the reader
+                                                // to match ranges to courses by
+                                                // position and then intersect
+                                                // them in their head, and the
+                                                // slash read as "either/or".
                                                 format!(
-                                                    "{} / {}",
+                                                    "{} {} / {} {}",
+                                                    c.a,
                                                     c.a_slot.label(),
+                                                    c.b,
                                                     c.b_slot.label(),
                                                 )
                                             };
@@ -943,12 +985,17 @@ fn my_timetable(app: App) -> impl IntoView {
                                 // row's own button names what it restores, so
                                 // the intro points at those instead of making
                                 // one promise for all of them.
-                                <p class="muted small">
+                                // Two sentences with a measure, not one 205-
+                                // character line at the panel's full width:
+                                // three facts in a breath, two nested asides
+                                // and a trailing "and", in grey, above the one
+                                // row the reader came for.
+                                <p class="muted small" style="max-width:92ch">
                                     "Everything you've added, deleted or changed in \
                                      your timetable. Each one can be undone on its \
                                      own — the button beside it says what it goes \
-                                     back to — and Ctrl+Z undoes the last change you \
-                                     made in this visit."
+                                     back to. Ctrl+Z undoes the last change you made \
+                                     in this visit."
                                 </p>
                                 {overrides_list(app)}
                             </div>
@@ -1052,16 +1099,43 @@ fn my_timetable(app: App) -> impl IntoView {
                                 <p class="print-footnote">
                                     <span>
                                         {move || {
-                                            let mut legend = "✎ you changed this · * credits \
-                                                              the app guessed (CMI doesn't \
-                                                              list them)"
-                                                .to_string();
-                                            if !app.clashes().is_empty() {
-                                                legend.push_str(
-                                                    " · ⚠ and a red border mark a clash",
-                                                );
+                                            // Name only the marks this sheet actually
+                                            // carries. The clash item was already
+                                            // conditional; the other two were not, so an
+                                            // untouched timetable printed a footnote
+                                            // explaining a ✎ that is nowhere on the paper
+                                            // and sent the reader hunting for it.
+                                            let courses = app.selected_courses();
+                                            let mut parts: Vec<&str> = Vec::new();
+                                            if courses
+                                                .iter()
+                                                .any(|c| {
+                                                    app.credits_custom(&c.code).is_some()
+                                                        || app
+                                                            .effective_meetings(c)
+                                                            .iter()
+                                                            .any(|e| e.overridden)
+                                                })
+                                            {
+                                                parts.push("✎ you changed this");
                                             }
-                                            legend
+                                            if courses
+                                                .iter()
+                                                .any(|c| {
+                                                    app.credits_custom(&c.code).is_none()
+                                                        && c.credits_assumed()
+                                                })
+                                            {
+                                                parts
+                                                    .push(
+                                                        "* credits the app guessed (CMI \
+                                                         doesn't list them)",
+                                                    );
+                                            }
+                                            if !app.clashes().is_empty() {
+                                                parts.push("⚠ and a red border mark a clash");
+                                            }
+                                            parts.join(" · ")
                                         }}
                                     </span>
                                     <span>
@@ -1379,7 +1453,7 @@ fn my_courses(app: App) -> impl IntoView {
                                         );
                                     }
                                 >
-                                    "Clear the filters"
+                                    "Clear all filters"
                                 </button>
                             </div>
                         </div>
@@ -1576,21 +1650,27 @@ fn course_card(app: App, course: Course) -> impl IntoView {
                              {cr_official}."
                         )
                     })
+                // Each of these opens with the "*" its own badge wears at the
+                // other end of the card: the mark had no key anywhere on
+                // screen, so a reader who noticed the star had to cross the
+                // card and then infer what it pointed at. (The printed poster
+                // spells it out in its legend; the card now does too.)
                 } else if let Some(span) = &cr_duration {
                     Some(format!(
-                        "CMI doesn't list credits for this course. It runs {span}, so \
+                        "* CMI doesn't list credits for this course. It runs {span}, so \
                          the app counts one credit per month. Set your own number with \
                          Edit this course."
                     ))
                 } else if cr_seminar {
                     Some(
-                        "CMI doesn't list credits for this seminar, so the app counts \
-                         0. Set your own number with Edit this course."
+                        "* CMI doesn't list credits for this seminar, so the app counts \
+                         0 — seminars don't usually carry credit. Set your own number \
+                         with Edit this course."
                             .to_string(),
                     )
                 } else if cr_assumed {
                     Some(
-                        "CMI doesn't list credits for this course, so the app counts \
+                        "* CMI doesn't list credits for this course, so the app counts \
                          the usual 4. Set your own number with Edit this course."
                             .to_string(),
                     )
@@ -1988,18 +2068,22 @@ fn master_grid(app: App) -> impl IntoView {
             // have, so nobody discovered that dragging a course you have NOT
             // picked adds it and places it in the one gesture — that line is
             // last but whole.)
+            // The instruction is not a legend entry. Inside the list it sat
+            // flush against three symbol keys in one wrapping row, its full
+            // stop the only signal that the row had changed register — and the
+            // keys, being asked to parallel a sentence, didn't parallel each
+            // other. Instruction above, key below.
+            <p class="muted small" style="margin:0 0 0.4rem">
+                "Click a course to add it to your timetable. Click it again to remove \
+                 it. Turn on ✎ Edit layout to drag one straight into the slot you \
+                 want — dropping it there adds it too."
+            </p>
             <ul class="grid-legend muted small">
-                <li>"Click a course to add it to your timetable. Click it again to remove it."</li>
-                <li><span class="legend-mark">"✓"</span>" already on your timetable"</li>
-                <li><span class="legend-mark">"⚠"</span>" clashes with something you have"</li>
+                <li><span class="legend-mark">"✓"</span>" on your timetable"</li>
+                <li><span class="legend-mark">"⚠"</span>" clashes with a course you have"</li>
                 <li>
                     <span class="legend-mark">"ⓘ"</span>
-                    " full details (or Tab to a course and press the i key)"
-                </li>
-                <li>
-                    <span class="legend-mark">"✎"</span>
-                    " Edit layout lets you drag a course straight into the slot you \
-                     want — dropping it there adds it to your timetable too"
+                    " full details — or Tab to a course and press i"
                 </li>
             </ul>
             {filter_bar(app, FilterScope::OnTheGrid, count)}
@@ -2169,7 +2253,10 @@ fn catalog(app: App) -> impl IntoView {
                 <h2 style="margin:0">"Catalog"</h2>
                 <span class="muted small">
                     {move || {
-                        app.snapshot.with(|s| format!("{} courses this semester", s.courses.len()))
+                        // Not a second copy of the count: "N courses match" in
+                        // the filter bar below owns the number, and with no
+                        // filter set the two lines were always the same one.
+                        "everything CMI lists this semester".to_string()
                     }}
                 </span>
                 <div class="grow"></div>
@@ -2310,8 +2397,15 @@ fn catalog(app: App) -> impl IntoView {
                             <div class="empty panel">
                                 <p class="big">"No courses match."</p>
                                 <p>
-                                    "To see more, take a filter off above or clear the \
-                                     search box."
+                                    // The button below does both of these in one
+                                    // press, search box included, so the sentence
+                                    // points at it instead of competing with it.
+                                    // "them all below" points at the button under
+                                    // it; "take one filter off" against "clear them
+                                    // all" offered a choice the screen can't honour
+                                    // when the typed text is the only filter set.
+                                    "To see more, take a filter off above — or clear \
+                                     them all below, search box included."
                                 </p>
                                 <div class="row" style="justify-content:center">
                                     <button
@@ -2327,7 +2421,7 @@ fn catalog(app: App) -> impl IntoView {
                                             );
                                         }
                                     >
-                                        "Clear the filters"
+                                        "Clear all filters"
                                     </button>
                                 </div>
                                 // It IS one of CMI's — you deleted it. Say so
@@ -2501,7 +2595,15 @@ fn catalog_row(app: App, course: Course) -> impl IntoView {
                     </div>
                     <div class="muted small">
                         {course.instructors.join(" / ")}
-                        {" · "}
+                        // `.dot-sep`, not `.mono`: the separator needs the mono
+                        // face to match the middots inside the meeting text it
+                        // introduces (in the UI face it sat tight against its
+                        // neighbours while theirs were airy, so the separator
+                        // dividing the two KINDS of fact read as the weakest of
+                        // the three) — but this row must keep exactly ONE
+                        // `.mono` element, because that is how t37 reads the
+                        // times out of it.
+                        <span class="dot-sep">{" · "}</span>
                         <span class="mono">{meetings_text}</span>
                         {move || {
                             edited()
@@ -2509,7 +2611,7 @@ fn catalog_row(app: App, course: Course) -> impl IntoView {
                                     view! {
                                         <span
                                             class="badge accent"
-                                            title="These are the times you set, not CMI's"
+                                            title="These are the times you set, not CMI's."
                                         >
                                             "✎ your times"
                                         </span>
@@ -2562,7 +2664,7 @@ fn catalog_row(app: App, course: Course) -> impl IntoView {
                             view! {
                                 <span
                                     class="badge warn"
-                                    title="CMI's hall list marks this room booking as \
+                                    title="CMI's hall list marks this booking as \
                                            temporary, so the hall may change."
                                 >
                                     "hall booked temporarily"
@@ -3053,7 +3155,7 @@ fn hall_row(
         view! {
             <span
                 class="badge custom"
-                title="A hall you added — CMI's allocation does not list it"
+                title="A hall you added — CMI's allocation does not list it."
             >
                 "your own"
             </span>
@@ -3068,7 +3170,7 @@ fn hall_row(
             .then(|| {
                 view! {
                     <th class="rowhead hallhead" scope="rowgroup" rowspan=chrome.span>
-                        <span class="hall-name">{hall.clone()}</span>
+                        <span class="hall-name">{crate::domx::keep_number_with_word(&hall)}</span>
                         {badge}
                         <span class="hall-load" class:free=chrome.weekly == 0>
                             {match chrome.weekly {
@@ -3084,7 +3186,7 @@ fn hall_row(
     } else {
         view! {
             <th class="rowhead hallhead" scope="row">
-                <span class="hall-name">{hall.clone()}</span>
+                <span class="hall-name">{crate::domx::keep_number_with_word(&hall)}</span>
                 {badge}
             </th>
         }
@@ -3218,9 +3320,9 @@ fn hall_row(
                                                     view! {
                                                         <span
                                                             class="badge warn"
-                                                            title="CMI's hall list marks this room \
-                                                                   booking as temporary, so the hall \
-                                                                   may change."
+                                                            title="CMI's hall list marks this booking \
+                                                                   as temporary, so the hall may \
+                                                                   change."
                                                         >
                                                             "hall booked temporarily"
                                                         </span>
@@ -3450,12 +3552,42 @@ fn halls_view(app: App) -> impl IntoView {
 
     view! {
         <section aria-label="Lecture halls">
+            // This sheet makes the most checkable claim in the app — which room
+            // a class is in — and it printed with no title, no term, no date and
+            // no caveat, while the timetable poster beside it on the same wall
+            // carried all four. Same masthead, same disclaimer, its own words.
+            <div class="print-masthead print-only" aria-hidden="true">
+                <div class="pm-left">
+                    <span class="pm-title">"Hall bookings"</span>
+                    // Just the provenance tail the poster carries: the first
+                    // half said what the sentence 30px below says ("This is
+                    // CMI's room allocation"), so the reader's eye travelled
+                    // down to be told the same fact in different words — and
+                    // with a different noun for it.
+                    <span class="pm-stats">"made with the CMI Timetable Planner"</span>
+                </div>
+                <div class="pm-right">
+                    <span class="pm-sem">
+                        {move || app.snapshot.with(|s| s.semester_label_display())}
+                    </span>
+                    <span class="pm-meta">
+                        {move || {
+                            format!(
+                                "cmi.ac.in · synced {}",
+                                crate::domx::fmt_local_date(
+                                    app.snapshot.with(|s| s.fetched_at),
+                                ),
+                            )
+                        }}
+                    </span>
+                </div>
+            </div>
             <div class="toolbar">
                 <h2 style="margin:0">"Halls"</h2>
                 <div
                     class="seg"
                     role="radiogroup"
-                    aria-label="Day"
+                    aria-label="Day view"
                     on:keydown=crate::domx::seg_radio_keydown
                 >
                     // The whole week first, then the days in week order: the
@@ -3468,13 +3600,16 @@ fn halls_view(app: App) -> impl IntoView {
                             if view_mode.get() == DayView::All { "true" } else { "false" }
                         }
                         tabindex=move || if view_mode.get() == DayView::All { "0" } else { "-1" }
-                        title="Every day at once"
+                        title="The whole week at once"
                         on:click=move |_| {
                             app.prefs.update(|p| p.halls_view = Some(DayView::All));
                             app.persist_prefs();
                         }
                     >
-                        "All"
+                        // "Week", like the identical control on My timetable —
+                        // and because "All" already means "tick every option"
+                        // in this app's facet menus.
+                        "Week"
                     </button>
                     {move || {
                         day_list
@@ -3517,11 +3652,36 @@ fn halls_view(app: App) -> impl IntoView {
                 {custom_changes_pill(app)}
                 {edit_toggle(app)}
             </div>
-            <p class="muted small" style="margin:0 0 0.6rem">
+            // The ✓ clause only when there is a ✓ to explain, and the drag
+            // instruction only on screen: on paper nobody turns on Edit layout,
+            // and a printed sheet naming a mark it does not carry is the exact
+            // defect the poster footnote was just fixed for.
+            // Description first, then the key — two short lines instead of one
+            // 186-character one, which was the longest run of prose in the app
+            // and sat directly above a dense table. The Master grid's legend
+            // above its own filter bar makes the same split.
+            <p class="muted small" style="margin:0 0 0.25rem">
                 "This is CMI's room allocation. Anything you moved appears in the \
-                 room you moved it to. ✓ marks the courses on your timetable. Turn \
-                 on ✎ Edit layout to drag a course to another room or time."
+                 room you moved it to."
             </p>
+            {move || {
+                // On paper the key survives only if there is a ✓ on the sheet;
+                // the drag line never does, so with nothing selected the whole
+                // line goes rather than printing as a blank.
+                let has_selection = !app.selected_courses().is_empty();
+                view! {
+                    <p
+                        class="muted small"
+                        class:noprint=!has_selection
+                        style="margin:0 0 0.6rem"
+                    >
+                        {has_selection.then_some("✓ marks the courses on your timetable.")}
+                        <span class="noprint">
+                            " ✎ Edit layout lets you drag a course to another room or time."
+                        </span>
+                    </p>
+                }
+            }}
 
             {move || match view_mode.get() {
                 // One day: the corner says which, and every row is a hall.
@@ -3554,7 +3714,12 @@ fn halls_view(app: App) -> impl IntoView {
 
             // Find a free hall — results appear once BOTH day and slot are
             // picked (never assume a default day).
-            <div class="panel" style="margin-top:0.8rem">
+            //
+            // `noprint`: two dropdowns and a heading are useless on paper, and
+            // they were printing at the FOOT of the hall sheet, under the last
+            // hall — a control on a wall poster ("Pick a day…", "Pick a
+            // slot…") that nobody can pick.
+            <div class="panel noprint" style="margin-top:0.8rem">
                 <h3>"Find a free hall"</h3>
                 <div class="row" style="display:flex;gap:0.5rem;flex-wrap:wrap;align-items:center">
                     <select
@@ -3713,6 +3878,17 @@ fn halls_view(app: App) -> impl IntoView {
                     })
                 }}
             </div>
+            // The other half of the poster's pairing, and the half that matters
+            // more here: this sheet's claim — which room a class is in — is the
+            // most checkable thing the app prints. Same sentence as the
+            // poster's footnote, so there is no second wording to keep true.
+            <p class="print-footnote print-only">
+                <span></span>
+                <span>
+                    "Check this against CMI's official announcements \
+                     before you rely on it."
+                </span>
+            </p>
         </section>
     }
 }

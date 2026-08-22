@@ -68,7 +68,7 @@ to, its credits, every weekly meeting, and clash marks where they apply.
   ask the same question). Its dropdowns list only what *your* courses have:
   your instructors, your halls, your days. The credit total keeps counting
   your whole timetable, and says so when the list is showing fewer.
-- **"Fits my schedule" is not here**, because it could not do anything here:
+- **"Fits my timetable" is not here**, because it could not do anything here:
   it hides whatever overlaps your selection, and every course on this page is
   your selection. It stays on the Catalog and the Master grid, where it has
   something to hide.
@@ -127,7 +127,7 @@ Every course this semester, searchable and filterable.
   searches — on every screen from a 320-pixel phone up.
 - Filter by **branch, instructor, day, time slot, hall, credits, course** and
   **flags** (optional courses, unscheduled ones, ones you have customised),
-  plus a **"Fits my schedule"** switch that hides anything overlapping what
+  plus a **"Fits my timetable"** switch that hides anything overlapping what
   you already have.
 - Every filter dropdown has its own search box and **All** / **None**
   shortcuts that act on whatever the search is currently showing.
@@ -242,7 +242,7 @@ the Hall filter, and get their own rows on the Halls page.
 ### Courses of your own
 
 **"Add your own course"** creates anything CMI's pages don't list: seminars,
-reading groups, a class at another institute. You can also create one straight
+reading groups, a course at another institute. You can also create one straight
 from a search that found nothing.
 
 - Name first, with a code suggested from the name; credits 0–20; any number of
@@ -381,8 +381,8 @@ play, counting exactly the rows in that list.
 
 | Link | Carries |
 |---|---|
-| **Copy link** | Your selection (`?c=TOC,QCOM,MFD`) — readable, with plain commas |
-| **Copy link with custom changes** | The selection *plus* your moved meetings, your credits and your own courses, compressed into the URL |
+| **Copy link** (Courses only) | Your selection (`?c=TOC,QCOM,MFD`) — readable, with plain commas |
+| **Copy link** (Courses and your changes) | The selection *plus* your moved meetings, your credits and your own courses, compressed into the URL. Offered only when you have such changes; a line under the row says so when you don't |
 
 Codes are matched case-insensitively, so a hand-typed `?c=toc` works, and a
 link that got re-encoded on its way through a chat app still opens correctly.
@@ -420,7 +420,7 @@ trades it for a short one through a free shortening service.
   the service thinking, it is your browser meeting it for the first time —
   looking up the name, opening the connection, agreeing on encryption. While
   the popup is open the app gets that out of the way for the service you have
-  picked: a handshake and nothing else, no link and no timetable. The popup
+  picked: just the connection, no link and no timetable. The popup
   says so. It is what takes da.gd from 629 ms to 244 ms, and it is why the
   three now finish within a few milliseconds of each other.
 - If a service cannot be reached, the app says which one and why, and leaves
@@ -540,7 +540,14 @@ A proper poster sheet, not a screenshot of a web page:
   clash, so the meaning survives a black-and-white printer.
 - A red strip listing every clash on the sheet.
 - A two-column course legend with names, instructors, credits and meetings.
+- The legend names **only the marks that are on the sheet** — an untouched
+  timetable prints no note about ✎, and a clash-free one none about ⚠.
 - A dense 12-course semester fits on **one page**, with nothing clipped.
+- The **Halls** tab prints as its own sheet, with the same masthead and the
+  same "check it against CMI's announcements" line the poster carries — a
+  hall sheet on a wall says which term it is and when it was synced. Its
+  on-screen instruction to drag a course is left off the paper, and the ✓
+  key appears only when there is a ✓ on the sheet.
 
 ---
 
@@ -623,8 +630,9 @@ timetable.
   short by a chat app, mangled in an email) leaves your timetable exactly as
   it was and says so in a banner, instead of being mistaken for a request
   for an empty one. If readable course codes ride beside the broken payload
-  they still open — with the banner owning up that the custom times and
-  courses the link carried were lost in transit.
+  they still open — with the banner owning up that only the codes came
+  through, not the times, credits or added courses, and pointing you back to
+  whoever sent it.
 - **What changed leads with your own week.** The banner says what happened to
   *your* courses first, by name — "CMI changed 2 of your courses — TOC,
   QCOM" — and keeps the campus-wide count as a tail. When none of the change
@@ -759,12 +767,18 @@ itself has been published. If there is one, it **asks**.
   app treats them accordingly: a save that fails says so, and a browser short
   on space drops the re-parseable page copies first.
 - If a stored value is ever unreadable, it is **backed up rather than
-  deleted**, and you are told where the copy is.
+  deleted**. A banner says what was reset and what to check; the key the copy
+  lives under goes to the browser console, since a storage key is not
+  something you can act on.
 - **The app opens offline.** After one normal visit, a copy of the app
   itself is kept by your browser (a service worker), so with no connection
   the planner still opens and everything in it works — and a quiet note says
   you're offline. Only syncing with CMI's pages needs the internet. A new
   version of the app replaces the copy on your next online reload.
+- **With JavaScript off it says so.** The planner is a WebAssembly app, so a
+  browser with scripting blocked cannot run it — and used to show a blank
+  white page. It now says: *"This planner needs JavaScript to run. Turn it on
+  for this page and reload, or open the page in another browser."*
 - **Every tab opens at once.** Switching to the Master grid or Halls used to
   take a visible beat on a slower laptop: both were working out the whole
   timetable again inside every cell of the table. They now work it out once

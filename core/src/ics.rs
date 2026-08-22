@@ -268,7 +268,18 @@ pub fn build_ics(courses: &[IcsCourse], opts: &IcsOptions) -> String {
             );
             let mut desc_parts: Vec<String> = Vec::new();
             if !course.instructors.is_empty() {
-                desc_parts.push(format!("Instructor(s): {}", course.instructors.join(", ")));
+                // The app picks Instructor/Instructors from this same count in
+                // two dialogs; the file a student opens in their calendar was
+                // the last place left hedging with "(s)".
+                desc_parts.push(format!(
+                    "{}: {}",
+                    if course.instructors.len() > 1 {
+                        "Instructors"
+                    } else {
+                        "Instructor"
+                    },
+                    course.instructors.join(", "),
+                ));
             }
             if !course.branches.is_empty() {
                 desc_parts.push(format!("Branches: {}", course.branches.join(", ")));

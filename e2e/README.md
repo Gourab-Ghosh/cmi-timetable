@@ -34,7 +34,7 @@ each other / on outside click / on Esc, adding extra weekly meetings to any
 course, undo/redo, an unscheduled course opening the same editor as any
 other (and its credits saving without it gaining a time), the filter
 bar on My courses (its own state since R43; menus offer only what your own
-courses have, and no "Fits my schedule" box it could not act on), the
+courses have, and no "Fits my timetable" box it could not act on), the
 wheel stepping every box and dropdown that has a step, the course editor asking before a stray Escape throws a half-written
 form away, the free-hall finder requiring an explicit day + slot, hall-and-slot drag & drop in the Halls
 view (including the chip relocating in the halls grid itself, surviving

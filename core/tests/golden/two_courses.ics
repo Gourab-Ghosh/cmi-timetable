@@ -22,8 +22,8 @@ DTEND;TZID=Asia/Kolkata:20260812T151500
 RRULE:FREQ=WEEKLY;UNTIL=20261130T182959Z
 SUMMARY:CM1: Classical Mechanics I(starts 12 Aug)
 LOCATION:Lecture Hall 802
-DESCRIPTION:Instructor(s): K G Arun\nBranches: BM1\nhttps://example.github
- .io/timetable/?c=CM1\,MFD
+DESCRIPTION:Instructor: K G Arun\nBranches: BM1\nhttps://example.github.io
+ /timetable/?c=CM1\,MFD
 BEGIN:VALARM
 ACTION:DISPLAY
 DESCRIPTION:CM1 starts in 10 minutes
@@ -38,8 +38,8 @@ DTEND;TZID=Asia/Kolkata:20260813T114500
 RRULE:FREQ=WEEKLY;UNTIL=20261130T182959Z
 SUMMARY:CM1: Classical Mechanics I(starts 12 Aug)
 LOCATION:Lecture Hall 802
-DESCRIPTION:Instructor(s): K G Arun\nBranches: BM1\nhttps://example.github
- .io/timetable/?c=CM1\,MFD
+DESCRIPTION:Instructor: K G Arun\nBranches: BM1\nhttps://example.github.io
+ /timetable/?c=CM1\,MFD
 BEGIN:VALARM
 ACTION:DISPLAY
 DESCRIPTION:CM1 starts in 10 minutes
@@ -54,8 +54,8 @@ DTEND;TZID=Asia/Kolkata:20260805T151500
 RRULE:FREQ=WEEKLY;UNTIL=20261130T182959Z
 SUMMARY:MFD: Matchings and Fair Division
 LOCATION:Lecture Hall 6
-DESCRIPTION:Instructor(s): Keshav Ranjan\nBranches: OCS2\nhttps://example.
- github.io/timetable/?c=CM1\,MFD
+DESCRIPTION:Instructor: Keshav Ranjan\nBranches: OCS2\nhttps://example.git
+ hub.io/timetable/?c=CM1\,MFD
 BEGIN:VALARM
 ACTION:DISPLAY
 DESCRIPTION:MFD starts in 10 minutes
@@ -70,8 +70,8 @@ DTEND;TZID=Asia/Kolkata:20260807T151500
 RRULE:FREQ=WEEKLY;UNTIL=20261130T182959Z
 SUMMARY:MFD: Matchings and Fair Division
 LOCATION:Lecture Hall 6
-DESCRIPTION:Instructor(s): Keshav Ranjan\nBranches: OCS2\nhttps://example.
- github.io/timetable/?c=CM1\,MFD
+DESCRIPTION:Instructor: Keshav Ranjan\nBranches: OCS2\nhttps://example.git
+ hub.io/timetable/?c=CM1\,MFD
 BEGIN:VALARM
 ACTION:DISPLAY
 DESCRIPTION:MFD starts in 10 minutes

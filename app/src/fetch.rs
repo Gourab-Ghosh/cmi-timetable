@@ -386,7 +386,7 @@ pub fn adopt(app: &App, new_snapshot: Snapshot, announce: bool, from: Adoption) 
         for code in &removed_selected {
             app.toast(format!(
                 "CMI dropped {code} from its timetable. It's still in My courses, \
-                 marked \"No longer on CMI's timetable\" — remove it there when \
+                 marked “No longer on CMI's timetable” — remove it there when \
                  you're sure."
             ));
         }
@@ -580,11 +580,11 @@ pub async fn run_update(app: App, manual: bool) {
         // holds the request open behind it, and the sentence explaining that
         // prompt has to outlive answering it.
         asking_note = Some(app.toast_keeping_id(
-            "The app couldn't get the timetable the usual way, so it's asking CMI's \
-             own website directly. Your browser may now ask whether this page can \
-             reach devices on your local network — that question is about the app \
-             asking cmi.ac.in for the timetable, and it's safe to allow. If you say \
-             no, the app simply can't ask CMI directly. Nothing else changes.",
+            "The app couldn't get the timetable the usual way, so it's asking \
+             cmi.ac.in directly. Your browser may now ask whether this page can \
+             reach devices on your local network — that question is about this \
+             fetch, and it's safe to allow. Saying no just means the app can't \
+             ask CMI directly.",
         ));
         match fetch_pages_tier(
             app,
@@ -628,11 +628,10 @@ pub async fn run_update(app: App, manual: bool) {
             app.dismiss_toast(id);
         }
         " If your browser asked whether this page may reach devices on your local \
-         network, that was this app getting the timetable from cmi.ac.in — on CMI's \
-         own network, cmi.ac.in counts as a local address. Allowing it lets the app \
-         ask CMI directly when nothing else works. Blocking it only means the app \
-         can't ask CMI directly — it still tries its usual way of getting the \
-         timetable first."
+         network, that was this app reaching cmi.ac.in — on CMI's own network, \
+         cmi.ac.in counts as a local address. Allowing it lets the app ask CMI \
+         directly when nothing else works. Blocking it only takes away that last \
+         resort."
     } else {
         ""
     };

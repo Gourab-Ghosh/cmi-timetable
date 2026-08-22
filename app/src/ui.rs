@@ -243,7 +243,15 @@ pub fn chip(app: App, p: ChipProps) -> impl IntoView {
             // Copy, so no signal is read inside another signal's `with`.
             let (selected, clash) = sel_clash.get();
             let name = identity.with(|(n, _, _)| n.clone());
-            let mut aria = format!("{code}, {name}{aria_when}{aria_pre}");
+            // A course CMI has dropped is in nobody's catalog, so it has no
+            // name — and the empty slot rendered as a hole: "QCOMX, , in your
+            // timetable", the pause spoken twice. Same guard the branch chip
+            // beside it has carried since R49.
+            let mut aria = if name.is_empty() {
+                format!("{code}{aria_when}{aria_pre}")
+            } else {
+                format!("{code}, {name}{aria_when}{aria_pre}")
+            };
             if selected {
                 aria.push_str(", in your timetable");
             }
@@ -269,6 +277,14 @@ pub fn chip(app: App, p: ChipProps) -> impl IntoView {
             }
             if warn_wont_fit {
                 aria.push_str(", would clash with your current timetable");
+            }
+            // Every chip in the suite is found by `aria-label^='CODE,'`, so
+            // the comma is part of the contract. Normally the first segment
+            // after the code carries it; a nameless course with no meeting,
+            // no place on the timetable and no warning has no segments at
+            // all — the Your-changes rows can render exactly that.
+            if aria.len() == code.len() {
+                aria.push(',');
             }
             aria
         })
@@ -296,7 +312,11 @@ pub fn chip(app: App, p: ChipProps) -> impl IntoView {
             text.push_str(s);
             text.push(' ');
         }
-        text.push_str(&hall_text);
+        // A hall may break between its words but never before its number: a
+        // 200px cell wrapped "09:10–14:00 Lecture Hall 803" so that "803" sat
+        // alone on line 2, under a line already ending in digits, and read as
+        // a second time value rather than a room.
+        text.push_str(&domx::keep_number_with_word(&hall_text));
         Some(text)
     } else {
         p.sublabel.clone()
@@ -551,7 +571,7 @@ pub fn Header() -> impl IntoView {
         let s = app.sync.get();
         if s.updating {
             if s.progress.is_empty() {
-                "Updating…".to_string()
+                "Syncing…".to_string()
             } else {
                 s.progress
             }
@@ -656,7 +676,10 @@ pub fn Header() -> impl IntoView {
                         "Nothing has been downloaded yet — press ⟳ Fetch the timetable \
                          to get it from cmi.ac.in."
                     } else {
-                        "The app checks CMI on its own, up to twice a day. Sync now for \
+                        // Non-breaking space: with 320px of empty header to the
+                        // right, this still broke after "a" and orphaned the
+                        // article from its noun.
+                        "The app checks CMI on its own, up to twice a\u{a0}day. Sync now for \
                          the latest."
                     }
                 }}
@@ -977,8 +1000,50 @@ fn tab_rail_keydown(app: App, ev: &web_sys::KeyboardEvent) {
 #[component]
 pub fn Toasts() -> impl IntoView {
     let app = App::use_ctx();
+    // The stack is `position: fixed`, so no layout anywhere knows how tall it
+    // is — and while a popup is open it sits at the TOP of the screen, which is
+    // where that popup's title and question are. Moving it there stopped it
+    // covering the action row; it started covering the question instead (at
+    // 1500x640 the conflicts title read "CMI cha", and at 412px the title and
+    // half the paragraph were gone). Neither a fixed reservation nor a guess
+    // per toast count survives a four-line toast, so the stack publishes its
+    // real height and the overlay spends exactly that: `--toast-band` plus a
+    // `toasts-live` marker, so a dialog with no toasts over it stays centred
+    // and untouched.
+    let stack = NodeRef::<leptos::html::Div>::new();
+    Effect::new(move |_| {
+        let count = app.toasts.with(|t| t.len());
+        let node = stack.get();
+        leptos::task::spawn_local(async move {
+            // Measured after the paint that added or removed the toast: read in
+            // the same tick as the signal, the height is the previous stack's.
+            gloo_timers::future::TimeoutFuture::new(0).await;
+            let doc = domx::document();
+            let Some(root) = doc
+                .document_element()
+                .and_then(|e| e.dyn_into::<web_sys::HtmlElement>().ok())
+            else {
+                return;
+            };
+            let body = doc.body();
+            if count == 0 || node.is_none() {
+                let _ = root.style().remove_property("--toast-band");
+                if let Some(body) = body {
+                    let _ = body.class_list().remove_1("toasts-live");
+                }
+                return;
+            }
+            let height = node.map_or(0, |n| n.offset_height());
+            let _ = root
+                .style()
+                .set_property("--toast-band", &format!("{height}px"));
+            if let Some(body) = body {
+                let _ = body.class_list().add_1("toasts-live");
+            }
+        });
+    });
     view! {
-        <div class="toasts" aria-live="polite">
+        <div class="toasts" node_ref=stack aria-live="polite">
             {move || {
                 app.toasts
                     .get()
@@ -1058,8 +1123,14 @@ pub fn BannerView() -> impl IntoView {
                     view! {
                         <div class="banner warn" role="status">
                             <span>
+                                // "One", not "1": the update banner sits
+                                // directly above this one and spells its own
+                                // single course out, so a numeral here put a
+                                // digit and a word for the same number 60px
+                                // apart.
                                 {format!(
-                                    "{n} timetable change{} from CMI conflict{} with your custom times.",
+                                    "{} timetable change{} from CMI conflict{} with your custom times.",
+                                    if n == 1 { "One".to_string() } else { n.to_string() },
                                     if n == 1 { "" } else { "s" },
                                     if n == 1 { "s" } else { "" },
                                 )}
@@ -1100,11 +1171,11 @@ pub fn BannerView() -> impl IntoView {
                             <div class="banner-main">
                                 <p class="banner-title">
                                     {if one {
-                                        "One course in that link isn't in CMI's timetable, so it was left out"
+                                        "One course in that link isn't in CMI's timetable, so it was left out."
                                             .to_string()
                                     } else {
                                         format!(
-                                            "{} courses in that link aren't in CMI's timetable, so they were left out",
+                                            "{} courses in that link aren't in CMI's timetable, so they were left out.",
                                             unknown.len(),
                                         )
                                     }}
@@ -1279,7 +1350,7 @@ fn search_in_menu(app: App, scope: FilterScope) -> impl IntoView {
                     input.set_checked(checked);
                 }
             });
-            let undo_label = format!("what the search reads{}", scope.undo_suffix());
+            let undo_label = format!("the “Search in” filter{}", scope.undo_suffix());
             view! {
                 <label class="opt">
                     <input
@@ -1360,7 +1431,7 @@ fn search_in_menu(app: App, scope: FilterScope) -> impl IntoView {
                 // filter bar's first `.muted` as the "N courses match" line,
                 // and this paragraph sits earlier in the DOM.
                 <p class="searchin-lede">
-                    "What typing in the search box is matched against."
+                    "Which parts of a course the search box reads."
                 </p>
                 {rows}
             </div>
@@ -1412,7 +1483,7 @@ fn search_switch(
                 // able to put it back.
                 app.act_filters_in(
                     scope.mine(),
-                    &format!("{}{}", label.to_lowercase(), scope.undo_suffix()),
+                    &format!("the {label} switch{}", scope.undo_suffix()),
                     false,
                     move |f| write(f, next),
                 );
@@ -1755,7 +1826,7 @@ pub fn filter_bar(app: App, scope: FilterScope, result_count: Signal<usize>) -> 
                 let label = titles
                     .iter()
                     .find(|(c, _)| *c == code)
-                    .map(|(_, t)| format!("{code} — {t}"))
+                    .map(|(_, t)| format!("{code} · {t}"))
                     .unwrap_or_else(|| code.clone());
                 (code, label)
             })
@@ -1838,7 +1909,7 @@ pub fn filter_bar(app: App, scope: FilterScope, result_count: Signal<usize>) -> 
     let course_opts = Memo::new(move |_| {
         let opts = courses.with(|cs| {
             cs.iter()
-                .map(|c| (c.code.clone(), format!("{} — {}", c.code, c.name)))
+                .map(|c| (c.code.clone(), format!("{} · {}", c.code, c.name)))
                 .collect::<Vec<_>>()
         });
         with_picked(opts, course_picked.get())
@@ -2208,7 +2279,7 @@ pub fn filter_bar(app: App, scope: FilterScope, result_count: Signal<usize>) -> 
                                 on:change=move |ev| {
                                     let on = event_target_checked(&ev);
                                     app.act_filters(
-                                        "the “fits my schedule” filter",
+                                        "the “Fits my timetable” filter",
                                         false,
                                         move |f| {
                                             f.fits = on;
@@ -2216,7 +2287,7 @@ pub fn filter_bar(app: App, scope: FilterScope, result_count: Signal<usize>) -> 
                                     );
                                 }
                             />
-                            <span>"Fits my schedule"</span>
+                            <span>"Fits my timetable"</span>
                         </label>
                     }
                 })}
@@ -2231,7 +2302,7 @@ pub fn filter_bar(app: App, scope: FilterScope, result_count: Signal<usize>) -> 
                 }}
             </span>
             {move || {
-                // Counted the way this bar behaves: "Fits my schedule" is not
+                // Counted the way this bar behaves: "Fits my timetable" is not
                 // shown here and cannot act here, so it must not be the reason
                 // a Clear-all button appears over an empty chip line.
                 let active = app.with_filters_in(scope.mine(), |f| match scope {
@@ -2361,7 +2432,18 @@ fn active_filter_chip_list(app: App, scope: FilterScope) -> Vec<FilterChip> {
     }
     for flag in f.flags {
         let f2 = flag.clone();
-        chips.push((flag, Box::new(move |f| f.flags.retain(|x| x != &f2))));
+        // `f.flags` holds the storage keys, so the chip has to say what the
+        // Status menu's row said — these are the labels `flag_opts` builds,
+        // and a fourth flag there needs a fourth arm here or its chip goes
+        // back to showing the raw key.
+        let label = match flag.as_str() {
+            "optional" => "Optional (+)",
+            "unscheduled" => "Unscheduled",
+            "custom" => "Has custom time",
+            other => other,
+        }
+        .to_string();
+        chips.push((label, Box::new(move |f| f.flags.retain(|x| x != &f2))));
     }
     for c in f.courses {
         let c2 = c.clone();
@@ -2394,7 +2476,10 @@ fn active_filter_chip_list(app: App, scope: FilterScope) -> Vec<FilterChip> {
     // Only where it can act. On My courses the filter is inert, so listing
     // it as a reason the list is short would be a lie.
     if f.fits && scope != FilterScope::MySelection {
-        chips.push(("Fits my schedule".to_string(), Box::new(|f| f.fits = false)));
+        chips.push((
+            "Fits my timetable".to_string(),
+            Box::new(|f| f.fits = false),
+        ));
     }
     chips
 }
@@ -2922,7 +3007,7 @@ pub fn meeting_row(app: App, course: &Course, eff: EffMeeting) -> impl IntoView 
                         view! {
                             <span
                                 class="badge warn"
-                                title="CMI's hall list marks this room booking as temporary, so the hall may change."
+                                title="CMI's hall list marks this booking as temporary, so the hall may change."
                             >
                                 "hall booked temporarily"
                             </span>
@@ -2984,7 +3069,9 @@ fn credits_display(app: App, course: &Course) -> impl IntoView + use<> {
     } else if official_assumed
         && course.credit_assumption() == ttcore::model::CreditAssumption::Seminar
     {
-        "CMI doesn't list credits for this seminar, so the app counts 0.".to_string()
+        "CMI doesn't list credits for this seminar, so the app counts 0 — \
+         seminars don't usually carry credit."
+            .to_string()
     } else if official_assumed {
         "CMI doesn't list credits for this course, so the app counts the usual 4.".to_string()
     } else {
@@ -3285,7 +3372,12 @@ fn details_dialog(app: App, code: String) -> impl IntoView {
                 if course.meetings.is_empty() {
                     view! {
                         <p class="muted">
-                            "CMI lists this course but hasn't put it on the timetable."
+                            // NOT the badge's sentence repeated (the pill 70px
+                            // above already carries the provenance): under a
+                            // heading that promises times, say what the absence
+                            // means for the reader's own week.
+                            "No class times yet, so nothing for it will appear on \
+                             your timetable."
                         </p>
                     }
                         .into_any()
@@ -3342,7 +3434,12 @@ fn details_dialog(app: App, code: String) -> impl IntoView {
                                     view! {
                                         <li>
                                             {chip(app, ChipProps::list(&other))}
-                                            <span class="x" aria-label="clashes with">"✗"</span>
+                                            // "on", not "clashes with": in THIS row the ✗
+                                            // sits between a course chip and a day, so a
+                                            // screen reader was saying "TOC clashes with
+                                            // Monday". views.rs:908 keeps "clashes with" —
+                                            // there the ✗ genuinely separates two courses.
+                                            <span class="x" aria-label="on">"✗"</span>
                                             <span class="whens">
                                                 {whens
                                                     .into_iter()
@@ -3482,7 +3579,13 @@ pub fn custom_changes_pill(app: App) -> impl IntoView {
                                    this to put any of it back"
                             on:click=move |_| app.dialog.set(Some(Dialog::MyData))
                         >
-                            {format!("✎ {n} change{}", if n == 1 { "" } else { "s" })}
+                            // No ✎ here: this pill sat immediately left of the
+                            // "✎ Edit layout" button, same shape, same weight,
+                            // same glyph, doing an unrelated job — the toolbar
+                            // read as the same control twice. The pencil is
+                            // load-bearing on Edit layout (the tray hint and
+                            // the grid legend both quote it), so it goes here.
+                            {format!("{n} change{}", if n == 1 { "" } else { "s" })}
                         </button>
                     }
                 })
@@ -3743,13 +3846,15 @@ pub fn overrides_list(app: App) -> impl IntoView {
                 // user invented has no CMI time to be back on.
                 let reset_toast = match kind {
                     OwnChange::Removed if o.base.is_some() => {
-                        format!("{course}'s meeting is back")
+                        // "Verbed object", like the three sibling buttons on
+                        // this same list: the toast answers "Put it back".
+                        format!("Put {course}'s meeting back")
                     }
                     OwnChange::Room => format!("Moved {course} back to CMI's room"),
                     OwnChange::Time | OwnChange::TimeAndRoom => {
                         format!("Moved {course} back to CMI's time")
                     }
-                    _ => format!("{course}'s meeting removed"),
+                    _ => format!("Removed {course}'s meeting"),
                 };
                 rows.push((
                     kind,
@@ -3882,7 +3987,7 @@ pub fn overrides_list(app: App) -> impl IntoView {
                                     });
                                     app.toast_undo(
                                         "Your changes to CMI's courses are removed — your \
-                                         own courses are untouched",
+                                         own courses are untouched.",
                                     );
                                 }
                             >
@@ -3968,19 +4073,27 @@ fn import_courses_dialog(app: App, plan: crate::state::IncomingPlan) -> impl Int
     if !plan.kept_yours.is_empty() {
         notes.push(format!(
             "{} {} already {} of your own, so yours {} kept and the file's \
-             version is left out.",
+             {} left out.",
             plan.kept_yours.join(", "),
             plural(plan.kept_yours.len(), "is", "are"),
             plural(plan.kept_yours.len(), "a course", "courses"),
             plural(plan.kept_yours.len(), "is", "are"),
+            plural(plan.kept_yours.len(), "version is", "versions are"),
         ));
     }
     if !plan.shadowed.is_empty() {
         notes.push(format!(
-            "CMI already lists {}, so the file's own version of {} left out — \
-             the catalog's course stands.",
+            // Mirrors the toast in state.rs, pluralized the same way (R49
+            // law: the two must read alike, so they move together).
+            "CMI already lists {}, so the file's own {} left out — \
+             the catalog's {}.",
             plan.shadowed.join(", "),
-            plural(plan.shadowed.len(), "it is", "them is"),
+            plural(
+                plan.shadowed.len(),
+                "version of it is",
+                "versions of them are",
+            ),
+            plural(plan.shadowed.len(), "course stands", "courses stand"),
         ));
     }
     if !plan.dropped_for_own_course.is_empty() {
@@ -4199,9 +4312,10 @@ fn my_data_dialog(app: App) -> impl IntoView {
                 .into(),
             points: vec![
                 "The courses you picked.".into(),
-                "Every change you made — moved classes, credits you set, courses \
-                 you added."
-                    .into(),
+                // Parallel without the three "you"s the bullet's own lead
+                // already supplies: the longer version was the only one of the
+                // four bullets that wrapped, and it broke after "credits you".
+                "Every change you made — classes moved, credits set, courses added.".into(),
                 "The downloaded copy of CMI's timetable.".into(),
                 "Your settings, including the theme.".into(),
             ],
@@ -4217,20 +4331,36 @@ fn my_data_dialog(app: App) -> impl IntoView {
             <h2>"My data"</h2>
             <p class="muted small dialog-lede">
                 "Everything the app knows lives in this browser. This list shows \
-                 all of it, and you can remove any of it right here. Nothing you \
-                 save here is uploaded anywhere."
+                 all of it, and you can remove any of it right here. Nothing here \
+                 is uploaded unless you ask for a short link."
             </p>
             // …with the one exception said out loud, rather than a promise
             // that used to read "nothing is ever sent to a server" and stopped
             // being true the day shortening was added (R71).
+            //
+            // Set as a list, not the 60-word sentence it was: it announced
+            // "three things" and then hid all three inside commas and two
+            // nested parentheticals, in the one dialog a reader opens to find
+            // out exactly this. Same facts, three scannable lines, and the
+            // "only the last one carries your timetable away" caveat now sits
+            // in the item it is about instead of trailing the slab.
             <p class="muted small dialog-lede">
-                "The app reaches the network for three things: fetching CMI's two
-                 pages (when you press Sync now, and on its own at most twice a
-                 day), asking this site whether a newer version of the app has
-                 been published (once a day — see App updates below), and making
-                 a share link short. Only the last one carries your timetable
-                 away, and it is the only one that waits to be asked."
+                "The app reaches the network for three things."
             </p>
+            <ul class="confirm-points">
+                <li>
+                    "Fetching CMI's two pages — when you press Sync now, and on \
+                     its own at most twice a day."
+                </li>
+                <li>
+                    "Asking this site whether a newer version of the app has been \
+                     published — once a day, see App updates below."
+                </li>
+                <li>
+                    "Making a share link short — the only one that carries your \
+                     timetable away, and the only one that waits to be asked."
+                </li>
+            </ul>
 
             // Every custom change together, and exactly which CMI data each
             // one replaces: courses added and deleted, meetings moved,
@@ -4320,7 +4450,11 @@ fn my_data_dialog(app: App) -> impl IntoView {
                                                its welcome screen until the next sync."
                                         on:click=clear_snapshot
                                     >
-                                        "Clear"
+                                        // Names its object like "Clear
+                                        // selection" one panel above; a bare
+                                        // "Clear" in a dialog of seven panels
+                                        // invites "clear everything".
+                                        "Clear timetable"
                                     </button>
                                 }
                             })
@@ -4381,15 +4515,15 @@ fn my_data_dialog(app: App) -> impl IntoView {
                                 </header>
                                 <p class="muted small">
                                     {if n == 1 {
-                                        "One short link, kept so that asking for it again \
-                                         costs nobody anything. Forgetting it here does not \
+                                        "One short link, kept so no service is asked twice \
+                                         for the same timetable. Forgetting it here does not \
                                          break it — a short link lives on the service that \
                                          made it."
                                             .to_string()
                                     } else {
                                         format!(
-                                            "{n} short links, kept so that asking for them \
-                                             again costs nobody anything. Forgetting them here \
+                                            "{n} short links, kept so no service is asked \
+                                             twice for the same timetable. Forgetting them here \
                                              does not break them — a short link lives on the \
                                              service that made it.",
                                         )
@@ -4410,7 +4544,7 @@ fn my_data_dialog(app: App) -> impl IntoView {
                     <h3>"App updates"</h3>
                     <button
                         class="btn small"
-                        title="Ask the server right now whether a newer version is published"
+                        title="Ask this site right now whether a newer version is published"
                         data-update-check
                         on:click=move |_| crate::update::check_now(app)
                     >
@@ -4441,7 +4575,7 @@ fn my_data_dialog(app: App) -> impl IntoView {
                 <p class="muted small">
                     {move || {
                         if app.update_checks_on() {
-                            "A few kilobytes once a day, and again when your connection \
+                            "A few kilobytes each time, and again when your connection \
                              comes back. Nothing installs itself: when there is a new \
                              version the app asks, and “Not now” keeps what you have until \
                              tomorrow."
@@ -4455,14 +4589,18 @@ fn my_data_dialog(app: App) -> impl IntoView {
 
             <section class="data-section">
                 <header>
-                    <h3>"Preferences"</h3>
+                    // "Settings" is what the rest of the app calls these — the
+                    // delete confirm's "Your settings, including the theme.",
+                    // the Start-fresh text, every backup message and the docs.
+                    // "Preferences" was the only one of its kind.
+                    <h3>"Settings"</h3>
                     <button
                         class="btn small danger"
                         title="Theme and row height only — your filters stay as they are"
                         on:click=move |_| {
                             // Filters and the current tab used to go too,
-                            // under a button that says "Reset" beside the
-                            // word "Preferences": a carefully built facet
+                            // under a button that says "Reset" beside a
+                            // heading about the theme: a carefully built facet
                             // set thrown away by someone putting the theme
                             // back to auto. And it was the one filter change
                             // Ctrl+Z could not reach, because it pushed no
@@ -4505,7 +4643,7 @@ fn my_data_dialog(app: App) -> impl IntoView {
                 <p class="muted small">
                     "Saving your timetable to a file, opening one that arrived from \
                      another browser, backing up this whole browser, or sharing your \
-                     week as a link — all of it lives under “Share or import”."
+                     timetable as a link — all of it lives under “Share or import”."
                 </p>
             </section>
 
@@ -4902,13 +5040,13 @@ fn course_editor_dialog(app: App, code: Option<String>, prefill: Option<String>)
         if !c.credits_assumed() {
             format!("CMI lists {}.", c.effective_credits())
         } else if c.credit_assumption() == ttcore::model::CreditAssumption::Seminar {
-            "CMI doesn't list credits for this seminar; without a number of \
-             your own the app counts 0."
+            "CMI doesn't list credits for this seminar — without a number of \
+             your own, the app counts 0."
                 .to_string()
         } else {
             format!(
-                "CMI doesn't list credits for this course; without a number of \
-                 your own the app counts {}.",
+                "CMI doesn't list credits for this course — without a number of \
+                 your own, the app counts {}.",
                 c.effective_credits()
             )
         }
@@ -5015,9 +5153,9 @@ fn course_editor_dialog(app: App, code: Option<String>, prefill: Option<String>)
     let lede = if is_cmi {
         "This is one of CMI's courses. Anything you change here changes only your \
          planner — CMI's own version is kept, every change of yours is listed \
-         under Your changes, and you can put any of it back."
+         under Your changes on My timetable, and you can put any of it back."
     } else if creating {
-        "Seminars, reading groups, a class from another institute — anything CMI's \
+        "Seminars, reading groups, a course from another institute — anything CMI's \
          pages don't list."
     } else {
         "This is your own course — everything here is yours to change."
@@ -5260,7 +5398,7 @@ fn course_editor_dialog(app: App, code: Option<String>, prefill: Option<String>)
                             .then(|| {
                                 view! {
                                     <div class="fieldrow ro">
-                                        <span class="fieldlabel">"Taught by"</span>
+                                        <span class="fieldlabel">"Instructor"</span>
                                         <span class="ro-value">{cmi_instructors}</span>
                                     </div>
                                 }
@@ -5303,7 +5441,7 @@ fn course_editor_dialog(app: App, code: Option<String>, prefill: Option<String>)
                             </span>
                         </div>
                         <div class="fieldrow">
-                            <label for="ce-instructor">"Taught by"</label>
+                            <label for="ce-instructor">"Instructor"</label>
                             <input
                                 id="ce-instructor"
                                 type="text"
@@ -6067,8 +6205,8 @@ fn export_dialog(app: App, scope: Option<String>) -> impl IntoView {
             .collect();
         if courses.iter().all(|c| c.meetings.is_empty()) {
             error.set(
-                "Nothing to export yet — none of these courses has a weekly meeting. \
-                 Open a course, add a meeting, then come back."
+                "Nothing to export yet — there's no weekly meeting to put in the \
+                 file. Open a course, add a meeting, then come back."
                     .to_string(),
             );
             return;
@@ -6415,8 +6553,8 @@ fn shorten_dialog(app: App) -> impl IntoView {
                                         }
                                         (None, asked) => {
                                             format!(
-                                                "Made by {}. {} was slow to answer, so the helper \
-                                                 {} {} asked as well and saw the link too.",
+                                                "Made by {}. {} was slow to answer, so the app asked \
+                                                 the helper {} {} as well, which saw the link too.",
                                                 s.name,
                                                 s.name,
                                                 if asked.len() == 1 { "site" } else { "sites" },
@@ -6559,17 +6697,28 @@ fn shorten_dialog(app: App) -> impl IntoView {
             </p>
 
             <p class="muted small shorten-why">
-                "Only services that work without an account are offered. Bitly and
-                 TinyURL's newer API both need a personal key, and a key built into
-                 a web page isn't private — so neither can be offered honestly here."
-                " While this popup is open the app opens a bare connection to the
-                 service above — a handshake and nothing else, no link and no
-                 timetable — because that handshake is most of the waiting."
+                "Only services that work without an account are offered. Bitly needs
+                 a personal key even on its free plan, and a key built into a web
+                 page isn't private — so it can't be offered honestly here."
+                " While this popup is open the app reaches the service above ahead
+                 of time — just the connection, no link and no timetable — because
+                 that is most of the waiting."
             </p>
 
             // The long link never leaves the screen: whatever the service
             // does or fails to do, there is always a link that works.
-            <details class="shorten-long">
+            //
+            // …and it OPENS when the last attempt failed, because that is the
+            // moment the failure line says "copy the full link instead". Shut,
+            // it was a summary 280px below the fold of this popup's scroller on
+            // a phone: a message naming a control the reader cannot see.
+            <details
+                class="shorten-long"
+                open=move || {
+                    app.shorten
+                        .with(|st| matches!(st, crate::state::ShortenState::Failed(_, _)))
+                }
+            >
                 <summary class="muted small">"The full link, as it is now"</summary>
                 <div class="fieldrow">
                     <input
@@ -6646,7 +6795,11 @@ fn shorten_dialog(app: App) -> impl IntoView {
                             // for: pressing it spends another request.
                             format!("Ask {} again", s.name)
                         } else {
-                            "Generate short link".to_string()
+                            // The popup's own title, the Share dialog's entry
+                            // button and the docs all call this making a link
+                            // short; "Generate" was the last software word
+                            // left on a visible control.
+                            "Make it short".to_string()
                         }
                     }}
                 </button>
@@ -6697,10 +6850,10 @@ fn share_dialog(app: App) -> impl IntoView {
             // name in one pass.
             <h2>"Share or import a timetable"</h2>
             <p class="muted small dialog-lede">
-                "A link carries your timetable inside the web address; a file carries \
-                 it as a download to keep or pass on. Both are made here on your \
-                 device — the one thing that leaves it is a short link, and only when \
-                 you ask for one."
+                "A link carries your timetable inside the web address. A file carries \
+                 it as a download, to keep or pass on. Both are made here on your \
+                 device. The one thing that ever leaves it is a short link, and only \
+                 when you ask for one."
             </p>
 
             <section class="data-section">
@@ -6712,7 +6865,7 @@ fn share_dialog(app: App) -> impl IntoView {
                 // the half of this dialog that can't be done any other way.
                 <p class="muted small">
                     "Opening the link puts your courses in place of whatever that \
-                     browser had — the quickest way to pass your week on."
+                     browser had — the quickest way to pass your timetable on."
                 </p>
                 {(!custom_codes.is_empty())
                     .then(|| {
@@ -6778,21 +6931,42 @@ fn share_dialog(app: App) -> impl IntoView {
                         disabled=!has_extras
                         aria-label="Copy link with courses and your changes"
                         title=if has_extras {
-                            "Includes the meetings you moved or added, your credit \
-                             changes and your own courses"
+                            "Includes the classes you moved or added, your credit \
+                             changes and your own courses."
                         } else {
-                            "You have no custom changes yet"
+                            "You haven't changed anything yet."
                         }
                         on:click=move |_| {
                             let url = with2.clone();
                             domx::copy_to_clipboard(url, |_| {});
-                            app.toast("Link with your custom changes copied.");
+                            app.toast("Link with your changes copied.");
                         }
                     >
                         "Copy link"
                     </button>
                 </div>
                 </div>
+                // The second row's button is dead until there is something of
+                // your own in the link, and the only word about that was a
+                // hover tooltip — invisible on a phone, and often unspoken for
+                // a disabled control — while the box beside it still showed a
+                // full link a reader could select by hand.
+                //
+                // OUTSIDE `.share-links`, which is a three-column grid whose
+                // rows are `display: contents`: a stray child there becomes a
+                // grid cell of its own and shoves every field and button after
+                // it out of the dialog. That is exactly what it did on the
+                // first attempt — the dialog grew a horizontal scrollbar and
+                // both link boxes left the screen.
+                {(!has_extras)
+                    .then(|| {
+                        view! {
+                            <p class="muted small">
+                                "You haven't changed anything yet, so there is nothing \
+                                 extra for this second link to carry."
+                            </p>
+                        }
+                    })}
                 // The ONE thing about shortening that lives out here. Every
                 // detail of it — which service, what it costs in privacy,
                 // the result — is inside the popup this opens, so the share
@@ -6869,9 +7043,9 @@ fn share_dialog(app: App) -> impl IntoView {
                 // is never asked the question at all.
                 <p class="muted small">
                     "Holds your whole week: the courses, the classes you moved, added \
-                     or struck out, the credits you corrected, and any course you wrote \
+                     or struck out, the credits you corrected, and any course you made \
                      yourself. Opening one asks whether to replace your timetable or \
-                     merge the two — where both changed the same class, yours stays. \
+                     join the two — where both changed the same class, yours stays. \
                      With nothing on the timetable yet, nothing is asked."
                 </p>
             </section>
@@ -6911,10 +7085,10 @@ fn share_dialog(app: App) -> impl IntoView {
                     </div>
                 </header>
                 <p class="muted small">
-                    "A complete copy of this browser — the timetable, your courses, \
-                     your changes and your settings — for a new device or a copy kept \
-                     safe. There is no merging: it replaces everything in the browser \
-                     that opens it."
+                    "A copy of everything this browser has saved — your courses, your \
+                     changes, CMI's downloaded timetable and your settings — for a new \
+                     device, or to keep somewhere safe. There is no merging: it \
+                     replaces everything in the browser that opens it."
                 </p>
             </section>
 
@@ -7138,8 +7312,8 @@ fn what_changed_dialog(app: App) -> impl IntoView {
         <div>
             <h2>"What changed since last sync"</h2>
             <p class="muted small">
-                "This is what CMI changed on its pages since your last sync. Your \
-                 courses and your custom changes are untouched."
+                "These are CMI's own edits to its pages. Your courses and your custom \
+                 changes are untouched."
             </p>
             // The one control in the digest, and it belongs up here with the
             // lede: it decides what you are about to read, not what you do
@@ -7149,7 +7323,7 @@ fn what_changed_dialog(app: App) -> impl IntoView {
                     <label
                         class="opt diff-filter"
                         class:on=move || app.prefs.with(|p| p.changes_mine_only)
-                        title="Hides changes to courses you haven't picked"
+                        title="Hides changes to courses you haven't picked."
                     >
                         <input
                             type="checkbox"
@@ -7160,10 +7334,23 @@ fn what_changed_dialog(app: App) -> impl IntoView {
                         />
                         <span>"Only my courses"</span>
                         <span class="tally muted small">
-                            {format!(
-                                "{mine_count} of {total} change{}",
-                                if total == 1 { "" } else { "s" },
-                            )}
+                            // "2 of 3 changes" beside an unticked box, above a
+                            // list showing all three, reads as "you are looking
+                            // at 2 of 3" — it isn't; it is how many are yours.
+                            // Say that, and the number has a subject.
+                            {if total == 1 {
+                                if mine_count == 1 {
+                                    "this one is yours".to_string()
+                                } else {
+                                    "not one of yours".to_string()
+                                }
+                            } else if mine_count == 0 {
+                                format!("none of these {total} are yours")
+                            } else if mine_count == 1 {
+                                format!("1 of these {total} is yours")
+                            } else {
+                                format!("{mine_count} of these {total} are yours")
+                            }}
                         </span>
                     </label>
                 }
@@ -7221,12 +7408,12 @@ fn removed_course_dialog(app: App, record: ttcore::model::Course) -> impl IntoVi
                 {if still_mine {
                     "CMI's pages no longer list this course, but it stays on your \
                      timetable until you remove it. What you see here is everything \
-                     the app still knows about it, and only until you dismiss the \
-                     update message at the top of the page."
+                     the app still knows about it, and all of it goes when you \
+                     dismiss the update message at the top of the page."
                 } else {
                     "CMI's pages no longer list this course. What you see here is \
-                     everything the app still knows about it, and only until you \
-                     dismiss the update message at the top of the page."
+                     everything the app still knows about it, and all of it goes \
+                     when you dismiss the update message at the top of the page."
                 }}
             </p>
             <dl class="kv">
@@ -7294,7 +7481,7 @@ fn removed_course_dialog(app: App, record: ttcore::model::Course) -> impl IntoVi
                      as a course of your own."
                 } else {
                     "Keep it as a course of your own and none of this is lost when the \
-                     update message goes — it stays on your timetable, and you can \
+                     update message goes — it is on your timetable for good, and you can \
                      edit it like any other course of yours."
                 }}
             </p>

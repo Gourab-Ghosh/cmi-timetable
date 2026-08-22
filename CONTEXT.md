@@ -786,8 +786,13 @@ regenerates the .ics golden.
   selected course with no time is part of the timetable, not a footnote.
 - "Your changes" groups are headed by `.cg-head` (colour rail + small caps
   + count), coloured by `OwnChange::tone()`. See §4.
-- Tests: 169 native + 125/125 e2e green (as of R78; the native count from
+- Tests: 169 native + 125/125 e2e green (as of R79; the native count from
   `deploy.sh`'s own in-container run — 49+18+3+9+25+27+28+10).
+- While a popup is open the toast stack sits at the TOP of the screen and the
+  overlay reserves its measured height: `ui::Toasts` publishes `--toast-band`
+  and a `toasts-live` class on `<body>`; `body.modal-open.toasts-live` spends
+  the band (styles.css). Both halves are needed — without the marker every
+  dialog would jump to the top whenever no toast exists (R79).
   Meeting removals: `MeetingOverride.to`
   is `Option<Meeting>` (None = removed; legacy JSON/share payloads still
   load — present meeting ⇒ Some). Out-of-grid times: **all three tables grow
@@ -1975,7 +1980,7 @@ What was fixed:
 - Clearing the cached timetable now confirms (its neighbour always did) and
   says when unresolved conflicts would go with it.
 - Preferences "Reset" wiped filters and the current tab under a button next
-  to the word "Preferences" — and was the one filter change Ctrl+Z could not
+  to the word "Preferences" (the heading is "Settings" since R79) — and was the one filter change Ctrl+Z could not
   reach. It resets theme and density only.
 - A share link that carried overrides replaced every time and credit the
   user had set, silently; it says so, with Undo.
@@ -2031,7 +2036,7 @@ assuming:
   from "No courses selected yet", and its button clears the filters rather
   than sending anyone to the catalog: the courses are still there.
 
-"Fits my schedule" is a no-op here by construction — `fits_schedule` returns
+"Fits my timetable" is a no-op here by construction — `fits_schedule` returns
 true for anything already selected — so no card can vanish behind it.
 
 100 native + 65/65 e2e; fmt and clippy clean.
@@ -2093,7 +2098,7 @@ source — not a changelog. Three decisions worth keeping:
 
 Facts verified against source rather than trusted to the commit messages:
 undo depth (100), the throttle ("at most twice a day"), the eight filter
-facets plus "Fits my schedule", the exact "Your changes" group labels and
+facets plus "Fits my timetable", the exact "Your changes" group labels and
 their plurals, the export dialog's reminder wording, the two share buttons,
 the five tabs, theme/density options, and the developer panel's contents
 (post-rename: storage inspector).
@@ -2494,7 +2499,7 @@ changes" labels, and the custom-course note names the button instead of
 facet "Flags" → "Status"; "N matches" → "N courses match"; "Clear all" →
 "Clear all filters"; "Export .ics" → "Export to calendar" (+ disabled-state
 tooltips, Print too); Custom badge → "Added by you"; catalog empty state
-gets a "Clear the filters" button (shared scope, mine=false); the
+gets a "Clear all filters" button (shared scope, mine=false); the
 master-grid unplaced note ends in an "Open the catalog" button
 (`app.set_tab(Tab::Catalog)`); All/None facet buttons get aria-labels; the
 **sync pill stops naming live routes** — "old copy"/"imported" still show
@@ -3136,8 +3141,8 @@ wf_12257ea0-5fb: 5 proposal lenses → 2 skeptics whose default was KILL →
 2. **The sync banner leads with your own week.** It said "CMI updated the
    timetable — 180 courses changed, 175 no longer listed", which reads as a
    catastrophe when none of it is yours. Now: "CMI changed 2 of your
-   courses — TOC, QCOM." + campus tail; "CMI no longer lists 1 of your
-   courses — …"; or "nothing on your week changed". Names at most 3 codes.
+   courses — TOC, QCOM." + campus tail; "CMI no longer lists one of your
+   courses — …"; or "none of your courses changed". Names at most 3 codes.
    Pinned in **t30** ("of your courses" + both codes) and **t71**.
 
 **Deliberately NOT built** (the third survivor): a semester-rollover notice
@@ -4245,7 +4250,7 @@ keys, t106 wheel), 132 native, fmt + clippy clean both targets, dialog-a11y
 User order: a URL shortener behind the share dialog. TinyURL by default and
 first in the list, several free services, **one** button in the share dialog,
 every detail inside the popup, never generate on its own, an explicit
-"Generate short link" button, and it must look as good as the dialog it
+"Make it short" button, and it must look as good as the dialog it
 comes from. Then: "make sure the link shortener actually works."
 
 Built as `core/src/shorten.rs` (services, request lines, fail-closed reply
@@ -4453,7 +4458,7 @@ Everything else came back clean: every `prefs.update` site is user-initiated
 (theme cycle, density button, both day strips, tab, the digest checkbox,
 filters and their undo restore; `last_update_attempt` is bookkeeping, not a
 choice). `density` and `halls_view` already follow the rule; deferred
-conflicts already survive reloads (R43); the "Reset" button under Preferences
+conflicts already survive reloads (R43); the "Reset" button under Settings (then "Preferences")
 deliberately touches theme and density only, and says so. `edit_mode` is left
 session-scoped on purpose — a reload returns it to the neutral off, which is
 not a different choice being made for you.
@@ -4932,7 +4937,7 @@ exactly where it broke.
 and `dialog.set(None)` as the Close in Share, My data, What changed, Details and
 Removed course — inserted as the SECOND child, plus `aria-label="Back to
 sharing"` on the existing Back, and two scoped CSS declarations. Footer reads
-`[Back][Close] ……… [Generate short link]`: both exits keep the left edge, the one
+`[Back][Close] ……… [Make it short]`: both exits keep the left edge, the one
 control in this app that hands a timetable to a stranger keeps the right corner.
 
 **Why Close is second and not last.** The app runs TWO contradictory footer
@@ -5265,6 +5270,184 @@ so it navigates with print off and asserts on the hall NAME's line count),
 sweep's own contrast probe re-run to watch the numbers flip. All sweep
 artifacts, probes, verdicts and the restore machinery: `.workagents/
 final-sweep/` (PLAN.md first).
+
+### R79 — every string in the app, read where the reader meets it
+
+The order: check ALL text in the app and make it as user-friendly, readable
+and beautiful as possible — "use as many workers as you want" — and
+**"verify this visually as well."** That last sentence changed the round's
+shape: a copy pass that only reads diffs cannot tell whether a better
+sentence still fits, and this one proved it three times over.
+
+The machinery, because it is the reusable part: two fleets, one to propose
+and one to look. Fleet A, eight harvest workers over the whole surface
+(views.rs, ui.rs in three slices, state.rs+app.rs, export/dev/index.html,
+a whole-app glossary, and one worker reading the RUNNING app), each judged
+by ONE batched adversarial verifier. Fleet B, five visual lenses over 50
+screenshots — 25 scenarios × both themes, desktop and phone and paper —
+shot before the round and again after every build, plus an in-place checker
+driving the app for the strings no screenshot can reach. `.workagents/
+copy-r79/PLAN.md` is the board; `harvest-proposals.py` rebuilds the whole
+proposal set from the workers' own notes files, and `shoot-strings.py` is
+the frame rig.
+
+**Five session-limit deaths, nothing lost, one process bug of my own.**
+Every worker's first act is a recovery file with STATUS discipline and its
+proposals appended as fenced JSON *the moment each is decided*, so a worker
+that never returns still delivers. What that machinery cannot do is tell me
+a fleet is alive: I read three thin notes files as deaths, relaunched them,
+and had two instances of two workers appending to one file — recoverable
+(the harvester keys on `(file, current, proposed)`, and both workers wrote
+reconciliation tables), but the check I skipped was one glance at the
+workflow's task status. The harvester itself had the round's most dangerous
+bug: an unanchored `STATUS:` regex matched plan lines like "flip to STATUS:
+COMPLETE" and reported five dead workers as finished. `^STATUS:`, multiline,
+last one wins. **A false clean bill is worse than no tool.**
+
+The crop: **108 proposals harvested, ~95 applied**, and the things that
+turned out to be real defects rather than wording were almost all found by
+looking, not by reading:
+
+- **The share dialog lost both its link fields.** A new sentence explaining
+  the greyed second "Copy link" was placed inside `.share-links`, which is
+  `display: grid` with `.fieldrow { display: contents }` — so a stray child
+  takes a cell of its own and pushes every field after it out of the dialog,
+  which grew a horizontal scrollbar. **125/125 e2e, 169 native, clippy and
+  fmt were all green with that on screen.** Found by opening the PNG one
+  minute after the build. Rule earned: *a copy change that adds an ELEMENT
+  is a layout change.*
+- **The toast stack covered a dialog's action row** — measured, three toasts
+  from a sync that finished while the conflicts question was open put
+  "Decide later" under a toast on a desktop, and Apply *and both radios* at
+  phone width, so the question could not be answered at all. Moving the
+  stack to the top fixed that and covered the *question* instead (at
+  1500×640 the title read "CMI cha"; at 412px the title and half the
+  paragraph were gone). The stack now publishes its measured height
+  (`--toast-band` + a `toasts-live` marker set by `ui::Toasts`) and the
+  overlay spends exactly that band, so a dialog with nothing over it stays
+  centred. Measured beats guessed: one toast is 40px, the local-network one
+  is four lines.
+- **The printed halls sheet came out as eight pages, two of them blank** —
+  one holding nothing but the decorative wash. `.grid-scroll { break-inside:
+  avoid }` is right for the one-page poster and wrong for a table that is
+  always taller than a page; it is now scoped. On the same sheet: the "Hall"
+  and "Day" corner labels printed as **nothing** (dark ink on the dark band,
+  1.01:1, because `table.tt th.rowhead` out-specifies `table.tt thead th`),
+  and **print deleted the ✓** that the sheet's own sentence promises, which
+  made that clause false on paper in every state and left a hall sheet with
+  no way to tell the reader's own courses from 140 other bookings.
+- **Filter chips showed raw storage keys** (`optional`, `unscheduled`,
+  `custom`) instead of the Status menu's own labels.
+- **"1 credits" on the printed poster**, and **"Synced 1 hours ago"** in the
+  header pill for a full hour after every sync — the two ungrammatical
+  counts left in an app that hand-writes the singular in forty places.
+- **A screen reader read "TOC clashes with Monday"**: the clash panel's ✗
+  carried an aria-label copied from a row where it sits between two courses.
+- **The shorten popup contradicted itself**, saying TinyURL "can't be offered
+  honestly here" eleven lines under the card that suggests TinyURL.
+- **The export empty state lied** when the export was scoped to one course,
+  and the dropped-course dialog said a course "stays on your timetable" to a
+  reader who had never picked it.
+- **A doubled comma** in the chip label of a dropped course ("QCOMX, , in
+  your timetable"), and the print legend explaining ✎ and * marks that were
+  not on the sheet.
+- **The update banner called an added course a changed one**: its tail counts
+  changed + added + removed and then always said "changed too", while the
+  digest one click away files that course under "New courses".
+- **A disabled primary was unreadable**: fading the whole button took
+  "Apply"'s white label to **2.03:1** against its own fill, because `opacity`
+  pulls text and fill toward the same white. The disabled state now changes
+  the fill instead (4.5:1 light, 5.3:1 dark).
+- **Two frames in the rig photographed the wrong thing** — the "import
+  error" scenario typed into a read-only box and clicked a native file
+  picker, and "editor validation error" captured a successful save. So two
+  of the screens where a stuck student reads hardest had never been
+  photographed, before or after, while fifty strings were being rewritten.
+  The lenses drove those states themselves and judged the real messages.
+- **The shortener showed a reader a JavaScript exception class**: "TinyURL
+  couldn't be reached (TypeError: Failed to fetch)", under a helper whose own
+  doc comment says it exists to give "a reason a person can act on, rather
+  than the browser's own words". Transport failures now say "the connection
+  didn't get through" or "it didn't answer in time"; an HTTP status still
+  earns its parentheses, because "HTTP 503" tells the reader whose bad day it
+  is. The raw string goes to the console.
+- **That same sentence named a control the reader could not see**: "copy the
+  full link instead", while the full link sat in a collapsed `<details>` whose
+  summary was 280px below the fold of the popup's own scroller on a phone. It
+  now opens whenever the last attempt failed.
+- **Two dialogs ended mid-sentence** at `max-height: min(85dvh, 720px)` on a
+  1000px window — the share dialog sliced its "As a full backup" paragraph
+  through a line and the shorten popup hid its whole "The full link, as it is
+  now" row, with a 1px scrollbar as the only hint either had more to say.
+  800px, and both finish.
+
+Everything else was wording, and the pattern worth keeping is *whose word
+wins*: one concept, one name. "Fits my schedule" → **"Fits my timetable"**
+(74 sites say timetable); the empty panels' "Clear the filters" → **"Clear
+all filters"**, the label the bar above them already carries for the same
+action; "Generate short link" → **"Make it short"**, the words the popup's
+own title uses; "Preferences" → **"Settings"**; the bare "Clear" → **"Clear
+timetable"**, beside a "Clear selection" one panel above; Halls' "All" →
+**"Week"**, the name the identical control on My timetable wears; "Taught
+by" → **"Instructor"**, which is what four read-only sites call it. Two
+declines are recorded with reasons in `arbitration-waveB2.md` and the
+verifier's audit: the conflicts dialog keeps **"Apply"** (the handler
+re-queues unanswered rows, so any label promising "use these times"
+over-claims completeness), and My courses keeps **"No courses selected
+yet."** (its twin in My data, three exact-label XPath pins, and a
+documented two-state design).
+
+Two structural improvements came from reading text in place: My data's
+"three things" paragraph is now the three-item list it always claimed to be,
+and the master grid's legend stopped mixing a two-sentence instruction with
+its symbol keys in one wrapping row — the halls explainer, its opposite
+number, got the same split, so the two grid tabs finally solve the same
+problem the same way.
+
+The gate that mattered most was the one no test performs. Three separate
+element-adding copy changes each had a layout consequence: the share
+paragraph above; the My-data list, which grew that dialog just enough that
+"Check now" started life under the sticky action bar (**t114 caught it** —
+Chrome refuses a click it would deliver onto the bar, so the scroller now
+reserves the bar's height and the test scrolls first, as the suite already
+does elsewhere); and the halls masthead, which landed on a sheet whose
+pagination was broken. **A `<noscript>` line also shipped**: with scripting
+off this app was a blank white page, and now it says so.
+
+Two probes are this round's durable acceptance tests, and both are worth
+re-running before anyone touches what they cover.
+`.workagents/copy-r79/probes/toast_band_check.py` drives the conflicts dialog
+with three toasts at 1500×1000, 1500×640 and 412×915 and asserts that the
+band is reserved, that the stack never intersects the dialog, and that the
+title and every action answer `elementFromPoint` themselves.
+`.workagents/copy-r79/probes/halls_print_check.py` prints both sheets to PDF
+and reports per-page text and ink — the only way to see that the halls sheet
+was eight pages with two of them blank, since a screenshot rig photographs
+one viewport and can never find that.
+
+The last worker to finish was the one no screenshot could replace: an
+in-place checker that drove the running app for every string this round
+changed behind a button press, a failed request or a browser setting —
+including `<noscript>` with scripting genuinely disabled, two ways, against a
+scripting-ON control. Eleven of its twelve items came back OK, and it
+refuted two of my own claims by quoting what had actually shipped, which is
+exactly what it was for. Item twelve is the two shortener defects above.
+
+Gates: **125/125 e2e, 169 native, clippy + fmt clean**, the golden `.ics`
+regenerated for `Instructor(s)` → `Instructor`, and 50 frames reshot from
+the final build and read by eye. Pins moved with their strings in
+`e2e/test_app.py` (17 assertions), `FEATURES.md`, `e2e/README.md`, seven
+stale present-tense quotes in this file, and eight R78/R79 probe scripts.
+The glossary batch's verifier died with the copy workflow and was relaunched
+afterwards to audit changes that were already live: it confirmed 24 of 26,
+upheld both declines with better reasons than mine, and caught a
+half-applied proposal (a word change whose full stop never landed — which
+also falsified the *other* change I had just made on the strength of "this
+is the only tooltip without a stop"). Deferred to R80, with measurements
+already in the notes: restructuring the update banner's three sentences
+(a paragraph where a phone reader's Monday should be), the credits control
+painting an *assumed* 4 as a chosen segment, and bolding only the half of a
+"moved" digest line that actually differs.
 
 ## 8. Open bugs — found, confirmed, NOT fixed (do not delete)
 

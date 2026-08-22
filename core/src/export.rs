@@ -641,7 +641,9 @@ impl ImportError {
                     .to_string()
             }
             ImportError::BadSnapshot(why) => {
-                format!("The timetable inside that file couldn't be used: {why}")
+                // Every filler this takes is a clean clause with no stop of
+                // its own, and every other arm of this family is stopped.
+                format!("The timetable inside that file couldn't be used: {why}.")
             }
             ImportError::MissingPart(part) => {
                 format!(

@@ -32,7 +32,7 @@ fn build_info(app: App) -> impl IntoView {
             <dl class="kv mono small">
                 <dt>"App version"</dt>
                 <dd>{crate::state::APP_VERSION}</dd>
-                <dt>"PARSER_VERSION"</dt>
+                <dt>"Parser version"</dt>
                 <dd>{ttcore::PARSER_VERSION.to_string()}</dd>
                 <dt>"Git commit"</dt>
                 <dd>{crate::state::GIT_COMMIT}</dd>
@@ -547,7 +547,7 @@ pub fn corrupt_data_banner(app: App) {
         "Some of what the app had saved in your browser couldn't be read, so \
          those parts were reset to defaults. Nothing was deleted — the unreadable \
          copy is still in your browser, but the app can't restore anything from \
-         it. Check your courses and settings, and set up anything that's missing \
-         again.",
+         it. Check your courses and settings, and put back anything that's \
+         missing.",
     );
 }

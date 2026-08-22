@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <meta name="description" content="Plan your CMI semester timetable. Everything is saved in your browser." />
+  <meta name="description" content="Pick your courses from CMI's timetable pages, see your clashes, and take the result to your calendar or a printer. Everything is saved in your browser." />
   <!-- The browser chrome (mobile address bar, PWA title bar) matches the
        app's ground instead of defaulting to white-on-dark or vice versa. -->
   <meta name="theme-color" content="#f3f4f7" media="(prefers-color-scheme: light)" />
@@ -54,5 +54,16 @@
   <link data-trunk rel="rust" data-bin="cmi-timetable-app" data-wasm-opt="z"
         data-wasm-opt-params="--enable-bulk-memory --enable-sign-ext --enable-mutable-globals --enable-nontrapping-float-to-int --enable-reference-types --enable-multivalue" />
 </head>
-<body></body>
+<body>
+  <!-- Without JavaScript the wasm app never mounts and the page is blank
+       white with no explanation — an extension or a locked-down campus
+       browser is enough to cause it. <noscript> renders only in exactly that
+       case, so it cannot disturb the app's own layout. -->
+  <noscript>
+    <p class="noscript-note">
+      This planner needs JavaScript to run. Turn it on for this page and
+      reload, or open the page in another browser.
+    </p>
+  </noscript>
+</body>
 </html>

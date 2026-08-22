@@ -127,7 +127,7 @@ async fn call(
 ) -> Result<Answer, String> {
     let direct = shorten::request_url(service, long);
     if direct.is_empty() {
-        return Err("This app doesn't know how to ask that service.".into());
+        return Err("The app doesn't know how to ask that service.".into());
     }
     // The straight call first and alone; the relays behind it, in the order
     // `fetch` already ranks them for reaching CMI.
@@ -234,9 +234,26 @@ async fn attempt(
 }
 
 /// A reason a person can act on, rather than the browser's own words.
+///
+/// `detail` is whatever the fetch layer handed back, and the two cases are not
+/// alike. An HTTP status earns its place in the parentheses — "HTTP 503" says
+/// the service is the one having the bad day, not the reader. The browser's own
+/// exception class does not: a reader on a blackholed host was shown
+/// "(TypeError: Failed to fetch)", which is exactly what this function exists
+/// to prevent. The raw string still goes to the console for whoever is
+/// debugging; the screen gets English.
 fn unreachable_msg(service: &Service, detail: &str) -> String {
+    let plain = if detail.contains("HTTP") {
+        detail.to_string()
+    } else if detail.contains("timed out") {
+        // Not "timed out after 8 s": R52 spelled the app's units out.
+        "it didn't answer in time".to_string()
+    } else {
+        "the connection didn't get through".to_string()
+    };
+    leptos::logging::log!("cmitt: {} unreachable: {detail}", service.name);
     format!(
-        "{} couldn't be reached ({detail}). Your link still works as it is — \
+        "{} couldn't be reached ({plain}). Your link still works as it is — \
          try another service, or copy the full link instead.",
         service.name
     )

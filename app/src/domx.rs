@@ -685,6 +685,12 @@ pub fn rel_time(ms: f64, now: f64) -> String {
         "just now".to_string()
     } else if mins < 60.0 {
         format!("{} min ago", mins as u32)
+    } else if mins < 120.0 {
+        // The pill said "Synced 1 hours ago" for a whole hour after every
+        // sync — the one ungrammatical count in an app that hand-writes the
+        // singular in forty other places. (The days arm starts at 48 h, so
+        // "1 days ago" can never render, and needs no such branch.)
+        "1 hour ago".to_string()
     } else if mins < 48.0 * 60.0 {
         format!("{} hours ago", (mins / 60.0) as u32)
     } else {
@@ -715,5 +721,25 @@ pub fn tick_delay_ms(elapsed_ms: f64) -> u32 {
         15_000
     } else {
         900_000
+    }
+}
+
+/// Glue a trailing number to the word before it with a non-breaking space, so
+/// a name breaks between its words but never in front of its number:
+/// "Lecture Hall 803" wraps as "Lecture / Hall 803", not "Lecture Hall / 803".
+///
+/// A room number severed from "Hall" at the end of a narrow grid cell reads as
+/// a second time value, especially under a line that already ends in digits
+/// (found in the R79 visual pass, on both the moved-course cell and the phone
+/// chips). Names with no trailing number are returned untouched, so
+/// "Seminar Hall" and a place of the reader's own are unaffected.
+pub fn keep_number_with_word(name: &str) -> String {
+    match name.rsplit_once(' ') {
+        Some((head, tail))
+            if !tail.is_empty() && tail.chars().all(|c| c.is_ascii_digit() || c == '-') =>
+        {
+            format!("{head}\u{a0}{tail}")
+        }
+        _ => name.to_string(),
     }
 }
