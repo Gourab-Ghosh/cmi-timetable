@@ -114,6 +114,7 @@ fn init_app() -> (App, bool) {
         conflicts_dismissed: RwSignal::new(false),
         what_changed: RwSignal::new(None),
         unknown_codes: RwSignal::new(Vec::new()),
+        unknown_was_everything: RwSignal::new(false),
         fetch_log: RwSignal::new(Vec::new()),
         reports: RwSignal::new(Vec::new()),
         route: RwSignal::new(Route::Planner),
@@ -268,7 +269,12 @@ fn apply_url_state(app: App) {
                  Ask whoever sent it for a new one."
             },
         );
-        if c.is_none() {
+        // `c.is_none()` was not the whole test. `?c=&s=<garbage>` — a link
+        // whose readable half carries NO codes — took the "the codes still
+        // open" path with an empty selection and wiped the timetable, which is
+        // the exact case FEATURES.md promises "changes nothing". A damaged link
+        // that resolved to nothing has nothing to apply, so it applies nothing.
+        if c.is_none() || state.selection.is_empty() {
             app.sync_url();
             return;
         }
@@ -394,9 +400,28 @@ fn apply_url_state(app: App) {
         && app
             .overrides
             .with_untracked(|o| !o.items.is_empty() || !o.credits.is_empty());
-    let differs = app.selection.with_untracked(|s| *s != known)
-        || shared_overrides.is_some()
-        || !incoming_customs.is_empty();
+    // A link that names courses and resolves NONE of them cannot replace a
+    // timetable. It used to: `*sel = known` with an empty `known` wrote an
+    // empty selection over the reader's stored one, permanently — an old
+    // bookmark, a link from a semester whose codes CMI has since retired, or a
+    // friend's link built from hand-made courses sent without their
+    // definitions. Found by two independent R82 audit agents, both rating it a
+    // blocker, and it was ALREADY LIVE: this arm predates the unpushed work.
+    //
+    // Resolution has already consulted the reader's own customs, the link's
+    // own customs and the snapshot (see `resolved` above), so "nothing
+    // resolved" really does mean the link names nothing that exists anywhere
+    // here — and then there is nothing to apply, not even overrides, since
+    // every override in it belongs to a course that does not exist.
+    let nothing_resolved = known.is_empty() && !unknown.is_empty();
+    let differs = !nothing_resolved
+        && (app.selection.with_untracked(|s| *s != known)
+            || shared_overrides.is_some()
+            || !incoming_customs.is_empty());
+    app.unknown_was_everything.set(nothing_resolved);
+    if nothing_resolved {
+        app.sync_url();
+    }
     if differs {
         app.act_customs("open shared link", move |customs, sel, ovs| {
             for course in incoming_customs {

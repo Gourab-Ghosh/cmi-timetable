@@ -786,7 +786,7 @@ regenerates the .ics golden.
   selected course with no time is part of the timetable, not a footnote.
 - "Your changes" groups are headed by `.cg-head` (colour rail + small caps
   + count), coloured by `OwnChange::tone()`. See §4.
-- Tests: 169 native + 127/127 e2e green (as of R80; the native count from
+- Tests: 169 native + 132/132 e2e green (as of R82; the native count from
   `deploy.sh`'s own in-container run — 49+18+3+9+25+27+28+10).
 - While a popup is open the toast stack sits at the TOP of the screen and the
   overlay reserves its measured height: `ui::Toasts` publishes `--toast-band`
@@ -5709,6 +5709,162 @@ Gates: 127/127 e2e, 169 native, clippy + fmt clean, and the dialog read off
 screenshots in both browsers, at 1.0x and 1.5x, on My timetable, the Catalog
 (2 pages) and Halls (3 pages), in both themes.
 
+### R82 — the pre-deploy audit: 17 dimensions, 84 agents, and the link that emptied a timetable
+
+> "Do a final tests before I deploy the app. Do as many tests as possible
+> because after this test I will deploy the app and there should not be any bugs
+> when the app is already deployed... use as many agents as possible... make sure
+> that all the agents save their work locally so that when the session limit is
+> reached, and then when I try to restore the work, the work of all the agents
+> should be restored properly." — later: "Test everything visually, functionally
+> and programmitically."
+
+Scope: `origin/main..HEAD` — **seven commits, ~5 160 insertions over 26 files**,
+none of them ever served. Two fleets, 17 dimensions, every finding handed to an
+independent verifier told to refute it. The full ledger is
+`.workagents/predeploy-r82/REPORT.md`; the per-dimension notes, 1 191
+screenshots, 109 PDFs and 237 probes are beside it. **77 findings, 54 verified
+verdicts (8 major, 42 minor, 4 nit), no blocker left standing.**
+
+**The one that mattered: a link could empty a timetable, permanently.** Found
+independently by both data-safety runs, both calling it a blocker, and it was
+ALREADY LIVE — `apply_url_state` ended in `*sel = known`, where `known` is what
+survived resolution. Open an old bookmark, a link from a semester whose codes
+CMI has retired, or a friend's hand-made courses sent without their definitions,
+and `known` is empty: the stored selection is overwritten with nothing, and the
+banner says *"Everything else in the link opened as usual."* Now a link that
+names courses and resolves NONE of them applies nothing at all, and the banner's
+last sentence becomes "your own timetable was left exactly as it was" (a new
+`App::unknown_was_everything` decides which sentence). Its sibling: the
+damaged-link guard tested `c.is_none()`, which a blank `c=` passes, so
+`?c=&s=<garbage>` wiped the selection too — the exact case FEATURES.md promises
+"changes nothing". `t131` and `t132` pin both.
+
+**Two majors in the new print work, both invisible to every existing test:**
+
+* `color-scheme: dark` sat at `print.html`'s top level, so it applied in PRINT
+  media. The root has no background of its own, so Chromium painted the page
+  canvas with its dark UA default while `body { background: #fff }` covered only
+  the page area: an **11-12mm near-black frame on all four sides of every
+  page**, ~18% of every sheet, for any dark-theme reader with "Background
+  graphics" ticked. Page-corner pixel `rgb(18,18,18)` → `rgb(255,255,255)`.
+  `t125` never saw it because it measures the APP document; R81's photographs
+  never saw it because that box is unticked by default. `t129` loads the print
+  tab itself.
+* `.density-compact .chip .hall { display: none }` (0,3,0) out-specified the
+  print block's `.chip .hall` (0,2,0) — and on the Master grid that span is not
+  a hall, it is the **meeting's real time when it differs from its column**. So
+  tight rows printed a class under a heading that gave the wrong time, with
+  nothing correcting it, and `App::device_density` returns Compact for every
+  phone-sized viewport. `t128` pins it, and the same rule now covers
+  `.density-compact .covered`, which was printing the band LARGER than the chips
+  above it.
+
+**The print tab does not keep the app usable, and both the docs and the code
+comment said it did.** The tab is same-origin with an opener, so it shares the
+app's renderer process and its modal print loop blocks that process's main
+thread: the app's `setInterval` stops for 8.6-8.8s and a click on the app's own
+sidebar is **dropped, not queued** — the listener never sees it. Only the paint
+is isolated (which was the bug R81 set out to fix). `noopener` would end the
+freeze and also make injecting the sheet impossible, so the honest fix is to say
+so: the Print button now reads **"Printing…"**, disabled, until a watcher whose
+first tick lands after the dialog closes puts it back. Do not re-add a claim
+that the app stays usable. Two repairs rode along: the 5s wait before the "print
+the app instead" fallback was racing `NAV_TIMEOUT_MS = 5000` in `sw-body.js`
+(measured ~50ms apart — a slower phone flips it and the reader's tab vanishes
+while their whole app prints itself), now 20s plus a `win.closed()` check; and
+the print tab's own card rendered in light-theme colours on the dark ground
+because the app's copied stylesheet is appended AFTER print.html's own block and
+won at equal specificity — its classes are `pw-`prefixed now, which cannot
+collide whatever the order.
+
+**A sentence in a `nowrap` pill was the app's layout floor.** Old §8.20: "CMI
+lists these courses but hasn't put them on the timetable" measured 338px and
+could not break, so the document's minimum width was ~368px and **the whole app
+scrolled sideways at 320 and 360px**, dragging the "Halls" tab and the toast
+rail out of view. The same defect in `ui::status_badges` cut a sentence off
+mid-word inside the details dialog at every phone width. Both now carry
+`.badge.wraps`. `t130` is the assertion §8.20 asked any fix to come with —
+`scrollWidth <= clientWidth` at 320/360/390 **with the tray on screen**, plus a
+sweep for any element outside the viewport that no scrollable ancestor explains.
+
+Fixing it broke `t117`, and that is worth understanding rather than patching:
+that test was passing *because of* the bug. A 320px viewport used to give the
+shorten popup a 335px footer, so its three buttons never wrapped — and
+`styles.css:2260-2269` says so in as many words, ending "Fixing the
+sideways-scroll bug in CONTEXT §8 gives 320px a real 244px footer and makes this
+rule load-bearing that day." That day arrived: the footer now wraps into the
+shape R76 designed for it (both exits on the upper row, the send alone on the
+row below, nowhere near the thumb), and `t117` asserts the SHAPE — one ordered
+row, or the send strictly below the exits.
+
+Four more, each with a repro in the notes: the printed **Master grid** carried ⚠
+marks with no key on the paper (its footnote asked `app.clashes()`, clashes
+*within* your selection, while the grid's ⚠ marks an *unselected* course
+overlapping it — one selected course gives nine unexplained marks); the printed
+**Catalog** carried a red ⚠ its footnote never explained; the **shortener** told
+readers a service "couldn't be reached" when it had answered with 429/403/500,
+sending them to check their wifi over something only the service can fix; and
+`o.id + 1` in `share.rs` panicked in debug and wrapped to 0 in release on a
+hand-crafted link (`saturating_add` now).
+
+**Two test-quality findings about tests written the day before, both correct:**
+`t127` passed with `print.html`'s `window.print()` DELETED — its "Printing…"
+status line is set on the line *before* the call, so the status proved nothing.
+It now counts the print tab's own `print()` calls through the opener's handle
+(same origin), and fails with `calls: 0` when the call is removed. And `t119`
+asserts nothing about "today is marked" on a Saturday or Sunday — the day this
+deploy is happening.
+
+**Verifying a fix by breaking it: the SRI trap.** The way to prove a new test
+is not vacuous is to remove the fix from a copy of the dist and watch the test
+go red. Editing a built `styles-*.css` does NOT do that: trunk stamps the
+`<link>` with a Subresource Integrity hash, so the browser drops the stylesheet
+entirely and `document.styleSheets.length` is **0** — every rule gone, the test
+passing for the wrong reason and every measurement meaningless. Recompute the
+sha384 and rewrite the `integrity` attribute, or strip it. Two runs were wasted
+on this before the 0 was noticed.
+
+**Firefox, for the first time in this project.** `firefox_print_check.py` drives
+real Firefox 154 headed. The app renders correctly and the whole print flow
+works: the tab opens at `print.html`, the sheet arrives, Firefox raises its own
+dialog, colours intact. Two traps: `--window-size` is **not** a Firefox flag
+outside headless (Firefox prints usage and maps no window, which photographs as
+a pure black screen), and Firefox needs `GDK_BACKEND=x11` on this Wayland
+desktop exactly as Chromium needs `--ozone-platform=x11`.
+
+**Same-tab printing is possible after all, and R80's note saying otherwise was
+measuring the wrong thing.** `iframe_selfprint_check.py`: a hidden iframe whose
+OWN script calls `print()` leaves the parent at `printMedia: false`,
+`rgb(14,16,20)`, unblocked, with the dialog in the app's own tab and the correct
+sheet in the preview — and Firefox prints the FRAME, not the parent (a harness
+with a red "THIS IS THE PARENT" page proves which). R80 had the *app* call
+`print()` on the frame, which is a different thing entirely. Not adopted in this
+round: swapping the print mechanism during a pre-deploy freeze is how a
+"no bugs" run acquires one, and Safari/iOS remains untestable here for either
+approach. The reporter chose the tab when offered the trade.
+
+`deploy.sh --build-only` was rehearsed: Docker build inside `rust:1`, 169 native
+tests, `sw.js precaches 6 files`, "publishing nothing". One wart worth knowing:
+trunk logs `Failed to minify JS`, so the wasm glue ships unminified — size only.
+
+**How the fleets survived their own execution.** The session's usage limit
+killed every running agent twice (41 of 84 in total). Nothing had to be redone,
+because each agent was instructed to write its notes to `findings/<slug>.md` AS
+IT WENT rather than at the end, and because `Workflow({scriptPath,
+resumeFromRunId})` replays completed agents from cache — fleet 1 replayed 36 and
+re-ran only the dead ones. The second kill carried a four-hour reset, so the
+report, the remaining verification and every fix above were done in the main
+session, which is not rate-limited. If you inherit this: read
+`.workagents/predeploy-r82/REPORT.md` first, then the notes for
+`browser-smoke`, `visual-regression` and `runtime-hygiene` — those three never
+finished, so there is no side-by-side against the deployed build and no
+long-session leak measurement.
+
+Gates: **132/132 e2e**, 169 native, clippy + fmt clean, print budget re-measured
+(8 pages, 835 KB, 0 curves, 0 groups, 0 masks), and the two proved-by-breaking
+tests above.
+
 ## 8. Open bugs — found, confirmed, NOT fixed (do not delete)
 
 Rules for this section: entries stay until the bug is actually fixed and a
@@ -5798,6 +5954,67 @@ What a fix must come with, or it will pass while the bug survives: an assertion
 that `scrollingElement.scrollWidth <= documentElement.clientWidth` at 320 and
 360px, taken **with the tray on screen** — i.e. with a selected course that has
 no time (the fixture has one: SVA is unscheduled).
+
+### 8.22 Two tabs of the app silently overwrite each other's selection and changes
+
+Found by R82's `user-journeys` agent, confirmed against the code by hand.
+**Pre-existing: `install_cross_tab_sync` is untouched in `origin/main..HEAD`,
+so this is already live on the deployed site — publishing R82 does not
+introduce it.** Recorded here because it is data loss, and this app has no
+server to recover from.
+
+`app/src/app.rs:515` (`install_cross_tab_sync`) listens for exactly two things:
+`KEY_SNAPSHOT`, and the single `update_checks_off` field of `KEY_PREFS`. It does
+NOT watch `KEY_SELECTION`, `KEY_OVERRIDES` or `KEY_CUSTOM` — and every `act()` /
+`act_customs()` writes the selection and the overrides wholesale from that tab's
+own in-memory copy. So the last tab to touch anything wins, and neither tab says
+a word.
+
+Reproduced (`.workagents/predeploy-r82/probes/uj_d2_two_tabs_dataloss.py`):
+
+```text
+tab 2: My courses -> Edit this course (TOC) -> move a meeting to Sat -> Save
+       cmitt.v1.overrides now holds the move
+tab 1: (still showing the old week, no banner) add any course from the catalog
+       cmitt.v1.overrides == {"next_id":0,"items":[],"credits":[]}   <- gone
+```
+
+Round 1 of the same probe loses a *selection* entry the same way: tab 2 adds
+MFD (`['TOC','QCOM','MFD']`), tab 1 then adds RFLR and storage becomes
+`['TOC','QCOM','RFLR']` while tab 2 goes on showing MFD with a live Remove
+button. A course of the reader's OWN survives by luck — `persist_customs` is
+only called when the custom store itself changes, so an unrelated write does
+not carry a stale copy of it.
+
+Why it is not fixed here: the fix is a design decision, not a patch. Adopting
+the other tab's store mid-edit can spoil work in progress (the snapshot path
+already has `busy_with_unsaved_work` for exactly that reason), and refusing the
+write needs a message the reader can act on. What a fix must come with: the
+three keys added to the same listener with the same deferred-adoption shape,
+and a test that drives TWO REAL TABS — a single-tab assertion cannot see this
+at all, which is why 129 tests never did.
+
+### 8.23 A share link replaces a picked timetable with no message, unless the reader happens to own an override
+
+Found by R82's `user-journeys` agent. **Also pre-existing** (`app/src/app.rs:393`
+is untouched in `origin/main..HEAD`).
+
+`replaced_own_work = shared_overrides.is_some() && (this planner has overrides)`
+is the only thing that raises the "this link replaced yours" toast with its
+Undo. The SELECTION being thrown away is never weighed. So:
+
+* reader with courses picked and no meeting/credit edits: opening
+  `?c=TOC,QCOM,MFD` (a friend's link, or their own older bookmark) replaces the
+  lot in silence — `toasts_text()` is `''`, no banner, and the only sign is the
+  Undo button going from disabled to enabled. One reload and it is
+  unrecoverable.
+* the identical action DOES announce itself, with an Undo, if that reader
+  happens to hold one override.
+
+The code's own comment at `app.rs:334-337` says the silence was the bug for
+overrides. The same hole for the selection is still open. Fix: weigh a
+non-empty selection into `replaced_own_work` and give it its own sentence (the
+existing one talks about "times and credits", which is not what was lost).
 
 ### 8.21 Deliberate non-bug — Chrome warns "integrity attribute is ignored" once per page load
 

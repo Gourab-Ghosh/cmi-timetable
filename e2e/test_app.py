@@ -5551,7 +5551,17 @@ def t110_a_shortener_that_cannot_be_reached_says_so_and_invents_nothing(app):
     """Every name but localhost is blackholed here, so pressing Generate is
     a real request that really fails — the state a student meets on a train.
     It has to end in a sentence, not a spinner, and it must never leave a
-    made-up link behind."""
+    made-up link behind.
+
+    TWO sentences, because the two failures are not alike (R82: the app used to
+    say "couldn't be reached" for both, which sends a reader to check their
+    wifi over a 429 only the service can fix):
+
+    * the service ANSWERED badly — which is what this harness actually produces,
+      since every host resolves to the stand-in server and it replies 503 —
+      must read "answered with an error (HTTP 503)";
+    * nothing came back at all — a blocked request, the train tunnel — must
+      read "couldn't be reached"."""
     app.boot("/", selection=["TOC", "RDBM"])
     _open_shorten(app)
     app.css(".shorten-dialog .actions button:last-child").click()
@@ -5559,7 +5569,8 @@ def t110_a_shortener_that_cannot_be_reached_says_so_and_invents_nothing(app):
     failed = WebDriverWait(app.d, 40).until(
         lambda d: d.find_elements(By.CSS_SELECTOR, ".shorten-failed") or False)
     text = failed[0].text
-    assert "TinyURL" in text and "couldn't be reached" in text, text
+    assert "TinyURL" in text and "answered with an error" in text, text
+    assert "HTTP" in text, f"the status earns its place in the sentence: {text}"
     assert "copy the full link instead" in text, text
     assert not app.css_all(".shorten-short"), "a failure must not produce a link"
     assert app.d.execute_script(
@@ -5570,6 +5581,27 @@ def t110_a_shortener_that_cannot_be_reached_says_so_and_invents_nothing(app):
     # shows a clean slate rather than TinyURL's bad news.
     app.css_all(".shorten-opt input")[1].click()
     WebDriverWait(app.d, 5).until(lambda d: app.css_all(".shorten-empty"))
+
+    # The OTHER sentence: a request that never lands at all. Blocking the URL
+    # outright is the closest thing here to a tunnel — the fetch rejects with
+    # the browser's own exception instead of a status, and then, and only then,
+    # "couldn't be reached" is the true thing to say.
+    app.d.execute_cdp_cmd("Network.enable", {})
+    app.d.execute_cdp_cmd("Network.setBlockedURLs", {"urls": ["*da.gd*"]})
+    try:
+        app.css(".shorten-dialog .actions button:last-child").click()
+        blocked = WebDriverWait(app.d, 40).until(
+            lambda d: d.find_elements(By.CSS_SELECTOR, ".shorten-failed") or False)
+        gone = blocked[0].text
+        assert "couldn't be reached" in gone, (
+            "a request that never landed must not be reported as an answer: "
+            f"{gone}")
+        assert "HTTP" not in gone, \
+            f"there was no status to quote: {gone}"
+        assert not app.css_all(".shorten-short"), \
+            "a blocked request must not produce a link either"
+    finally:
+        app.d.execute_cdp_cmd("Network.setBlockedURLs", {"urls": []})
 
 
 def t111_the_chosen_service_is_warmed_and_only_the_chosen_one(app):
@@ -6369,17 +6401,20 @@ def t117_the_shorten_popup_has_a_way_out_and_it_is_not_beside_the_send(app):
             rows: new Set(bs.map((b) => Math.round(r(b).top))).size,
             back_left: Math.round(r(bs[0]).left),
             close_right: Math.round(r(bs[1]).right),
+            exits_bottom: Math.round(Math.max(r(bs[0]).bottom, r(bs[1]).bottom)),
+            primary_top: Math.round(r(last).top),
             primary_left: Math.round(r(last).left),
             primary_w: Math.round(r(last).width),
             footer_h: Math.round(r(f).height),
             widest: Math.max(...bs.map((b) => Math.round(r(b).right))),
             leftmost: Math.min(...bs.map((b) => Math.round(r(b).left))),
-            // The box the footer is allowed to fill. NOT the viewport: at
-            // 320/360px this app lays out wider than the viewport for a reason
-            // that has nothing to do with this footer (CONTEXT §8 — a badge
-            // holding a whole sentence with white-space: nowrap), so measuring
-            // the buttons against `documentElement.clientWidth` would fail
-            // this test for somebody else's bug.
+            // The box the footer is allowed to fill, which is the popup and
+            // not the viewport — the popup has its own padding, so a button
+            // flush with the viewport edge would still be a bug and one inside
+            // the popup is fine. (Until R82 there was a second reason: the app
+            // laid out wider than a 320px viewport because of a `nowrap` badge
+            // holding a sentence. That is fixed and pinned by t130, which is
+            // also why this footer now wraps at 320px.)
             dlg_left: Math.round(r(dlg).left),
             dlg_right: Math.round(r(dlg).right),
         };
@@ -6465,13 +6500,30 @@ def t117_the_shorten_popup_has_a_way_out_and_it_is_not_beside_the_send(app):
         assert g["leftmost"] >= g["dlg_left"] and g["widest"] <= g["dlg_right"], (
             f"at {width}px a footer button is outside the popup: buttons span "
             f"{g['leftmost']}..{g['widest']}, popup {g['dlg_left']}..{g['dlg_right']}")
-        # Wrapped or not, the exits stay left of the send, with real space
-        # between them — measured 19px at 320-360px, where the row is still one
-        # line because the popup gets a 335px footer rather than the 244px a
-        # 320px viewport would give it (see §8).
-        assert g["back_left"] < g["close_right"] < g["primary_left"], (
-            f"at {width}px the footer order broke: back {g['back_left']}, "
-            f"close ends {g['close_right']}, primary starts {g['primary_left']}")
+        # Wrapped or not, the way out is never adjacent to the send.
+        #
+        # R82 is the day the CSS comment at styles.css:2260-2269 predicted:
+        # fixing the sideways-scroll bug (old §8.20 — a sentence in a
+        # `nowrap` badge setting the app's layout floor at ~368px) gave 320px a
+        # real 244px footer, three word-buttons stopped fitting on one line,
+        # and `justify-content: flex-start` + the primary's `margin-left: auto`
+        # became load-bearing. So this now asserts the SHAPE rather than one
+        # line of it: either the three sit in reading order across one row, or
+        # the two exits share the upper row and the send is on a row of its own
+        # BELOW them — which is the arrangement that keeps a thumb travelling
+        # to Send away from Close.
+        if g["rows"] == 1:
+            assert g["back_left"] < g["close_right"] < g["primary_left"], (
+                f"at {width}px the footer order broke: back {g['back_left']}, "
+                f"close ends {g['close_right']}, primary starts "
+                f"{g['primary_left']}")
+        else:
+            assert g["primary_top"] >= g["exits_bottom"], (
+                f"at {width}px the footer wrapped with the send NOT below the "
+                f"exits: primary top {g['primary_top']}, exits bottom "
+                f"{g['exits_bottom']} — a mis-tap waiting to happen")
+            assert g["back_left"] < g["close_right"], (
+                f"at {width}px Back is not left of Close: {g!r}")
         assert app.css(".shorten-dialog .actions button:last-child").text.strip(), \
             f"at {width}px the primary has no label"
         # Finger-sized, which is what `pointer: coarse` is emulated for here.
@@ -7217,7 +7269,27 @@ def t127_printing_never_repaints_the_app(app):
         const real = window.open.bind(window);
         window.open = (u, t, f) => {
           window.__openCalls.push([t, f === undefined ? null : String(f)]);
-          return (window.__printWin = real(u, t, f));
+          const w = (window.__printWin = real(u, t, f));
+          // Count the print tab's OWN print() calls. Same origin, so this
+          // patch reaches into it — and it has to be installed by polling,
+          // because the tab is still loading when open() returns and the
+          // patch must be in place before its MutationObserver fires (the app
+          // needs a tick to inject the sheet, then print.html waits 90ms).
+          // Without this the test passed with print.html's window.print()
+          // DELETED: its "Printing…" status line is set just before the call,
+          // so the status alone proves nothing (R82's test-quality agent).
+          window.__printed = 0;
+          const arm = setInterval(() => {
+            try {
+              if (!w || w.closed) { clearInterval(arm); return; }
+              if (w.__armed) return;
+              w.__armed = true;
+              const p = w.print;
+              w.print = function () { window.__printed++; return p.apply(this, arguments); };
+              clearInterval(arm);
+            } catch (e) { /* mid-navigation: try again next tick */ }
+          }, 5);
+          return w;
         };
     """)
     app_handle = app.d.current_window_handle
@@ -7274,10 +7346,17 @@ def t127_printing_never_repaints_the_app(app):
         # name rather than "print.html".
         assert got["title"] == "CMI Timetable Planner", \
             f"the print tab is titled {got['title']!r}"
-        # And it raised the dialog itself rather than waiting to be printed
-        # from the app — its own status line is the evidence.
+        # And it raised the dialog ITSELF rather than waiting to be printed
+        # from the app. The counter installed on the tab's own `print` is the
+        # evidence; the status line is not, because it is written on the line
+        # before the call and survives the call's deletion.
+        printed = app.d.execute_script("return window.__printed;")
+        assert printed and printed >= 1, (
+            "print.html never called print() on itself — the sheet would sit "
+            f"in a tab and nothing would print (calls: {printed!r}, status "
+            f"{got['status']!r})")
         assert "Printing" in str(got["status"]) or "Printed" in str(got["status"]), \
-            f"the print tab never printed itself: status {got['status']!r}"
+            f"the print tab never said what it was doing: status {got['status']!r}"
 
         # Press it again. The tab is named, so this one refills the same tab —
         # and it has to REPLACE the sheet, not stack a second one under it.
@@ -7296,6 +7375,285 @@ def t127_printing_never_repaints_the_app(app):
             app.d.switch_to.window(handle)
             app.d.close()
         app.d.switch_to.window(app_handle)
+
+
+def t128_tight_rows_still_print_the_real_time(app):
+    """A printed sheet must not depend on the window it was printed from — and
+    the ROW HEIGHT is part of that window.
+
+    `.density-compact .chip .hall { display: none }` (0,3,0) out-specified the
+    print block's `.chip .hall` (0,2,0). On the Master grid that span is not a
+    hall: `show_hall` is false there, so it carries the SUBLABEL — the meeting's
+    real time when it differs from the column it borrows. Tight rows therefore
+    printed a class under a heading that gave the wrong time, with nothing on
+    the paper correcting it. `App::device_density` returns Compact for any
+    phone-sized viewport, so a reader who never touched the toggle got the
+    lossy sheet (R82's audit measured it: the desktop PDF contains "09:10–14:00",
+    the phone PDF does not).
+
+    The band under a covered slot rode along: `.density-compact .covered`
+    (0,2,0) beat print's `.covered` (0,1,0) and printed BIGGER than the chips
+    above it, inverting the hierarchy."""
+    # TOC's Tuesday class, moved to 09:30-10:20 — entirely INSIDE the
+    # 09:10-10:25 column, so no synthetic column is minted and no continuation
+    # band is cast. The chip's second line is then the ONLY thing on the sheet
+    # that says when the class is, which is what makes this a data defect
+    # rather than a cosmetic one.
+    inside_the_column = {
+        "next_id": 1,
+        "items": [{
+            "id": 0, "course": "TOC",
+            "base": {"day": "Tue", "slot": {"start_min": 550, "end_min": 625},
+                     "hall": "Lecture Hall 803", "temp_booking": False},
+            "to": {"day": "Tue", "slot": {"start_min": 570, "end_min": 620},
+                   "hall": "Lecture Hall 803", "temp_booking": False},
+            "created_at": 1754000000000.0}],
+        "credits": [],
+    }
+    app.d.set_window_size(430, 900)
+    try:
+        app.boot("/", selection=["TOC", "RDBM", "MFD"],
+                 overrides=inside_the_column)
+        app.open_tab("Master grid")
+        app.wait_css("section[aria-label='Master grid'] table.tt")
+        assert app.css_all("section[aria-label='Master grid'] .density-compact"), \
+            "this test is meaningless without the compact grid"
+        app.d.execute_cdp_cmd("Emulation.setEmulatedMedia", {"media": "print"})
+        got = app.d.execute_script("""
+            const hall = document.querySelector(
+                "section[aria-label='Master grid'] table.tt td .chip .hall");
+            const band = document.querySelector(
+                "section[aria-label='Master grid'] .covered");
+            return {
+              hall: hall ? getComputedStyle(hall).display : 'none-found',
+              hallPx: hall ? getComputedStyle(hall).fontSize : null,
+              bandPx: band ? getComputedStyle(band).fontSize : null,
+            };
+        """)
+        # `block` and 7.8px specifically, not merely "not none": the print
+        # block has to be the rule that GOVERNS this line. An `inline` here
+        # would mean neither print nor density is winning it, which is the
+        # same class of accident as the bug (and is what a broken stylesheet
+        # looks like, so it also keeps this test honest about its own setup).
+        assert got["hall"] == "block", (
+            "tight rows print a chip with no second line, so a meeting whose "
+            f"real time differs from its column loses it: {got!r}")
+        assert got["hallPx"] and abs(float(got["hallPx"].rstrip("px")) - 7.8) < 0.6, (
+            f"the print block must set this line's size, not the screen: {got!r}")
+        if got["bandPx"]:
+            assert float(got["bandPx"].rstrip("px")) <= 9.5, (
+                "the continuation band must not print bigger than the chips "
+                f"above it: {got!r}")
+    finally:
+        app.d.execute_cdp_cmd("Emulation.setEmulatedMedia", {"media": ""})
+        app.d.set_window_size(1500, 1000)
+
+
+def t129_the_print_tab_puts_nothing_dark_on_the_paper(app):
+    """The print tab carries its own screen design in the reader's theme, and
+    exactly one declaration of that design must not reach paper.
+
+    `color-scheme: dark` sat at the top level of print.html's stylesheet, so it
+    applied in PRINT media too. The root element has no background of its own,
+    so Chromium painted the page CANVAS with its dark UA default while
+    `body { background: #fff }` covered only the page area — an 11-12mm
+    near-black frame on all four sides of every page, ~18% of every sheet, for
+    any reader with the theme dark and "Background graphics" ticked. Measured
+    off the PDFs in R82's audit: page corner rgb(18,18,18), against
+    rgb(255,255,255) once `color-scheme: light` is forced.
+
+    It cannot be fixed from styles.css: print.html hard-codes
+    data-theme="light", so the app's print reset only matches the bare `:root`
+    (0,1,0) and loses to `:root[data-appearance="dark"]` (0,2,0). The fix lives
+    in print.html, and this test reads the print tab itself — nothing else in
+    the suite loads that document."""
+    app.boot("/", selection=["TOC", "RDBM"])
+    try:
+        app.dismiss_toasts()
+    except Exception:
+        pass
+    app.d.execute_script(
+        "localStorage.setItem('cmitt.v1.prefs', JSON.stringify("
+        "{theme: 'Dark', last_update_attempt: Date.now()}));")
+    app.d.refresh()
+    app.wait_css("section[aria-label='My timetable']")
+    app_handle = app.d.current_window_handle
+    btn = next(b for b in app.css_all(
+        "section[aria-label='My timetable'] .toolbar button")
+        if b.text.strip() in ("Print", "Printing…"))
+    btn.click()
+    time.sleep(3.0)
+    handles = [h for h in app.d.window_handles if h != app_handle]
+    assert handles, "Print opened no tab"
+    try:
+        app.d.switch_to.window(handles[0])
+        # The tab took the reader's theme for the SCREEN…
+        appearance = app.d.execute_script(
+            "return document.documentElement.dataset.appearance;")
+        assert appearance == "dark", \
+            f"the print tab ignored the reader's dark theme: {appearance!r}"
+        screen_scheme = app.d.execute_script(
+            "return getComputedStyle(document.documentElement).colorScheme;")
+        assert "dark" in screen_scheme, \
+            f"on screen the dark tab should be dark: {screen_scheme!r}"
+        # …and nothing of it on PAPER.
+        app.d.execute_cdp_cmd("Emulation.setEmulatedMedia", {"media": "print"})
+        printed = app.d.execute_script("""
+            return {
+              scheme: getComputedStyle(document.documentElement).colorScheme,
+              body: getComputedStyle(document.body).backgroundColor,
+              prep: getComputedStyle(document.querySelector('.pw-prep')).display,
+            };
+        """)
+        assert "dark" not in printed["scheme"], (
+            "a dark color-scheme on the print tab's root paints the page "
+            f"canvas — an 11mm black frame on every page: {printed!r}")
+        assert printed["body"] in ("rgb(255, 255, 255)", "rgba(0, 0, 0, 0)"), \
+            f"the printed page must be white: {printed!r}"
+        assert printed["prep"] == "none", \
+            f"the tab's own screen card must not print: {printed!r}"
+        app.d.execute_cdp_cmd("Emulation.setEmulatedMedia", {"media": ""})
+        app.d.close()
+    finally:
+        app.d.switch_to.window(app_handle)
+
+
+def t130_a_phone_never_scrolls_sideways(app):
+    """The app must not scroll sideways on a phone — and until R82 it did, at
+    320px and 360px, with no dialog open at all.
+
+    One element set the floor: a whole sentence inside a `.badge`, which is
+    `white-space: nowrap`. "CMI lists these courses but hasn't put them on the
+    timetable" measured 338px and could not break, so the document's minimum
+    width became ~368px and two more elements were dragged out of view behind
+    it (the "Halls" tab at r=346, the toast rail at r=329). The same defect in
+    `ui::status_badges` cut a sentence off mid-word inside the details dialog at
+    every phone width. Both now carry `.badge.wraps`.
+
+    This is the assertion open bug 8.20 asked any fix to come with, including
+    its condition: measured WITH THE TRAY ON SCREEN, which needs a selected
+    course that has no time (SVA is unscheduled in the fixture). A fixture
+    without one never renders the sentence, and the suite passed for months."""
+    try:
+        for width in (320, 360, 390):
+            app.d.execute_cdp_cmd("Emulation.setDeviceMetricsOverride", {
+                "width": width, "height": 760, "deviceScaleFactor": 2,
+                "mobile": True,
+            })
+            app.boot("/", selection=["TOC", "SVA", "RDBM"])
+            app.wait_css("section[aria-label='My timetable']")
+            got = app.d.execute_script("""
+                const doc = document.documentElement;
+                const tray = [...document.querySelectorAll('h3')]
+                    .find((h) => h.textContent.includes('No fixed slot yet'));
+                const badge = tray && tray.querySelector('.badge');
+                // Content inside a horizontally scrollable box is SUPPOSED to
+                // extend past the viewport — that is what the box is for (the
+                // week table in `.grid-scroll`, the tab rail). What must not
+                // happen is an element reaching past the edge with nothing to
+                // scroll it, because then it is simply unreachable.
+                const scrollable = (el) => {
+                  for (let p = el.parentElement; p; p = p.parentElement) {
+                    const ox = getComputedStyle(p).overflowX;
+                    if (ox === 'auto' || ox === 'scroll') return true;
+                  }
+                  return false;
+                };
+                const wide = [...document.querySelectorAll('body *')]
+                    .filter((el) => el.getBoundingClientRect().right
+                                    > doc.clientWidth + 1 && !scrollable(el))
+                    .slice(0, 4)
+                    .map((el) => (el.tagName + '.' + (el.className || '')).slice(0, 48)
+                                 + ' r=' + Math.round(el.getBoundingClientRect().right));
+                return {
+                  client: doc.clientWidth,
+                  scroll: document.scrollingElement.scrollWidth,
+                  trayShown: !!tray,
+                  badgeWrap: badge ? getComputedStyle(badge).whiteSpace : null,
+                  overflowing: wide,
+                };
+            """)
+            assert got["trayShown"], (
+                "the tray with the long sentence must be on screen or this "
+                f"test proves nothing: {got!r}")
+            assert got["badgeWrap"] == "normal", \
+                f"the sentence badge must be allowed to wrap: {got!r}"
+            assert got["scroll"] <= got["client"] + 1, (
+                f"the document scrolls sideways at {width}px: {got!r}")
+            assert not got["overflowing"], (
+                f"elements hang outside the viewport at {width}px: {got!r}")
+    finally:
+        app.d.execute_cdp_cmd("Emulation.clearDeviceMetricsOverride", {})
+
+
+def t131_a_link_that_names_nothing_here_keeps_your_timetable(app):
+    """A link cannot empty a timetable by naming courses that do not exist.
+
+    `apply_url_state` ended in `*sel = known`, and `known` is what SURVIVED
+    resolution. Open an old bookmark, a link from a semester whose codes CMI
+    has retired, or a friend's hand-made courses sent without their
+    definitions, and `known` is empty — so the reader's stored selection was
+    overwritten with nothing, permanently, while the banner said "Everything
+    else in the link opened as usual". Two independent R82 audit agents rated
+    it a blocker; it predates the unpushed work, so it was live.
+
+    Both halves are pinned here: the timetable survives, AND the banner stops
+    claiming that everything else opened."""
+    app.boot("/", selection=["TOC", "RDBM", "MFD"])
+    before = app.d.execute_script(
+        "return JSON.parse(localStorage.getItem('cmitt.v1.selection'));")
+    assert len(before) == 3, f"fixture did not seed three courses: {before!r}"
+
+    # Every code unknown: nothing in this link exists here.
+    app.d.get(f"{BASE}/?c=ZZZ1,ZZZ2")
+    app.wait_css("section[aria-label='My timetable']")
+    time.sleep(1.0)
+    after = app.d.execute_script(
+        "return JSON.parse(localStorage.getItem('cmitt.v1.selection'));")
+    assert after == before, (
+        f"a link naming only unknown courses emptied the timetable: "
+        f"{before!r} -> {after!r}")
+    note = app.d.execute_script(
+        "const n = document.querySelector('.unknown-codes .banner-note');"
+        "return n ? n.textContent.trim() : null;")
+    assert note, "the unknown-codes banner did not appear"
+    assert "left exactly as it was" in note, (
+        f"the banner must not promise the rest of the link opened: {note!r}")
+
+    # And the mixed case still works: the known half opens, the rest is named.
+    app.d.get(f"{BASE}/?c=TOC,ZZZ9")
+    app.wait_css("section[aria-label='My timetable']")
+    time.sleep(1.0)
+    mixed = app.d.execute_script(
+        "return JSON.parse(localStorage.getItem('cmitt.v1.selection'));")
+    assert mixed == ["TOC"], f"the known half of a link must still open: {mixed!r}"
+    note2 = app.d.execute_script(
+        "const n = document.querySelector('.unknown-codes .banner-note');"
+        "return n ? n.textContent.trim() : null;")
+    assert note2 and "opened as usual" in note2, (
+        f"with a course actually opened, the banner should say so: {note2!r}")
+
+
+def t132_a_damaged_link_with_no_codes_changes_nothing(app):
+    """`?c=&s=<garbage>`: the readable half carries no codes, so there is
+    nothing to open — and FEATURES.md promises a damaged link changes nothing.
+
+    The guard tested `c.is_none()`, which a blank `c=` passes, so this fell
+    through to the apply path with an empty selection and wiped the timetable.
+    t123 covers the damaged link WITHOUT a c= at all; this is its sibling."""
+    app.boot("/", selection=["TOC", "RDBM"])
+    before = app.d.execute_script(
+        "return JSON.parse(localStorage.getItem('cmitt.v1.selection'));")
+    app.d.get(f"{BASE}/?c=&s=not-a-real-payload")
+    app.wait_css("section[aria-label='My timetable']")
+    time.sleep(1.0)
+    after = app.d.execute_script(
+        "return JSON.parse(localStorage.getItem('cmitt.v1.selection'));")
+    assert after == before, (
+        f"a damaged link with a blank c= emptied the timetable: "
+        f"{before!r} -> {after!r}")
+    assert app.css_all(".banner.warn"), \
+        "a damaged link must still say it was damaged"
 
 
 TESTS = [
@@ -7426,6 +7784,11 @@ TESTS = [
     t106_the_wheel_over_the_rail_walks_the_sections,
     t126_every_section_prints_itself_and_only_itself,
     t127_printing_never_repaints_the_app,
+    t128_tight_rows_still_print_the_real_time,
+    t129_the_print_tab_puts_nothing_dark_on_the_paper,
+    t130_a_phone_never_scrolls_sideways,
+    t131_a_link_that_names_nothing_here_keeps_your_timetable,
+    t132_a_damaged_link_with_no_codes_changes_nothing,
 ]
 
 

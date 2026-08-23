@@ -692,6 +692,16 @@ label.opt { min-height: 32px; }
   padding: 0.1rem 0.55rem;
   white-space: nowrap;
 }
+/* A badge holding a SENTENCE rather than a tag. `nowrap` is right for
+   "4 cr" or "✎ your times" and wrong for a clause: a 384px span that cannot
+   break overflowed the details dialog at every phone width (the sentence cut
+   off mid-word, with a scrollbar minted inside the dialog), and under the
+   grid it set the whole document's layout floor at ~368px, which is why the
+   app scrolled SIDEWAYS at 320 and 360px with nothing else on screen.
+   Wrapping is not a downgrade here — a pill with a clause in it was always
+   going to be two lines on a phone; the alternative was a clause with its
+   end missing. */
+.badge.wraps { white-space: normal; text-align: left; }
 .badge.warn { border-color: transparent; color: var(--warn); background: var(--warn-wash); }
 .badge.alarm { border-color: transparent; color: var(--alarm); background: var(--alarm-wash); }
 .badge.accent { border-color: transparent; color: var(--accent); background: var(--accent-wash); }
@@ -3438,12 +3448,28 @@ pre.devpre {
     line-height: 1.15;
   }
   .chip .hall {
+    /* `display` first, and it is not cosmetic: `.density-compact .chip .hall
+       { display: none }` (0,3,0) out-specifies this rule (0,2,0), and on the
+       Master grid that span holds the SUBLABEL — the meeting's real time when
+       it differs from the column it borrows. In Compact rows the sheet
+       therefore printed a class under a heading that gave the wrong time,
+       with nothing correcting it; and `App::device_density` returns Compact
+       for any phone-sized viewport, so a reader who never touched the toggle
+       got the lossy sheet. Same principle as the 640px rules above: a printed
+       sheet must not depend on the window it was printed from — and density is
+       part of that window. */
+    display: block !important;
     font-size: 7.8px;
     font-weight: 400;
     /* Real ink, not `opacity: 0.85` over the code's colour. The faded version
        was one alpha switch per chip — hundreds a sheet — and a photocopier
        loses it; this is the same step down in emphasis, made of pigment. */
-    color: hsl(var(--hue) 45% 34%) !important;
+    /* 28%, not 34%: at 34% the worst hue measured 3.90:1 against the chip's
+       own tint and failed AA for body text on paper — a regression this print
+       block introduced when it replaced `opacity: .85` with real ink (R82's
+       a11y audit measured every hue). 28% clears 4.5:1 on all of them and is
+       still a visible step down from the code above it. */
+    color: hsl(var(--hue) 45% 28%) !important;
     max-width: 100%;
     /* Wraps like on screen — a printed hall name must be whole. Centred with
        it: the chip's first line is centred, so a wrapped "802" left-aligned
@@ -3459,7 +3485,11 @@ pre.devpre {
   .covered {
     flex: 1 1 100%;
     padding: 1px 4px;
-    font-size: 9px;
+    /* `!important` for the same reason as the `display` above:
+       `.density-compact .covered` (0,2,0) beats this (0,1,0), and printed the
+       band at ~10.6px — bigger than the 9px chips it sits under, which inverts
+       the hierarchy on paper. */
+    font-size: 9px !important;
     border-left: 2.5px solid hsl(var(--hue) 42% 60%) !important;
     background: hsl(var(--hue) 55% 95%) !important;
     color: hsl(var(--hue) 60% 28%) !important;
@@ -3670,7 +3700,12 @@ pre.devpre {
     font-style: italic;
     color: #5a6170 !important;
   }
-  .sheet-list .badge::before { content: "· "; font-style: normal; }
+  /* A space on BOTH sides: where the badge is a flex item the gap already
+     separates it, but a Catalog row's "✎ your times" badge is inline right
+     after the meetings text, and with a trailing space only it printed as
+     "Thu 09:10· ✎ your times" — jammed against the time while every other
+     middot on the line was airy. */
+  .sheet-list .badge::before { content: " · "; font-style: normal; }
   .sheet-list .badge.warn, .sheet-list .badge.alarm { color: #7d5f08 !important; }
   /* Meeting lists inside a card: one line, not a stack of rows with their
      own rules — the card is already the entry. */
@@ -3805,6 +3840,16 @@ pre.devpre {
     min-height: 13px;
     font-size: 9.5px;
     padding: 0 3px;
+    /* ROW, not column, and it is the fixed row height that depends on it: the
+       ✓ on a course of yours is a flex child of its own, so in a column it
+       became a second line, outgrew the 13px chip, and — because the hall-name
+       cell spans five rows — stretched that hall's whole block ~30% taller
+       than its neighbours. Two heights in one table read as two tables, which
+       is the very thing the fixed height above exists to prevent. */
+    flex-direction: row;
+    align-items: center;
+    justify-content: center;
+    gap: 2px;
   }
   /* A hall's five days are one thing to read. `avoid` on the row would only
      protect one day; this keeps the name cell with the rows it spans, so a

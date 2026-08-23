@@ -106,13 +106,27 @@ const MADE_WITH: &str = "made with the CMI Timetable Planner";
 /// make impossible.
 fn print_button(nothing: Option<(&'static str, Signal<bool>)>) -> impl IntoView {
     let empty = move || nothing.is_some_and(|(_, sig)| sig.get());
+    // The dialog freezes this tab, and that is not something `print_sheet` can
+    // fix: the print tab is same-origin with an opener, so it shares this
+    // renderer process, and a nested modal print loop blocks the process's
+    // main thread. Clicks on the app during those seconds are DROPPED, not
+    // queued (measured 8.6-8.8s in Brave and Chromium, R82). Before R80 the
+    // app went white, which was ugly but at least unmistakable; the tab
+    // version leaves the app looking perfectly normal and dead to the touch.
+    // So it says so. The label is set before the freeze starts, which is why
+    // it is on screen during it, and the watcher below clears it on the first
+    // tick after the dialog closes.
+    let printing = RwSignal::new(false);
     view! {
         <button
             class="btn"
-            disabled=empty
+            disabled=move || empty() || printing.get()
+            aria-live="polite"
             title=move || {
                 if empty() {
                     nothing.map(|(why, _)| why)
+                } else if printing.get() {
+                    Some("Your browser's print dialog is open — the app waits for it")
                 } else {
                     Some("Print this section — or save it as a PDF")
                 }
@@ -120,9 +134,12 @@ fn print_button(nothing: Option<(&'static str, Signal<bool>)>) -> impl IntoView 
             // Not `window.print()`: that would put the app the reader is
             // looking at into print media for as long as the dialog is open —
             // see `domx::print_sheet`, which measured 8.8 seconds of it.
-            on:click=move |_| crate::domx::print_sheet()
+            on:click=move |_| {
+                printing.set(true);
+                crate::domx::print_sheet(move || printing.set(false));
+            }
         >
-            "Print"
+            {move || if printing.get() { "Printing…" } else { "Print" }}
         </button>
     }
 }
@@ -858,7 +875,14 @@ fn my_timetable(app: App) -> impl IntoView {
                                     // The name the rest of the app promises
                                     // ("it's waiting in 'No fixed slot yet'").
                                     "No fixed slot yet "
-                                    <span class="badge warn">{note}</span>
+                                    // `wraps`: this badge holds a whole
+                                    // sentence, and `nowrap` made it a 338px
+                                    // span that could not break — the layout
+                                    // floor of the WHOLE APP, which is why the
+                                    // document scrolled sideways at 320 and
+                                    // 360px whenever an unscheduled course was
+                                    // selected (open bug 8.20).
+                                    <span class="badge warn wraps">{note}</span>
                                 </h3>
                                 // Dragging one of these onto the grid is how
                                 // a course gets a time in one gesture, and
@@ -2382,7 +2406,19 @@ fn master_grid(app: App) -> impl IntoView {
                 if !app.selection.with(|s| s.is_empty()) {
                     parts.push("✓ already on your timetable");
                 }
-                if !app.clashes().is_empty() {
+                // The question has to be the one the GRID asks. `app.clashes()`
+                // is clashes WITHIN the reader's own selection; this grid's ⚠
+                // marks an UNSELECTED course that would collide with it
+                // (`warn_wont_fit` above). Pick a single course and the two
+                // disagree completely: nothing clashes with itself, so
+                // `clashes()` is empty, while every overlapping course on the
+                // page wears a ⚠ — nine of them, with no key anywhere on the
+                // paper (R82's views audit). Same rule, same predicate.
+                if app.selection.with(|s| !s.is_empty())
+                    && filtered.get().iter().any(|c| {
+                        !app.is_selected(&c.code) && !app.would_clash_with(c).is_empty()
+                    })
+                {
                     parts.push("⚠ clashes with a course you have");
                 }
                 parts.join(" \u{b7} ")
@@ -2756,11 +2792,19 @@ fn catalog(app: App) -> impl IntoView {
             // exactly why `catalog_row` marks those rows, and why the mark has
             // to be explained on the paper it appears on.
             {print_footnote(move || {
-                if app.overrides.with(|o| o.items.is_empty()) {
-                    String::new()
-                } else {
-                    "✎ times you set yourself, not CMI's".to_string()
+                let mut parts: Vec<&str> = Vec::new();
+                if app.overrides.with(|o| !o.items.is_empty()) {
+                    parts.push("✎ times you set yourself, not CMI's");
                 }
+                // A catalog row's code chip carries the clash mark too, for any
+                // course of yours that clashes (`ui::chip` sets `class:clash`
+                // on a selected clashing course) — so the Catalog printed a red
+                // ⚠ in a red box and was the one sheet that never said what it
+                // meant. Same sentence as the other three sheets use.
+                if !app.clashes().is_empty() {
+                    parts.push("⚠ marks a clash");
+                }
+                parts.join(" \u{b7} ")
             })}
         </section>
     }

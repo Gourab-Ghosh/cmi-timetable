@@ -354,8 +354,10 @@ targets differ row by row, the panel's opening line does not name one for all
 of them — it points at the button beside each row instead. One button undoes all of your
 changes to CMI's courses while keeping your own courses untouched.
 
-A **✎ N changes** pill sits in the grid toolbars whenever custom data is in
-play, counting exactly the rows in that list.
+A **N changes** pill sits in the grid toolbars whenever custom data is in
+play, counting exactly the rows in that list. (No ✎ on it: it sits directly
+left of the ✎ Edit layout button, and two pencils side by side read as one
+control.)
 
 ### Undo, for everything
 
@@ -597,8 +599,13 @@ leave alone: the sheets keep their colours either way.
 to be printed stays "in print" for as long as the dialog is open, which means
 the app you are looking at is repainted as a white sheet with no sidebar — for
 as long as you take to choose a filename. Printing a copy in a tab of its own
-keeps your app exactly as it was, in whatever theme you chose, and leaves it
-usable while the dialog is up.
+keeps your app exactly as it was, in whatever theme you chose.
+
+What it does not do is let you carry on working: while the print dialog is up,
+your browser holds the app still, and clicks on it are lost rather than
+remembered. So the Print button says **Printing…** until you save or cancel,
+and comes back by itself afterwards — the button, not a guess, tells you when
+the app is listening again.
 
 A tab rather than a small window, because the print dialog is only as good as
 the room it gets: it is a settings panel plus whatever is left for the preview,
@@ -692,7 +699,14 @@ timetable.
   for an empty one. If readable course codes ride beside the broken payload
   they still open — with the banner owning up that only the codes came
   through, not the times, credits or added courses, and pointing you back to
-  whoever sent it.
+  whoever sent it. If the readable half turns out to carry no course codes at
+  all, nothing is applied — an empty half is not a request for an empty week.
+- **And neither does a link full of courses this semester doesn't have.** Open
+  an old bookmark, a link from a term whose codes CMI has since retired, or a
+  friend's hand-made courses sent without their definitions, and every code in
+  it is unknown here. Your own timetable is left exactly as it was, and the
+  banner names the codes and says so — it does not tell you the rest of the
+  link opened, because there was no rest.
 - **What changed leads with your own week.** The banner says what happened to
   *your* courses first, by name — "CMI changed 2 of your courses — TOC,
   QCOM" — and keeps the campus-wide count as a tail. When none of the change

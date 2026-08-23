@@ -243,18 +243,27 @@ async fn attempt(
 /// to prevent. The raw string still goes to the console for whoever is
 /// debugging; the screen gets English.
 fn unreachable_msg(service: &Service, detail: &str) -> String {
-    let plain = if detail.contains("HTTP") {
-        detail.to_string()
+    leptos::logging::log!("cmitt: {} unreachable: {detail}", service.name);
+    // A service that ANSWERED was reached, and saying otherwise sends the
+    // reader to check their wifi over a 429 or a 403 — the one thing they
+    // cannot fix. "Couldn't be reached" is kept for the case it describes:
+    // nothing came back at all (R82's state-and-network audit).
+    let opening = if detail.contains("HTTP") {
+        // "Answered with an error" fits every status a shortener can send:
+        // 429 (too many), 403 (refused), 503 (having a bad day). "Turned the
+        // request down" would be wrong for the last one.
+        format!("{} answered with an error ({detail})", service.name)
     } else if detail.contains("timed out") {
         // Not "timed out after 8 s": R52 spelled the app's units out.
-        "it didn't answer in time".to_string()
+        format!("{} didn't answer in time", service.name)
     } else {
-        "the connection didn't get through".to_string()
+        format!(
+            "{} couldn't be reached (the connection didn't get through)",
+            service.name
+        )
     };
-    leptos::logging::log!("cmitt: {} unreachable: {detail}", service.name);
     format!(
-        "{} couldn't be reached ({plain}). Your link still works as it is — \
-         try another service, or copy the full link instead.",
-        service.name
+        "{opening}. Your link still works as it is — try another service, or \
+         copy the full link instead."
     )
 }

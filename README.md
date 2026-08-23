@@ -205,7 +205,7 @@ with custom changes"). When both are present, `s` wins. The query stays
   set — each with a one-click way back that says what pressing it leaves
   behind ("Put it back", "Back to CMI's time", "Back to CMI's room", "Back
   to CMI's credits"), plus "Undo my changes to CMI's courses" (which keeps
-  your own courses). A "✎ N changes" pill sits in the grid
+  your own courses). A "N changes" pill sits in the grid
   toolbars whenever custom data is in play, counting exactly the rows in
   that list, and overridden meeting rows say inline which CMI time they
   overwrite.

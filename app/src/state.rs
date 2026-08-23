@@ -670,6 +670,12 @@ pub struct App {
     pub what_changed: RwSignal<Option<SnapshotDiff>>,
     /// Unknown codes from a shared URL (dismissible warning chips).
     pub unknown_codes: RwSignal<Vec<String>>,
+    /// True when a link named courses and NOT ONE of them exists here, so the
+    /// reader's own timetable was deliberately left alone (`apply_url_state`).
+    /// The banner has to say a different thing then: "everything else in the
+    /// link opened as usual" is exactly wrong when nothing else did, and until
+    /// R82 that reassurance sat over a timetable the link had just emptied.
+    pub unknown_was_everything: RwSignal<bool>,
     pub fetch_log: RwSignal<Vec<FetchLogEntry>>,
     pub reports: RwSignal<Vec<StoredReport>>,
     pub route: RwSignal<Route>,

@@ -1189,20 +1189,45 @@ pub fn BannerView() -> impl IntoView {
                                         .collect_view()}
                                 </div>
                                 <p class="banner-note muted small">
-                                    {if one {
-                                        "It may be from an earlier semester, or it may be a \
-                                         course added by hand rather than published by CMI. \
-                                         A course added by hand travels only in the \
-                                         “Courses and your changes” link, so ask whoever \
-                                         sent this for that one instead. Everything else in \
-                                         the link opened as usual."
-                                    } else {
-                                        "They may be from an earlier semester, or they may be \
-                                         courses added by hand rather than published by CMI. \
-                                         Courses added by hand travel only in the “Courses \
-                                         and your changes” link, so ask whoever sent this for \
-                                         that one instead. Everything else in the link opened \
-                                         as usual."
+                                    // The last sentence is the one that has to
+                                    // be true: when NOTHING in the link
+                                    // resolved, nothing else opened either, and
+                                    // the reader's own timetable was left
+                                    // exactly as it was (`app.rs`, the
+                                    // `nothing_resolved` guard). Promising that
+                                    // "everything else opened as usual" over an
+                                    // untouched — or, before R82, an emptied —
+                                    // timetable is the reassurance that made
+                                    // that bug invisible.
+                                    {move || {
+                                        let all = app.unknown_was_everything.get();
+                                        match (one, all) {
+                                            (true, false) => "It may be from an earlier semester, or it may be a \
+                                                 course added by hand rather than published by CMI. \
+                                                 A course added by hand travels only in the \
+                                                 “Courses and your changes” link, so ask whoever \
+                                                 sent this for that one instead. Everything else in \
+                                                 the link opened as usual.",
+                                            (false, false) => "They may be from an earlier semester, or they may be \
+                                                 courses added by hand rather than published by CMI. \
+                                                 Courses added by hand travel only in the “Courses \
+                                                 and your changes” link, so ask whoever sent this for \
+                                                 that one instead. Everything else in the link opened \
+                                                 as usual.",
+                                            (true, true) => "It may be from an earlier semester, or it may be a \
+                                                 course added by hand rather than published by CMI. \
+                                                 A course added by hand travels only in the \
+                                                 “Courses and your changes” link, so ask whoever \
+                                                 sent this for that one instead. It was the only \
+                                                 course in the link, so your own timetable was left \
+                                                 exactly as it was.",
+                                            (false, true) => "They may be from an earlier semester, or they may be \
+                                                 courses added by hand rather than published by CMI. \
+                                                 Courses added by hand travel only in the “Courses \
+                                                 and your changes” link, so ask whoever sent this for \
+                                                 that one instead. They were the whole link, so your \
+                                                 own timetable was left exactly as it was.",
+                                        }
                                     }}
                                 </p>
                             </div>
@@ -2962,7 +2987,11 @@ fn status_badges(course: &Course) -> impl IntoView + use<> {
     badges
         .into_iter()
         .map(|(text, kind)| {
-            view! { <span class="badge" class:warn=kind == "warn">{text}</span> }
+            // `wraps` because two of these are clauses, not tags: at 320-412px
+            // the dialog is 286-378px wide and a `nowrap` 384px pill hung out
+            // of it with its last words cut off. A tag ("marked optional by
+            // CMI") is short enough that wrapping never triggers.
+            view! { <span class="badge wraps" class:warn=kind == "warn">{text}</span> }
         })
         .collect_view()
 }

@@ -824,12 +824,27 @@ pub fn keep_number_with_word(name: &str) -> String {
 /// printing, and printing a document whose stylesheet has not arrived yet
 /// produces a correct, complete, entirely unstyled sheet.
 ///
-/// Falls back to a plain `window.print()` if the popup cannot be opened. A
+/// # What this does NOT buy: the app is FROZEN, not merely repainted
+///
+/// The print tab is same-origin and has an opener, so it shares this renderer
+/// process, and the nested modal loop inside its `window.print()` blocks that
+/// process's main thread. Measured in Brave and Chromium (R82's audit): the
+/// app's `setInterval` stops for 8.6-8.8s, and a click on the app's own
+/// sidebar during that time is **dropped, not queued** — the listener never
+/// sees it. Only the PAINT is isolated, which is the part that was broken.
+///
+/// `noopener` would end the freeze and also make injecting the sheet
+/// impossible, so the honest fix is to say so: the button reads "Printing…"
+/// and is disabled for the duration (`views::print_button`), and `on_done`
+/// below is what puts it back. Do not write "the app stays usable" anywhere.
+///
+/// Falls back to a plain `window.print()` if the tab cannot be opened. A
 /// reader who cannot print at all is worse off than one whose background
 /// blinks.
-pub fn print_sheet() {
-    if try_print_in_own_window().is_none() {
+pub fn print_sheet(on_done: impl Fn() + Clone + 'static) {
+    if try_print_in_own_window(on_done.clone()).is_none() {
         let _ = window().print();
+        on_done();
     }
 }
 
@@ -865,7 +880,7 @@ fn collect_css() -> String {
 /// second press replaces those rules instead of appending a second copy.
 const APP_CSS_ID: &str = "cmitt-app-css";
 
-fn try_print_in_own_window() -> Option<()> {
+fn try_print_in_own_window(on_done: impl Fn() + Clone + 'static) -> Option<()> {
     let doc = document();
     let app = doc.query_selector(".app").ok()??;
     let css = collect_css();
@@ -897,10 +912,26 @@ fn try_print_in_own_window() -> Option<()> {
         // somewhere the navigation is about to throw away. `#sheet` is the
         // proof that the right document has arrived.
         let mut host = None;
-        // Five seconds: generous on purpose. The alternative below prints the
-        // app, and a slow cold load is not a reason to inflict that.
-        for _ in 0..200 {
+        // TWENTY seconds, and the number is not arbitrary. The fallback below
+        // prints the APP — the white flash this whole design exists to avoid —
+        // so it must never be reached by a load that was merely slow. The old
+        // 5s was exactly `NAV_TIMEOUT_MS` in `hooks/sw-body.js`: on a stalled
+        // connection the service worker answers from cache at ~5000ms, the
+        // same instant this gave up, and R82 measured the two 50ms apart. Two
+        // independent 5000ms constants must not decide who wins.
+        for _ in 0..800 {
             gloo_timers::future::TimeoutFuture::new(25).await;
+            // The reader closed the print tab: nothing to print into, and
+            // printing the app instead would be a white flash they never
+            // asked for. Note `win.document()` on a closed tab does NOT throw
+            // and is not None — it hands back a detached document that says
+            // `readyState: "complete"` — so `closed` is the only honest test,
+            // and without it this loop spends its whole patience on a tab that
+            // is already gone.
+            if win.closed().unwrap_or(false) {
+                on_done();
+                return;
+            }
             if let Some(pdoc) = win.document()
                 && pdoc.ready_state() == "complete"
                 && let Some(h) = pdoc.get_element_by_id("sheet")
@@ -910,11 +941,13 @@ fn try_print_in_own_window() -> Option<()> {
             }
         }
         let Some((pdoc, host)) = host else {
-            // Five seconds and the tab never became the page we asked for.
-            // Print the app itself instead: the reader pressed Print, and a
-            // background that blinks beats a button that does nothing.
+            // Twenty seconds and the tab never became the page we asked for —
+            // a broken build or a service worker without print.html in it.
+            // Print the app itself: the reader pressed Print, and a background
+            // that blinks beats a button that does nothing.
             let _ = win.close();
             let _ = window().print();
+            on_done();
             return;
         };
 
@@ -931,6 +964,7 @@ fn try_print_in_own_window() -> Option<()> {
         let Some(style) = style else {
             // An unstyled sheet is not worth printing.
             let _ = win.close();
+            on_done();
             return;
         };
         style.set_text_content(Some(&css));
@@ -943,6 +977,26 @@ fn try_print_in_own_window() -> Option<()> {
         // doc comment. `focus()` matters only when the tab was already open,
         // as a new one arrives focused.
         let _ = win.focus();
+
+        // Wait for the tab to go, and put the button back when it does.
+        //
+        // Every tick of this loop is queued behind the dialog's modal loop —
+        // that is the freeze — so the first one to actually RUN is already
+        // after the reader saved or cancelled, and `print.html` closes itself
+        // on `afterprint` a tick later. That makes this both the "dialog
+        // closed" signal and the "tab closed" signal with no message passing.
+        //
+        // The cap is a backstop for the one case where the tab lives on: a
+        // browser that refuses `close()`. Then the tab says what it is (see
+        // `print.html`) and the button must not stay stuck on "Printing…"
+        // for the rest of the session.
+        for _ in 0..600 {
+            gloo_timers::future::TimeoutFuture::new(250).await;
+            if win.closed().unwrap_or(true) {
+                break;
+            }
+        }
+        on_done();
     });
     Some(())
 }

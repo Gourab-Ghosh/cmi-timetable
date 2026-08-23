@@ -150,7 +150,16 @@ pub fn resolve_url_state(c: Option<&str>, s: Option<&str>) -> UrlState {
                 selection.push(code);
             }
         }
-        let next_id = payload.o.iter().map(|o| o.id + 1).max().unwrap_or(0);
+        // `saturating_add`: a hand-crafted link can carry `id: u32::MAX`, and
+        // `o.id + 1` then panics in a debug build and wraps to 0 in the shipped
+        // release one — handing the store a `next_id` that collides with an
+        // existing item (R82's core audit, 12 714 mutations in).
+        let next_id = payload
+            .o
+            .iter()
+            .map(|o| o.id.saturating_add(1))
+            .max()
+            .unwrap_or(0);
         return UrlState {
             selection,
             overrides: Some(OverridesStore {

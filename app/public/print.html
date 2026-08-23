@@ -37,39 +37,52 @@
        code chose left Chromium's preview about 610px wide next to its 380px
        settings panel, which is the cramped, ugly dialog this replaces.
 
-       Everything below is about the fraction of a second before the print
-       dialog covers this tab, and about what sits behind that dialog while the
-       reader chooses a filename. A blank white page reads as something having
-       gone wrong; this reads as a print window in their own theme, which is
-       what it is.
+       Everything in `@media screen` below is about the fraction of a second
+       before the print dialog covers this tab, and about what sits behind that
+       dialog while the reader chooses a filename. A blank white page reads as
+       something having gone wrong; this reads as a print window in their own
+       theme, which is what it is.
 
-       `!important` on the rules that matter: the app's whole stylesheet is
-       copied into this document (so the sheet is laid out by exactly the rules
-       that lay it out anywhere else) and lands in the same cascade as this
-       block. Order between them is not worth depending on. */
-    :root {
-      color-scheme: light;
-      --ground: #f3f4f7;
-      --card: #ffffff;
-      --edge: #e2e5eb;
-      --ink: #10131b;
-      --muted: #5d6675;
-      --lift: 0 10px 30px rgba(16, 19, 27, 0.08);
-    }
-    :root[data-appearance="dark"] {
-      color-scheme: dark;
-      --ground: #0e1014;
-      --card: #171a21;
-      --edge: #272d3a;
-      --ink: #e8eaf0;
-      --muted: #9aa4b4;
-      --lift: 0 12px 34px rgba(0, 0, 0, 0.45);
-    }
+       TWO RULES THIS FILE LEARNED THE HARD WAY (R82's audit found both):
+
+       1. Every screen-only declaration lives INSIDE `@media screen` — including
+          `color-scheme`. Left at the top level, `color-scheme: dark` applied in
+          PRINT media too, and since the root element has no background of its
+          own, Chromium painted the page canvas with its dark UA default: an
+          11-12mm near-black frame around every printed page, ~18% of every
+          sheet, for any reader with the theme dark and "Background graphics"
+          ticked. `@media print` at the bottom now pins it as well.
+       2. This file's classes are prefixed `pw-` because the app's ENTIRE
+          stylesheet is copied into this document at print time, and it is
+          appended AFTER this block: a bare `.card`, `.mark`, `.t` or `.s` loses
+          to the app's own rule of the same specificity, which put a light-theme
+          card on the dark ground with a 2.5:1 status line. Prefixed names
+          cannot collide, whatever order the cascade ends up in. */
     html, body { margin: 0; padding: 0; }
     @media screen {
+      :root {
+        color-scheme: light;
+        --pw-ground: #f3f4f7;
+        --pw-card: #ffffff;
+        --pw-edge: #e2e5eb;
+        --pw-ink: #10131b;
+        --pw-muted: #5d6675;
+        --pw-link: #3f5bd9;
+        --pw-lift: 0 10px 30px rgba(16, 19, 27, 0.08);
+      }
+      :root[data-appearance="dark"] {
+        color-scheme: dark;
+        --pw-ground: #0e1014;
+        --pw-card: #171a21;
+        --pw-edge: #272d3a;
+        --pw-ink: #e8eaf0;
+        --pw-muted: #9aa4b4;
+        --pw-link: #93a6ff;
+        --pw-lift: 0 12px 34px rgba(0, 0, 0, 0.45);
+      }
       body {
-        background: var(--ground) !important;
-        color: var(--ink);
+        background: var(--pw-ground) !important;
+        color: var(--pw-ink) !important;
         font-family: "Segoe UI Variable Display", "Segoe UI", Inter, system-ui,
           -apple-system, "Helvetica Neue", Arial, sans-serif;
         -webkit-font-smoothing: antialiased;
@@ -77,27 +90,29 @@
       /* The sheet is for paper. On screen it would render as a second copy of
          the app, which is exactly the confusion this window exists to avoid. */
       #sheet { display: none !important; }
-      .prep {
+      .pw-prep {
         min-height: 100vh;
         display: grid;
         place-items: center;
         padding: 2rem;
         box-sizing: border-box;
       }
-      .card {
+      .pw-card {
         display: flex;
         align-items: center;
         gap: 0.85rem;
+        max-width: min(92vw, 26rem);
         padding: 1.15rem 1.5rem 1.15rem 1.25rem;
-        background: var(--card);
-        border: 1px solid var(--edge);
-        border-radius: 14px;
-        box-shadow: var(--lift);
+        background: var(--pw-card) !important;
+        color: var(--pw-ink) !important;
+        border: 1px solid var(--pw-edge) !important;
+        border-radius: 14px !important;
+        box-shadow: var(--pw-lift) !important;
       }
       /* The app's own mark, in the app's own gradient: a week frame with one
          class placed on it. Same shape as the favicon and the header logo, so
          this window is recognisably part of the same thing. */
-      .mark {
+      .pw-mark {
         flex: none;
         width: 38px;
         height: 38px;
@@ -105,50 +120,63 @@
         background: linear-gradient(120deg, #3f5bd9, #8a46c8);
         position: relative;
       }
-      .mark::before,
-      .mark::after {
+      .pw-mark::before,
+      .pw-mark::after {
         content: "";
         position: absolute;
         background: #fff;
       }
-      .mark::before {
+      .pw-mark::before {
         inset: 9px;
         border-radius: 3px;
         background: none;
         border: 1.4px solid rgba(255, 255, 255, 0.92);
       }
-      .mark::after {
+      .pw-mark::after {
         left: 20px;
         top: 20px;
         width: 9px;
         height: 9px;
         border-radius: 2px;
       }
-      .t { margin: 0; font-size: 0.95rem; font-weight: 700; letter-spacing: -0.01em; }
-      .s { margin: 0.15rem 0 0; font-size: 0.84rem; color: var(--muted); }
-      .s a { color: #6f8bff; }
-      :root[data-appearance="light"] .s a { color: #3f5bd9; }
+      .pw-t {
+        margin: 0;
+        font-size: 0.95rem;
+        font-weight: 700;
+        letter-spacing: -0.01em;
+        color: var(--pw-ink) !important;
+      }
+      .pw-s {
+        margin: 0.15rem 0 0;
+        font-size: 0.84rem;
+        color: var(--pw-muted) !important;
+      }
+      .pw-s a { color: var(--pw-link) !important; }
       @media (prefers-reduced-motion: no-preference) {
-        .card { animation: rise 220ms cubic-bezier(0.22, 0.61, 0.36, 1) both; }
-        @keyframes rise {
+        .pw-card { animation: pw-rise 220ms cubic-bezier(0.22, 0.61, 0.36, 1) both; }
+        @keyframes pw-rise {
           from { opacity: 0; transform: translateY(6px); }
           to { opacity: 1; transform: none; }
         }
       }
     }
-    /* On paper this window is only the sheet. */
+    /* On paper this window is only the sheet — on a white page, whatever the
+       reader's theme. `color-scheme` is restated here rather than merely left
+       out of print media, because this document inherits the app's rules too
+       and paper is not the place to find out who won. */
     @media print {
-      .prep { display: none !important; }
+      :root { color-scheme: light !important; }
+      .pw-prep { display: none !important; }
     }
   </style>
 </head>
 <body>
-  <div class="prep" role="status">
-    <div class="card">
-      <span class="mark" aria-hidden="true"></span>
+  <div class="pw-prep" role="status">
+    <div class="pw-card">
+      <span class="pw-mark" aria-hidden="true"></span>
       <span>
-        <p class="t">CMI Timetable Planner</p>
-        <p class="s" id="status">Getting your sheet ready to print&hellip;</p>
+        <p class="pw-t">CMI Timetable Planner</p>
+        <p class="pw-s" id="status">Getting your sheet ready to print&hellip;</p>
       </span>
     </div>
   </div>
@@ -165,8 +193,14 @@
       // the difference between the dialog the reader knows and the one they
       // complained about: the dialog belongs to this tab (title bar, address
       // bar, the reader's own window size — the Ctrl+P dialog, because this is
-      // the same thing Ctrl+P does), and the app is never blocked waiting for
-      // it.
+      // the same thing Ctrl+P does), and the app is never repainted as a sheet.
+      //
+      // What it does NOT buy: the app stays FROZEN while the dialog is up. This
+      // tab is same-origin and has an opener, so it shares the app's renderer
+      // process, and a nested modal print loop blocks that process's main
+      // thread — clicks on the app tab are dropped, not queued (measured:
+      // 8.6-8.8s, R82's audit). The app's Print button says "Printing…" for
+      // exactly that reason; do not re-add a claim that the app stays usable.
       //
       // A MutationObserver rather than a one-shot: press Print twice and the
       // app refills this same named tab, and the second sheet has to print
@@ -182,8 +216,7 @@
 
       // Fires whether they saved the PDF or cancelled, so the tab always goes
       // away by itself. `close()` is permitted: this window was opened by
-      // script. If a browser ever refuses, the reader is left with a tab that
-      // says what it is and how to get back — see below.
+      // script.
       window.addEventListener("afterprint", function () {
         window.close();
         // Only reached if the browser refused to close it — a document that
