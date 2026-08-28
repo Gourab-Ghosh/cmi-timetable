@@ -868,12 +868,19 @@ regenerates the .ics golden.
   the user's request: nothing on GitHub may build/schedule/fail/mail). The
   The ONLY GitHub-side step left is their managed `pages-build-deployment`,
   which copies the branch's static files — unavoidable for Pages.
-  **Live as of R75** (17 Aug 2026): `main` = `531a1d2` pushed, `gh-pages` tip
-  `3ea1a62`, serving that build. After a deploy, run
-  `.workagents/live-site-check.py` — the pre-deploy harnesses all drive a
-  localhost artifact, and it is the only one that drives the real origin
-  (GitHub's 404.html, the sub-path worker scope, and whether the fresh build
-  offers itself an update).
+  **Live as of R85** (28 Aug 2026, 12:30 UTC): `main` = `de0c130` pushed,
+  `gh-pages` tip `e57b414` ("deploy: de0c130"), serving wasm
+  `cmi-timetable-app-d82ba9a41eb71e38_bg.wasm` — 8 files, 2 344 481 bytes,
+  verified byte-for-byte against `app/dist-deploy/`. (Was R75 / `531a1d2` /
+  `3ea1a62` before this.)
+  After a deploy, run `.workagents/live-site-check.py` — the pre-deploy
+  harnesses all drive a localhost artifact, and it is the only one that drives
+  the real origin (GitHub's 404.html, the sub-path worker scope, and whether
+  the fresh build offers itself an update). Then run
+  `.workagents/cors-r84/probes/deployed_sync_probe.py <wasm-name>`, which is
+  the only check that presses the real button on the real origin: `deploy.sh`
+  verifies GitHub is serving the right FINGERPRINT, and a correctly-served
+  build that cannot reach CMI is exactly the outage R84 was opened for.
   **A docs-only push must be `CMITT_SKIP_DEPLOY=1 git push`.** The pre-push
   hook redeploys on any `main` push, and `build.rs` stamps `APP_BUILD_TIME`
   into the wasm — so rebuilding identical source yields a new content hash, a
@@ -6236,6 +6243,87 @@ dependencies cannot tell you a dependency has died.** The two probes above are
 cheap, take under a minute, and are the difference between finding this and
 being told about it.
 
+### R85 — "push and deploy the webpage": the release, and what it looked like from outside
+
+The first deploy since the outage. `./deploy.sh --push` pushed `main`
+(`ca7ad77..de0c130`, 12 commits), ran the native suite inside the container,
+built the release wasm, published `gh-pages` as a single orphan commit
+(`e57b414`, "deploy: de0c130", no `+dirty`) and polled the live URL until it
+served this build. Exit 0.
+
+**The check the deploy script cannot make.** Its verification asks whether
+GitHub is serving the right *fingerprint*. That is not the same question as
+whether the app WORKS, and after R84 it is the only question worth asking.
+`deployed_sync_probe.py` (in `.workagents/cors-r84/probes/`) drives the real
+deployed page and presses the real button, because the bug being fixed exists
+only at a public origin: localhost never triggers CMI's missing CORS headers,
+and `curl` cannot see the problem at all since `curl` does not enforce CORS.
+Result on release day: **79 courses, 14 halls, 1.6 s, via `cors.sh`.**
+
+Four agents then verified the live site along dimensions the suite structurally
+cannot reach. All four PASS.
+
+**The returning reader — the one that actually mattered.** Every existing user
+had the BROKEN build in their service-worker cache, so the release only reaches
+the people who hit the bug if the worker upgrades them. Answered by experiment,
+not by reading the source: the previous release was served locally, its worker
+allowed to install and claim, the bytes then swapped for this build and the
+profile reloaded. The new build ran on the FIRST navigation after the deploy;
+both caches were present at +2 s and the old one was gone by +8 s. `install`
+calls `skipWaiting()` unconditionally and `activate` deletes every other
+`cmitt-sw-*` cache, so a new deploy never sits in "waiting". Two bounded
+caveats, both self-healing and both recorded in §8: Pages serves `index.html`
+and `sw.js` with `max-age=600`, so a reader who loaded the page in the ten
+minutes before a deploy asks the server nothing at all on their next
+navigation; and `navigate()` races the network against a 5 s timer whose loser
+is the cached shell, so a connection slower than 5 s to first byte gets the
+previous build for that one visit. Neither is a stuck state.
+
+**Two findings, one of them mine, and the refutation that mattered more.**
+
+An agent reported "3 of the 7 relays are dead on release day". A refuting agent
+killed it, and the reason is a permanent lesson about how this project measures
+relays: the finding was an artifact of the PROBE's own shape. Fourteen
+concurrent requests per round make `allorigins.win`, `codetabs.com` and
+`cors.lol` look dead; asked one at a time, 25 s apart — the shape the app's
+head start actually produces — `allorigins.win` and `cors.lol` both answered
+**200 with CMI's exact 33 100 bytes**. A relay census run at a concurrency the
+app never uses measures the probe, not the relay. The margin is better than 4
+of 7, not worse.
+
+The finding that SURVIVED refutation was a claim in this repo's own source. The
+`corsmirror` comment said it was "the only survivor NOT on Cloudflare — one
+Cloudflare incident takes both of the two above". That is true of Cloudflare
+*Workers* and false of Cloudflare's *edge*, and the edge is the more common
+failure mode. The refuting agent tried hard to kill it and found what looks
+like a decisive counter — `corsmirror`'s `216.24.57.0/24` is announced by
+**AS397273 RENDER**, not AS13335 — then killed its own refutation with the one
+test neither had run: `https://corsmirror.onrender.com/cdn-cgi/trace` returns
+the CLIENT's ip and `colo=MAA`, and only a Cloudflare edge machine answers that
+path. It is Cloudflare BYOIP: Render's own addresses, fronted by Cloudflare's
+edge, so an ASN lookup says "not Cloudflare" and is wrong. Six of the seven
+answer that trace; `api.cors.lol` is the only one that does not.
+
+Both comments corrected. `corsmirror` now says it buys COMPUTE diversity and
+explicitly warns the next reader off the ASN check, and `cors.lol` — last on
+throughput, and previously justified only as "a sixth independent operator" —
+now records that it is the one route a Cloudflare EDGE incident would not take
+with it, with an instruction not to trim it if this list is ever shortened for
+being long. A claim in a comment is a claim; R84 corrected a contrast number
+the same way in the same file's neighbour.
+
+**The published tree.** Eight files, 2 344 481 bytes, byte-for-byte identical
+to `app/dist-deploy/` (all eight blob SHA-1s reproduced with `git hash-object`);
+every live URL 200 with a matching sha256; all three SRI `integrity=` values
+reproduced with `openssl dgst -sha384`; `.nojekyll` present; **no copy of CMI's
+pages anywhere in the tree**, which is the hard rule §1 states. A live student
+walk at the user's real 2560x1600 @1.5x found no sideways scroll, no clipping
+and no SEVERE console errors across every tab in both themes.
+
+One honest gap, recorded rather than papered over: the live walk exercised only
+the `cors.sh` route, because that is the one that answered first every time. The
+other six were exercised by the census, not by the app.
+
 ## 8. Open bugs — found, confirmed, NOT fixed (do not delete)
 
 Rules for this section: entries stay until the bug is actually fixed and a
@@ -6334,6 +6422,46 @@ write needs a message the reader can act on. What a fix must come with: the
 three keys added to the same listener with the same deferred-adoption shape,
 and a test that drives TWO REAL TABS — a single-tab assertion cannot see this
 at all, which is why 129 tests never did.
+
+### 8.24 A reader who loaded the page in the 10 minutes before a deploy stays on the old build for one navigation
+
+GitHub Pages serves `index.html` AND `sw.js` with `cache-control: max-age=600`.
+`navigate()` in the service worker calls plain `fetch()`, which consults the
+HTTP cache, and the browser's own worker update check is served from it too. So
+the navigation immediately after a deploy can generate ZERO server requests —
+no shell fetch, no `sw.js` fetch — and the reader runs the previous build.
+
+Reproduced in R85 with a scaled 20 s `max-age` and server-side request logging
+(`.workagents/deploy-verify/sw_maxage_window.py`): no requests at all at +0.1 s,
+then at +20.7 s — exactly when the entry lapsed — `sw.js` was fetched, the new
+build precached, the old cache dropped, and the next navigation ran the new
+build.
+
+NOT FIXED, and probably should not be: the window is bounded by `max-age`, it
+self-heals with no user action, and the affected population is only readers
+whose last visit was within ten minutes of a deploy. Real returning users come
+back hours or days later with a long-expired entry. Shortening it means
+`Cache-Control` headers Pages does not let this project set, or a cache-busted
+worker URL, both of which cost more than the ten minutes buy.
+
+### 8.25 On a connection slower than 5 s to first byte, a returning reader gets the previous build for that one visit
+
+`navigate()` races the network against a 5000 ms timer (`NAV_TIMEOUT_MS`) whose
+loser is the cached shell. Measured in R85 against a server stalling the shell
+for 12 s (`.workagents/deploy-verify/sw_slow_nav.py`): the navigation returned
+at 5.02 s serving the CACHED OLD shell, and because the old build's hashed
+assets are still in Cache Storage the old app booted and ran.
+
+This is the offline-first trade-off working as designed — the same 5 s cap is
+what lets the app open with no connection at all — so it is recorded, not
+"fixed". Two things keep it benign: the new worker still installs and precaches
+in the background during that same slow visit (old cache gone between +15 s and
++30 s), and the next normal-speed visit runs the new build. A student on bad
+hostel wifi can see one stale load and never has to clear anything.
+
+Do not "fix" this by raising or removing the timeout without re-reading §8's
+offline requirement: the loser of that race is what makes the app work on a
+train.
 
 ### 8.21 Deliberate non-bug — Chrome warns "integrity attribute is ignored" once per page load
 

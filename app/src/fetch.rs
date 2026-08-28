@@ -108,10 +108,22 @@ pub const PROXIES: &[ProxyDef] = &[
         },
         headers: &[],
     },
-    // Verified 7/7, and the only survivor NOT on Cloudflare — one Cloudflare
-    // incident takes both of the two above, and this is what is left. Third
-    // rather than second only because Render sleeps a free service: the
-    // first contact of the day measured 25.5s, warm ones ~0.6s.
+    // Verified 7/7. Here for COMPUTE diversity: its origin really is Render
+    // on GCP us-west1, so a Cloudflare *Workers* outage takes both of the two
+    // above and leaves this one standing. Do NOT read that as edge diversity,
+    // which an earlier draft of this comment claimed: corsmirror answers
+    // /cdn-cgi/trace with the CLIENT's ip and a colo, and only a Cloudflare
+    // edge machine does that. Its 216.24.57.0/24 is announced by AS397273
+    // RENDER, not AS13335 — Cloudflare BYOIP, Render's addresses fronted by
+    // Cloudflare's edge — so an ASN lookup says "not Cloudflare" and is
+    // wrong. Measured on release day: six of these seven answer that trace;
+    // api.cors.lol is the one that does not, which makes cors.lol, last in
+    // this list, the actual edge-independent route. A Cloudflare EDGE
+    // incident is therefore survived by cors.lol, by your own helper site,
+    // and by the paste-the-page hand-over — not by this entry.
+    // Third rather than second only because Render sleeps a free service:
+    // the first contact of the day measured 25.5s, warm ones ~0.6s, and the
+    // budget is 12s, so the first sync of a quiet day can lose it.
     ProxyDef {
         name: "corsmirror",
         build: |url| {
@@ -166,6 +178,13 @@ pub const PROXIES: &[ProxyDef] = &[
     // carries no `Access-Control-Allow-Origin` at all, so the browser never
     // sees the status and the app cannot tell "throttled, try later" from
     // "dead host". Its quota is per IP, and a campus shares one.
+    //
+    // Kept regardless, and it is the one entry whose absence would be
+    // structural rather than statistical: on release day it was the ONLY one
+    // of these seven that does not answer /cdn-cgi/trace, i.e. the only route
+    // here that a Cloudflare edge incident would not take with it. Last on
+    // throughput, first on independence. If this list is ever trimmed for
+    // being long, do not trim this one.
     ProxyDef {
         name: "cors.lol",
         build: |url| {
