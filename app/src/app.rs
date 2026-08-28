@@ -335,10 +335,7 @@ fn apply_url_state(app: App) {
         // moved or re-credited themselves is gone. It is one undo step, but
         // nothing pointed at it — the incoming custom *courses* raise a
         // banner when they lose, while this went by in silence.
-        let replaced_own_work = shared_overrides.is_some()
-            && app
-                .overrides
-                .with_untracked(|o| !o.items.is_empty() || !o.credits.is_empty());
+        let notice = replacement_notice(app, &selection, shared_overrides.is_some());
         if app.selection.with_untracked(|s| *s != selection)
             || shared_overrides.is_some()
             || !incoming_customs.is_empty()
@@ -354,10 +351,8 @@ fn apply_url_state(app: App) {
                 }
                 unhide_selected(sel, ovs);
             });
-            if replaced_own_work {
-                app.toast_undo(
-                    "This link brought its own times and credits, and they replaced yours.",
-                );
+            if let Some(notice) = notice {
+                app.toast_undo(notice);
             }
         }
         return;
@@ -396,10 +391,7 @@ fn apply_url_state(app: App) {
     }
 
     let shared_overrides = state.overrides;
-    let replaced_own_work = shared_overrides.is_some()
-        && app
-            .overrides
-            .with_untracked(|o| !o.items.is_empty() || !o.credits.is_empty());
+    let notice = replacement_notice(app, &known, shared_overrides.is_some());
     // A link that names courses and resolves NONE of them cannot replace a
     // timetable. It used to: `*sel = known` with an empty `known` wrote an
     // empty selection over the reader's stored one, permanently — an old
@@ -434,13 +426,54 @@ fn apply_url_state(app: App) {
             }
             unhide_selected(sel, ovs);
         });
-        if replaced_own_work {
-            app.toast_undo("This link brought its own times and credits, and they replaced yours.");
+        if let Some(notice) = notice {
+            app.toast_undo(notice);
         }
     } else {
         app.sync_url();
     }
     app.unknown_codes.set(unknown);
+}
+
+/// What a share link is about to take away, in the words the reader needs.
+///
+/// A link is written over the planner wholesale, and until R83 only ONE of the
+/// two things it can destroy raised a word: the incoming overrides replacing
+/// the reader's own moved classes and credits. The SELECTION being thrown away
+/// was never weighed — so a reader with courses picked and no meeting edits
+/// opened a friend's link (or their own older bookmark) and their timetable
+/// was replaced in silence, with the Undo button going from disabled to
+/// enabled as the only sign, and one reload making it permanent. The identical
+/// action DID announce itself if that reader happened to hold one override
+/// (old §8.23).
+///
+/// Both are weighed now, and each gets its own sentence: "times and credits"
+/// is not what was lost when what was lost was the courses.
+fn replacement_notice(app: App, incoming: &[String], shared_overrides: bool) -> Option<String> {
+    let lost_edits = shared_overrides
+        && app
+            .overrides
+            .with_untracked(|o| !o.items.is_empty() || !o.credits.is_empty());
+    // Only a link that actually CHANGES the picked courses replaces them —
+    // reopening the same link, or one naming what is already there, takes
+    // nothing away.
+    let lost_courses = app
+        .selection
+        .with_untracked(|s| !s.is_empty() && s.as_slice() != incoming);
+    match (lost_courses, lost_edits) {
+        (false, false) => None,
+        (false, true) => Some(
+            "This link brought its own times and credits, and they replaced yours.".to_string(),
+        ),
+        (true, false) => {
+            Some("This link replaced the courses you had picked with its own.".to_string())
+        }
+        (true, true) => Some(
+            "This link replaced the courses you had picked, and the times and \
+             credits you set, with its own."
+                .to_string(),
+        ),
+    }
 }
 
 /// A course cannot be on the timetable AND deleted. A link that names one —
@@ -504,6 +537,20 @@ fn install_viewport_listener(app: App) {
     }
 }
 
+/// A window that changes size while a filter menu is open.
+///
+/// `domx::place_facet_menu` measures the menu against the window at the
+/// moment it opens; resizing the window (or turning a phone) invalidates that
+/// measurement in whichever direction the edge moved, so it is taken again.
+/// Cheap by construction: it does nothing at all unless a facet is open, and
+/// no menu can be open on a page nobody is looking at.
+fn install_facet_placement_listener() {
+    let closure = Closure::<dyn FnMut()>::new(domx::replace_open_facet_menus);
+    let _ =
+        domx::window().add_event_listener_with_callback("resize", closure.as_ref().unchecked_ref());
+    closure.forget();
+}
+
 fn install_theme_listener(app: App) {
     if let Ok(Some(mql)) = domx::window().match_media("(prefers-color-scheme: dark)") {
         let closure = Closure::<dyn FnMut(web_sys::MediaQueryListEvent)>::new(
@@ -554,6 +601,39 @@ fn install_cross_tab_sync(app: App) {
             // the blob would stomp this tab's filters, theme and day view,
             // which are deliberately per-tab until a refresh. Nothing is
             // written back from here either, or the two tabs would echo.
+            // Another tab of this app just wrote the user's OWN data — the
+            // one thing here that cannot be fetched again.
+            //
+            // Each tab holds the whole store in memory and writes it back
+            // wholesale, so whichever tab saves LAST wins and the other's
+            // work is gone with no message and nothing in the undo stack of
+            // the tab that is still open. Two tabs is an ordinary thing to
+            // have: a share link opens one, and "open in new tab" on the app
+            // itself is a habit (old §8.22 — found by R82's user-journeys
+            // agent, reproduced, and deferred there because the FIX is a
+            // design decision).
+            //
+            // This is not that fix, and does not pretend to be: adopting the
+            // other tab's data would yank the page out from under someone
+            // mid-edit, which is its own kind of loss. What it does is end
+            // the SILENCE — the reader is told, while both versions still
+            // exist, and reloading is one keystroke. Sticky, because it must
+            // outlive the background sync that clears transient banners on
+            // this same load.
+            if matches!(
+                ev.key().as_deref(),
+                Some(storage::KEY_SELECTION | storage::KEY_OVERRIDES | storage::KEY_CUSTOM)
+            ) && ev.new_value().is_some()
+                && ev.new_value() != ev.old_value()
+            {
+                app.set_banner_sticky(
+                    crate::state::BannerKind::Warn,
+                    "Another tab of this app has changed your timetable. This tab is \
+                     still showing the version from before — reload it to catch up. \
+                     If you carry on here instead, this tab's version is the one \
+                     that gets saved.",
+                );
+            }
             if ev.key().as_deref() == Some(storage::KEY_PREFS)
                 && let storage::Loaded::Value(stored) =
                     storage::load::<crate::state::Prefs>(storage::KEY_PREFS)
@@ -596,6 +676,7 @@ pub fn Root() -> impl IntoView {
     install_routing(app);
     install_theme_listener(app);
     install_viewport_listener(app);
+    install_facet_placement_listener();
     dnd::install_global_handlers(app);
     apply_theme(app);
 

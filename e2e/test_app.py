@@ -33,6 +33,7 @@ path a real student's browser takes first — rather than a special one that
 only exists under test.
 """
 
+import datetime
 import http.server
 import json
 import os
@@ -236,7 +237,8 @@ CMI_PAGES = {
     "/practical/lecturehalls.php": "lecturehalls.php.html",
 }
 
-_cmi = {"up": False, "proxy": False, "bodies": {}}
+_cmi = {"up": False, "proxy": False, "relays": None, "bodies": {},
+        "cors": True, "dead": False}
 
 
 def _make_cert(directory):
@@ -259,24 +261,70 @@ class _CmiHandler(http.server.BaseHTTPRequestHandler):
 
     def _relayed_path(self):
         """The CMI path a relay was asked to fetch, or None if this request
-        isn't a relayed one. Both public relays take the target as a `url`
-        query parameter (`/raw?url=…` for allorigins, `/?url=…` for
-        corsproxy), and the app hangs a cache-buster on that target — so the
-        path is what identifies the page, never the whole string."""
+        isn't a relayed one.
+
+        Relays disagree about how the target rides along, and the app now
+        ships four of them (R84), so this recognises all three shapes rather
+        than one: a `url=` query parameter (allorigins, cors.lol), a `quest=`
+        one (codetabs), and the whole target appended to the relay's own path
+        (cors.sh). The app hangs a cache-buster on the target either way, so
+        what identifies the page is its PATH, never the whole string."""
         query = self.path.split("?", 1)[1] if "?" in self.path else ""
-        target = urllib.parse.parse_qs(query).get("url", [None])[0]
+        params = urllib.parse.parse_qs(query)
+        target = params.get("url", params.get("quest", [None]))[0]
+        if target is None:
+            # cors.sh style: https://proxy.cors.sh/https://www.cmi.ac.in/…
+            head = self.path.split("?", 1)[0]
+            for scheme in ("/https://", "/http://"):
+                if scheme in head:
+                    target = head[head.index(scheme) + 1:]
+                    break
         if target is None:
             return None
         return urllib.parse.urlsplit(target).path
 
+    def do_OPTIONS(self):
+        """CORS preflight.
+
+        A request carrying a header that is not CORS-safelisted — the app
+        sends `x-return-format` to exactly one relay — is preceded by an
+        OPTIONS the browser will not let the real request past. Without this
+        the stand-in answered 501 and that relay looked dead, which is a
+        property of this harness and not of the app (R84)."""
+        if _cmi["dead"]:
+            self.close_connection = True
+            return
+        self.send_response(204)
+        if _cmi["cors"]:
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Access-Control-Allow-Headers", "*")
+            self.send_header("Access-Control-Allow-Methods", "GET, OPTIONS")
+            self.send_header("Access-Control-Max-Age", "600")
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
     def do_GET(self):
+        # "Nothing at that address at all": answer nothing and hang up. The
+        # ordinary "down" state of this stand-in is a 503, which is a real
+        # failure but a DIFFERENT one — the app can read a status, which
+        # proves the cross-origin rule was not what stopped it. Telling those
+        # two apart is the whole point of the failure copy (R84), so the
+        # harness has to be able to produce both.
+        if _cmi["dead"]:
+            self.close_connection = True
+            return
         path = self.path.split("?", 1)[0]
         # A relayed request answers with the same page the direct one would,
         # but only while the relays are switched on: the default is every
         # public route dead, which is what most tests want.
         relayed = self._relayed_path()
         if relayed is not None:
-            path = relayed if _cmi["proxy"] else "/nowhere"
+            # Which relay was asked matters now that the app ships four of
+            # them: a test can leave exactly one alive and prove the others
+            # are not what carried the sync (R84).
+            host = (self.headers.get("Host") or "").split(":")[0]
+            allowed = _cmi["relays"] is None or host in _cmi["relays"]
+            path = relayed if (_cmi["proxy"] and allowed) else "/nowhere"
         if not _cmi["up"] or path not in _cmi["bodies"]:
             self.send_response(503)
             self.send_header("Content-Length", "0")
@@ -287,10 +335,14 @@ class _CmiHandler(http.server.BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         # The real CMI sends no CORS header — that is the whole reason the
-        # proxy tier exists. This one does, because a test that had to go
-        # through a public relay to reach localhost would be testing the
-        # relay, not the app.
-        self.send_header("Access-Control-Allow-Origin", "*")
+        # proxy tier exists. This one does by default, because a test that
+        # had to go through a public relay to reach localhost would be
+        # testing the relay, not the app. `serve_cmi(cors=False)` turns it
+        # off, which reproduces the real cmi.ac.in exactly: the page answers
+        # 200, the browser refuses to let the app READ it, and the app has to
+        # say so without blaming a network that is working (R84).
+        if _cmi["cors"]:
+            self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
@@ -299,16 +351,27 @@ class _CmiHandler(http.server.BaseHTTPRequestHandler):
         pass
 
 
-def serve_relays():
+def serve_relays(only=None):
     """Make the public CORS relays answer too, for the tests that care which
     route the app takes. Off by default: with the relays dead, a sync falls
-    through to the direct route, which is what most tests exercise."""
+    through to the direct route, which is what most tests exercise.
+
+    `only` is a set of relay hostnames; everything else keeps answering as if
+    it were down. The app ships four relays plus whatever the reader supplies
+    (R84), so "one of them is enough" and "yours is asked first" are things a
+    test can now state."""
     _cmi["proxy"] = True
+    _cmi["relays"] = set(only) if only is not None else None
 
 
-def serve_cmi(timetable=None, lecturehalls=None):
+def serve_cmi(timetable=None, lecturehalls=None, cors=True):
     """Make CMI reachable for this test. Serves the fixture pages verbatim
-    unless given something else."""
+    unless given something else.
+
+    `cors=False` withholds `Access-Control-Allow-Origin`, which is what the
+    real cmi.ac.in does — the pages answer and the browser will not let the
+    app read them. Only one test wants that; everything else would be testing
+    a relay instead of the app."""
     given = {"timetable.php.html": timetable,
              "lecturehalls.php.html": lecturehalls}
     for path, name in CMI_PAGES.items():
@@ -318,6 +381,7 @@ def serve_cmi(timetable=None, lecturehalls=None):
                 body = f.read()
         _cmi["bodies"][path] = body
     _cmi["up"] = True
+    _cmi["cors"] = cors
 
 
 def stop_serving_cmi():
@@ -325,7 +389,20 @@ def stop_serving_cmi():
     included."""
     _cmi["up"] = False
     _cmi["proxy"] = False
+    _cmi["relays"] = None
     _cmi["bodies"] = {}
+    _cmi["cors"] = True
+    _cmi["dead"] = False
+
+
+class _QuietCmiServer(http.server.ThreadingHTTPServer):
+    """Hanging up mid-request is a THING THIS SERVER DOES on purpose (see
+    `_cmi["dead"]`), and socketserver prints a full traceback for every one of
+    them. Swallow it: a stack trace that means "the test is working" trains
+    the eye to skip stack traces."""
+
+    def handle_error(self, request, client_address):
+        pass
 
 
 def serve_fake_cmi():
@@ -333,7 +410,7 @@ def serve_fake_cmi():
     key, crt = _make_cert(tmp)
     ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     ctx.load_cert_chain(crt, key)
-    server = http.server.ThreadingHTTPServer(("127.0.0.1", CMI_PORT), _CmiHandler)
+    server = _QuietCmiServer(("127.0.0.1", CMI_PORT), _CmiHandler)
     server.socket = ctx.wrap_socket(server.socket, server_side=True)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     return server
@@ -373,8 +450,17 @@ def make_driver():
     # resolver.
     opts.add_argument(
         f"--host-resolver-rules=MAP www.cmi.ac.in 127.0.0.1:{CMI_PORT}, "
+        f"MAP proxy.cors.sh 127.0.0.1:{CMI_PORT}, "
+        f"MAP api.cors.lol 127.0.0.1:{CMI_PORT}, "
         f"MAP api.allorigins.win 127.0.0.1:{CMI_PORT}, "
-        f"MAP corsproxy.io 127.0.0.1:{CMI_PORT}, "
+        f"MAP api.codetabs.com 127.0.0.1:{CMI_PORT}, "
+        f"MAP cors-get-proxy.sirjosh.workers.dev 127.0.0.1:{CMI_PORT}, "
+        f"MAP corsmirror.onrender.com 127.0.0.1:{CMI_PORT}, "
+        f"MAP r.jina.ai 127.0.0.1:{CMI_PORT}, "
+        # Somewhere for "a helper site the reader supplied" to point at, so
+        # that route can be tested as what it is: a host the app has never
+        # heard of (R84).
+        f"MAP helper.example 127.0.0.1:{CMI_PORT}, "
         "MAP * ~NOTFOUND, EXCLUDE 127.0.0.1"
     )
     # The stand-in's certificate is self-signed; it is only there because
@@ -395,7 +481,7 @@ class App:
     # -- lifecycle ---------------------------------------------------------
 
     def boot(self, path="/", fresh=True, seed=True, selection=None,
-             overrides=None, raw_snapshot=None, customs=None):
+             overrides=None, raw_snapshot=None, customs=None, prefs=None):
         """Load the app. fresh=True wipes storage; seed=True (the default)
         pre-loads the fixture-derived snapshot and suppresses the background
         sync, so tests run on deterministic data. seed=False boots the app
@@ -426,8 +512,13 @@ class App:
                     "localStorage.setItem('cmitt.v1.prefs', arguments[0]);"
                     "localStorage.setItem('cmitt.v1.snapshot', arguments[1]);"
                 )
+                stored_prefs = {"last_update_attempt": time.time() * 1000.0}
+                # `prefs` merges rather than replaces, so a test that needs one
+                # setting does not have to restate the sync throttle that keeps
+                # every other test deterministic.
+                stored_prefs.update(prefs or {})
                 args = [
-                    json.dumps({"last_update_attempt": time.time() * 1000.0}),
+                    json.dumps(stored_prefs),
                     raw_snapshot if raw_snapshot is not None else SEED_SNAPSHOT_JSON,
                 ]
                 if selection is not None:
@@ -442,10 +533,87 @@ class App:
                 self.d.execute_script(script, *args)
             else:
                 self.d.execute_script("localStorage.clear();")
+                if prefs:
+                    self.d.execute_script(
+                        "localStorage.setItem('cmitt.v1.prefs', arguments[0]);",
+                        json.dumps(prefs))
         self.d.get(f"{BASE}{path}")
         self.wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, ".header h1")))
 
     # -- helpers -----------------------------------------------------------
+
+    def pin_weekday(self, weekday):
+        """Make the browser believe today is a given weekday (Mon=0), for
+        every document loaded from here on.
+
+        Tests that assert "today is marked" used to read the HOST clock and
+        skip their own subject on a Saturday or Sunday — two days in seven,
+        including the day one deploy went out — passing by asserting that
+        nothing was marked, which is also exactly what a completely missing
+        feature looks like (R83). The app reads the date through the ordinary
+        `Date` constructor, so replacing it before any script runs is enough,
+        and it makes the positive assertions run every day of the week.
+
+        Call `unpin_weekday()` afterwards; it does not survive a new driver.
+        """
+        offset_days = (weekday - datetime.datetime.now().weekday()) % 7
+        return self.d.execute_cdp_cmd(
+            "Page.addScriptToEvaluateOnNewDocument",
+            {"source": """
+                (() => {
+                  const SHIFT = %d * 86400000;
+                  const Real = Date;
+                  const Shifted = function (...args) {
+                    if (args.length === 0) return new Real(Real.now() + SHIFT);
+                    return new Real(...args);
+                  };
+                  Shifted.prototype = Real.prototype;
+                  Shifted.now = () => Real.now() + SHIFT;
+                  Shifted.parse = Real.parse;
+                  Shifted.UTC = Real.UTC;
+                  window.Date = Shifted;
+                })();
+             """ % offset_days},
+        )["identifier"]
+
+    def unpin_weekday(self, identifier):
+        """Undo `pin_weekday`. MUST be called in a `finally`: an injected
+        script outlives the test that added it and would silently shift the
+        clock for every test after it."""
+        self.d.execute_cdp_cmd("Page.removeScriptToEvaluateOnNewDocument",
+                               {"identifier": identifier})
+
+    def wait_for_print_tab(self, app_handle, timeout=25):
+        """Wait until the print tab exists AND has been filled with a sheet.
+
+        A bare `sleep(3)` was the only wait in the newest print test, and 3s
+        is less than the app's own budget for that tab — so on a loaded
+        machine it failed CLOSED, which is a false red rather than a false
+        green, but it is still the first thing to suspect (R83). Polling for
+        the thing the test is actually waiting for removes the guess.
+
+        Returns the print tab's handle and leaves the driver on the ORIGINAL
+        window, so callers keep the control they had.
+        """
+        end = time.time() + timeout
+        found = None
+        while time.time() < end:
+            others = [h for h in self.d.window_handles if h != app_handle]
+            if others:
+                found = others[0]
+                try:
+                    self.d.switch_to.window(found)
+                    filled = self.d.execute_script(
+                        "const s = document.getElementById('sheet');"
+                        "return !!(s && s.children.length);")
+                except Exception:
+                    filled = False
+                finally:
+                    self.d.switch_to.window(app_handle)
+                if filled:
+                    return found
+            time.sleep(0.15)
+        return found
 
     def css(self, sel):
         return self.d.find_element(By.CSS_SELECTOR, sel)
@@ -1204,7 +1372,16 @@ def t25_first_run_prompt_when_empty(app):
         app.css_all(".sync-pill .spinner"), "pill must show the unsynced state"
     # The automatic first sync fails (no reachable route) → banner + prompt stays.
     banner = app.wait_css(".banner", timeout=30)
-    assert "couldn't be fetched" in banner.text, banner.text
+    # WHICH failure it names is t136's subject, and it depends on what the
+    # stand-in does — here it answers 503 at every address, which is a real
+    # failure but not the same one as a dead network. What this test is about
+    # is that the app says so plainly, does not pretend a timetable arrived,
+    # and leaves the reader somewhere to go.
+    assert "still empty" in banner.text, banner.text
+    assert any(reason in banner.text for reason in (
+        "answered, but with an error", "Nothing answered",
+        "isn't allowed to read it", "offline",
+    )), banner.text
     assert app.css_all(".welcome-card"), "prompt must survive a failed sync"
     app.xpath("//button[contains(.,'Fetch the timetable')]")
 
@@ -6651,19 +6828,31 @@ def t119_today_is_marked_on_the_week_tables(app):
     timetable and the Master grid too. Single-day views mark nothing (the
     view already says which day it shows), and the printed poster stays
     timeless: it is read all term, and "today" is only true once."""
-    import datetime
-    weekday = datetime.datetime.now().weekday()  # Mon=0
-    day_short = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"][weekday]
-    app.boot("/", selection=["TOC", "RDBM", "MFD"])
+    # Tuesday, whatever day it really is. This test used to read the host
+    # clock, and the fixture grid draws Mon-Fri only — so on a Saturday or a
+    # Sunday every positive assertion below was skipped and the test passed
+    # by asserting that NOTHING was marked, which is also precisely what a
+    # deleted feature looks like. It went green that way on the day of a
+    # deploy (R83). The app reads the date through the ordinary `Date`
+    # constructor, so pinning it before any script runs makes the real
+    # assertions run all seven days.
+    day_short = "Tue"
+    pinned = app.pin_weekday(1)
+    try:
+        app.boot("/", selection=["TOC", "RDBM", "MFD"])
+        assert app.d.execute_script("return new Date().getDay()") == 2, \
+            "the clock pin did not take — the rest of this test would be vacuous"
 
-    for tab, label in (("My timetable", "My timetable"), ("Master grid", "Master grid")):
-        app.open_tab(tab)
-        app.wait_css(f"section[aria-label='{label}'] table.tt")
-        rows = app.css_all(f"section[aria-label='{label}'] table.tt tbody tr")
-        marked = app.css_all(f"section[aria-label='{label}'] table.tt tbody tr.today")
-        shown_days = [r.find_element(By.CSS_SELECTOR, "th.rowhead").text.strip()
-                      for r in rows]
-        if len(rows) > 1 and day_short in shown_days:
+        for tab, label in (("My timetable", "My timetable"),
+                           ("Master grid", "Master grid")):
+            app.open_tab(tab)
+            app.wait_css(f"section[aria-label='{label}'] table.tt")
+            rows = app.css_all(f"section[aria-label='{label}'] table.tt tbody tr")
+            marked = app.css_all(f"section[aria-label='{label}'] table.tt tbody tr.today")
+            shown_days = [r.find_element(By.CSS_SELECTOR, "th.rowhead").text.strip()
+                          for r in rows]
+            assert len(rows) > 1 and day_short in shown_days, \
+                f"{label}: the fixture week must show {day_short} ({shown_days})"
             assert len(marked) == 1, \
                 f"{label}: expected exactly one today row, found {len(marked)}"
             head = marked[0].find_element(By.CSS_SELECTOR, "th.rowhead")
@@ -6671,24 +6860,24 @@ def t119_today_is_marked_on_the_week_tables(app):
             # The mark is the halls table's language: an inset accent bar.
             assert head.value_of_css_property("box-shadow") != "none", \
                 "the today rowhead must carry the inset bar"
-        else:
-            assert not marked, \
-                f"{label}: no today row should be marked ({shown_days})"
 
-    # The poster prints without it: emulate print media and the bar is gone.
-    # This pins the specificity trap the screen rule sets up — the print
-    # reset must repeat the screen selector's :not() or it silently loses.
-    if day_short in ("Mon", "Tue", "Wed", "Thu", "Fri"):
+        # The poster prints without it: emulate print media and the bar is
+        # gone. This pins the specificity trap the screen rule sets up — the
+        # print reset must repeat the screen selector's :not() or it silently
+        # loses. Unconditional now: with the day pinned there is always a
+        # today row to check.
         app.open_tab("My timetable")
         today_heads = app.css_all(
             "section[aria-label='My timetable'] table.tt tbody tr.today th.rowhead")
-        if today_heads:
-            app.d.execute_cdp_cmd("Emulation.setEmulatedMedia", {"media": "print"})
-            time.sleep(0.2)
-            shadow = today_heads[0].value_of_css_property("box-shadow")
-            app.d.execute_cdp_cmd("Emulation.setEmulatedMedia", {"media": ""})
-            assert shadow == "none", \
-                f"the today bar must not print (box-shadow: {shadow})"
+        assert today_heads, "there must be a today row to print-check"
+        app.d.execute_cdp_cmd("Emulation.setEmulatedMedia", {"media": "print"})
+        time.sleep(0.2)
+        shadow = today_heads[0].value_of_css_property("box-shadow")
+        app.d.execute_cdp_cmd("Emulation.setEmulatedMedia", {"media": ""})
+        assert shadow == "none", \
+            f"the today bar must not print (box-shadow: {shadow})"
+    finally:
+        app.unpin_weekday(pinned)
 
 
 def t120_dialogs_open_hands_off_and_the_page_behind_stays_put(app):
@@ -7011,7 +7200,10 @@ def t125_print_stays_light_whatever_the_theme(app):
     lies rode along: hall NAMES letter-stacked inside a 46px clamp sized for
     day names, and today's rowhead printed THINNER than its siblings because
     the today-reset said `inherit` and took the row's 400."""
-    import datetime
+    # Tuesday, so the today-weight check below runs every day of the week
+    # rather than skipping itself on a weekend — see t119 for the whole
+    # argument and the fixture's Mon-Fri grid (R83).
+    pinned = app.pin_weekday(1)
     app.boot("/", selection=["TOC", "RDBM", "MFD"])
     # Stamp dark exactly the way the boot script does. Navigation happens
     # with print OFF — the tab rail is display:none on paper — and every
@@ -7048,18 +7240,18 @@ def t125_print_stays_light_whatever_the_theme(app):
         assert sum(mark_rgb) < 400, \
             f"legend marks must print dark on white, got rgb{tuple(mark_rgb)}"
 
-        # Today's rowhead prints the SAME weight as the other days (only on
-        # a weekday — the seed's grid has no weekend rows to mark).
-        if datetime.datetime.now().weekday() < 5:
-            weights = app.d.execute_script(
-                "return [...document.querySelectorAll("
-                "  \"section[aria-label='Master grid'] table.tt tbody tr\")]"
-                ".map(r => [r.classList.contains('today'),"
-                "  getComputedStyle(r.querySelector('th.rowhead')).fontWeight]);")
-            today = [w for is_today, w in weights if is_today]
-            others = {w for is_today, w in weights if not is_today}
-            assert today and today[0] in others, \
-                f"today must print the siblings' weight, got {today} vs {others}"
+        # Today's rowhead prints the SAME weight as the other days. The
+        # clock is pinned to a weekday, so there is always a today row and
+        # this assertion always runs.
+        weights = app.d.execute_script(
+            "return [...document.querySelectorAll("
+            "  \"section[aria-label='Master grid'] table.tt tbody tr\")]"
+            ".map(r => [r.classList.contains('today'),"
+            "  getComputedStyle(r.querySelector('th.rowhead')).fontWeight]);")
+        today = [w for is_today, w in weights if is_today]
+        others = {w for is_today, w in weights if not is_today}
+        assert today and today[0] in others, \
+            f"today must print the siblings' weight, got {today} vs {others}"
 
         # Hall names get their width back: no nine-line letter stack.
         print_media(False)
@@ -7083,6 +7275,10 @@ def t125_print_stays_light_whatever_the_theme(app):
             f"{stacked} hall names letter-stack in the print clamp"
     finally:
         app.d.execute_cdp_cmd("Emulation.setEmulatedMedia", {"media": ""})
+        # An injected script outlives the test that added it, so this has to
+        # happen however the test ends: leaving it in would shift the clock
+        # for every test after this one.
+        app.unpin_weekday(pinned)
 
 
 def t105_arrow_keys_walk_the_tab_rail(app):
@@ -7297,9 +7493,9 @@ def t127_printing_never_repaints_the_app(app):
         "section[aria-label='My timetable'] .toolbar button")
         if b.text.strip() == "Print")
     btn.click()
-    # The implementation waits for the new tab to report itself ready before
-    # filling it, so give it longer than that.
-    time.sleep(3.0)
+    # Polled, not slept: the app's own budget for this tab is 20s, and a
+    # fixed 3s wait was shorter than the thing it was waiting for.
+    app.wait_for_print_tab(app_handle)
 
     app.d.switch_to.window(app_handle)
     calls = app.d.execute_script("return window.__openCalls;")
@@ -7360,8 +7556,20 @@ def t127_printing_never_repaints_the_app(app):
 
         # Press it again. The tab is named, so this one refills the same tab —
         # and it has to REPLACE the sheet, not stack a second one under it.
+        # (Chromium RE-NAVIGATES the named tab, so the fresh document is what
+        # does the clearing; `domx.rs`'s own `set_inner_html("")` is belt and
+        # braces. Recorded so this assertion is not mistaken for coverage of
+        # that line — R83's test-quality read.)
         btn.click()
-        time.sleep(3.0)
+        # 25s, not 12: the app's own budget for a print tab to load and be
+        # filled is 20s, and a test that waits less than the thing it is
+        # waiting for is a red light that means "this machine is busy".
+        WebDriverWait(app.d, 25).until(
+            lambda d: d.execute_script(
+                "try { const s = window.__printWin.document"
+                ".getElementById('sheet');"
+                "return !!(s && s.children.length); } catch (e) { return false; }"),
+            message="the second press never refilled the print tab")
         again = app.d.execute_script("""
             const d = window.__printWin.document;
             const sheet = d.getElementById('sheet');
@@ -7482,7 +7690,7 @@ def t129_the_print_tab_puts_nothing_dark_on_the_paper(app):
         "section[aria-label='My timetable'] .toolbar button")
         if b.text.strip() in ("Print", "Printing…"))
     btn.click()
-    time.sleep(3.0)
+    app.wait_for_print_tab(app_handle)
     handles = [h for h in app.d.window_handles if h != app_handle]
     assert handles, "Print opened no tab"
     try:
@@ -7656,6 +7864,394 @@ def t132_a_damaged_link_with_no_codes_changes_nothing(app):
         "a damaged link must still say it was damaged"
 
 
+def t133_one_working_helper_site_is_enough(app):
+    """R84 — the outage that started it: this app can only reach CMI through
+    somebody else's server (CMI's pages carry no `Access-Control-Allow-Origin`,
+    so a browser will not let a page on github.io read them), and it shipped
+    exactly TWO helper sites. One went down and the other started charging,
+    within days of each other, and every reader's Sync died with no route
+    left. Four now, each a different operator — so this asserts what that is
+    for: any ONE of them alive carries the sync on its own, and the app says
+    which one it used."""
+    # Every shipped relay, one at a time: seven operators now, and the point
+    # of seven is that ANY ONE of them carries a sync on its own.
+    for host, shown in (
+        ("proxy.cors.sh", "cors.sh"),
+        ("cors-get-proxy.sirjosh.workers.dev", "cors-get-proxy"),
+        ("corsmirror.onrender.com", "corsmirror"),
+        ("r.jina.ai", "r.jina.ai"),
+        ("api.allorigins.win", "allorigins.win"),
+        ("api.codetabs.com", "codetabs.com"),
+        ("api.cors.lol", "cors.lol"),
+    ):
+        serve_cmi()
+        serve_relays(only={host})
+        try:
+            app.boot("/", seed=False)
+            app.wait_css(".tabs .tab", timeout=30)
+            app.wait_gone(".welcome-card")
+            title = app.css(".sync-pill").get_attribute("title")
+            assert f"through the helper site {shown}" in title, \
+                f"only {host} was alive, so it had to be the route: {title}"
+            # And nothing reached cmi.ac.in itself: a live relay is still the
+            # first tier, whichever of the four it happens to be.
+            tiers = fetch_log_tiers(app)
+            assert all(t.startswith("proxy:") for t in tiers), tiers
+        finally:
+            stop_serving_cmi()
+
+
+def t134_a_helper_site_you_supply_is_tried_first(app):
+    """R84 — the half of the repair that does not need a new version of the
+    app. When every helper site the app knows is gone, a reader (or CMI) can
+    paste one of their own into My data, and it is tried BEFORE the shipped
+    list. Here every shipped relay is dead and the reader's own is the only
+    thing answering, which is exactly the state that broke the live app."""
+    serve_cmi()
+    serve_relays(only={"helper.example"})
+    try:
+        app.boot("/", seed=False, prefs={
+            "helper_site": "https://helper.example/get?url={url}",
+        })
+        app.wait_css(".tabs .tab", timeout=30)
+        app.wait_gone(".welcome-card")
+        title = app.css(".sync-pill").get_attribute("title")
+        assert "through the helper site your helper site" in title, title
+        tiers = fetch_log_tiers(app)
+        assert all(t.startswith("proxy:") for t in tiers), tiers
+        # FIRST, and alone: the reader's own helper site gets a head start,
+        # so a run where it answers inside `HELPER_HEAD_START_MS` never asks
+        # a shipped relay at all. That is the promise — someone who set up
+        # their own does not go on handing CMI's address to four strangers.
+        assert set(tiers) == {"proxy:your helper site"}, tiers
+
+        # And the app remembers what worked, so the next sync starts there.
+        stored = app.d.execute_script(
+            "return JSON.parse(localStorage.getItem('cmitt.v1.prefs')||'{}')")
+        assert stored.get("last_good_route") == "your helper site", stored
+    finally:
+        stop_serving_cmi()
+
+
+def t135_you_can_load_the_timetable_from_cmis_own_page(app):
+    """R84 — the route that cannot rot. Every other way in needs some server
+    to agree to hand CMI's bytes to a page served from github.io. Opening a
+    page is the one thing a browser never has to ask anyone about, so when
+    nothing will fetch the timetable the reader can open CMI themselves and
+    hand it over. Same parser, same validation gate, same adoption as a live
+    fetch — and the app says the data came that way rather than claiming it
+    fetched it."""
+    # Exactly what a reader met: CMI's pages answer, they carry no
+    # `Access-Control-Allow-Origin`, so the browser will not let the app read
+    # them — and every helper site is unavailable. No tabs to wait for (an app
+    # with no data has none, t25), so the welcome card says the first render
+    # happened.
+    serve_cmi(cors=False)
+    try:
+        app.boot("/", seed=False)
+        app.wait_css(".welcome-card", timeout=30)
+        banner = app.wait_css(".banner.warn", timeout=60)
+        assert "isn't allowed to read it" in banner.text, banner.text
+        # The banner offers the way out as a BUTTON, not as advice to read.
+        button = banner.find_element(
+            By.XPATH, ".//button[contains(., \"Load it from CMI's page\")]")
+        button.click()
+    finally:
+        stop_serving_cmi()
+    app.wait_css(".dialog")
+
+    with open(os.path.join(FIXTURES, "timetable.php.html"), encoding="utf-8") as f:
+        timetable = f.read()
+    with open(os.path.join(FIXTURES, "lecturehalls.php.html"), encoding="utf-8") as f:
+        halls = f.read()
+
+    boxes = app.css_all(".dialog textarea.load-paste")
+    assert len(boxes) == 2, f"one box per CMI page, got {len(boxes)}"
+    load = app.xpath("//div[@class='dialog']//button[normalize-space()='Load these pages']")
+    assert not load.is_enabled(), "nothing pasted yet — there is nothing to load"
+
+    # Pasting the page's TEXT rather than the page is the commonest mistake,
+    # and it gets its own sentence instead of a gate failure about CMI.
+    app.d.execute_script(
+        "arguments[0].value = arguments[1];"
+        "arguments[0].dispatchEvent(new Event('input', {bubbles: true}));",
+        boxes[0], "Monday 09:10 ALG3 Lecture Hall 5")
+    app.d.execute_script(
+        "arguments[0].value = arguments[1];"
+        "arguments[0].dispatchEvent(new Event('input', {bubbles: true}));",
+        boxes[1], "Lecture Hall 5")
+    load.click()
+    error = app.wait_css(".dialog .form-error").text
+    assert "the text off it" in error and "Ctrl+U" in error, error
+
+    for box, body in zip(boxes, (timetable, halls)):
+        app.d.execute_script(
+            "arguments[0].value = arguments[1];"
+            "arguments[0].dispatchEvent(new Event('input', {bubbles: true}));",
+            box, body)
+    load.click()
+    app.wait_gone(".dialog")
+    app.wait_toast("Timetable updated from CMI's own page.")
+
+    title = app.css(".sync-pill").get_attribute("title")
+    assert "from CMI's page, loaded by you" in title, title
+    # Real data, through the real gate — not a placeholder that says "synced".
+    courses = app.d.execute_script(
+        "return (JSON.parse(localStorage.getItem('cmitt.v1.snapshot')||'{}')"
+        ".courses||[]).length")
+    assert courses > 10, f"the pages had to produce a real catalog, got {courses}"
+    # And the failure banner that sent them here is gone.
+    assert not app.css_all(".banner.warn"), "the banner outlived the fix"
+
+
+def t136_a_sync_failure_says_which_thing_failed(app):
+    """R84 — the app told everyone the same thing however it failed: "CMI's
+    website couldn't be reached". It said it to readers who had CMI's page
+    open and working in the next tab, which is how the outage went unreported
+    for as long as it did.
+
+    Three failures, three sentences. CMI answering an ERROR is visible only
+    because a status the page can read proves the cross-origin rule was not
+    what stopped it — that is the whole signal, and it is why this case can
+    never be confused with the others."""
+    def banner_after_boot():
+        app.boot("/", seed=False)
+        app.wait_css(".welcome-card", timeout=30)
+        return app.wait_css(".banner.warn", timeout=60).text
+
+    def offers_the_way_out():
+        """The BUTTON, by its label. `.banner.warn button` also matches the
+        unconditional Dismiss, so asserting on that proved nothing — a
+        mutation deleting the action entirely left it green (R84 review)."""
+        return app.d.find_elements(
+            By.XPATH,
+            "//div[contains(@class,'banner')]"
+            "//button[contains(., \"Load it from CMI's page\")]")
+
+    # (1) CMI answers, with an error, on every route. The app can READ a
+    # status, which is only possible when the cross-origin rule allowed it —
+    # so whatever went wrong, it was not that.
+    serve_cmi()
+    _cmi["bodies"] = {}          # up, but nothing at either path -> 503
+    try:
+        text = banner_after_boot()
+        assert "answered, but with an error" in text, text
+        assert "HTTP 503" in text, text
+        assert "not your connection" in text, text
+        # …and NO way-out button here. The direct route runs in the reader's
+        # own browser, so a 503 to the app is a 503 in the tab they would
+        # open by hand: offering a route that cannot work is worse than
+        # offering none.
+        assert not offers_the_way_out(), text
+    finally:
+        stop_serving_cmi()
+
+    # (2) The real cmi.ac.in, exactly: the pages answer 200 and send no
+    # `Access-Control-Allow-Origin`, so the browser refuses to let the app
+    # read them. No status is visible, and only the `no-cors` probe can tell
+    # this apart from a dead network. This is the case the live outage was,
+    # and the one the app used to report as "CMI couldn't be reached".
+    serve_cmi(cors=False)
+    try:
+        text = banner_after_boot()
+        assert "isn't allowed to read it" in text, text
+        assert "Every helper site it knows is unavailable" in text, text
+        assert offers_the_way_out(), text
+    finally:
+        stop_serving_cmi()
+
+    # (3) Nothing at that address at all — the connection is dropped without
+    # an answer, so even the probe gets nothing back.
+    _cmi["dead"] = True
+    try:
+        text = banner_after_boot()
+        assert "Nothing answered" in text, text
+        assert offers_the_way_out(), text
+    finally:
+        _cmi["dead"] = False
+        stop_serving_cmi()
+
+    # (4) ONE of CMI's two pages errors and the other is fine. The direct
+    # tier logs an entry per page, so a version of this that read only the
+    # LAST one missed the 503 entirely and fell through to "CMI is up and we
+    # aren't allowed to read it" — the very sentence this feature exists to
+    # stop being said wrongly. Found by R84's own adversarial review, with a
+    # repro; this is that repro.
+    serve_cmi()
+    with open(os.path.join(FIXTURES, "lecturehalls.php.html"), encoding="utf-8") as f:
+        halls_body = f.read()
+    _cmi["bodies"] = {"/practical/lecturehalls.php": halls_body}
+    try:
+        text = banner_after_boot()
+        assert "answered, but with an error" in text, \
+            f"a status on EITHER page proves the browser let us read it: {text}"
+        assert "isn't allowed to read it" not in text, text
+        assert not offers_the_way_out(), text
+    finally:
+        stop_serving_cmi()
+
+
+def t137_the_route_that_worked_last_time_is_the_only_one_asked(app):
+    """R84. Remembering which route worked is only worth anything if the app
+    actually withholds the others — and sorting a list it then races does
+    not, because every entry starts in the same tick. (The app's own fetch
+    log cannot show this: the losers are dropped before they log. The
+    stand-in counts what it was really asked, by Host header.)
+
+    So the remembered relay gets the same head start the reader's own helper
+    site gets: asked alone, with the rest brought in only if it fails or
+    stays silent. A returning reader's sync is then one request to one relay
+    instead of four to four — faster, and three fewer strangers shown which
+    CMI page a student is fetching."""
+    serve_cmi()
+    serve_relays()                      # ALL four alive, so nothing is forced
+    try:
+        app.boot("/", seed=False, prefs={"last_good_route": "codetabs.com"})
+        app.wait_css(".tabs .tab", timeout=30)
+        app.wait_gone(".welcome-card")
+        title = app.css(".sync-pill").get_attribute("title")
+        assert "through the helper site codetabs.com" in title, \
+            f"the remembered route had to win when every route was alive: {title}"
+        tiers = fetch_log_tiers(app)
+        assert set(tiers) == {"proxy:codetabs.com"}, \
+            f"only the remembered route may be asked: {tiers}"
+    finally:
+        stop_serving_cmi()
+
+    # With nothing remembered either, the head start still holds: the best
+    # relay on the shipped list is asked alone. These are free services
+    # somebody else pays for, and asking all seven twice on every sync would
+    # be both rude and seven strangers shown which CMI page a student wants.
+    serve_cmi()
+    serve_relays()
+    try:
+        app.boot("/", seed=False)
+        app.wait_css(".tabs .tab", timeout=30)
+        app.wait_gone(".welcome-card")
+        tiers = fetch_log_tiers(app)
+        assert set(tiers) == {"proxy:cors.sh"}, \
+            f"a healthy sync is ONE request to one relay: {tiers}"
+    finally:
+        stop_serving_cmi()
+
+    # …and a remembered route that has since DIED must not strand the reader:
+    # the head start expires and the others come in behind it.
+    serve_cmi()
+    serve_relays(only={"proxy.cors.sh"})
+    try:
+        app.boot("/", seed=False, prefs={"last_good_route": "codetabs.com"})
+        app.wait_css(".tabs .tab", timeout=40)
+        app.wait_gone(".welcome-card")
+        title = app.css(".sync-pill").get_attribute("title")
+        assert "through the helper site cors.sh" in title, title
+        # And the app now remembers the one that actually worked.
+        stored = app.d.execute_script(
+            "return JSON.parse(localStorage.getItem('cmitt.v1.prefs')||'{}')")
+        assert stored.get("last_good_route") == "cors.sh", stored
+    finally:
+        stop_serving_cmi()
+
+
+def t138_a_link_that_replaces_your_courses_says_so(app):
+    """Old §8.23. A share link is written over the planner wholesale, and only
+    ONE of the two things it can destroy ever said a word: the incoming times
+    and credits replacing the reader's own. The COURSES being thrown away were
+    never weighed — so a reader with a timetable and no meeting edits opened a
+    friend's link, or their own older bookmark, and it was replaced in
+    silence, with the Undo button going from disabled to enabled as the only
+    sign. One reload later it was unrecoverable. The identical action DID
+    announce itself if that reader happened to hold one override.
+
+    Pinned here: the notice appears, it says what was actually lost, Undo puts
+    it back — and a link that takes nothing away stays quiet."""
+    app.boot("/", selection=["TOC", "RDBM", "MFD"])
+
+    # A friend's link, on a planner with courses and no edits of any kind.
+    app.d.get(f"{BASE}/?c=ISS")
+    app.wait_css("section[aria-label='My timetable']")
+    WebDriverWait(app.d, 10).until(
+        lambda d: "replaced the courses you had picked" in app.toasts_text(),
+        message=f"a silent replacement: toasts were {app.toasts_text()!r}")
+    toast = app.toasts_text()
+    assert "times and credits" not in toast, \
+        f"nothing of the sort was lost — say what was: {toast!r}"
+    assert app.d.execute_script(
+        "return JSON.parse(localStorage.getItem('cmitt.v1.selection'));") == ["ISS"]
+
+    # …and it is genuinely undoable from that toast, which is the whole point
+    # of announcing it.
+    app.xpath("//div[contains(@class,'toast')]//button[normalize-space()='Undo']").click()
+    WebDriverWait(app.d, 5).until(
+        lambda d: d.execute_script(
+            "return JSON.parse(localStorage.getItem('cmitt.v1.selection'));")
+        == ["TOC", "RDBM", "MFD"],
+        message="Undo did not put the replaced timetable back")
+
+    # A link that takes nothing away says nothing: same codes, empty planner,
+    # and reopening the link you are already on.
+    app.boot("/", selection=[])
+    app.d.get(f"{BASE}/?c=TOC")
+    app.wait_css("section[aria-label='My timetable']")
+    time.sleep(1.0)
+    assert "replaced" not in app.toasts_text(), \
+        f"nothing was replaced on an empty planner: {app.toasts_text()!r}"
+    app.d.get(f"{BASE}/?c=TOC")
+    app.wait_css("section[aria-label='My timetable']")
+    time.sleep(1.0)
+    assert "replaced" not in app.toasts_text(), \
+        f"reopening the same link replaces nothing: {app.toasts_text()!r}"
+
+
+def t139_a_second_tab_changing_your_timetable_is_not_silent(app):
+    """Old §8.22, the half that can be fixed without a design decision.
+
+    Every tab holds the whole store in memory and writes it back wholesale,
+    so with two tabs open the one that saves LAST wins and the other's work
+    is gone — with no message, and nothing in the undo stack of the tab still
+    on screen. Two tabs is an ordinary thing to have: a share link opens one,
+    and "open in a new tab" is a habit.
+
+    This does not stop the overwrite (adopting the other tab's data would
+    yank the page out from under someone mid-edit, which is its own kind of
+    loss). It ends the SILENCE, while both versions still exist and reloading
+    is one keystroke."""
+    app.boot("/", selection=["TOC"])
+    first = app.d.current_window_handle
+    assert not app.css_all(".banner.warn"), "no warning before anything happens"
+
+    app.d.switch_to.new_window("tab")
+    second = app.d.current_window_handle
+    try:
+        app.d.get(f"{BASE}/")
+        app.wait_css("section[aria-label='My timetable']")
+        # A real change, made the way a reader makes one: the catalog row's
+        # own Add button. (Its code CHIP opens the details popover — clicking
+        # that changes nothing, which is how the first version of this test
+        # managed to prove nothing.)
+        app.open_tab("Catalog")
+        app.wait_css("section[aria-label='Catalog'] .card")
+        row = app.xpath("//section[@aria-label='Catalog']//div[contains(@class,'card')]"
+                        "[.//button[starts-with(@aria-label, 'RDBM,')]]")
+        app.d.execute_script("arguments[0].scrollIntoView({block: 'center'});", row)
+        row.find_element(By.XPATH, ".//button[normalize-space()='Add']").click()
+        WebDriverWait(app.d, 5).until(
+            lambda d: "RDBM" in (d.execute_script(
+                "return localStorage.getItem('cmitt.v1.selection') || ''")),
+            message="the second tab did not save its change")
+    finally:
+        app.d.switch_to.window(first)
+
+    banner = WebDriverWait(app.d, 10).until(
+        lambda d: next(iter(app.css_all(".banner.warn")), None),
+        message="the first tab was not told another tab had changed its data")
+    assert "Another tab of this app has changed your timetable" in banner.text, banner.text
+    assert "reload it to catch up" in banner.text, banner.text
+
+    app.d.switch_to.window(second)
+    app.d.close()
+    app.d.switch_to.window(first)
+
+
 TESTS = [
     t01_header_sync_button_and_hidden_dev,
     t02_developer_endpoint_only,
@@ -7789,6 +8385,13 @@ TESTS = [
     t130_a_phone_never_scrolls_sideways,
     t131_a_link_that_names_nothing_here_keeps_your_timetable,
     t132_a_damaged_link_with_no_codes_changes_nothing,
+    t133_one_working_helper_site_is_enough,
+    t134_a_helper_site_you_supply_is_tried_first,
+    t135_you_can_load_the_timetable_from_cmis_own_page,
+    t136_a_sync_failure_says_which_thing_failed,
+    t137_the_route_that_worked_last_time_is_the_only_one_asked,
+    t138_a_link_that_replaces_your_courses_says_so,
+    t139_a_second_tab_changing_your_timetable_is_not_silent,
 ]
 
 

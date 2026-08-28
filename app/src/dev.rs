@@ -445,7 +445,14 @@ fn storage_inspector(app: App) -> impl IntoView {
                                                     && let Some(text) = text.as_string()
                                                 {
                                                     let _ = storage::set_raw(&key, &text);
-                                                    let _ = domx::window().location().reload();
+                                                    // Without the query, for
+                                                    // the same reason Clear
+                                                    // needs it: an imported
+                                                    // `cmitt.v1.selection` is
+                                                    // otherwise overwritten
+                                                    // by the `?c=` still in
+                                                    // the address bar (R83).
+                                                    domx::reload_without_query();
                                                 }
                                             });
                                         }

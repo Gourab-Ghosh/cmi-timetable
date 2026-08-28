@@ -65,6 +65,24 @@ impl Tab {
             Tab::Halls => "Halls",
         }
     }
+
+    /// The id of the section this tab shows, so the rail's `role="tab"`
+    /// buttons can name what they control and the sections can carry
+    /// `role="tabpanel"`. The rail has always claimed to be a tablist and
+    /// behaved like one — roving tabindex, arrow keys, `aria-selected` — but
+    /// nothing tied a tab to its panel, which is the other half of the
+    /// pattern (R83). Only the selected panel is mounted, so only the
+    /// selected tab's `aria-controls` resolves; that is the ordinary shape
+    /// for a tablist that renders one panel at a time.
+    pub fn panel_id(&self) -> &'static str {
+        match self {
+            Tab::MyTimetable => "panel-my-timetable",
+            Tab::MyCourses => "panel-my-courses",
+            Tab::MasterGrid => "panel-master-grid",
+            Tab::Catalog => "panel-catalog",
+            Tab::Halls => "panel-halls",
+        }
+    }
 }
 
 /// Facets are multi-select: OR within a facet, AND across facets.
@@ -234,6 +252,29 @@ pub struct Prefs {
     /// for everyone who ever used an older build.
     #[serde(default)]
     pub update_checks_off: bool,
+    /// A helper site the READER supplied, tried before the shipped ones.
+    ///
+    /// This app can only reach CMI through somebody else's server: CMI's
+    /// pages carry no `Access-Control-Allow-Origin` header, so a browser
+    /// refuses to let a page on github.io read them however well the network
+    /// is working. The shipped relays are free public services, and free
+    /// public services go away — one of the two this app shipped went down
+    /// and the other started charging, within the same week, and every
+    /// reader's Sync stopped working with no way for them to fix it (R84).
+    ///
+    /// So the list is no longer only ours. A template with `{url}` in it —
+    /// `https://my-worker.example.dev/?url={url}` — is tried first, which
+    /// means a reader (or CMI itself) can put the app back to work in the
+    /// time it takes to paste a URL, with no new version of the app and
+    /// nobody to wait for. `None` is the normal state.
+    #[serde(default)]
+    pub helper_site: Option<String>,
+    /// The route that last delivered a timetable, by name, so the next sync
+    /// starts with it. Ordinary self-healing: whichever relay is alive today
+    /// is the one tried first tomorrow, and the routes that are down stop
+    /// costing the reader their timeout every time.
+    #[serde(default)]
+    pub last_good_route: Option<String>,
 }
 
 /// A day strip's selection: one day, or all of them.
@@ -272,6 +313,8 @@ impl Default for Prefs {
             shorten_service: None,
             changes_mine_only: false,
             update_checks_off: false,
+            helper_site: None,
+            last_good_route: None,
         }
     }
 }
@@ -323,6 +366,12 @@ pub struct Banner {
     /// Sticky banners (e.g. the corrupt-data notice) survive the start of
     /// the next update attempt; ordinary failure banners are cleared there.
     pub sticky: bool,
+    /// An optional way out, as a label and the dialog it opens. A failure the
+    /// reader can actually do something about should carry the doing: the
+    /// sync-failure banner used to end with a paragraph of advice and no
+    /// button, so the one route still open to them was a thing to read
+    /// rather than a thing to press (R84).
+    pub action: Option<(String, Dialog)>,
 }
 
 /// A question the app asks before doing something it cannot take back —
@@ -376,6 +425,12 @@ pub enum Dialog {
     Details(String),
     /// "My data": everything saved in the browser, with removal options.
     MyData,
+    /// Load CMI's timetable from the page itself: the reader opens CMI in a
+    /// tab (which always works — it is an ordinary navigation, with no
+    /// cross-origin rule to satisfy), and hands the app the page. The one
+    /// route that cannot rot, and the answer to the week both shipped helper
+    /// sites went away at once (R84).
+    LoadFromPage,
     Conflicts,
     Export {
         scope: Option<String>,
@@ -821,14 +876,78 @@ impl App {
             kind,
             text: text.into(),
             sticky: false,
+            action: None,
         }));
     }
 
-    pub fn set_banner_sticky(&self, kind: BannerKind, text: impl Into<String>) {
+    /// A transient banner that carries a way out — see `Banner::action`.
+    pub fn set_banner_with_action(
+        &self,
+        kind: BannerKind,
+        text: impl Into<String>,
+        action: (String, Dialog),
+    ) {
+        if self
+            .banner
+            .with_untracked(|b| b.as_ref().is_some_and(|b| b.sticky))
+        {
+            return;
+        }
         self.banner.set(Some(Banner {
             kind,
             text: text.into(),
+            sticky: false,
+            action: Some(action),
+        }));
+    }
+
+    /// A notice that outlives the next sync attempt.
+    ///
+    /// Two of these can be raised on one load — the corrupt-storage notice
+    /// from boot, then a damaged-link notice from the URL — and there is one
+    /// banner slot. Replacing meant the second silently swallowed the first,
+    /// and the first is the one the reader cannot recover on their own: it is
+    /// the only sentence telling them their moved classes were set aside
+    /// (R83). So they queue into one banner instead, in the order they were
+    /// raised, and the renderer gives each its own paragraph.
+    pub fn set_banner_sticky(&self, kind: BannerKind, text: impl Into<String>) {
+        let text = text.into();
+        let existing = self.banner.with_untracked(|b| {
+            b.as_ref()
+                .filter(|b| b.sticky)
+                .map(|b| (b.text.clone(), b.kind))
+        });
+        // The louder of the two kinds survives. An `Info` notice queued
+        // behind a `Warn` must not quietly restyle the warning as news
+        // (R84 review).
+        let kind = match &existing {
+            Some((_, BannerKind::Warn)) => BannerKind::Warn,
+            _ => kind,
+        };
+        let existing = existing.map(|(text, _)| text);
+        let text = match existing {
+            Some(prev) => {
+                // Compared line by line, not with `contains`: a notice is one
+                // whole paragraph, and `contains` is asymmetric — a longer
+                // notice arriving after a shorter one that is a prefix of it
+                // was appended, while the reverse was dropped (R84 review).
+                let mut lines: Vec<&str> = prev.split('\n').collect();
+                if !lines.iter().any(|l| *l == text) {
+                    lines.push(&text);
+                }
+                // Two is a banner; three is a wall nobody reads. The oldest
+                // goes, because the newest notice is about what just
+                // happened.
+                let keep = lines.len().saturating_sub(2);
+                lines[keep..].join("\n")
+            }
+            None => text,
+        };
+        self.banner.set(Some(Banner {
+            kind,
+            text,
             sticky: true,
+            action: None,
         }));
     }
 
@@ -1360,7 +1479,15 @@ impl App {
     ) -> String {
         let plural = |n: usize| if n == 1 { "course" } else { "courses" };
         let n = plan.known.len();
-        let mut out = if replace {
+        let mut out = if replace && n == 0 {
+            // A file whose every code is unknown to this browser — a last
+            // semester's export, say. "exactly the 0 courses from that file"
+            // is arithmetic, not a sentence, and the number it reports is the
+            // one thing a reader in this situation needs explained (R83).
+            "That file's courses aren't in this browser's copy of CMI's \
+             timetable, so your timetable is now empty."
+                .to_string()
+        } else if replace {
             format!(
                 // Spelled for one, because "the 1 course" reads as a count
                 // where the sentence means the whole of what the file listed.

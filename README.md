@@ -56,13 +56,36 @@ it is actionable — "old copy", "imported"). For speed, each tier fetches both 
 parallel**, and the proxy tier **races all relays at once** — the first
 valid response wins:
 
-1. **proxy** — public CORS relays raced in parallel (see `app/src/fetch.rs`)
+0. **your own helper site**, if one is set in My data — asked alone first,
+   with a 2.5 s head start, so a reader who has one never hands CMI's address
+   to a public relay at all
+1. **proxy** — seven public CORS relays raced in parallel (see `app/src/fetch.rs`)
 2. **direct** — a cheap 4 s attempt at the CMI URLs, only if no relay answered
+3. **from CMI's page in your browser** — My data → "Load it from CMI's page",
+   where you open CMI yourself and hand the app the two pages; same parser,
+   same validation gate, same adoption, and no server in between to fail
 
-Both routes end at cmi.ac.in. There is deliberately no third tier serving a
-copy of the pages from this site: a fallback like that works by showing you
-something CMI published a while ago, without you knowing how long ago, and a
-timetable you can't date is worse than an honest "couldn't reach CMI".
+All of them end at cmi.ac.in. There is deliberately no tier serving a copy of
+the pages from this site: a fallback like that works by showing you something
+CMI published a while ago, without you knowing how long ago, and a timetable
+you can't date is worse than an honest "couldn't reach CMI".
+
+**Why seven relays and a way in without one.** cmi.ac.in sends no
+`Access-Control-Allow-Origin` header, so a browser will not let this page read
+it directly however healthy the network is — the direct tier fails by refusal
+in about 12 ms, and the app's ability to sync rests on the relays. It shipped
+two, and both broke inside a week (one down, one turned paid), which took sync
+away from everybody at once with nothing any reader could do about it. Hence:
+seven operators instead of two — chosen by measuring each one from the real
+deployed origin in a real browser, on both CMI pages — plus a helper site the
+reader can set themselves, and a route that needs no server's cooperation at
+all. The app asks ONE of them at a
+time — the leading route alone, the rest only if it fails or goes silent for
+2.5 s — and remembers which one last worked, so an ordinary sync is a single
+request to a single service. `.workagents/cors-r84/probes/`
+holds the two checks worth running before a deploy — one measures relays from
+the real deployed origin (curl cannot: it does not enforce CORS), the other
+syncs the built app against the real cmi.ac.in.
 
 **Why the relays go first, though they are the less trustworthy route.** Most
 people using this app are on CMI's own network, where `www.cmi.ac.in`

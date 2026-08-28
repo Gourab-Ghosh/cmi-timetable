@@ -478,6 +478,169 @@ pub fn close_open_facets(except: Option<&web_sys::Element>) {
     }
 }
 
+/// Keep the keyboard's place when a pressed control deletes its own row.
+///
+/// The "Your changes" list — in the My timetable panel and in the My data
+/// dialog — undoes one change per row, and undoing removes the row. The
+/// button went with it, focus fell to `<body>`, and the next Tab restarted at
+/// the top of the page: 35 to 63 presses to reach the second change of two,
+/// measured (R83). WCAG 2.4.3 asks that focus not be lost when the thing
+/// holding it disappears.
+///
+/// Where it goes, in order: the row that took this one's place (so pressing
+/// Enter repeatedly walks down the list undoing changes), the new last row if
+/// this was the last, and otherwise the panel that held them — which is still
+/// the reader's place on the page even once it is empty.
+///
+/// Position, not identity: the whole list is rebuilt by its own closure on
+/// every change, so a node captured here is detached a tick later. The two
+/// hosts are stable across that rebuild and are what gets re-queried.
+pub fn keep_place_after_row_removal(ev: &web_sys::MouseEvent) {
+    const HOSTS: &str = "[data-testid='your-changes'], .data-section";
+    let Some(btn) = ev
+        .target()
+        .and_then(|t| t.dyn_into::<web_sys::Element>().ok())
+        .and_then(|t| t.closest("button").ok().flatten())
+    else {
+        return;
+    };
+    let Some(host) = btn.closest(HOSTS).ok().flatten() else {
+        return;
+    };
+    // The region behind the panel, for the case where undoing the last change
+    // takes the panel off the page with it.
+    let region = btn.closest("section[aria-label]").ok().flatten();
+    let row_buttons = |el: &web_sys::Element| -> Vec<web_sys::HtmlElement> {
+        el.query_selector_all("ul.changes button")
+            .ok()
+            .map(|list| {
+                (0..list.length())
+                    .filter_map(|i| {
+                        list.item(i)
+                            .and_then(|n| n.dyn_into::<web_sys::HtmlElement>().ok())
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    let node: &web_sys::Node = btn.as_ref();
+    let Some(index) = row_buttons(&host)
+        .iter()
+        .position(|b| b.is_same_node(Some(node)))
+    else {
+        return;
+    };
+    // A mark rather than a selector or a captured node. The panel and the My
+    // data dialog can both hold one of these lists at the same time, so
+    // re-querying the class would find the wrong one; and the host itself is
+    // outside the closure that rebuilds, so the mark is still on it after.
+    const MARK: &str = "data-keep-focus";
+    let _ = host.set_attribute(MARK, "");
+    leptos::task::spawn_local(async move {
+        // One turn of the loop: the list is redrawn by a Leptos effect, which
+        // runs in a microtask, so anything queued behind it sees the new DOM.
+        gloo_timers::future::TimeoutFuture::new(0).await;
+        let host = document()
+            .query_selector(&format!("[{MARK}]"))
+            .ok()
+            .flatten();
+        if let Some(host) = &host {
+            let _ = host.remove_attribute(MARK);
+            let remaining = row_buttons(host);
+            if !remaining.is_empty() {
+                let at = index.min(remaining.len() - 1);
+                let _ = remaining[at].focus();
+                return;
+            }
+        }
+        // Nothing left to step to. Land on the panel, or on the region that
+        // held it — focusable only for this, never in the Tab order.
+        for target in [host, region] {
+            if let Some(el) = target
+                .filter(|e| e.is_connected())
+                .and_then(|e| e.dyn_into::<web_sys::HtmlElement>().ok())
+            {
+                let _ = el.set_attribute("tabindex", "-1");
+                let _ = el.focus();
+                return;
+            }
+        }
+    });
+}
+
+/// Keep a just-opened facet menu inside the window.
+///
+/// The menu is `position: absolute; left: 0` against its own `<summary>`, and
+/// its floor is 19rem. So a facet that the filter bar wrapped into the right
+/// half of a row opened a 304px panel starting where the button is: past the
+/// right edge of the window, minting a page scrollbar and pushing the menu's
+/// own **All** and **None** buttons entirely off screen. Measured on every
+/// facet at 320-430px (the worst: a Time-slot menu 204px off a 360px screen),
+/// and on the last facet at the project's own 1500px reference window (R83).
+///
+/// CSS cannot do this alone: where a summary lands depends on how the bar
+/// wrapped, which is exactly what the stylesheet does not know. So the shift
+/// is measured here and handed back as `--menu-nudge`, which the stylesheet
+/// applies as a left margin. Width is CSS's half of the job — the menu is
+/// clamped to the viewport there, so this only ever has to move it.
+pub fn place_facet_menu(facet: &web_sys::Element) {
+    /// Breathing room kept between the menu and either edge of the window.
+    const GUTTER: f64 = 8.0;
+    let Some(menu) = facet
+        .query_selector(".menu")
+        .ok()
+        .flatten()
+        .and_then(|m| m.dyn_into::<web_sys::HtmlElement>().ok())
+    else {
+        return;
+    };
+    // Measure it where the stylesheet puts it. Without this clear, the nudge
+    // from the last time this menu was open reads as its natural position and
+    // the shifts accumulate.
+    let _ = menu.style().remove_property("--menu-nudge");
+    // clientWidth, not innerWidth: the scrollbar's channel is not somewhere a
+    // menu may sit, and overflowing INTO it is what mints the page scrollbar.
+    let vw = document()
+        .document_element()
+        .map(|e| f64::from(e.client_width()))
+        .unwrap_or_default();
+    if vw <= 0.0 {
+        return;
+    }
+    let rect = menu.get_bounding_client_rect();
+    let over = rect.right() - (vw - GUTTER);
+    if over <= 0.0 {
+        return;
+    }
+    // Never past the LEFT edge chasing the right one: a menu wider than the
+    // window stays where it is and the stylesheet's clamp is what keeps it
+    // readable. `max(0)` so a menu already starting off-screen is left alone.
+    let nudge = over.min((rect.left() - GUTTER).max(0.0));
+    if nudge <= 0.0 {
+        return;
+    }
+    let _ = menu
+        .style()
+        .set_property("--menu-nudge", &format!("-{nudge}px"));
+}
+
+/// Re-place every open facet menu — for a window that changed size (or a
+/// phone that turned) while one was open, where the measured nudge is now
+/// wrong in whichever direction the window moved.
+pub fn replace_open_facet_menus() {
+    let Ok(list) = document().query_selector_all("details.facet[open]") else {
+        return;
+    };
+    for i in 0..list.length() {
+        if let Some(el) = list
+            .item(i)
+            .and_then(|n| n.dyn_into::<web_sys::Element>().ok())
+        {
+            place_facet_menu(&el);
+        }
+    }
+}
+
 pub fn any_open_facet() -> bool {
     document()
         .query_selector("details.facet[open]")

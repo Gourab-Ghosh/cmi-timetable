@@ -185,6 +185,7 @@ pub fn timetable_export_json(app: &App) -> String {
         SourceTier::Direct => "direct",
         SourceTier::Proxy(_) => "proxy",
         SourceTier::Imported => "imported",
+        SourceTier::Pasted => "pasted",
         SourceTier::Mirror | SourceTier::Bundled => "legacy-copy",
         SourceTier::None => "none",
     };

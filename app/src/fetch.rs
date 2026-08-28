@@ -24,6 +24,7 @@
 use crate::state::{App, BannerKind, FetchLogEntry, StoredReport};
 use crate::{domx, storage};
 use futures::future::{Either, select};
+use futures::stream::StreamExt;
 use leptos::prelude::*;
 use ttcore::model::{Snapshot, SourceTier};
 use ttcore::validate::{ParseOutcome, SnapshotMeta, parse_and_validate};
@@ -38,6 +39,11 @@ pub const CMI_HALLS_URL: &str = "https://www.cmi.ac.in/practical/lecturehalls.ph
 const DIRECT_TIMEOUT_MS: u32 = 4_000;
 const PROXY_TIMEOUT_MS: u32 = 12_000;
 const AUTO_UPDATE_INTERVAL_MS: f64 = 12.0 * 3600.0 * 1000.0;
+/// How long a helper site the READER supplied gets on its own before the
+/// shipped relays are started alongside it. Long enough that a working one
+/// finishes first and no public relay is ever asked; short enough that a
+/// misconfigured one costs a pause rather than the whole timeout.
+const HELPER_HEAD_START_MS: u32 = 2_500;
 
 /// Public CORS relays, tried in order. To add a self-hosted relay (the most
 /// reliable proxy option), deploy a trivial Cloudflare Worker that forwards
@@ -51,9 +57,86 @@ const AUTO_UPDATE_INTERVAL_MS: f64 = 12.0 * 3600.0 * 1000.0;
 pub struct ProxyDef {
     pub name: &'static str,
     pub build: fn(&str) -> String,
+    /// Request headers this relay needs. Almost always empty — a relay that
+    /// wants a header is a relay that can stop working when it changes its
+    /// mind about which one. `r.jina.ai` is here because it is the only
+    /// large operator on the list and it wants exactly one.
+    pub headers: &'static [(&'static str, &'static str)],
 }
 
+/// The shipped relays, tried in this order after anything the reader chose.
+///
+/// FOUR, not two, and deliberately four different operators on four
+/// different pieces of infrastructure. Two was not a list, it was a pair of
+/// single points of failure: on 2026-08-28 `allorigins.win` was answering
+/// 520 for every target it was given (its own back end, not CMI — a control
+/// fetch of example.com failed the same way) and `corsproxy.io` had become a
+/// paid product answering `401 {"error":"A valid API key is required"}` to
+/// everyone else. Both at once, and Sync was dead for every reader with no
+/// route left to try (R84).
+///
+/// Each entry is a whole independent operator. Adding one costs a line;
+/// keeping a dead one costs a reader their patience, so a route that fails
+/// *by policy* — the 401 above — is removed rather than demoted, while one
+/// that is merely DOWN stays: outages end, pricing decisions don't.
+///
+/// Verified against CMI's real timetable page on 2026-08-28 (33 100 bytes,
+/// 55 `<pre>` blocks, `Access-Control-Allow-Origin: *`):
+/// `.workagents/cors-r84/probes/relay_probe.py` is the check, and it tests
+/// the two things that both have to be true — that the body is CMI's and
+/// that the header lets a browser read it. Testing only the first is how a
+/// relay that returns its own landing page with a 200 gets shipped.
 pub const PROXIES: &[ProxyDef] = &[
+    // Verified 7/7 complete syncs. Free, no key; the browser's own `Origin`
+    // header is enough. A path shape, so the cache-buster on the target
+    // rides along untouched.
+    ProxyDef {
+        name: "cors.sh",
+        build: |url| format!("https://proxy.cors.sh/{url}"),
+        headers: &[],
+    },
+    // Verified 7/7, and the fastest and steadiest thing measured (483ms
+    // median). One person's Cloudflare Worker, so no SLA — which is an
+    // argument for having five of these, not for leaving it out.
+    ProxyDef {
+        name: "cors-get-proxy",
+        build: |url| {
+            format!(
+                "https://cors-get-proxy.sirjosh.workers.dev/?url={}",
+                js_sys::encode_uri_component(url)
+            )
+        },
+        headers: &[],
+    },
+    // Verified 7/7, and the only survivor NOT on Cloudflare — one Cloudflare
+    // incident takes both of the two above, and this is what is left. Third
+    // rather than second only because Render sleeps a free service: the
+    // first contact of the day measured 25.5s, warm ones ~0.6s.
+    ProxyDef {
+        name: "corsmirror",
+        build: |url| {
+            format!(
+                "https://corsmirror.onrender.com/v1/cors?url={}",
+                js_sys::encode_uri_component(url)
+            )
+        },
+        headers: &[],
+    },
+    // Verified 7/7 at ~2.9s, and the only LARGE operator here — the others
+    // are one-person projects that can vanish without notice. The header is
+    // mandatory: without it this returns 16 300 bytes of Markdown with no
+    // `<pre>` at all, which the gate would reject as a changed CMI. It also
+    // re-serialises the HTML (33 154 bytes against CMI's 33 100, same 55
+    // `<pre>` blocks), so the parser sees equivalent markup rather than
+    // identical bytes.
+    ProxyDef {
+        name: "r.jina.ai",
+        build: |url| format!("https://r.jina.ai/{url}"),
+        headers: &[("x-return-format", "html")],
+    },
+    // Flapping rather than gone: 2 complete syncs in 7 rounds, and it
+    // recovered during the measuring session. Slow even when it works
+    // (~6.5s, over half the proxy budget), so it is behind the four above.
     ProxyDef {
         name: "allorigins.win",
         build: |url| {
@@ -62,17 +145,146 @@ pub const PROXIES: &[ProxyDef] = &[
                 js_sys::encode_uri_component(url)
             )
         },
+        headers: &[],
     },
+    // Flat 522 all day and kept anyway: a sixth independent operator,
+    // outages end, and a dead entry in a parallel race costs one wasted
+    // request.
     ProxyDef {
-        name: "corsproxy.io",
+        name: "codetabs.com",
         build: |url| {
             format!(
-                "https://corsproxy.io/?url={}",
+                "https://api.codetabs.com/v1/proxy?quest={}",
                 js_sys::encode_uri_component(url)
             )
         },
+        headers: &[],
+    },
+    // LAST, on the numbers: 1 complete sync in 7 rounds, 3 requests in 14.
+    // A sync asks for both CMI pages through one relay at the same moment
+    // and this one usually serves one and 429s the other — and its 429
+    // carries no `Access-Control-Allow-Origin` at all, so the browser never
+    // sees the status and the app cannot tell "throttled, try later" from
+    // "dead host". Its quota is per IP, and a campus shares one.
+    ProxyDef {
+        name: "cors.lol",
+        build: |url| {
+            format!(
+                "https://api.cors.lol/?url={}",
+                js_sys::encode_uri_component(url)
+            )
+        },
+        headers: &[],
     },
 ];
+
+/// Turn the reader's own helper-site template into a URL for `target`.
+///
+/// `{url}` is replaced with the percent-encoded target, `{raw}` with the
+/// target as typed — relays disagree about which they want, and a reader
+/// pasting a URL out of a README should not have to know the difference. A
+/// template with neither simply gets the encoded target appended, which is
+/// the shape most of them take. Whitespace is trimmed, because a pasted URL
+/// usually arrives with some.
+///
+/// Deliberately not validated beyond "is not blank": the whole point of this
+/// field is to work with a service nobody has thought of yet, and a
+/// well-meant check on the shape of a URL is exactly the thing that would
+/// stop it (R84).
+pub fn build_helper_url(template: &str, target: &str) -> Option<String> {
+    let template = template.trim();
+    if template.is_empty() {
+        return None;
+    }
+    let encoded = String::from(js_sys::encode_uri_component(target));
+    if template.contains("{url}") || template.contains("{raw}") {
+        Some(template.replace("{url}", &encoded).replace("{raw}", target))
+    } else {
+        Some(format!("{template}{encoded}"))
+    }
+}
+
+/// One route to CMI. Exactly one of `build` and `template` is ever used:
+/// `template` is the reader's own helper site, `build` is a shipped relay.
+struct RelayRoute {
+    name: String,
+    build: fn(&str) -> String,
+    template: Option<String>,
+    headers: &'static [(&'static str, &'static str)],
+}
+
+/// Every relay route to try, in the order to try it: the reader's own helper
+/// site, then whichever shipped route worked last time, then the rest.
+///
+/// Order here decides one real thing: `run_update` gives the FIRST entry a
+/// head start — asked alone, with the rest brought in only if it fails or
+/// goes quiet — so this list's head is the route a healthy sync actually
+/// uses, and the rest are insurance rather than traffic. A returning reader's
+/// sync is one request to the relay that worked yesterday.
+fn relay_routes(app: &App) -> Vec<RelayRoute> {
+    let prefs = app.prefs.get_untracked();
+    let mut routes: Vec<RelayRoute> = Vec::new();
+    if let Some(template) = prefs.helper_site.as_deref()
+        && !template.trim().is_empty()
+    {
+        routes.push(RelayRoute {
+            name: "your helper site".to_string(),
+            // Unused for this entry — the template is carried beside it.
+            build: |url| url.to_string(),
+            template: Some(template.trim().to_string()),
+            headers: &[],
+        });
+    }
+    let mut shipped: Vec<&ProxyDef> = PROXIES.iter().collect();
+    if let Some(good) = prefs.last_good_route.as_deref() {
+        shipped.sort_by_key(|p| p.name != good);
+    }
+    routes.extend(shipped.into_iter().map(|p| RelayRoute {
+        name: p.name.to_string(),
+        build: p.build,
+        template: None,
+        headers: p.headers,
+    }));
+    routes
+}
+
+/// Did anything at all answer at that address?
+///
+/// A cross-origin `fetch` the browser refuses to let the page READ fails with
+/// exactly the same error as one that never left the machine — both are
+/// `TypeError: Failed to fetch`. That is deliberate on the browser's part, so
+/// that a page cannot use the difference to map a network it is not allowed
+/// to see. It also means the app could not tell "CMI is up and we are not
+/// allowed to read it" from "CMI is down", and said the second — to readers
+/// who had CMI's page open in the next tab (R84).
+///
+/// `mode: no-cors` gives that distinction back. The response comes back
+/// opaque: unreadable, zero visible bytes, useless for fetching a timetable.
+/// But the promise RESOLVES when the server answered and REJECTS when
+/// nothing did, and that is the entire question here. Used only to choose
+/// which sentence to show after every route has already failed — never to
+/// accept or reject content.
+async fn answers_at_all(url: &str, timeout_ms: u32) -> bool {
+    // Abortable, like `fetch_text`: a probe whose timeout wins would
+    // otherwise be left running against a host that is already known not to
+    // be answering in time.
+    let controller = web_sys::AbortController::new().ok();
+    let signal = controller.as_ref().map(|c| c.signal());
+    let request = gloo_net::http::Request::get(url)
+        .mode(web_sys::RequestMode::NoCors)
+        .abort_signal(signal.as_ref())
+        .send();
+    let timeout = gloo_timers::future::TimeoutFuture::new(timeout_ms);
+    match select(Box::pin(request), Box::pin(timeout)).await {
+        Either::Left((result, _)) => result.is_ok(),
+        Either::Right(_) => {
+            if let Some(c) = &controller {
+                c.abort();
+            }
+            false
+        }
+    }
+}
 
 /// The CMI URL a relay is asked to fetch, with a cache-buster on it.
 ///
@@ -102,13 +314,26 @@ pub async fn fetch_text_public(url: &str, timeout_ms: u32) -> Result<String, Str
 }
 
 async fn fetch_text(url: &str, timeout_ms: u32) -> Result<FetchOk, String> {
+    fetch_text_with(url, timeout_ms, &[]).await
+}
+
+/// `fetch_text`, plus any request headers the route needs. Only one relay
+/// wants one (see `ProxyDef::headers`), and it is worth the parameter: the
+/// alternative was leaving the largest, steadiest operator on the list out.
+async fn fetch_text_with(
+    url: &str,
+    timeout_ms: u32,
+    headers: &[(&str, &str)],
+) -> Result<FetchOk, String> {
     let started = domx::now_ms();
     let controller = web_sys::AbortController::new().ok();
     let signal = controller.as_ref().map(|c| c.signal());
 
-    let request = gloo_net::http::Request::get(url)
-        .abort_signal(signal.as_ref())
-        .send();
+    let mut builder = gloo_net::http::Request::get(url).abort_signal(signal.as_ref());
+    for (name, value) in headers {
+        builder = builder.header(name, value);
+    }
+    let request = builder.send();
     let timeout = gloo_timers::future::TimeoutFuture::new(timeout_ms);
 
     let response = match select(Box::pin(request), Box::pin(timeout)).await {
@@ -431,6 +656,22 @@ pub fn adopt(app: &App, new_snapshot: Snapshot, announce: bool, from: Adoption) 
     }
 }
 
+/// Remember which route delivered a timetable, so the next sync asks it
+/// first. Written only on success, and only when it changes — this lands in
+/// localStorage, and a write per sync for a value that rarely moves is not
+/// worth the quota.
+fn remember_route(app: &App, name: &str) {
+    let already = app
+        .prefs
+        .with_untracked(|p| p.last_good_route.as_deref() == Some(name));
+    if already {
+        return;
+    }
+    app.prefs
+        .update(|p| p.last_good_route = Some(name.to_string()));
+    app.persist_prefs();
+}
+
 fn progress(app: &App, text: &str) {
     let text = text.to_string();
     app.sync.update(|s| s.progress = text);
@@ -455,11 +696,12 @@ async fn fetch_pages_tier(
     halls_url: String,
     timeout_ms: u32,
     source: SourceTier,
+    headers: &'static [(&'static str, &'static str)],
 ) -> TierResult {
     let is_proxy = matches!(source, SourceTier::Proxy(_));
     let (tt, halls) = futures::join!(
-        fetch_text(&tt_url, timeout_ms),
-        fetch_text(&halls_url, timeout_ms)
+        fetch_text_with(&tt_url, timeout_ms, headers),
+        fetch_text_with(&halls_url, timeout_ms, headers)
     );
     log(&app, &tier_name, &tt_url, &tt);
     log(&app, &tier_name, &halls_url, &halls);
@@ -518,6 +760,7 @@ pub async fn run_update(app: App, manual: bool) {
     // so nothing else could see anything different (§8.6). Direct being last
     // makes that true by construction — there is no route after it.
     let mut gate_failed_any = false;
+    let mut gate_failed_direct = false;
     let mut adopted = false;
     let mut direct_tried = false;
     // The "asking cmi.ac.in directly" note, kept so the failure banner can
@@ -533,31 +776,146 @@ pub async fn run_update(app: App, manual: bool) {
     // student is on. See the module docs.
     if force.is_none() || force.as_deref() == Some("proxy") {
         progress(&app, "Fetching CMI's timetable…");
-        let mut pending: Vec<futures::future::LocalBoxFuture<'static, TierResult>> = PROXIES
-            .iter()
-            .map(|proxy| {
-                let fut = fetch_pages_tier(
-                    app,
-                    format!("proxy:{}", proxy.name),
-                    (proxy.build)(&uncached(CMI_TIMETABLE_URL)),
-                    (proxy.build)(&uncached(CMI_HALLS_URL)),
-                    PROXY_TIMEOUT_MS,
-                    SourceTier::Proxy(proxy.name.to_string()),
-                );
-                Box::pin(fut) as futures::future::LocalBoxFuture<'static, TierResult>
+        let routes = relay_routes(&app);
+        // The FIRST route is asked ALONE, with the rest brought in behind it
+        // only if it fails outright or is still silent after
+        // `HELPER_HEAD_START_MS`. Which route is first is decided in
+        // `relay_routes`: the reader's own helper site, else whichever worked
+        // last time, else the best-measured of the shipped list.
+        //
+        // Two reasons, and the second is the one that matters at seven
+        // relays. A head start is the only mechanism here that actually
+        // WITHHOLDS a request — merely sorting the list does nothing, because
+        // everything in it starts in the same tick, and the ordering claim
+        // was decorative until this existed (this round's adversarial review
+        // caught it by recording which hosts the stand-in was really
+        // contacted on). And these are free services somebody else pays for:
+        // asking all seven, twice each, on every sync would be both rude and
+        // seven strangers shown which CMI page a student is fetching. The
+        // ordinary sync is now ONE request to one relay.
+        //
+        // It costs almost nothing when the leader is down, because a route
+        // that FAILS starts the rest immediately; only a leader that goes
+        // SILENT costs the 2.5s, which is the case worth waiting on anyway.
+        let mine_first = !routes.is_empty();
+        let mut queue = routes
+            .into_iter()
+            .filter_map(|route| {
+                let RelayRoute {
+                    name,
+                    build,
+                    template,
+                    headers,
+                } = route;
+                let url_for = |target: &str| -> Option<String> {
+                    match &template {
+                        Some(t) => build_helper_url(t, &uncached(target)),
+                        None => Some(build(&uncached(target))),
+                    }
+                };
+                // A helper-site template that produces nothing (blank after
+                // trimming) is skipped rather than fetched as "".
+                let (tt, halls) = (url_for(CMI_TIMETABLE_URL)?, url_for(CMI_HALLS_URL)?);
+                let label = name.clone();
+                let fut = async move {
+                    let out = fetch_pages_tier(
+                        app,
+                        format!("proxy:{name}"),
+                        tt,
+                        halls,
+                        PROXY_TIMEOUT_MS,
+                        SourceTier::Proxy(name.clone()),
+                        headers,
+                    )
+                    .await;
+                    (name, out)
+                };
+                Some((
+                    label,
+                    Box::pin(fut) as futures::future::LocalBoxFuture<'static, (String, TierResult)>,
+                ))
             })
-            .collect();
-        while !pending.is_empty() && !adopted {
-            let (result, _index, rest) = futures::future::select_all(pending).await;
-            pending = rest;
-            match result {
-                TierResult::Snapshot(snapshot) => {
-                    adopt(&app, *snapshot, true, Adoption::Fetched);
-                    adopted = true;
+            .collect::<Vec<_>>()
+            .into_iter();
+
+        let mut inflight = futures::stream::FuturesUnordered::new();
+        // Which routes were ASKED, and which of them lived long enough to say
+        // so. `log()` runs inside a route's own future, so a route dropped
+        // when a faster one wins never reaches it — and the developer's Fetch
+        // log then showed one route while four had been handed CMI's address.
+        // That is a diagnostic that misleads exactly when someone is
+        // diagnosing an outage, and "did my helper site get asked?" is a
+        // question it was answering wrongly (R84 review). The difference is
+        // written out below.
+        let mut started: Vec<String> = Vec::new();
+        let mut finished: Vec<String> = Vec::new();
+        // Start everything still queued. Says whether it added anything.
+        macro_rules! start_the_rest {
+            () => {{
+                let mut added = false;
+                for (name, fut) in queue.by_ref() {
+                    started.push(name);
+                    inflight.push(fut);
+                    added = true;
                 }
-                // A proxy may have mangled the content — wait for the others.
-                TierResult::GateFailed => gate_failed_any = true,
-                TierResult::Unreachable => {}
+                added
+            }};
+        }
+        if mine_first {
+            if let Some((name, fut)) = queue.next() {
+                started.push(name);
+                inflight.push(fut);
+            }
+        } else {
+            start_the_rest!();
+        }
+        while !adopted {
+            if inflight.is_empty() && !start_the_rest!() {
+                break;
+            }
+            let hedge = gloo_timers::future::TimeoutFuture::new(HELPER_HEAD_START_MS);
+            // Dropping this future when the hedge wins leaves the requests
+            // themselves running — which is what makes this a head start and
+            // not a queue.
+            match select(Box::pin(inflight.next()), Box::pin(hedge)).await {
+                Either::Left((Some((name, result)), _)) => {
+                    finished.push(name.clone());
+                    match result {
+                        TierResult::Snapshot(snapshot) => {
+                            adopt(&app, *snapshot, true, Adoption::Fetched);
+                            adopted = true;
+                            remember_route(&app, &name);
+                        }
+                        // A relay may have mangled the content — wait for the
+                        // others, and start them NOW rather than waiting out a
+                        // head start for a runner that is already gone.
+                        TierResult::GateFailed => {
+                            gate_failed_any = true;
+                            start_the_rest!();
+                        }
+                        TierResult::Unreachable => {
+                            start_the_rest!();
+                        }
+                    }
+                }
+                Either::Left((None, _)) => {}
+                // Still silent. Bring the others in alongside it.
+                Either::Right(((), _)) => {
+                    start_the_rest!();
+                }
+            }
+        }
+        // The routes that saw CMI's address and were dropped before they
+        // could report. Written out so the Fetch log is a record of what
+        // left this browser, which is what FEATURES promises about it.
+        for name in started {
+            if !finished.contains(&name) {
+                log(
+                    &app,
+                    &format!("proxy:{name}"),
+                    "(asked, then dropped when another route won)",
+                    &Err("no answer needed — a faster route had already won".to_string()),
+                );
             }
         }
     }
@@ -593,24 +951,33 @@ pub async fn run_update(app: App, manual: bool) {
             CMI_HALLS_URL.to_string(),
             DIRECT_TIMEOUT_MS,
             SourceTier::Direct,
+            &[],
         )
         .await
         {
             TierResult::Snapshot(snapshot) => {
                 adopt(&app, *snapshot, true, Adoption::Fetched);
                 adopted = true;
+                remember_route(&app, "direct");
             }
-            TierResult::GateFailed => gate_failed_any = true,
+            // A gate failure on CMI's OWN bytes is the one kind a hand-load
+            // cannot help with — the same pages would meet the same parser
+            // and fail identically — so it is tracked apart from a relay's,
+            // which usually means the relay mangled the page and handing the
+            // real one over WOULD work.
+            TierResult::GateFailed => {
+                gate_failed_any = true;
+                gate_failed_direct = true;
+            }
             TierResult::Unreachable => {}
         }
     }
 
-    app.sync.update(|s| {
-        s.updating = false;
-        s.progress = String::new();
-    });
-
     if adopted {
+        app.sync.update(|s| {
+            s.updating = false;
+            s.progress = String::new();
+        });
         return;
     }
 
@@ -636,6 +1003,65 @@ pub async fn run_update(app: App, manual: bool) {
         ""
     };
 
+    // Before blaming CMI, work out what actually stopped the app — there are
+    // three different failures here and they had all been reported as the
+    // same sentence, "CMI's website couldn't be reached", including to
+    // readers with CMI's page open and working in the next tab (R84).
+    //
+    // The first signal is free and completely decisive. An HTTP STATUS from
+    // cmi.ac.in is something a page can only see if the browser let it read
+    // the response — so if the direct attempt came back with one, whatever
+    // went wrong, it was not the cross-origin rule. CMI answered, and said
+    // something other than a timetable.
+    //
+    // EVERY direct entry from this run, not the last one. The direct tier
+    // fetches both pages and can log a parse error after them, so reading
+    // only the last entry missed a 503 on `timetable.php` whose sibling
+    // `lecturehalls.php` answered fine — and the app then fell through to
+    // the cross-origin explanation and told the reader CMI was up and
+    // unreadable, which is R84's original sin reintroduced by R84's fix
+    // (found by this round's own adversarial review, with a repro).
+    // `status` is the primary signal and the string is the fallback: a
+    // response the page could read is one the cross-origin rule allowed.
+    let direct_entries: Vec<(Option<u16>, Option<String>)> = app.fetch_log.with_untracked(|l| {
+        l.iter()
+            .filter(|e| e.tier == "direct")
+            .map(|e| (e.status, e.error.clone()))
+            .collect()
+    });
+    let direct_answered = direct_tried
+        && direct_entries.iter().any(|(status, error)| {
+            status.is_some() || error.as_deref().is_some_and(|e| e.contains("HTTP "))
+        });
+    // The first thing CMI actually said, for the message.
+    let direct_error = direct_entries
+        .iter()
+        .find_map(|(status, error)| match (status, error) {
+            (_, Some(e)) if e.contains("HTTP ") => Some(e.clone()),
+            (Some(code), _) => Some(format!("HTTP {code}")),
+            _ => None,
+        });
+    // The second costs one request and separates the other two. A fetch the
+    // browser refuses to let the page READ fails exactly like one that never
+    // left the machine; `answers_at_all` asks the only question that can
+    // still tell them apart. Only asked when it can change the sentence.
+    let cmi_answers = if online && !gate_failed_any && !direct_answered {
+        progress(&app, "Working out what went wrong…");
+        // `uncached`, like every other request that must reflect right now
+        // rather than a cache: a probe answered from a disk cache would say
+        // CMI is up on the strength of a copy taken hours ago.
+        answers_at_all(&uncached(CMI_TIMETABLE_URL), DIRECT_TIMEOUT_MS).await
+    } else {
+        false
+    };
+    // Only NOW is the sync over. The probe is a request the reader is
+    // waiting on, and clearing the spinner before it left them looking at a
+    // finished, silent app for up to four seconds.
+    app.sync.update(|s| {
+        s.updating = false;
+        s.progress = String::new();
+    });
+
     let text = if gate_failed_any && no_data {
         "CMI's website answered, but its pages don't look the way this app \
          expects, so nothing could be loaded. Try again in a while. If it keeps \
@@ -648,33 +1074,150 @@ pub async fn run_update(app: App, manual: bool) {
              from {saved_date} was kept. Nothing was lost. If this keeps happening, the \
              app needs an update."
         )
-    } else if no_data && !online {
+    } else if !online && no_data {
         "Your browser says you're offline, so nothing was fetched and the planner \
          is still empty. Connect to the internet and press ⟳ Fetch the \
          timetable. After that the app keeps everything in this browser, so \
          you'll only need the internet to sync."
             .to_string()
-    } else if no_data {
-        format!(
-            "The timetable couldn't be fetched just now, so the planner is still \
-             empty. Check your connection and press ⟳ Fetch the timetable \
-             again.{lan_note}"
-        )
     } else if !online {
         format!(
             "Your browser says you're offline, so you're seeing your saved \
              timetable from {saved_date}."
         )
-    } else {
+    } else if direct_answered {
+        // CMI answered and the app was allowed to read the answer; it simply
+        // was not a timetable. Its own words, because "HTTP 503" is the one
+        // detail that tells a reader this is CMI's bad day and not theirs.
+        let detail = direct_error.clone().unwrap_or_default();
+        let kept = if no_data {
+            "The planner is still empty.".to_string()
+        } else {
+            format!("You're still seeing your saved timetable from {saved_date}.")
+        };
         format!(
-            "CMI's website couldn't be reached right now. You're still seeing \
-             your saved timetable from {saved_date}. Try syncing again \
-             later.{lan_note}"
+            "cmi.ac.in answered, but with an error rather than the timetable \
+             ({detail}). That is CMI's website having a bad moment, not your \
+             connection. {kept} Try again in a while."
+        )
+    } else if cmi_answers {
+        // The precise, checkable truth. CMI is fine; the browser's
+        // same-origin rule is doing what it is for; every helper site the app
+        // knows is unavailable. Naming the real obstacle is what makes the
+        // way out below make sense — "couldn't be reached" would send the
+        // reader to check a connection that is working.
+        let kept = if no_data {
+            "The planner is still empty.".to_string()
+        } else {
+            format!("You're still seeing your saved timetable from {saved_date}.")
+        };
+        format!(
+            "CMI's timetable page is up — this app just isn't allowed to read it. A \
+             web page may only read another site's pages if that site says it may, \
+             and cmi.ac.in doesn't say so, which is why the app normally goes \
+             through a helper site. Every helper site it knows is unavailable right \
+             now. {kept} You can load the timetable straight from CMI's own page \
+             instead — it takes a minute, and nothing leaves your browser.{lan_note}"
+        )
+    } else {
+        let kept = if no_data {
+            "The planner is still empty.".to_string()
+        } else {
+            format!("You're still seeing your saved timetable from {saved_date}.")
+        };
+        format!(
+            "Nothing answered when the app went looking for CMI's timetable — not \
+             cmi.ac.in and not any of the helper sites it goes through. {kept} Try \
+             syncing again later. If CMI's page opens fine in another tab, you can \
+             load the timetable from it yourself.{lan_note}"
         )
     };
-    app.set_banner(BannerKind::Warn, text);
+    // Every branch but one ends with a route the reader can take, so the
+    // banner carries the button for it rather than describing it. The
+    // exception is a gate failure on CMI's own bytes: those same pages,
+    // handed over by hand, would meet the same parser and fail the same way,
+    // and offering a way out that cannot work is worse than not offering one.
+    // …and not when CMI itself answered an error either: the direct route
+    // runs in the READER's browser, so a 503 there is a 503 in the tab they
+    // would open by hand.
+    if online && !gate_failed_direct && !direct_answered {
+        app.set_banner_with_action(
+            BannerKind::Warn,
+            text,
+            (
+                "Load it from CMI's page".to_string(),
+                crate::state::Dialog::LoadFromPage,
+            ),
+        );
+    } else {
+        app.set_banner(BannerKind::Warn, text);
+    }
     if manual {
         app.toast("Sync failed. The message at the top of the page says what happened.");
+    }
+}
+
+/// Take CMI's two pages from the reader's own browser and adopt them.
+///
+/// The route that cannot rot. Every other one needs a server to agree to
+/// serve CMI's bytes to a page on github.io — CMI itself does not, and the
+/// helper sites in between are free services that can be down, rate-limited
+/// or sold. A browser opening a page needs nobody's permission, so as long as
+/// a student can see CMI's timetable, they can put it in this app.
+///
+/// The SAME parser, the SAME validation gate and the SAME `adopt` as a live
+/// fetch: nothing here is a second, looser way in. What arrives is judged
+/// exactly as a fetched page is, so a wrong file cannot become a timetable —
+/// and the snapshot it produces carries `SourceTier::Pasted`, so the app
+/// never claims it fetched something it was handed.
+///
+/// Returns the reason on failure, in words meant for the person who pasted.
+pub fn load_from_pages(app: App, tt_html: &str, halls_html: &str) -> Result<(), String> {
+    // The commonest mistake by far, and worth naming precisely instead of
+    // failing the gate with a sentence about CMI: copying what the page LOOKS
+    // like (Ctrl+A on the rendered page) rather than what it IS. CMI's
+    // timetable lives inside <pre> blocks, and selecting the rendered text
+    // throws that structure away.
+    for (what, html) in [("timetable", tt_html), ("lecture halls", halls_html)] {
+        if html.trim().is_empty() {
+            return Err(format!("The {what} page is empty — nothing to read."));
+        }
+        if !html.to_ascii_lowercase().contains("<pre") {
+            return Err(format!(
+                "That doesn't look like CMI's {what} page itself — more like the text \
+                 off it. Use the page SOURCE: press Ctrl+U on CMI's page, then Ctrl+A \
+                 and Ctrl+C. Or save the page with Ctrl+S and choose the file here."
+            ));
+        }
+    }
+    let outcome = parse_pair(tt_html, halls_html, domx::now_ms(), SourceTier::Pasted)
+        .map_err(|e| format!("The pages couldn't be read: {e}"))?;
+    record_report(&app, "pasted", outcome.report.clone());
+    match outcome.snapshot {
+        Some(snapshot) => {
+            adopt(&app, snapshot, true, Adoption::Fetched);
+            // The route worked; nothing about the network changed, so the
+            // failure banner that sent them here is what goes.
+            app.clear_transient_banner();
+            Ok(())
+        }
+        None => {
+            // The first FAILED rule, in the gate's own words — not the first
+            // rule, which is usually one that passed.
+            let why = outcome
+                .report
+                .gate
+                .iter()
+                .find(|g| !g.passed)
+                .map(|g| g.detail.clone())
+                .unwrap_or_else(|| {
+                    "the pages didn't hold a timetable this app can read".to_string()
+                });
+            Err(format!(
+                "Those pages didn't pass the app's checks: {why}. Make sure the first \
+                 box is CMI's timetable page and the second is its lecture halls page."
+            ))
+        }
     }
 }
 

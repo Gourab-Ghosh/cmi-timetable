@@ -85,6 +85,11 @@ impl ChipProps {
 /// `clash` is decided by the CALLER, per cell: a band reds only where the
 /// covered span actually fights something — the cell that holds the other
 /// course's chip (or another course's band) — not in every cell it crosses.
+/// What a continuation band is labelled when the booking it echoes names no
+/// course — CMI's bare `TMP` rows hold a room without saying what for. Shared
+/// with the halls grid so the two can never drift apart.
+pub const BARE_BOOKING_LABEL: &str = "booked";
+
 pub fn covered_band(
     app: App,
     code: String,
@@ -110,7 +115,15 @@ pub fn covered_band(
             }
         })
     };
-    let title = format!("{code} continues here ({})", slot.label());
+    // CMI's bare TMP rows book a room without naming a course, and the halls
+    // grid labels those with `BARE_BOOKING_LABEL` rather than a code — for
+    // which "booked continues here" is not a sentence (R83). The visible
+    // words read correctly either way ("booked · until 14:00").
+    let title = if code == BARE_BOOKING_LABEL {
+        format!("This room stays booked here ({})", slot.label())
+    } else {
+        format!("{code} continues here ({})", slot.label())
+    };
     view! {
         <span
             class="covered"
@@ -859,6 +872,7 @@ fn tabs_nav(app: App) -> impl IntoView {
                         <button
                             class="tab"
                             role="tab"
+                            aria-controls=tab.panel_id()
                             // Roving tabindex: the rail is ONE Tab stop, not
                             // five, which is what makes the arrows worth
                             // having — a keyboard user reaches the content
@@ -1107,7 +1121,30 @@ pub fn BannerView() -> impl IntoView {
                             class:warn=banner.kind == BannerKind::Warn
                             role="status"
                         >
-                            <span>{banner.text.clone()}</span>
+                            // One paragraph per line: two sticky notices can
+                            // queue into one banner (see `set_banner_sticky`),
+                            // and running them together as one paragraph is
+                            // how the second stops being read.
+                            <span class="banner-lines">
+                                {banner
+                                    .text
+                                    .split('\n')
+                                    .map(|line| view! { <span>{line.to_string()}</span> })
+                                    .collect_view()}
+                            </span>
+                            {banner
+                                .action
+                                .clone()
+                                .map(|(label, dialog)| {
+                                    view! {
+                                        <button
+                                            class="btn small primary"
+                                            on:click=move |_| app.dialog.set(Some(dialog.clone()))
+                                        >
+                                            {label}
+                                        </button>
+                                    }
+                                })}
                             <button class="btn small" on:click=move |_| app.banner.set(None)>
                                 "Dismiss"
                             </button>
@@ -1376,8 +1413,16 @@ fn search_in_menu(app: App, scope: FilterScope) -> impl IntoView {
                 }
             });
             let undo_label = format!("the “Search in” filter{}", scope.undo_suffix());
+            // The same sentence on the row as on the box. `.searchin-menu
+            // label.opt:has(input:disabled)` already paints the WHOLE row as
+            // the refusing thing, so hovering the label text invited an
+            // answer that only the 13px square could give (R83).
+            let why_locked = move || {
+                (enabled.get() == 1 && app.with_filters_in(scope.mine(), |f| f.searches(key)))
+                    .then_some("The search has to read something — tick another part first.")
+            };
             view! {
-                <label class="opt">
+                <label class="opt" title=move || why_locked().unwrap_or_default()>
                     <input
                         node_ref=node
                         type="checkbox"
@@ -1387,16 +1432,7 @@ fn search_in_menu(app: App, scope: FilterScope) -> impl IntoView {
                             enabled.get() == 1
                                 && app.with_filters_in(scope.mine(), |f| f.searches(key))
                         }
-                        title=move || {
-                            if enabled.get() == 1
-                                && app.with_filters_in(scope.mine(), |f| f.searches(key))
-                            {
-                                "The search has to read something — tick another \
-                                 part first."
-                            } else {
-                                ""
-                            }
-                        }
+                        title=move || why_locked().unwrap_or_default()
                         on:change=move |ev| {
                             let on = event_target_checked(&ev);
                             app.act_filters_in(
@@ -1571,6 +1607,10 @@ fn facet_menu(
                 {
                     opened.set(true);
                     crate::domx::close_open_facets(Some(&el));
+                    // Where the bar wrapped decides whether this menu fits;
+                    // only the browser knows that, so it is measured now
+                    // rather than guessed in the stylesheet.
+                    crate::domx::place_facet_menu(&el);
                 }
             }
         >
@@ -2662,6 +2702,7 @@ pub fn DialogHost() -> impl IntoView {
                     let body = match dialog {
                         Dialog::Details(code) => details_dialog(app, code).into_any(),
                         Dialog::MyData => my_data_dialog(app).into_any(),
+                        Dialog::LoadFromPage => load_from_page_dialog(app).into_any(),
                         Dialog::Conflicts => conflicts_dialog(app).into_any(),
                         Dialog::Export { scope } => export_dialog(app, scope).into_any(),
                         Dialog::Share => share_dialog(app).into_any(),
@@ -2683,6 +2724,18 @@ pub fn DialogHost() -> impl IntoView {
                                 class="dialog"
                                 role="dialog"
                                 aria-modal="true"
+                                // Every dialog body's headline carries
+                                // `id="dialog-title"`, and exactly one body is
+                                // mounted at a time. Without this the AX name
+                                // of all seven dialogs was the empty string:
+                                // R77 made focus land on this container rather
+                                // than on a field inside it, so at the moment
+                                // a dialog opens the only thing a screen
+                                // reader has to say is the boundary and its
+                                // name — and the visible <h2> right below was
+                                // going unused (R83). The confirm layer has
+                                // done it this way since R76.
+                                aria-labelledby="dialog-title"
                                 // Focusable (not tabbable): the open effect
                                 // above focuses THIS element, not a control
                                 // inside it — see the comment there.
@@ -2782,7 +2835,15 @@ pub fn ConfirmHost() -> impl IntoView {
                 storage::remove(&key);
                 // The developer panel's list is built at mount; reloading is
                 // how its sibling controls refresh it too.
-                let _ = domx::window().location().reload();
+                //
+                // WITHOUT the query. Every selection change writes `?c=…`
+                // (`App::sync_url`), so a plain reload handed the cleared
+                // selection straight back from the address bar and Clear on
+                // `cmitt.v1.selection` did nothing at all — under a confirm
+                // that said "No backup is kept" and "This cannot be undone"
+                // (R83). The rule this broke is R63's, in as many words:
+                // never `location.reload()` after clearing storage.
+                domx::reload_without_query();
             }
         }
     };
@@ -2917,6 +2978,168 @@ fn trap_tab(ev: &web_sys::KeyboardEvent) {
         if let Some(el) = first.and_then(|n| n.dyn_into::<web_sys::HtmlElement>().ok()) {
             let _ = el.focus();
         }
+    }
+}
+
+/// "Load the timetable from CMI's page" — the route that needs nobody's
+/// permission but the reader's.
+///
+/// Everything else this app does to get a timetable depends on some server
+/// agreeing to hand CMI's pages to a page served from github.io. CMI does not
+/// (its pages carry no `Access-Control-Allow-Origin`), so the app goes
+/// through free public helper sites — and in the week this was written both
+/// of the ones it shipped stopped working at once, one down and one gone
+/// paid, leaving every reader's Sync dead with CMI's own page open and
+/// working in the next tab (R84).
+///
+/// Opening a page is the one thing a browser never has to ask anyone about.
+/// So: open CMI's two pages, hand them over, done. The bytes go through the
+/// same parser and the same gate as a fetched page — see
+/// `fetch::load_from_pages` — and never leave this browser.
+fn load_from_page_dialog(app: App) -> impl IntoView {
+    let timetable = RwSignal::new(String::new());
+    let halls = RwSignal::new(String::new());
+    let error: RwSignal<Option<String>> = RwSignal::new(None);
+    let ready =
+        move || !timetable.with(|t| t.trim().is_empty()) && !halls.with(|h| h.trim().is_empty());
+
+    // One block per page: open it, then hand it over — as a file you saved or
+    // as text you pasted. Both doors, because which one is easy depends
+    // entirely on the browser and the machine, and a reader who cannot use
+    // one is not stuck.
+    let page_block = move |title: &'static str,
+                           url: &'static str,
+                           what: &'static str,
+                           slug: &'static str,
+                           into: RwSignal<String>| {
+        // `slug`, not `what`: "lecture halls" would have made
+        // `id="cmitt-page-lecture halls"`, and an id with a space in it is
+        // not one id (R84 review).
+        let input_id = format!("cmitt-page-{slug}");
+        let input_id_for = input_id.clone();
+        view! {
+            <div class="load-page">
+                <div class="row" style="align-items:baseline;gap:0.5rem;flex-wrap:wrap">
+                    <h4 style="margin:0">{title}</h4>
+                    {move || {
+                        into.with(|v| !v.trim().is_empty())
+                            .then(|| view! { <span class="badge ok">"ready"</span> })
+                    }}
+                </div>
+                <div class="row" style="gap:0.4rem;flex-wrap:wrap">
+                    <a class="btn small" href=url target="_blank" rel="noopener noreferrer">
+                        "Open this page"
+                    </a>
+                    <label class="btn small" for=input_id_for>
+                        "Choose the saved file…"
+                    </label>
+                    <input
+                        type="file"
+                        id=input_id
+                        accept=".html,.htm,text/html"
+                        style="display:none"
+                        on:change=move |ev| {
+                            let Some(input) = ev
+                                .target()
+                                .and_then(|t| t.dyn_into::<web_sys::HtmlInputElement>().ok())
+                            else {
+                                return;
+                            };
+                            let Some(file) = input.files().and_then(|f| f.item(0)) else {
+                                return;
+                            };
+                            leptos::task::spawn_local(async move {
+                                if let Ok(text) = wasm_bindgen_futures::JsFuture::from(file.text())
+                                    .await
+                                    && let Some(text) = text.as_string()
+                                {
+                                    into.set(text);
+                                    error.set(None);
+                                }
+                            });
+                        }
+                    />
+                </div>
+                <textarea
+                    class="load-paste"
+                    rows="3"
+                    aria-label=format!("Paste CMI's {what} page here")
+                    placeholder="…or paste the page's source here"
+                    prop:value=move || into.get()
+                    on:input=move |ev| {
+                        into.set(event_target_value(&ev));
+                        error.set(None);
+                    }
+                ></textarea>
+            </div>
+        }
+    };
+
+    view! {
+        <div>
+            <h2 id="dialog-title">"Load the timetable from CMI's page"</h2>
+            <p class="muted small form-lede">
+                "Your browser can always open cmi.ac.in — that never needs anyone's \
+                 permission. This hands the app the page your browser opened, and it \
+                 reads it exactly as it would read one it fetched itself. Nothing is \
+                 uploaded: both pages stay in this browser."
+            </p>
+            <ol class="load-how muted small">
+                <li>"Open each of CMI's two pages below."</li>
+                <li>
+                    "Save it with Ctrl+S and pick the file here — or press Ctrl+U to \
+                     show the page's source, select it all, and paste it in."
+                </li>
+                <li>"Press Load these pages."</li>
+            </ol>
+            {page_block(
+                "CMI's timetable page",
+                crate::fetch::CMI_TIMETABLE_URL,
+                "timetable",
+                "timetable",
+                timetable,
+            )}
+            {page_block(
+                "CMI's lecture halls page",
+                crate::fetch::CMI_HALLS_URL,
+                "lecture halls",
+                "halls",
+                halls,
+            )}
+            {move || {
+                error
+                    .get()
+                    .map(|e| view! { <p class="form-error" role="alert">{e}</p> })
+            }}
+            <div class="actions">
+                <button
+                    class="btn primary"
+                    disabled=move || !ready()
+                    title=move || {
+                        if ready() {
+                            "Read both pages and update your timetable"
+                        } else {
+                            "Add both of CMI's pages first — the timetable and the \
+                             lecture halls"
+                        }
+                    }
+                    on:click=move |_| {
+                        let tt = timetable.get_untracked();
+                        let hl = halls.get_untracked();
+                        match crate::fetch::load_from_pages(app, &tt, &hl) {
+                            Ok(()) => {
+                                app.dialog.set(None);
+                                app.toast("Timetable updated from CMI's own page.");
+                            }
+                            Err(why) => error.set(Some(why)),
+                        }
+                    }
+                >
+                    "Load these pages"
+                </button>
+                {close_button(app)}
+            </div>
+        </div>
     }
 }
 
@@ -3170,7 +3393,7 @@ fn details_dialog(app: App, code: String) -> impl IntoView {
         let edit_code = code.clone();
         return view! {
             <div>
-                <h2 class="mono">{code}</h2>
+                <h2 id="dialog-title" class="mono">{code}</h2>
                 <p>
                     "CMI's timetable no longer lists this course. It stays on your \
                      timetable, with any times you set for it, until you remove it."
@@ -3291,7 +3514,7 @@ fn details_dialog(app: App, code: String) -> impl IntoView {
             // as its usual chip, matching card headers everywhere else.
             <div class="row" style="align-items:center;gap:0.55rem;margin-bottom:0.45rem">
                 {chip(app, ChipProps::list(&course.code))}
-                <h2 style="margin:0">{course.display_name()}</h2>
+                <h2 id="dialog-title" style="margin:0">{course.display_name()}</h2>
             </div>
             <dl class="kv">
                 <dt>
@@ -3762,7 +3985,10 @@ pub fn overrides_list(app: App) -> impl IntoView {
                             <button
                                 class="btn small danger"
                                 title="Deletes this course of yours. Ctrl+Z brings it back."
-                                on:click=move |_| app.delete_custom_course(&del_code, false)
+                                on:click=move |ev| {
+                                    domx::keep_place_after_row_removal(&ev);
+                                    app.delete_custom_course(&del_code, false);
+                                }
                             >
                                 "Delete"
                             </button>
@@ -3797,7 +4023,10 @@ pub fn overrides_list(app: App) -> impl IntoView {
                             </span>
                             <button
                                 class="btn small"
-                                on:click=move |_| app.restore_course(&restore_code)
+                                on:click=move |ev| {
+                                    domx::keep_place_after_row_removal(&ev);
+                                    app.restore_course(&restore_code);
+                                }
                             >
                                 "Restore"
                             </button>
@@ -3904,7 +4133,8 @@ pub fn overrides_list(app: App) -> impl IntoView {
                             <button
                                 class="btn small"
                                 class:danger=!removal
-                                on:click=move |_| {
+                                on:click=move |ev| {
+                                    domx::keep_place_after_row_removal(&ev);
                                     app.reset_override(id, Some(reset_toast.clone()));
                                 }
                             >
@@ -3942,7 +4172,10 @@ pub fn overrides_list(app: App) -> impl IntoView {
                             </span>
                             <button
                                 class="btn small danger"
-                                on:click=move |_| app.remove_credit_override(&remove_course)
+                                on:click=move |ev| {
+                                    domx::keep_place_after_row_removal(&ev);
+                                    app.remove_credit_override(&remove_course);
+                                }
                             >
                                 // Not a bare "Remove", which read as "remove
                                 // the credits" — it puts back whatever number
@@ -4207,7 +4440,7 @@ fn import_courses_dialog(app: App, plan: crate::state::IncomingPlan) -> impl Int
         // dialog opens with focus on its own container — the same property,
         // for all of them — so this wrapper is structure only.
         <div>
-            <h2>"A timetable from a file"</h2>
+            <h2 id="dialog-title">"A timetable from a file"</h2>
             <p class="muted small dialog-lede">
                 "Here is what the file holds. Nothing has changed yet."
             </p>
@@ -4357,7 +4590,7 @@ fn my_data_dialog(app: App) -> impl IntoView {
 
     view! {
         <div class="my-data">
-            <h2>"My data"</h2>
+            <h2 id="dialog-title">"My data"</h2>
             <p class="muted small dialog-lede">
                 "Everything the app knows lives in this browser. This list shows \
                  all of it, and you can remove any of it right here. Nothing here \
@@ -4373,23 +4606,39 @@ fn my_data_dialog(app: App) -> impl IntoView {
             // out exactly this. Same facts, three scannable lines, and the
             // "only the last one carries your timetable away" caveat now sits
             // in the item it is about instead of trailing the slab.
-            <p class="muted small dialog-lede">
-                "The app reaches the network for three things."
-            </p>
-            <ul class="confirm-points">
-                <li>
-                    "Fetching CMI's two pages — when you press Sync now, and on \
-                     its own at most twice a day."
-                </li>
-                <li>
-                    "Asking this site whether a newer version of the app has been \
-                     published — once a day, see App updates below."
-                </li>
-                <li>
-                    "Making a share link short — the only one that carries your \
-                     timetable away, and the only one that waits to be asked."
-                </li>
-            </ul>
+            // The count and the list both follow the switches: in the one
+            // dialog whose whole job is saying what leaves this browser, a
+            // reader who has turned the update check OFF four sections down
+            // was still being told the app makes it (R83).
+            {move || {
+                let checks_off = app.prefs.with(|p| p.update_checks_off);
+                let n = if checks_off { "two" } else { "three" };
+                view! {
+                    <p class="muted small dialog-lede">
+                        {format!("The app reaches the network for {n} things.")}
+                    </p>
+                    <ul class="confirm-points">
+                        <li>
+                            "Fetching CMI's two pages — when you press Sync now, and on \
+                             its own at most twice a day."
+                        </li>
+                        {(!checks_off)
+                            .then(|| {
+                                view! {
+                                    <li>
+                                        "Asking this site whether a newer version of the \
+                                         app has been published — once a day, see App \
+                                         updates below."
+                                    </li>
+                                }
+                            })}
+                        <li>
+                            "Making a share link short — the only one that carries your \
+                             timetable away, and the only one that waits to be asked."
+                        </li>
+                    </ul>
+                }
+            }}
 
             // Every custom change together, and exactly which CMI data each
             // one replaces: courses added and deleted, meetings moved,
@@ -4562,6 +4811,86 @@ fn my_data_dialog(app: App) -> impl IntoView {
                         }
                     })
             }}
+
+            // How the timetable gets here, and the two ways to get it when
+            // the usual one stops working.
+            //
+            // This section exists because of the week it was written in: both
+            // of the free helper sites the app shipped stopped working within
+            // days of each other — one down, one turned paid — and Sync died
+            // for every reader at once, with no way for any of them to do
+            // anything about it but wait for a new version of the app (R84).
+            // Neither control below needs a new version.
+            <section class="data-section">
+                <header>
+                    <h3>"Getting CMI's timetable"</h3>
+                </header>
+                <p class="muted small">
+                    "CMI's website doesn't allow other sites to read its pages, so \
+                     this app asks a public helper site to fetch them on its behalf. \
+                     Those are free services and they come and go. If syncing stops \
+                     working, either of these gets your timetable anyway."
+                </p>
+                {move || {
+                    let route = app.prefs.with(|p| p.last_good_route.clone());
+                    route
+                        .map(|r| {
+                            view! {
+                                <p class="muted small">
+                                    {format!("Last worked: {r}. The app tries it first.")}
+                                </p>
+                            }
+                        })
+                }}
+                <div class="row" style="gap:0.4rem;flex-wrap:wrap">
+                    <button
+                        class="btn small"
+                        title="Open CMI's pages yourself and hand them to the app — \
+                               this works even when nothing else does"
+                        on:click=move |_| app.dialog.set(Some(Dialog::LoadFromPage))
+                    >
+                        "Load it from CMI's page…"
+                    </button>
+                </div>
+                <label class="field" style="margin-top:0.6rem">
+                    <span>"Your own helper site (optional)"</span>
+                    <input
+                        type="text"
+                        inputmode="url"
+                        spellcheck="false"
+                        placeholder="https://example.workers.dev/?url={url}"
+                        aria-describedby="helper-site-note"
+                        prop:value=move || {
+                            app.prefs.with(|p| p.helper_site.clone().unwrap_or_default())
+                        }
+                        on:change=move |ev| {
+                            let value = event_target_value(&ev);
+                            let trimmed = value.trim().to_string();
+                            app.prefs
+                                .update(|p| {
+                                    p.helper_site = (!trimmed.is_empty()).then_some(trimmed);
+                                });
+                            app.persist_prefs();
+                            app.toast(
+                                if app.prefs.with_untracked(|p| p.helper_site.is_some()) {
+                                    "Saved. The app will try your helper site first."
+                                } else {
+                                    "Cleared. The app will use its own helper sites."
+                                },
+                            );
+                        }
+                        on:keydown=domx::blur_on_enter
+                    />
+                </label>
+                <p id="helper-site-note" class="muted small">
+                    "Any service that fetches a page and allows other sites to read \
+                     the answer. Put "
+                    <code>"{url}"</code>
+                    " where the address of CMI's page should go. It is tried before \
+                     the app's own list, so a working one puts syncing back on its \
+                     feet immediately. Leave it empty to use only the app's."
+                </p>
+            </section>
 
             // Not data, strictly — but it is the one decision about the app
             // itself a reader might want to change, and this dialog is where
@@ -4965,7 +5294,7 @@ fn course_editor_dialog(app: App, code: Option<String>, prefill: Option<String>)
     }) else {
         return view! {
             <div>
-                <h2>"That course isn't here any more"</h2>
+                <h2 id="dialog-title">"That course isn't here any more"</h2>
                 <p class="muted">
                     "It disappeared while you were opening it — CMI's timetable \
                      changed, or it was deleted in another tab."
@@ -5046,18 +5375,25 @@ fn course_editor_dialog(app: App, code: Option<String>, prefill: Option<String>)
     // field for the reader — the pattern R77 removed from every dialog. The
     // first run of this effect is that mount; it only stays hands-off when
     // the box was already there.
+    //
+    // Tracked on the SIGNAL that shows the box, not on the NodeRef. Leptos
+    // does not clear a `NodeRef` when its node unmounts, so an effect keyed
+    // on "have we ever seen the box" returned `true` on the first mount and
+    // never went back: press Other…, get focus; press 4; press Other… again
+    // and the digits went to a radio button that only understands arrows
+    // (R83). Every false→true transition of the signal is a fresh press and
+    // earns the focus; the first run returns the starting state without
+    // focusing, which is what keeps R77's hands-off property.
     let credits_box = NodeRef::<leptos::html::Input>::new();
     Effect::new(move |prev: Option<bool>| {
-        let Some(input) = credits_box.get() else {
-            return false;
-        };
-        if prev.is_none() && start_credits > 4 {
-            return true;
-        }
-        if prev != Some(true) {
+        let showing = credits_other.get();
+        if showing
+            && prev == Some(false)
+            && let Some(input) = credits_box.get()
+        {
             let _ = input.focus();
         }
-        true
+        showing
     });
     let official_credits = cmi_course.as_ref().map(|c| c.effective_credits());
     let official_credits_assumed = cmi_course.as_ref().is_some_and(|c| c.credits_assumed());
@@ -5381,7 +5717,7 @@ fn course_editor_dialog(app: App, code: Option<String>, prefill: Option<String>)
                 }
             }
         >
-            <h2>{title}</h2>
+            <h2 id="dialog-title">{title}</h2>
             <p class="muted small form-lede">{lede}</p>
             {
                 let switch_code = own_editing.unwrap_or_default();
@@ -6039,7 +6375,7 @@ fn conflicts_dialog(app: App) -> impl IntoView {
 
     view! {
         <div>
-            <h2>"CMI changed times you customised"</h2>
+            <h2 id="dialog-title">"CMI changed times you customised"</h2>
             <p class="muted">
                 "Pick what to keep for each change. Nothing is picked for you, \
                  and nothing changes until you press Apply. Anything you leave \
@@ -6261,7 +6597,29 @@ fn export_dialog(app: App, scope: Option<String>) -> impl IntoView {
             "text/calendar",
             &ics,
         );
-        app.toast("Calendar file downloaded.");
+        // A course with no weekly meeting puts nothing in the file. The
+        // refusal above only fires when EVERY chosen course is empty, so
+        // "All selected (5)" quietly wrote a file holding three of them and
+        // said "Calendar file downloaded." — a feature skipping a selected
+        // course silently is lying by omission (§4's rule, R83). Naming them
+        // costs a clause and turns a wrong impression into a fact.
+        let empty: Vec<&str> = courses
+            .iter()
+            .filter(|c| c.meetings.is_empty())
+            .map(|c| c.code.as_str())
+            .collect();
+        app.toast(match empty.as_slice() {
+            [] => "Calendar file downloaded.".to_string(),
+            [one] => format!(
+                "Calendar file downloaded. {one} isn't in it — CMI hasn't given \
+                 it a weekly time."
+            ),
+            many => format!(
+                "Calendar file downloaded. {} aren't in it — CMI hasn't given \
+                 them weekly times.",
+                many.join(", ")
+            ),
+        });
         app.dialog.set(None);
     });
 
@@ -6277,7 +6635,7 @@ fn export_dialog(app: App, scope: Option<String>) -> impl IntoView {
                 download.run(());
             }
         }>
-            <h2>"Export to calendar (.ics)"</h2>
+            <h2 id="dialog-title">"Export to calendar (.ics)"</h2>
             // With one course on the timetable, "All selected (1)" and that
             // course are the same file — a dropdown whose two entries do the
             // same thing is a decision asked for no reason. Say what is going
@@ -6481,7 +6839,7 @@ fn shorten_dialog(app: App) -> impl IntoView {
 
     view! {
         <div class="shorten-dialog">
-            <h2>"Make this link short"</h2>
+            <h2 id="dialog-title">"Make this link short"</h2>
             <p class="muted small dialog-lede">
                 "Your whole timetable travels inside a share link, which makes it
                  long. A shortening service swaps it for a short one that leads
@@ -6542,7 +6900,7 @@ fn shorten_dialog(app: App) -> impl IntoView {
                                         type="text"
                                         readonly
                                         class="shorten-short"
-                                        prop:value=shown.clone()
+                                        prop:value=shown
                                         aria-label="Your short link"
                                         // A link you came back for is a link
                                         // you are about to copy.
@@ -6620,7 +6978,7 @@ fn shorten_dialog(app: App) -> impl IntoView {
                                         type="text"
                                         readonly
                                         class="shorten-short"
-                                        prop:value=old.short.clone()
+                                        prop:value=old.short
                                         aria-label="The short link you made earlier"
                                     />
                                     <button
@@ -6753,7 +7111,7 @@ fn shorten_dialog(app: App) -> impl IntoView {
                     <input
                         type="text"
                         readonly
-                        prop:value=long.clone()
+                        prop:value=long
                         aria-label="The full share link"
                     />
                     <button
@@ -6877,7 +7235,7 @@ fn share_dialog(app: App) -> impl IntoView {
             // with it — the buttons on the right of each header supply the
             // verbs, and a reader scanning for "the backup one" finds it by
             // name in one pass.
-            <h2>"Share or import a timetable"</h2>
+            <h2 id="dialog-title">"Share or import a timetable"</h2>
             <p class="muted small dialog-lede">
                 "A link carries your timetable inside the web address. A file carries \
                  it as a download, to keep or pass on. Both are made here on your \
@@ -7339,7 +7697,7 @@ fn what_changed_dialog(app: App) -> impl IntoView {
 
     view! {
         <div>
-            <h2>"What changed since last sync"</h2>
+            <h2 id="dialog-title">"What changed since last sync"</h2>
             <p class="muted small">
                 "These are CMI's own edits to its pages. Your courses and your custom \
                  changes are untouched."
@@ -7426,7 +7784,7 @@ fn removed_course_dialog(app: App, record: ttcore::model::Course) -> impl IntoVi
         <div>
             <div class="row" style="align-items:center;gap:0.55rem;margin-bottom:0.45rem">
                 <span class="chip mono" style="--hue:215">{record.code.clone()}</span>
-                <h2 style="margin:0">{record.name.clone()}</h2>
+                <h2 id="dialog-title" style="margin:0">{record.name.clone()}</h2>
             </div>
             <div class="chipline">
                 <span class="badge warn">"No longer on CMI's timetable"</span>

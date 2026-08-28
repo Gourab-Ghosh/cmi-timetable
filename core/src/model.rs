@@ -452,6 +452,13 @@ pub enum SourceTier {
     /// `fetched_at` stays the ORIGINAL fetch time: importing a file does
     /// not make old data young, and the staleness tint measures the data.
     Imported,
+    /// CMI's own page, opened by the reader in their browser and handed to
+    /// the app — pasted as source, or picked as a saved file. The bytes are
+    /// CMI's and went through this app's own parser and gate like any other
+    /// route; what is different is that no server in between had to agree to
+    /// serve them. It is the one route that cannot stop working: a browser
+    /// can always open a page (R84).
+    Pasted,
     /// The empty placeholder before the first successful sync.
     None,
 }
@@ -464,6 +471,7 @@ impl SourceTier {
             SourceTier::Mirror => "from this site's old copy".to_string(),
             SourceTier::Bundled => "bundled with the app".to_string(),
             SourceTier::Imported => "imported from a file".to_string(),
+            SourceTier::Pasted => "from CMI's page, loaded by you".to_string(),
             SourceTier::None => "nothing synced yet".to_string(),
         }
     }
@@ -475,6 +483,7 @@ impl SourceTier {
             SourceTier::Mirror => "old copy".to_string(),
             SourceTier::Bundled => "built-in copy".to_string(),
             SourceTier::Imported => "imported".to_string(),
+            SourceTier::Pasted => "loaded by you".to_string(),
             SourceTier::None => "not synced".to_string(),
         }
     }

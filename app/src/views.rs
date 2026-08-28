@@ -104,8 +104,16 @@ const MADE_WITH: &str = "made with the CMI Timetable Planner";
 /// courses are empty until the reader picks something. A disabled button with
 /// no explanation is a dead end, which is the mistake this signature exists to
 /// make impossible.
-fn print_button(nothing: Option<(&'static str, Signal<bool>)>) -> impl IntoView {
-    let empty = move || nothing.is_some_and(|(_, sig)| sig.get());
+/// `nothing` is the sheet's own answer to "is there anything to print, and if
+/// not, why not" — `Some(reason)` disables the button and puts the reason in
+/// its tooltip, `None` leaves it live. A signal of the REASON rather than a
+/// reason plus a boolean, because a sheet can have more than one way of being
+/// empty and each one deserves its own sentence: My courses is blank both
+/// when nothing is picked and when the filters hide everything picked, and
+/// the two need different advice (R83).
+fn print_button(nothing: Option<Signal<Option<&'static str>>>) -> impl IntoView {
+    let why = move || nothing.and_then(|sig| sig.get());
+    let empty = move || why().is_some();
     // The dialog freezes this tab, and that is not something `print_sheet` can
     // fix: the print tab is same-origin with an opener, so it shares this
     // renderer process, and a nested modal print loop blocks the process's
@@ -117,14 +125,22 @@ fn print_button(nothing: Option<(&'static str, Signal<bool>)>) -> impl IntoView 
     // it is on screen during it, and the watcher below clears it on the first
     // tick after the dialog closes.
     let printing = RwSignal::new(false);
+    // A disabled button is deliberately not focusable — that is what disabled
+    // means, and the app uses the native attribute everywhere rather than
+    // `aria-disabled`. But that left the reason it is disabled living only in
+    // a `title`, which is a hover: a screen-reader user in browse mode found
+    // it and nobody else did (R83). The reason is now also a described-by
+    // string, which assistive technology reads wherever it meets the button.
+    let describe_id = "print-why";
     view! {
         <button
             class="btn"
             disabled=move || empty() || printing.get()
             aria-live="polite"
+            aria-describedby=move || empty().then_some(describe_id)
             title=move || {
-                if empty() {
-                    nothing.map(|(why, _)| why)
+                if let Some(reason) = why() {
+                    Some(reason)
                 } else if printing.get() {
                     Some("Your browser's print dialog is open — the app waits for it")
                 } else {
@@ -141,6 +157,16 @@ fn print_button(nothing: Option<(&'static str, Signal<bool>)>) -> impl IntoView 
         >
             {move || if printing.get() { "Printing…" } else { "Print" }}
         </button>
+        {move || {
+            why()
+                .map(|reason| {
+                    view! {
+                        <span id=describe_id class="sr-only">
+                            {reason}
+                        </span>
+                    }
+                })
+        }}
     }
 }
 
@@ -257,6 +283,20 @@ fn what_changed_panel(app: App) -> impl IntoView {
                         .map(|c| c.code.clone())
                         .filter(|c| app.is_selected(c))
                         .collect();
+                    // A course the reader is WAITING for. `added` was the one
+                    // of the three lists never asked whose it was, so a code
+                    // already in the selection that CMI had just started
+                    // listing was filed under campus news — the banner said
+                    // "2 other changes on campus" while the dialog one click
+                    // away said "2 of these 3 are yours" and put the course
+                    // under New courses with an "in your timetable" badge
+                    // (R83). It is the piece of news that reader most wants.
+                    let mine_new: Vec<String> = diff
+                        .added
+                        .iter()
+                        .filter(|c| app.is_selected(c))
+                        .cloned()
+                        .collect();
                     let name_them = |codes: &[String]| {
                         if codes.len() <= 3 {
                             codes.join(", ")
@@ -292,6 +332,17 @@ fn what_changed_panel(app: App) -> impl IntoView {
                             name_them(&mine_gone),
                         ));
                     }
+                    if !mine_new.is_empty() {
+                        heads.push(format!(
+                            "CMI now lists {} of your courses — {}.",
+                            if mine_new.len() == 1 {
+                                "one".to_string()
+                            } else {
+                                mine_new.len().to_string()
+                            },
+                            name_them(&mine_new),
+                        ));
+                    }
                     let sentence = if heads.is_empty() {
                         // Nothing of theirs moved — say exactly that. It IS
                         // the news, and it saves opening the dialog at all.
@@ -302,7 +353,8 @@ fn what_changed_panel(app: App) -> impl IntoView {
                             if total == 1 { "was" } else { "were" },
                         )
                     } else {
-                        let others = total - mine_changed.len() - mine_gone.len();
+                        let others =
+                            total - mine_changed.len() - mine_gone.len() - mine_new.len();
                         // "change", not "changed": `total` counts changed +
                         // added + removed, so this tail was calling an ADDED
                         // course a changed one — the digest one click away
@@ -357,10 +409,36 @@ pub fn column_for(slot_grid: &[Slot], meeting: &Meeting) -> Option<u16> {
         .map(|s| s.start_min)
 }
 
-/// The columns a meeting COVERS beyond the one it renders in: every column
-/// whose slot overlaps the meeting's own time, except its home. This is what
-/// makes a 09:10–14:00 class visibly occupy 10:30 and 11:50 instead of
-/// leaving them looking free (R77).
+/// How a clash's time is written, wherever it is written.
+///
+/// One range when both meetings really run it; otherwise each range wears its
+/// own code, because "09:10–14:00 / 10:30–11:45" left the reader to match
+/// ranges to courses by position and the slash read as "either/or".
+///
+/// Shared by the on-screen panel and the print-only strip above it. It was
+/// not: the panel was fixed to name a code per range and the strip forty
+/// lines up kept formatting `a_slot` alone, so a poster of a term with a
+/// stretched class told its reader that the OTHER course ran 09:10–14:00
+/// (R83). §4's rule — fixing a wrong sentence is not done until the claim is
+/// grepped — is why this is now one function and not two.
+fn clash_times(c: &crate::state::ClashPair) -> String {
+    if c.a_slot == c.b_slot {
+        c.a_slot.label()
+    } else {
+        format!(
+            "{} {} / {} {}",
+            c.a,
+            c.a_slot.label(),
+            c.b,
+            c.b_slot.label(),
+        )
+    }
+}
+
+/// The columns a meeting COVERS beyond the one it renders in: every LATER
+/// column whose slot overlaps the meeting's own time. This is what makes a
+/// 09:10–14:00 class visibly occupy 10:30 and 11:50 instead of leaving them
+/// looking free (R77).
 ///
 /// Judged against the MEETING's slot with `Slot::overlaps` — the clash
 /// panel's exact predicate, half-open, so a meeting ending at 14:00 covers
@@ -369,13 +447,25 @@ pub fn column_for(slot_grid: &[Slot], meeting: &Meeting) -> Option<u16> {
 /// (push_extra_column's same-start merge), and the home must be whatever
 /// `column_for` chose, whose nearest fallback can pick a column that does
 /// not even contain the meeting.
+///
+/// LATER is the whole point and it has to be enforced here, because
+/// `Slot::overlaps` is symmetric. Personal grids mint extra columns for
+/// override times (`push_extra_column` merges only identical starts), so a
+/// 21:30–22:45 class and a 20:30–21:45 one leave two columns that overlap
+/// each other; without this floor the 21:30 class cast a band into the
+/// 20:30 column reading "RFLR until 22:45" — claiming an hour that is free,
+/// under a tooltip saying the class "continues here" in a column it has not
+/// reached (R83). The floor is the later of the meeting's start and its home
+/// column's, so a band can never appear left of the chip it echoes even when
+/// `column_for` fell back to the nearest column.
 pub fn covered_columns(slot_grid: &[Slot], meeting: &Meeting) -> Vec<u16> {
     let home = column_for(slot_grid, meeting);
+    let floor = home.map_or(meeting.slot.start_min, |h| h.max(meeting.slot.start_min));
     slot_grid
         .iter()
         .filter(|s| s.overlaps(&meeting.slot))
         .map(|s| s.start_min)
-        .filter(|c| Some(*c) != home)
+        .filter(|c| *c > floor)
         .collect()
 }
 
@@ -570,7 +660,7 @@ fn my_timetable(app: App) -> impl IntoView {
     let clash_list = move || app.clashes();
 
     view! {
-        <section aria-label="My timetable">
+        <section aria-label="My timetable" role="tabpanel" id="panel-my-timetable">
             {print_masthead(
                 app,
                 "My timetable",
@@ -650,10 +740,11 @@ fn my_timetable(app: App) -> impl IntoView {
                 // Disabled on an empty timetable, like the Export button beside it:
                 // printing a blank grid is not something anyone asked for, and
                 // the two buttons had different answers to the same question.
-                {print_button(Some((
-                    "Add a course first — there is nothing to print yet.",
-                    Signal::derive(move || app.selection.with(|s| s.is_empty())),
-                )))}
+                {print_button(Some(Signal::derive(move || {
+                    app.selection
+                        .with(|s| s.is_empty())
+                        .then_some("Add a course first — there is nothing to print yet.")
+                })))}
             </div>
 
             {move || {
@@ -661,7 +752,15 @@ fn my_timetable(app: App) -> impl IntoView {
                     view! {
                         <div class="empty panel">
                             <p class="big">"Nothing on your timetable yet."</p>
-                            <p>
+                            // `noprint`, like every other instruction in the
+                            // app: it names buttons the paper does not have.
+                            // Reachable on paper only through Ctrl+P (the
+                            // Print button is correctly disabled with nothing
+                            // to print), and it printed a paragraph about
+                            // using the app inside a large empty ruled box
+                            // (R83). The headline above it still prints, so
+                            // the sheet says what it is.
+                            <p class="noprint">
                                 "Add courses from the catalog. The app marks a clash as soon \
                                  as two of your courses overlap, and you can move any meeting \
                                  to a time that suits you better."
@@ -960,6 +1059,85 @@ fn my_timetable(app: App) -> impl IntoView {
                     })
             }}
 
+            // A course you picked that CMI has since stopped listing, and
+            // that has no time of its own to put it on the grid, appeared
+            // NOWHERE on this page: not on the grid (a stub has no
+            // meetings), not in the tray above (which excludes it on
+            // purpose), not in Your changes — while still counting toward
+            // the credit total, so the total could not be accounted for from
+            // anything on screen. §4's rule in as many words: a code in the
+            // selection is on the timetable, and a feature that silently
+            // skips it is lying by omission (R83).
+            //
+            // Deliberately not folded into the tray above it: "no fixed slot
+            // yet" is a sentence about scheduling, and this is a course that
+            // may not be running at all. Different news, different box.
+            {move || {
+                let gone: Vec<Course> = app
+                    .selected_courses()
+                    .into_iter()
+                    .filter(|c| {
+                        app.is_removed_upstream(&c.code) && app.effective_meetings(c).is_empty()
+                    })
+                    .collect();
+                (!gone.is_empty())
+                    .then(|| {
+                        let n = gone.len();
+                        view! {
+                            <div class="tray noprint">
+                                <h3>
+                                    "Not on CMI's timetable "
+                                    <span class="badge warn wraps">
+                                        {if n == 1 {
+                                            "CMI's timetable doesn't list this course any more"
+                                                .to_string()
+                                        } else {
+                                            format!(
+                                                "CMI's timetable doesn't list {n} of your \
+                                                 courses any more",
+                                            )
+                                        }}
+                                    </span>
+                                </h3>
+                                <p class="muted small tray-hint">
+                                    "They stay on your timetable — and keep counting toward \
+                                     your credits — until you remove them. Open one to see \
+                                     the last thing CMI published about it."
+                                </p>
+                                <div class="items">
+                                    {gone
+                                        .into_iter()
+                                        .map(|course| {
+                                            let code = course.code;
+                                            let drop_code = code.clone();
+                                            let label_code = code.clone();
+                                            view! {
+                                                <span class="tray-item">
+                                                    {chip(app, ChipProps::list(&code))}
+                                                    <button
+                                                        class="btn small danger"
+                                                        aria-label=format!(
+                                                            "Remove {label_code} from your \
+                                                             timetable",
+                                                        )
+                                                        title="Take it off your timetable. \
+                                                               Ctrl+Z brings it back."
+                                                        on:click=move |_| {
+                                                            app.remove_course(&drop_code);
+                                                        }
+                                                    >
+                                                        "Remove"
+                                                    </button>
+                                                </span>
+                                            }
+                                        })
+                                        .collect_view()}
+                                </div>
+                            </div>
+                        }
+                    })
+            }}
+
             // Print-only clash strip: a wall poster must shout about
             // overlaps at least as loudly as the screen does.
             {move || {
@@ -974,7 +1152,7 @@ fn my_timetable(app: App) -> impl IntoView {
                                     c.a,
                                     c.b,
                                     c.day.short(),
-                                    c.a_slot.label(),
+                                    clash_times(c),
                                 )
                             })
                             .collect::<Vec<_>>()
@@ -1013,24 +1191,7 @@ fn my_timetable(app: App) -> impl IntoView {
                                         let mut groups: Vec<((String, String), Vec<String>)> =
                                             Vec::new();
                                         for c in clashes {
-                                            let times = if c.a_slot == c.b_slot {
-                                                c.a_slot.label()
-                                            } else {
-                                                // Each range wears its own
-                                                // code: "09:10–14:00 /
-                                                // 10:30–11:45" left the reader
-                                                // to match ranges to courses by
-                                                // position and then intersect
-                                                // them in their head, and the
-                                                // slash read as "either/or".
-                                                format!(
-                                                    "{} {} / {} {}",
-                                                    c.a,
-                                                    c.a_slot.label(),
-                                                    c.b,
-                                                    c.b_slot.label(),
-                                                )
-                                            };
+                                            let times = clash_times(&c);
                                             let when = format!("{} · {times}", c.day.full());
                                             let key = (c.a.clone(), c.b.clone());
                                             match groups.iter_mut().find(|(k, _)| *k == key) {
@@ -1217,17 +1378,31 @@ fn my_timetable(app: App) -> impl IntoView {
                                             {
                                                 parts.push("✎ you changed this");
                                             }
-                                            if courses
+                                            // See the My-courses footnote:
+                                            // the parenthetical is only true
+                                            // of CMI's own courses.
+                                            let starred: Vec<&Course> = courses
                                                 .iter()
-                                                .any(|c| {
-                                                    app.credits_custom(&c.code).is_none()
-                                                        && c.credits_assumed()
+                                                .filter(|c| {
+                                                    c.credits_assumed()
+                                                        && (app.is_custom(&c.code)
+                                                            || app
+                                                                .credits_custom(&c.code)
+                                                                .is_none())
                                                 })
-                                            {
+                                                .collect();
+                                            if !starred.is_empty() {
                                                 parts
                                                     .push(
-                                                        "* credits the app guessed (CMI \
-                                                         doesn't list them)",
+                                                        if starred
+                                                            .iter()
+                                                            .any(|c| app.is_custom(&c.code))
+                                                        {
+                                                            "* credits the app guessed"
+                                                        } else {
+                                                            "* credits the app guessed (CMI \
+                                                             doesn't list them)"
+                                                        },
                                                     );
                                             }
                                             if !app.clashes().is_empty() {
@@ -1464,37 +1639,58 @@ fn my_courses(app: App) -> impl IntoView {
     let hidden = move || app.selection.with(|s| s.len()).saturating_sub(shown.get());
 
     view! {
-        <section aria-label="My courses" class="sheet-list">
+        <section aria-label="My courses" role="tabpanel" id="panel-my-courses" class="sheet-list">
             // Counts what is ON THE SHEET, not what is selected: this page has
             // a filter bar, the filter bar does not print, and a printout
             // headed "5 courses" listing three is a sheet that lies about
-            // itself. The note under the credit total already explains the
-            // difference for the reader who is looking at the screen.
+            // itself. When the two numbers differ the masthead says both, so
+            // the count reads as "this is a part of my timetable" rather than
+            // as the size of it.
+            //
+            // No credit figure here. The credit summary prints three lines
+            // below with the total for the WHOLE timetable — the number a
+            // student is actually keeping track of — and a filtered sheet
+            // that also headed itself "2 credits" put two different credit
+            // totals on one page, each presenting itself as the total, with
+            // the note between them saying "the credit total above" as if
+            // there were one (R83).
             {print_masthead(
                 app,
                 "My courses",
                 move || {
-                    let courses = filtered.get();
-                    let total: u32 = courses
-                        .iter()
-                        .map(|c| u32::from(app.course_credits(c)))
-                        .sum();
-                    format!(
-                        "{} course{} · {} credit{} · {MADE_WITH}",
-                        courses.len(),
-                        if courses.len() == 1 { "" } else { "s" },
-                        total,
-                        if total == 1 { "" } else { "s" },
-                    )
+                    let shown_n = filtered.get().len();
+                    let picked = app.selection.with(|s| s.len());
+                    if shown_n == picked {
+                        format!(
+                            "{shown_n} course{} · {MADE_WITH}",
+                            if shown_n == 1 { "" } else { "s" },
+                        )
+                    } else {
+                        format!("{shown_n} of {picked} courses · {MADE_WITH}")
+                    }
                 },
             )}
             <div class="toolbar noprint">
                 <h2 style="margin:0">"My courses"</h2>
                 <div class="grow"></div>
-                {print_button(Some((
-                    "Add a course first — there is nothing to print yet.",
-                    Signal::derive(move || app.selection.with(|s| s.is_empty())),
-                )))}
+                // Two ways for this sheet to be blank, and they need
+                // different advice: nothing picked at all, or the filter bar
+                // hiding everything that was. The sheet's contents come from
+                // `filtered`, so `shown` is what decides — the button used to
+                // ask the SELECTION and stayed live over a page that printed
+                // itself "0 courses" under a filter (R83).
+                {print_button(Some(Signal::derive(move || {
+                    if app.selection.with(|s| s.is_empty()) {
+                        Some("Add a course first — there is nothing to print yet.")
+                    } else if shown.get() == 0 {
+                        Some(
+                            "These filters leave nothing to print — clear one to \
+                             put your courses back on the sheet.",
+                        )
+                    } else {
+                        None
+                    }
+                })))}
             </div>
             {credit_summary}
             // The bar earns its place only once there is something to
@@ -1718,11 +1914,25 @@ fn my_courses(app: App) -> impl IntoView {
                 }) {
                     parts.push("✎ you changed this");
                 }
-                if courses
+                // "(CMI doesn't list them)" is only true of CMI's courses.
+                // A course the reader invented and left without a number is
+                // starred by the same rule, and CMI has never heard of it —
+                // so when one of those is on the sheet the parenthetical goes
+                // and the mark speaks for itself (R83).
+                let starred: Vec<&Course> = courses
                     .iter()
-                    .any(|c| app.credits_custom(&c.code).is_none() && c.credits_assumed())
-                {
-                    parts.push("* credits the app guessed (CMI doesn't list them)");
+                    .filter(|c| {
+                        c.credits_assumed()
+                            && (app.is_custom(&c.code)
+                                || app.credits_custom(&c.code).is_none())
+                    })
+                    .collect();
+                if !starred.is_empty() {
+                    parts.push(if starred.iter().any(|c| app.is_custom(&c.code)) {
+                        "* credits the app guessed"
+                    } else {
+                        "* credits the app guessed (CMI doesn't list them)"
+                    });
                 }
                 if !app.clashes().is_empty() {
                     parts.push("⚠ marks a clash");
@@ -1802,17 +2012,40 @@ fn course_card(app: App, course: Course) -> impl IntoView {
             // tooltip is invisible on a phone. Reactive: setting or clearing
             // your own number changes the sentence.
             {move || {
-                let sentence = if app.credits_custom(&cr_code_title).is_some() {
-                    Some(if cr_assumed {
-                        format!(
-                            "You set this course's credits yourself. CMI doesn't list \
-                             credits for it — without your number the app would count \
-                             {cr_official}."
-                        )
-                    } else {
-                        format!(
-                            "You set this course's credits yourself. CMI lists \
-                             {cr_official}."
+                // (what the number is, whether to offer the way to change it).
+                // The offer is not universal: a card whose credits the reader
+                // has ALREADY set was telling them to set them (R83).
+                let sentence: Option<(String, bool)> = if !is_custom
+                    && app.credits_custom(&cr_code_title).is_some()
+                {
+                    Some((
+                        if cr_assumed {
+                            format!(
+                                "You set this course's credits yourself. CMI doesn't list \
+                                 credits for it — without your number the app would count \
+                                 {cr_official}."
+                            )
+                        } else {
+                            format!(
+                                "You set this course's credits yourself. CMI lists \
+                                 {cr_official}."
+                            )
+                        },
+                        false,
+                    ))
+                // A course the reader invented: CMI has never heard of it, so
+                // every sentence below — each of which reports what CMI does
+                // or doesn't list — would be a claim about a course that is
+                // not CMI's to list. `ui::credits_display` has always guarded
+                // this with `own`; the card did not, and the diff that put a
+                // "*" in front made the false claim assert a mark too (R83).
+                } else if is_custom {
+                    cr_assumed.then(|| {
+                        (
+                            "* This is your own course and you haven't given it a \
+                             number, so the app counts the usual 4."
+                                .to_string(),
+                            true,
                         )
                     })
                 // Each of these opens with the "*" its own badge wears at the
@@ -1821,22 +2054,27 @@ fn course_card(app: App, course: Course) -> impl IntoView {
                 // card and then infer what it pointed at. (The printed poster
                 // spells it out in its legend; the card now does too.)
                 } else if let Some(span) = &cr_duration {
-                    Some(format!(
-                        "* CMI doesn't list credits for this course. It runs {span}, so \
-                         the app counts one credit per month."
+                    Some((
+                        format!(
+                            "* CMI doesn't list credits for this course. It runs {span}, so \
+                             the app counts one credit per month."
+                        ),
+                        true,
                     ))
                 } else if cr_seminar {
-                    Some(
+                    Some((
                         "* CMI doesn't list credits for this seminar, so the app counts \
                          0 — seminars don't usually carry credit."
                             .to_string(),
-                    )
+                        true,
+                    ))
                 } else if cr_assumed {
-                    Some(
+                    Some((
                         "* CMI doesn't list credits for this course, so the app counts \
                          the usual 4."
                             .to_string(),
-                    )
+                        true,
+                    ))
                 } else {
                     None
                 };
@@ -1857,13 +2095,18 @@ fn course_card(app: App, course: Course) -> impl IntoView {
                 // a button, and the printed sheet has none. It was also the
                 // second half of this sentence on every card, so a five-course
                 // sheet repeated the same instruction five times.
-                sentence.map(|s| {
+                sentence.map(|(s, offer_fix)| {
                     view! {
                         <p class="muted small cr-note" class:noprint=generic>
                             {s}
-                            <span class="noprint">
-                                " Set your own number with Edit this course."
-                            </span>
+                            {offer_fix
+                                .then(|| {
+                                    view! {
+                                        <span class="noprint">
+                                            " Set your own number with Edit this course."
+                                        </span>
+                                    }
+                                })}
                         </p>
                     }
                 })
@@ -2221,7 +2464,7 @@ fn master_grid(app: App) -> impl IntoView {
     };
 
     view! {
-        <section aria-label="Master grid">
+        <section aria-label="Master grid" role="tabpanel" id="panel-master-grid">
             // `count` is what the filter bar reports and what the grid draws,
             // so the sheet's own headline number agrees with its own contents.
             {print_masthead(
@@ -2480,7 +2723,7 @@ fn catalog(app: App) -> impl IntoView {
     let count = Signal::derive(move || filtered.get().len());
 
     view! {
-        <section aria-label="Catalog" class="sheet-list">
+        <section aria-label="Catalog" role="tabpanel" id="panel-catalog" class="sheet-list">
             {print_masthead(
                 app,
                 "Catalog",
@@ -2792,8 +3035,22 @@ fn catalog(app: App) -> impl IntoView {
             // exactly why `catalog_row` marks those rows, and why the mark has
             // to be explained on the paper it appears on.
             {print_footnote(move || {
+                // Both marks are asked of the rows ON THIS SHEET, not of the
+                // browser's store. The catalog is a filtered list, and both
+                // predicates used to ask a global question: "does this
+                // browser hold any override at all" explained a ✎ on a sheet
+                // with none (a search that hides the edited course does it,
+                // and so does an override on a course the reader has since
+                // deleted), and "does the timetable clash anywhere" did the
+                // same for ⚠. A footnote for a mark that is nowhere on the
+                // paper sends the reader hunting the sheet for it (R79's
+                // rule, R83's repair).
+                let rows = filtered.get();
                 let mut parts: Vec<&str> = Vec::new();
-                if app.overrides.with(|o| !o.items.is_empty()) {
+                if rows
+                    .iter()
+                    .any(|c| app.effective_meetings(c).iter().any(|e| e.overridden))
+                {
                     parts.push("✎ times you set yourself, not CMI's");
                 }
                 // A catalog row's code chip carries the clash mark too, for any
@@ -2801,7 +3058,14 @@ fn catalog(app: App) -> impl IntoView {
                 // on a selected clashing course) — so the Catalog printed a red
                 // ⚠ in a red box and was the one sheet that never said what it
                 // meant. Same sentence as the other three sheets use.
-                if !app.clashes().is_empty() {
+                let clashing = app.clashes();
+                if rows.iter().any(|c| {
+                    app.is_selected(&c.code)
+                        && clashing.iter().any(|cl| {
+                            cl.a.eq_ignore_ascii_case(&c.code)
+                                || cl.b.eq_ignore_ascii_case(&c.code)
+                        })
+                }) {
                     parts.push("⚠ marks a clash");
                 }
                 parts.join(" \u{b7} ")
@@ -3520,7 +3784,9 @@ fn hall_row(
                                     .iter()
                                     .find(|(_, s)| !matches!(s, BookingCell::Gone))
                                     .map(|(code, _)| code.clone())
-                                    .unwrap_or_else(|| "booked".to_string());
+                                    .unwrap_or_else(|| {
+                                        crate::ui::BARE_BOOKING_LABEL.to_string()
+                                    });
                                 let pair = (label, b.booking.slot);
                                 if !shadows.contains(&pair) {
                                     shadows.push(pair);
@@ -3821,7 +4087,7 @@ fn halls_view(app: App) -> impl IntoView {
     let own_halls = Memo::new(move |_| app.user_halls());
 
     view! {
-        <section aria-label="Lecture halls">
+        <section aria-label="Lecture halls" role="tabpanel" id="panel-halls">
             // This sheet makes the most checkable claim in the app — which room
             // a class is in — and it printed with no title, no term, no date and
             // no caveat, while the timetable poster beside it on the same wall
@@ -3946,9 +4212,14 @@ fn halls_view(app: App) -> impl IntoView {
                         class:noprint=!has_selection
                         style="margin:0 0 0.6rem"
                     >
-                        {has_selection.then_some("✓ marks the courses on your timetable.")}
+                        {has_selection.then_some("✓ marks the courses on your timetable. ")}
                         <span class="noprint">
-                            " ✎ Edit layout lets you drag a course to another room or time."
+                            // The separating space belongs to the ✓ clause, not
+                            // to this one: with nothing selected this span is
+                            // the paragraph's whole content, and a leading
+                            // space rendered as an indent no other line on the
+                            // page has (R83).
+                            "✎ Edit layout lets you drag a course to another room or time."
                         </span>
                     </p>
                 }

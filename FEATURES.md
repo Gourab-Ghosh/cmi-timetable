@@ -39,6 +39,10 @@ Your week as a grid — days down the left, CMI's time slots across the top.
 - **"No fixed slot yet"** holds the courses you have picked that have no time
   yet — CMI hasn't scheduled them, or they are yours and waiting for you.
   Drag one onto the grid, or open it and set a time.
+- **"Not on CMI's timetable"** holds the reverse: courses you picked that CMI
+  has since stopped listing and that have no time of their own. They stay on
+  your timetable, and keep counting toward your credits, until you remove
+  them — so they are on the page rather than only in the total.
 - **Clashes** are listed under the grid: one row per pair of courses, with
   every colliding time beside it.
 - **On a phone, one day at a time.** A week grid needs sideways scrolling on
@@ -274,6 +278,15 @@ catalog and the master grid.
   is one nobody can trust.
 - A share link naming a deleted course **lifts the deletion** rather than
   contradicting it.
+- **Two tabs no longer change your timetable behind your back.** Each tab
+  saves its whole copy, so the last one to save wins — if another tab changes
+  something, this one says so while both versions still exist, and reloading
+  catches it up.
+- **A link that replaces what you had says so, and is undoable.** Opening one
+  overwrites your picked courses and any times and credits you set; whichever
+  of those it actually takes away is named in a message with an Undo beside
+  it. A link that takes nothing away — an empty planner, or reopening the
+  link you are already on — says nothing.
 - The Halls page keeps every booking either way: it answers "is this room
   free?", and that stays true whatever you want the course.
 
@@ -561,7 +574,10 @@ Sheet by sheet:
 - A two-column course legend with names, instructors, credits and meetings.
 - The legend names **only the marks that are on the sheet** — an untouched
   timetable prints no note about ✎, and a clash-free one none about ⚠.
-- A dense 12-course semester fits on **one page**, with nothing clipped.
+- A dense 12-course semester fits on **one page**, with nothing clipped —
+  unless several of those courses meet three times a week, where the legend
+  can run a few entries onto a second page. Nothing is ever clipped either
+  way.
 
 **My courses** — the same list you read on screen, as a reference sheet: the
 credit total and its breakdown as one line, then two columns of courses with
@@ -631,15 +647,70 @@ on its own as time passes — "just now", "12 min ago", "2 days ago" — and
 turning a warning colour once the data is two days old. CMI edits its
 timetable all semester, and a planner that can't tell you how old it is isn't
 worth much. Each successful sync says where it came from as it happens —
-*"Timetable updated (through the helper site corsproxy.io)."* or
+*"Timetable updated (through the helper site cors.sh)."* or
 *"…(directly from cmi.ac.in)."* — so the route is never a mystery.
 
 ### Where the data comes from
 
 Every route ends at **cmi.ac.in** itself:
 
-1. **relays** — public CORS relays, all raced at once, first valid answer wins
-2. **direct** — a short attempt at CMI's own URLs, only if no relay answered
+1. **your own helper site**, if you set one — asked alone first
+2. **relays** — seven public CORS relays, raced at once, first valid answer wins
+3. **direct** — a short attempt at CMI's own URLs, only if no relay answered
+4. **from CMI's page in your browser** — the one route nobody can take away
+
+**Why a helper site is needed at all.** CMI's pages carry no header saying
+other websites may read them, and a browser will not let a page from one site
+read another site's pages without it. So this app cannot fetch cmi.ac.in
+straight, however well your connection is working, and asks a public helper
+site to fetch it instead. That is a fact about the web's security model, not
+about CMI being down — which is why the app never says "CMI is unreachable"
+when CMI is answering (see below).
+
+**Seven helper sites, and yours.** Free public relays come and go: two of them
+stopped working within days of each other — one down, one turned paid — and a
+version of this app that knew only those two could not sync at all. There are
+seven now, each a different operator, deliberately not all on the same
+infrastructure, and **any one of them is enough**. Which one carried your
+timetable is named in the header. If they all go, the two controls below get
+it anyway, and neither needs a new version of the app.
+
+### When nothing can fetch it
+
+Under **My data → Getting CMI's timetable**:
+
+- **Load it from CMI's page…** — open CMI's two pages yourself (your browser
+  never needs anyone's permission to open a page), save them or copy their
+  source, and hand them over. They go through exactly the same parser and the
+  same validation gate as a fetched page, nothing is uploaded, and the header
+  says *"from CMI's page, loaded by you"* rather than claiming a sync. This
+  route cannot stop working.
+- **Your own helper site** — any service that fetches a page and lets other
+  sites read the answer. Put `{url}` where CMI's address should go. It is
+  asked **first and alone**, so once you have one, no public relay is asked at
+  all.
+
+The app asks **one** helper site at a time: the leading one alone, with the
+others brought in only if it fails or goes quiet. It remembers which route
+worked last time and starts there. So an ordinary sync is a single request to
+a single service — faster, and nobody else is shown which CMI page you are
+reading.
+
+### Why the sync failed, exactly
+
+A failure names the thing that actually failed, because "couldn't reach CMI"
+sent people to check a connection that was fine:
+
+- **cmi.ac.in answered with an error** — the app saw an HTTP status, which it
+  can only do when the browser let it read the reply, so the cross-origin rule
+  was not the problem. CMI's website is having a bad moment.
+- **CMI is up but this app isn't allowed to read it** — CMI answered, the app
+  was not allowed to see what it said, and every helper site is unavailable.
+- **Nothing answered at all** — not CMI, not any helper site.
+- **You're offline** — your browser says so.
+
+Whichever it is, the banner carries a **Load it from CMI's page** button, so
+the way out is a thing to press rather than a paragraph to read.
 
 **Why the relays go first.** On CMI's own network, `cmi.ac.in` is a *local*
 address. A web page asking for a local address is exactly what your browser's
@@ -862,8 +933,9 @@ itself has been published. If there is one, it **asks**.
   Halls from 116 ms to 86 ms — under the tenth of a second that reads as
   "instant".
 - No accounts, no analytics, no cookies, no tracking. The only network
-  requests it ever makes are for CMI's two timetable pages — through a public
-  relay, or straight from cmi.ac.in if no relay answers. A relay learns which
+  requests it ever makes are for CMI's two timetable pages — through a helper
+  site (yours if you set one), or straight from cmi.ac.in if none answers, or
+  from the pages you hand it yourself. A helper site learns which
   CMI page was asked for and nothing else: your courses, your changes and your
   own courses never leave your browser.
 
@@ -901,8 +973,9 @@ Being clear about these is part of the design:
   is your decision.
 - **It never ships or hosts a copy of CMI's timetable.** What you see was
   fetched from cmi.ac.in by your own browser.
-- **It never guesses quietly.** An assumed credit says "assumed"; an
-  unreachable CMI says so; a page it cannot read says the app needs an update.
+- **It never guesses quietly.** An assumed credit says "assumed"; a page it
+  cannot read says the app needs an update; and a failed sync names which of
+  the four things went wrong rather than blaming CMI for all of them.
 - **It doesn't exclude CMI's holidays** from calendar exports, and says so.
 - **Keyboard move mode isn't available on the Halls page** — that table is
   organised by room rather than by day, so pressing `M` there explains where

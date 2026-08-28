@@ -781,13 +781,23 @@ regenerates the .ics golden.
 
 ## 6. Current state
 
-- My-timetable column order (R33): grid → **"No fixed slot yet" tray** →
-  clashes → Your changes → print-only legend. The tray used to be last; a
-  selected course with no time is part of the timetable, not a footnote.
+- My-timetable column order (R33, extended R83): grid → **"No fixed slot yet"
+  tray** → **"Not on CMI's timetable"** → clashes → Your changes → print-only
+  legend. The tray used to be last; a selected course with no time is part of
+  the timetable, not a footnote. The second box exists for the same reason:
+  a selected course CMI has dropped, with no time of its own, appeared
+  NOWHERE on this page while still counting toward the credit total.
 - "Your changes" groups are headed by `.cg-head` (colour rail + small caps
   + count), coloured by `OwnChange::tone()`. See §4.
-- Tests: 169 native + 132/132 e2e green (as of R82; the native count from
+- Tests: 169 native + 136/136 e2e green (as of R84; the native count from
   `deploy.sh`'s own in-container run — 49+18+3+9+25+27+28+10).
+- **The e2e suite mocks the relays, so it can never tell you a real one has
+  died** — which is exactly how R84's outage reached a user. Two probes cover
+  that gap and take under a minute:
+  `.workagents/cors-r84/probes/origin_relay_probe.py` (measures each relay
+  from the real deployed origin, in a browser, because curl does not enforce
+  CORS) and `.workagents/cors-r84/probes/live_sync_probe.py` (syncs the built
+  dist against the real cmi.ac.in). Run both before publishing.
 - While a popup is open the toast stack sits at the TOP of the screen and the
   overlay reserves its measured height: `ui::Toasts` publishes `--toast-band`
   and a `toasts-live` class on `<body>`; `body.modal-open.toasts-live` spends
@@ -5882,6 +5892,288 @@ after every fix — **7 pages** now, 830 KB, 0 curves, 0 groups, 0 masks (Halls
 dropped a page: the ✓ chips stopped inflating its rows) — and the two
 proved-by-breaking tests above.
 
+### R83 — the audit's leftovers, done: everything R82 recorded and did not fix
+
+The ask was *"Do the work whatever was not completed before."* R82's REPORT
+listed nine defects fixed and a longer list "recorded, not fixed" — three a11y
+majors, three narrow-width majors, and 42 verified minors across the twelve
+dimensions that reported. This round worked that list.
+
+**A continuation band was appearing in a column the class had not reached.**
+`views::covered_columns` filtered `slot_grid` by `Slot::overlaps`, which is
+symmetric, and then removed only the home column — so a 21:30–22:45 class cast
+a band into the 20:30 column reading "RFLR until 22:45", claiming an hour that
+was free, under a tooltip saying the class "continues here". The stylesheet's
+own comment three files away states the intended rule ("every LATER column it
+covers"), so the function and the design disagreed and the function was wrong.
+The floor is now the later of the meeting's start and its home column's, so a
+band can never be drawn left of the chip it echoes. The design-check link hits
+this on the first screen of two tabs, which is how the visual-regression agent
+found it by eye and no assertion did.
+
+**Every dialog was an unnamed `role="dialog"`.** Seven for seven, AX name = the
+empty string, in an app where R77 deliberately made focus land on the dialog
+container rather than a field — so at the moment a dialog opened, the only
+thing a screen reader had to announce was the boundary and its name, and the
+name was nothing. Each body's `<h2>` now carries `id="dialog-title"` (exactly
+one body is mounted at a time) and the container `aria-labelledby`. The confirm
+layer 120 lines below had been doing this correctly since R76.
+
+**Keyboard focus was dropped to `<body>` whenever a pressed control removed its
+own row** — 35 to 63 Tab presses to get back, measured, because the viewport
+stays where it was while Tab restarts at the top of the document. Both places:
+the four row buttons in "Your changes" (`domx::keep_place_after_row_removal`,
+which records the pressed button's POSITION rather than its identity, since the
+whole list is rebuilt by its own closure a tick later) and the keyboard move
+mode's successful drop (`dnd::focus_moved_chip` — Escape already handed the
+chip back; success did not, which is the one gesture the feature exists for).
+
+**Filter menus opened off the right edge of the window** at every phone width —
+the All and None buttons 0% visible, the document scrolling sideways, the worst
+case a Time-slot menu 204px off a 360px screen — and, since this round's own
+"Search in" control widened the search group, on the LAST facet at the
+project's own 1500px reference window too. CSS alone cannot fix it: where a
+summary lands depends on how the filter bar wrapped, which the stylesheet
+cannot see. So the width is clamped in CSS (`min(19rem, calc(100vw - 2rem))`)
+and the position measured in `domx::place_facet_menu` on open, handed back as
+`--menu-nudge`, and re-measured on resize.
+
+**Five of the nine selectors in the `@media (pointer: coarse)` 44px block were
+dead.** A media query adds no specificity, and `label.opt`, the shared field
+rule, `details.facet > summary` and `.seg button` were all re-declared later in
+the file at the same specificity — so the eight filter buttons, every checkbox
+row in every dropdown, the search field, the `<select>`s and the day strip were
+32–36px on a phone, silently, since the rule was written. Moved to the end of
+the screen CSS, after every rule it has to beat, rather than restated where the
+two copies could drift.
+
+**Three more phone defects**: the 320px tab rail needed 362px and clipped
+"Halls" to a 10px sliver that `touch-action: pan-y` made impossible to pan into
+view (the 42px now come out of padding and gaps, never the 44px height); the
+day strip was `display: block` at ≤640px and wrapped mid-control (`.seg` lost
+the same specificity fight `.day-list` had already been fixed for); and every
+dialog and confirm shifted the whole page sideways by the scrollbar's width on
+open and back on close, which `scrollbar-gutter: stable` reserves away.
+
+**Sentences that were not true.** The Catalog's print footnote explained a ✎
+and a ⚠ by asking the STORE ("does this browser hold any override") rather than
+the sheet, so a filtered sheet carrying neither still explained both; both now
+ask `filtered`. The printed clash strip formatted `a_slot` alone and told the
+reader the OTHER course ran 09:10–14:00 — the on-screen panel had been fixed to
+name a code per range and the strip forty lines above it had not, so both now
+call one `clash_times`. A card whose credits the reader had already set told
+them to set them. A course the reader INVENTED was described as one "CMI
+doesn't list credits for". The Halls explainer rendered a leading space when
+nothing was selected. A bare TMP booking's band read "booked continues here".
+My courses printed two different credit totals on one sheet, each presenting
+itself as the total, and its Print button stayed live over a filtered sheet
+headed "0 courses". "The app reaches the network for three things" stayed three
+after the reader turned the update check off, in the one dialog whose whole job
+is saying what leaves the browser. The .ics export wrote "All selected (5)" and
+a file holding three, silently. The what-changed banner filed a course the
+reader was WAITING for under campus news, because `added` was the one of the
+three lists never asked whose it was.
+
+**A selected course CMI had stopped listing appeared nowhere on My timetable**
+— not on the grid (a stub has no meetings), not in the tray (which excludes it
+on purpose), not in Your changes — while still counting toward the credit
+total, so the total could not be accounted for from anything on the page. It
+now has its own box under the tray, with the last thing CMI published about it
+one click away.
+
+**Two tests were passing without asserting their subject.** `t119` read the
+HOST clock, and the fixture grid draws Mon–Fri only, so on a Saturday or a
+Sunday every positive assertion was skipped and the test passed by asserting
+that NOTHING was marked — which is also exactly what a deleted feature looks
+like. It went green that way on the day of a deploy. `t125` had the same gate.
+Both now pin the browser's clock to a Tuesday through
+`Page.addScriptToEvaluateOnNewDocument` (`App.pin_weekday`), so the real
+assertions run all seven days; each verifies the pin took before trusting
+anything after it, and removes it in a `finally` — an injected script outlives
+the test that added it.
+
+**Old §8.22 lost its worst word.** Two tabs still overwrite each other — each
+holds the whole store and writes it back wholesale, so the last save wins —
+but it is no longer SILENT: a write to `cmitt.v1.{selection,overrides,custom}`
+from another tab raises a sticky banner here while both versions still exist,
+and reloading is one keystroke. Adopting the other tab's data was deliberately
+not done; it would yank the page out from under someone mid-edit, which is its
+own kind of loss, and that choice is the design decision §8.22 stays open for.
+`t139` drives two real tabs.
+
+**Old §8.23 is closed with it.** A share link is written over the planner
+wholesale, and only ONE of the two things it can destroy raised a word: the
+incoming times and credits replacing the reader's own. The COURSES being thrown
+away were never weighed — so a reader with a timetable and no meeting edits
+opened a friend's link, or their own older bookmark, and it was replaced in
+silence, the Undo button going from disabled to enabled as the only sign, and
+one reload making it permanent. The identical action DID announce itself if
+that reader happened to hold one override. Both are weighed now and each gets
+its own sentence, because "times and credits" is not what was lost when what
+was lost was the courses; `t138` pins it, including the quiet cases (an empty
+planner, and reopening the link you are already on).
+
+Also fixed: developer mode's Clear on `cmitt.v1.selection` was a dead control
+under a confirm that said "This cannot be undone" (a plain `location.reload()`
+handed the cleared selection straight back from the `?c=` in the address bar —
+R63's rule, `domx::reload_without_query()` is the fix, and Import from file had
+the same bug in the other direction); `set_banner_sticky` overwrote rather than
+queued, so a damaged-link notice silently swallowed the corrupt-storage one,
+which is the more important of the two and the only sentence telling the reader
+their moved classes were set aside; and "Other…" focused the credits box only
+the first time it was pressed, because the effect tracked the NodeRef, which
+Leptos does not clear on unmount, rather than the signal that shows the box.
+
+### R84 — the outage: "CMI is reachable in my browser but the app says it isn't"
+
+Reported from the LIVE site, mid-round, and it was true. The app said *"CMI's
+website couldn't be reached"* while CMI's own page opened fine in the reader's
+next tab.
+
+**What was actually wrong, measured rather than reasoned about.**
+`https://www.cmi.ac.in/practical/timetable.php` answers 200 with 33 100 bytes
+and **zero `Access-Control-*` headers** — none, on GET and on OPTIONS. A
+browser therefore refuses to let a page served from github.io read it, however
+well the network is working, and the "direct" tier fails in **12ms**:
+immediately, by refusal, not by timeout. That is why the direct fallback the
+reporter expected to save them could not: it has never been able to work from
+a public origin, and the app's whole ability to sync rested on the relays. Of
+which it shipped **two**, and both had broken in the same week —
+`api.allorigins.win` answering 520 for every target it was given (its own back
+end: a control fetch of example.com failed identically) and `corsproxy.io`
+answering `401 {"error":"A valid API key is required"}`, a pricing decision
+rather than an outage. Nothing was left, and the failure message named the one
+party that was innocent.
+
+**The instrument that mattered.** `curl` does not enforce CORS, so it is
+structurally unable to answer "could the app have used this relay". It said
+`whateverorigin.org` worked (it returns its own marketing page with HTTP 200)
+and that `api.cors.lol` worked from an origin where the browser blocked it.
+`.workagents/cors-r84/probes/origin_relay_probe.py` loads the LIVE deployed
+site read-only and runs the fetches **from its own origin**, which is the only
+question worth asking; `probes/live_sync_probe.py` serves the built dist and
+syncs against the real cmi.ac.in, and is the acceptance test the e2e suite
+structurally cannot be — the suite mocks the relays, so it cannot ever notice
+that a real one has died. Run both before a deploy.
+
+**The repair, in five parts, none of which is "add a relay and hope".**
+
+1. **Seven relays instead of two, seven different operators**, and the list
+   was MEASURED rather than assembled. A scout tested 60+ candidates and
+   ranked the survivors by 7 rounds of 14 requests each, issued the way a sync
+   issues them — both CMI pages, concurrently, cache-busted, from
+   `https://gourab-ghosh.github.io` in a real browser. What shipped:
+   `cors.sh`, `cors-get-proxy.sirjosh.workers.dev` and `corsmirror.onrender.com`
+   (7/7 each), `r.jina.ai` (7/7, and the only large operator on the list — it
+   needs a `x-return-format: html` header, which is why `ProxyDef` grew a
+   `headers` field), then `allorigins.win` (2/7, flapping rather than gone) and
+   `codetabs.com` (0/7, kept because outages end and a dead entry in a parallel
+   race costs one wasted request), with `cors.lol` LAST on its numbers: 1
+   complete sync in 7 rounds, because a sync asks both pages through one relay
+   at once and it serves one and 429s the other — and its 429 carries no
+   `Access-Control-Allow-Origin`, so the browser never sees the status and the
+   app cannot tell "throttled" from "dead". `corsproxy.io` is REMOVED rather
+   than demoted: a route that fails by policy can never come back on its own.
+   Deliberately not all on one platform — `cors.sh` and the sirjosh worker are
+   both Cloudflare Workers, and `corsmirror` (Render) is what one Cloudflare
+   incident leaves standing.
+
+   Two method findings worth keeping: **`r.jina.ai` FAILS curl** (a Cloudflare
+   "Just a moment…" 403) **and works in the browser**, so a curl-only screen
+   throws away a working relay — while `cors.io` returns 200 with a valid
+   `ACAO` and hands back its own landing page, which is the same mistake in the
+   other direction. And whole categories die at once: Deno Deploy Classic was
+   sunset 2026-07-20 and took every `*.deno.dev` proxy with it, Vercel's bot
+   check makes every `*.vercel.app` proxy unusable from a page, and popular
+   Cloudflare Worker demos get banned (`test.cors.workers.dev` now answers
+   "banned for abuse" to everyone, and every fork pointing at it inherits it).
+   `.workagents/cors-r84/findings/relay-scout.md` has the full ranked table,
+   the honest negatives, and the `gh search repos … --json homepage` recipe
+   that found both new relays — check the platform before the host.
+2. **A helper site the reader supplies**, in My data → Getting CMI's timetable:
+   any URL template with `{url}` in it, tried **first and alone** with a
+   2.5s head start, so a reader who has their own does not go on handing CMI's
+   address to four strangers. This is the half of the repair that does not need
+   a new version of the app — the thing whose absence turned a relay outage
+   into a total outage for everybody at once.
+3. **"Load it from CMI's page"** — open CMI's two pages yourself, hand them
+   over as saved files or pasted source, and they go through the same parser,
+   the same validation gate and the same `adopt` as a fetched page. Opening a
+   page is the one thing a browser never has to ask anyone about, so this route
+   cannot rot. The snapshot wears `SourceTier::Pasted` and the header says "from
+   CMI's page, loaded by you" rather than claiming a sync.
+4. **One request, not seven.** The leading route is asked ALONE, with the
+   rest brought in only if it fails outright or goes silent for 2.5s — and the
+   winning route is remembered (`Prefs::last_good_route`) so tomorrow's sync
+   starts there. A head start is the only mechanism here that actually
+   withholds a request; sorting a list that is then raced does nothing. It
+   costs almost nothing when the leader is down, because a route that FAILS
+   starts the rest immediately. These are free services somebody else pays
+   for, and asking all seven twice on every sync would be both rude and seven
+   strangers shown which CMI page a student is fetching.
+5. **A four-way diagnosis instead of one sentence for every failure.** The
+   decisive signal is free: an HTTP STATUS from cmi.ac.in is something the page
+   can only see if the browser let it read the reply, so if the direct attempt
+   came back with one, the cross-origin rule was not what stopped it — CMI
+   answered, and said something other than a timetable. When it did not, a
+   `mode: no-cors` probe separates the remaining two: an opaque response is
+   unreadable but its promise RESOLVES when the server answered and REJECTS
+   when nothing did. So the app can now say "cmi.ac.in answered with an error",
+   "CMI is up and this app isn't allowed to read it", "nothing answered at all"
+   or "you're offline", and never the wrong one. Each carries a **Load it from
+   CMI's page** button, so the way out is a thing to press.
+
+Verified against the real internet, not only the harness: the rebuilt app
+fetched **79 real courses from cmi.ac.in** over the live network.
+
+`t133` (any one of the seven relays alive carries the sync on its own, and the
+app names which), `t134` (a supplied helper site is asked first and ALONE —
+`set(tiers) == {"proxy:your helper site"}`, which is the only form of that
+assertion the parallel race makes true), `t135` (the whole hand-it-over flow,
+including the commonest mistake: pasting the page's TEXT gets its own sentence
+about Ctrl+U rather than a gate failure about CMI) and `t136` (three failures,
+three different sentences) pin all of it. The harness learned the three URL
+shapes relays use and grew `serve_relays(only=…)` so a test can leave exactly
+one alive.
+
+**An adversarial review of this repair caught four things, two of them mine
+and both major**, which is the argument for reviewing a fix the way a feature
+gets reviewed. (1) The new diagnosis read only the LAST `direct` entry in the
+fetch log — but the direct tier logs one entry per PAGE, so a 503 on
+`timetable.php` beside a healthy `lecturehalls.php` was invisible and the app
+fell through to "CMI is up and this app isn't allowed to read it": R84's
+original sin, reintroduced by R84's fix. Every direct entry of the run is now
+scanned, `status` first. (2) Remembering `last_good_route` and SORTING the list
+by it changed nothing, because everything in the list starts in the same tick —
+proved by recording which hosts the stand-in was actually contacted on, where
+all four relays were asked. A head start is the only mechanism here that
+withholds a request, so the remembered route now gets the same one the reader's
+helper site gets: the ordinary sync is one request to one relay instead of four
+to four. (3) and (4) were test defects in `t136` — its "the way out is offered"
+assertion matched the unconditional **Dismiss** button and survived deleting
+the feature, and both of its halves hit the same branch, so the `answers_at_all`
+path and the CORS sentence had no test at all. The harness can now serve CMI
+**without** an `Access-Control-Allow-Origin` header (which is what the real
+cmi.ac.in does) and can drop a connection unanswered, so `t136` exercises four
+distinct failures and `t137` pins the head start.
+
+Six smaller ones from the same review are fixed too: the probe was uncached and
+unabortable and ran after the spinner stopped; the local-network explanation was
+dismissed in branches that never printed its replacement; a *relay's* gate
+failure withheld the one escape hatch that would have worked (a gate failure on
+CMI's own bytes is now tracked apart, and is the only case where the button is
+correctly withheld — along with CMI answering an error, which the reader's own
+browser would meet identically); the Fetch log omitted routes that were asked
+and then dropped when a faster one won, which is a diagnostic misleading exactly
+when someone is diagnosing an outage; the sticky-banner queue deduped with
+`contains` (asymmetric) and let an `Info` restyle a queued `Warn`; and an
+element id contained a space.
+
+The lesson for the next round is a process one: **a suite that mocks its
+dependencies cannot tell you a dependency has died.** The two probes above are
+cheap, take under a minute, and are the difference between finding this and
+being told about it.
+
 ## 8. Open bugs — found, confirmed, NOT fixed (do not delete)
 
 Rules for this section: entries stay until the bug is actually fixed and a
@@ -5897,7 +6189,14 @@ the R37 audit added (8.7–8.13), deliberately deferred because each was a
 change of behaviour big enough to want its own look, were all fixed in R48 —
 R48's §7 entry says what each was, how it was fixed, and which test now
 fails without the fix. 8.6 below is not a bug and never leaves. 8.18 was
-found by the R58 scouts and is open. 8.19 (a self-update landing on top of a
+found by the R58 scouts and is open. **8.23 (a share link replacing a picked
+timetable in silence) was fixed in R83**: both things a link can destroy are
+weighed now, each with its own sentence, and `t138` is the assertion. **8.20
+(the whole app scrolling sideways
+at 320 and 360px) was fixed in R82** — a sentence inside a `white-space:
+nowrap` pill was the app's layout floor; `.badge.wraps` is the fix and `t130`
+is the assertion the entry demanded, so the entry has moved into R82's §7
+entry as the rules here require. 8.19 (a self-update landing on top of a
 live Undo offer, found by R72's screenshots) was fixed in R73 by removing every
 self-initiated reload — R73's §7 entry says what replaced it and which phase of
 t114 fails without it.
@@ -5923,56 +6222,19 @@ Catalog, and assert the Day menu there is untouched — and the reverse. Check
 `with_picked`'s callers at the same time, since the badge and the menu
 disagreeing is the symptom that would remain if only one side were changed.
 
-### 8.20 The whole app scrolls SIDEWAYS at 320px and 360px
+### 8.22 Two tabs of the app overwrite each other's selection and changes
 
-Found in R76 by measuring, while checking whether a third button fits the
-shorten popup's footer. It is not about that footer and not caused by it — the
-bare app, with no dialog open at all, already does this:
-
-```text
-NO DIALOG  set= 430  inner= 430 client= 430 scroll= 430  fits
-NO DIALOG  set= 390  inner= 390 client= 390 scroll= 390  fits
-NO DIALOG  set= 360  inner= 368 client= 360 scroll= 368  OVERFLOWS
-NO DIALOG  set= 320  inner= 369 client= 320 scroll= 369  OVERFLOWS
-```
-
-(CDP `Emulation.setDeviceMetricsOverride`, `mobile: true`; `client` is
-`documentElement.clientWidth`, `scroll` is `scrollingElement.scrollWidth`.)
-
-The single culprit, isolated by walking every element and reporting the ones
-whose rect leaves the viewport: **`app/src/views.rs:688`** puts a whole
-sentence inside a pill —
-
-```rust
-<span class="badge warn">{note}</span>   // note = "CMI lists these courses
-                                         // but hasn't put them on the timetable"
-```
-
-— and `.badge` sets `white-space: nowrap` (`app/styles.css:614`), which is
-right for a tag and wrong for a sentence. The span measures **338px** and
-cannot break, so the layout floor becomes ~368px and both narrow widths scroll
-sideways. Two more elements are then dragged out of view at 320px as a
-consequence (`button.tab` "Halls" at r=346, `.toasts` at r=329).
-
-Why it was invisible: t116 measures the search box at these widths and passes,
-because that box was fixed in R73 — nothing in the suite asserts that the
-DOCUMENT does not overflow. And the tray only renders when a selected course
-has no time, so a fixture without one never shows it.
-
-Not fixed in R76 on purpose: the ask was a Close button on the shorten popup,
-and this is the My-timetable tray on a different surface, where the fix is a
-visual decision rather than a mechanical one — a pill that wraps to three lines
-at 320px stops looking like a pill, so the honest options are to let this note
-stop being a `.badge` (a `.muted small` line beside the heading) or to give it
-its own wrapping variant. Either changes what the tray looks like, which is the
-user's call.
-
-What a fix must come with, or it will pass while the bug survives: an assertion
-that `scrollingElement.scrollWidth <= documentElement.clientWidth` at 320 and
-360px, taken **with the tray on screen** — i.e. with a selected course that has
-no time (the fixture has one: SVA is unscheduled).
-
-### 8.22 Two tabs of the app silently overwrite each other's selection and changes
+**R83 took the word "silently" out of the title, and that is all it took out.**
+The overwrite still happens; it is now announced while both versions still
+exist. `install_cross_tab_sync` watches `cmitt.v1.{selection,overrides,custom}`
+for a write from another tab and raises a sticky banner — "Another tab of this
+app has changed your timetable. This tab is still showing the version from
+before — reload it to catch up. If you carry on here instead, this tab's
+version is the one that gets saved." — pinned by `t139`, which drives two real
+tabs. Adopting the other tab's data was deliberately NOT done: it would yank
+the page out from under someone mid-edit, which is its own kind of loss, and
+choosing between the two is the design decision this entry is still open for.
+Everything below is the original report, unchanged.
 
 Found by R82's `user-journeys` agent, confirmed against the code by hand.
 **Pre-existing: `install_cross_tab_sync` is untouched in `origin/main..HEAD`,
@@ -6010,28 +6272,6 @@ write needs a message the reader can act on. What a fix must come with: the
 three keys added to the same listener with the same deferred-adoption shape,
 and a test that drives TWO REAL TABS — a single-tab assertion cannot see this
 at all, which is why 129 tests never did.
-
-### 8.23 A share link replaces a picked timetable with no message, unless the reader happens to own an override
-
-Found by R82's `user-journeys` agent. **Also pre-existing** (`app/src/app.rs:393`
-is untouched in `origin/main..HEAD`).
-
-`replaced_own_work = shared_overrides.is_some() && (this planner has overrides)`
-is the only thing that raises the "this link replaced yours" toast with its
-Undo. The SELECTION being thrown away is never weighed. So:
-
-* reader with courses picked and no meeting/credit edits: opening
-  `?c=TOC,QCOM,MFD` (a friend's link, or their own older bookmark) replaces the
-  lot in silence — `toasts_text()` is `''`, no banner, and the only sign is the
-  Undo button going from disabled to enabled. One reload and it is
-  unrecoverable.
-* the identical action DOES announce itself, with an Undo, if that reader
-  happens to hold one override.
-
-The code's own comment at `app.rs:334-337` says the silence was the bug for
-overrides. The same hole for the selection is still open. Fix: weigh a
-non-empty selection into `replaced_own_work` and give it its own sentence (the
-existing one talks about "times and credits", which is not what was lost).
 
 ### 8.21 Deliberate non-bug — Chrome warns "integrity attribute is ignored" once per page load
 

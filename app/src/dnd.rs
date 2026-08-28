@@ -575,6 +575,13 @@ fn on_key_down(app: App, ev: &web_sys::KeyboardEvent) {
                         } else {
                             app.say(format!("Dropped {}.", mm.spec.code));
                         }
+                        // The whole point of move mode is that a keyboard can
+                        // move a class without a mouse; it used to end by
+                        // dropping focus to <body>, so the reader was
+                        // returned to the top of the document by their next
+                        // Tab. Escape already hands the chip back — success
+                        // has to as well (R83).
+                        focus_moved_chip(mm.spec.code.clone(), mm.cursor.0, mm.cursor.1);
                     } else {
                         app.say(format!(
                             "That time is no longer on the grid. Move cancelled, so {} has not moved.",
@@ -602,6 +609,41 @@ fn on_key_down(app: App, ev: &web_sys::KeyboardEvent) {
         app.redo();
         ev.prevent_default();
     }
+}
+
+/// Put the keyboard back on the chip that has just been dropped.
+///
+/// Looked up by where it landed rather than held as a node: the drop rewrites
+/// the grid, so the chip that was focused when Enter was pressed does not
+/// exist a tick later. Scoped to the region the move happened in, because the
+/// Master grid carries cells with the same day and slot as My timetable's.
+fn focus_moved_chip(code: String, day: Day, slot_start: u16) {
+    let region = domx::document()
+        .active_element()
+        .and_then(|a| a.closest("section[aria-label]").ok().flatten());
+    leptos::task::spawn_local(async move {
+        // Behind the Leptos effect that redraws the grid.
+        gloo_timers::future::TimeoutFuture::new(0).await;
+        let cell = format!(
+            "[data-day='{}'][data-slot='{}'] button.chip[aria-label^='{code}, ']",
+            day.index(),
+            slot_start,
+        );
+        // A drop that minted a synthetic column can land the chip in a column
+        // whose start is not the cell's; the code alone still finds it.
+        let anywhere = format!("button.chip[aria-label^='{code}, ']");
+        let scope = region.filter(|r| r.is_connected());
+        for sel in [&cell, &anywhere] {
+            let found = match &scope {
+                Some(r) => r.query_selector(sel).ok().flatten(),
+                None => domx::document().query_selector(sel).ok().flatten(),
+            };
+            if let Some(el) = found.and_then(|e| e.dyn_into::<web_sys::HtmlElement>().ok()) {
+                let _ = el.focus();
+                return;
+            }
+        }
+    });
 }
 
 /// Install document-level listeners once at startup. The closures live for

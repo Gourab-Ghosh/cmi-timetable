@@ -175,7 +175,12 @@
     <div class="pw-card">
       <span class="pw-mark" aria-hidden="true"></span>
       <span>
-        <p class="pw-t">CMI Timetable Planner</p>
+        <!-- An h1, not a <p>: this page had no heading at all, so a screen
+             reader landing on it found a document with nothing to orient by
+             while the print dialog was open in front of it (R83). Styled
+             identically — `.pw-t` carries the look, the tag carries the
+             structure. -->
+        <h1 class="pw-t">CMI Timetable Planner</h1>
         <p class="pw-s" id="status">Getting your sheet ready to print&hellip;</p>
       </span>
     </div>

@@ -20,6 +20,17 @@
      white square, brighter than anything else on the page. */
   color-scheme: light;
 
+  /* Reserve the scrollbar's channel whether or not it is drawn. Without this,
+     `body.modal-open { overflow: hidden }` (below) takes the scrollbar away
+     the instant a dialog opens, the document gets ~10-15px wider, and the
+     whole page behind the scrim — header, grid, banners — jumps sideways and
+     re-wraps, then jumps back on close. Measured on every dialog and every
+     confirm, both themes (R83). The gutter, not a padding-right on <body>:
+     padding would fight the `body::before` ambience, which is fixed to the
+     viewport. `@media print` resets this to `auto`, because on paper a
+     reservation is a stripe of empty margin down the side of a table. */
+  scrollbar-gutter: stable;
+
   --font-ui: "Inter", "Segoe UI Variable Text", "Segoe UI", "SF Pro Text",
     "Helvetica Neue", system-ui, Arial, sans-serif;
   --font-mono: ui-monospace, "JetBrains Mono", "Cascadia Code", "Fira Code",
@@ -274,7 +285,20 @@ button {
   background: var(--surface-2);
 }
 .btn:active:not(:disabled) { transform: translateY(1px); box-shadow: none; }
-.btn:disabled { opacity: 0.45; cursor: default; box-shadow: none; }
+/* Unmistakably unavailable, and still legible. `opacity: 0.45` pulled the
+   label and its ground toward the page white together and composited to
+   2.86:1 in light / 3.94:1 in dark — WCAG exempts inactive controls, so this
+   was never a conformance failure, but the disabled PRIMARY eight lines below
+   drops `opacity` for exactly this reason and states its measured numbers.
+   The five Print buttons are plain `.btn`s, so they were the ones sitting at
+   2.86:1. Muted ink and a quiet fill instead: 5.8:1 / 6.7:1 (R83). */
+.btn:disabled {
+  cursor: default;
+  box-shadow: none;
+  color: var(--muted);
+  background: var(--surface-2);
+  border-color: var(--line);
+}
 .btn.primary {
   background: linear-gradient(120deg, var(--accent), var(--accent2));
   border-color: var(--accent-strong);
@@ -475,6 +499,17 @@ button {
   /* Five tabs must fit the bottom bar whole — a navigation bar that
      scrolls sideways hides pages. */
   .tab { padding: 0.5rem 0.3rem; font-size: 0.76rem; }
+}
+
+/* The narrowest phones still sold. At 320px the five tabs wanted 362px, so
+   "Halls" was clipped to a 10px sliver at the screen edge — and because the
+   rail takes `touch-action: pan-y` on purpose (a sideways drag means "next
+   section"), no finger could pan it into view. Reachable by swiping, but not
+   tappable, which is not what "tap targets sized for fingers" means (R83).
+   The 42px come out of padding and gaps, never out of the 44px height. */
+@media (max-width: 380px) {
+  .tabs { padding: 0.4rem 0.2rem; gap: 0.1rem; }
+  .tab { padding: 0.5rem 0.18rem; font-size: 0.74rem; letter-spacing: -0.01em; }
   /* The week grid squeezes politely: slimmer day gutter, smaller time
      headings, tighter cells. (The day buttons above it are the real phone
      view — the grid opens on today there.) */
@@ -562,22 +597,6 @@ span.chip { cursor: default; }
     0 0 0 2px var(--accent);
 }
 
-@media (pointer: coarse) {
-  .chip,
-  .btn,
-  .btn.small,
-  .tab,
-  .seg button,
-  details.facet > summary,
-  label.opt,
-  input[type="text"], input[type="search"], input[type="date"],
-  input[type="time"], select {
-    min-height: 44px;
-  }
-  /* Height alone leaves a one-glyph button ~24px wide. */
-  .btn.icon, .filterchip button { min-width: 44px; }
-}
-
 /* A single glyph is not a target. Both of these are how a thing gets
    removed — a meeting row, a filter — so they are worth a finger. */
 .btn.icon, .filterchip button {
@@ -596,6 +615,13 @@ label.opt { min-height: 32px; }
   color: var(--alarm);
 }
 .chip.clash::before { content: "⚠"; font-size: 0.75rem; }
+/* Full strength where the words ARE the warning — the same fix, and the same
+   two measured numbers, as `.covered.clash .until` further down: dimmed to
+   .85 the hall line composited to 3.96:1 (light) / 4.32:1 (dark) on the alarm
+   wash, under the 4.5:1 small-text floor. The continuation band was written
+   with this fix; the chip it was modelled on never got it (R83). 4.93:1 /
+   5.41:1 at full strength. */
+.chip.clash .hall { opacity: 1; }
 
 /* Override: dashed outline + pencil glyph + label in details. */
 .chip.overridden { border-style: dashed; border-width: 1.5px; }
@@ -877,7 +903,11 @@ table.tt.halls-merged tr.quiet th.dayhead {
 /* Empty days are dimmed — but not today's, which is the one label on the
    page a reader is looking for. `tr.quiet` catches a day with no bookings,
    and dimming it took today's marker down to 2.6:1 on white. */
-table.tt.halls-merged tr.quiet:not(.today) th.dayhead { opacity: 0.6; }
+/* 0.68, not 0.6: over an own-hall row's violet wash the day name composited
+   to 4.28:1 — under the 4.5:1 floor for 11.84px text, on the one sheet whose
+   whole job is "which room, when" (R83). 0.68 clears it and still reads as
+   the quiet state beside a booked row. */
+table.tt.halls-merged tr.quiet:not(.today) th.dayhead { opacity: 0.68; }
 table.tt.halls-merged tbody tr:hover td:not(.extra) { background: var(--surface-2); }
 table.tt tbody tr.group-start:not(:first-child) > th,
 table.tt tbody tr.group-start:not(:first-child) > td {
@@ -1626,9 +1656,20 @@ details.facet .menu {
   z-index: 30;
   top: calc(100% + 6px);
   left: 0;
-  /* Wide enough that "BM2 — B.S. Mathematics & CS II year" fits one line. */
-  min-width: 19rem;
-  max-width: 26rem;
+  /* Two halves of one job: keep the menu inside the window.
+
+     WIDTH is CSS's half. "BM2 — B.S. Mathematics & CS II year" wants one
+     line, so the floor is 19rem — but a bare 19rem is 304px, and on a 320px
+     phone a menu that wide plus its offset ran the DOCUMENT sideways. Both
+     bounds now yield to the viewport before they yield to the text.
+
+     POSITION is measured, not declared: `left: 0` anchors the menu to its own
+     summary, and where that summary landed depends on how the filter bar
+     wrapped — which the stylesheet cannot see. `domx::place_facet_menu` runs
+     on open and hands the shift back here as `--menu-nudge` (R83). */
+  min-width: min(19rem, calc(100vw - 2rem));
+  max-width: min(26rem, calc(100vw - 2rem));
+  margin-left: var(--menu-nudge, 0px);
   max-height: min(60vh, 21rem);
   overflow-y: auto;
   overscroll-behavior: contain;
@@ -1865,6 +1906,18 @@ details.facet .menu .menu-empty { margin: 0.2rem 0 0; }
   box-shadow: var(--shadow-sm);
 }
 .banner.warn { border-left-color: var(--warn); }
+/* The message itself takes the row's spare width, so the buttons stay on the
+   right instead of being pushed under a long sentence. Two queued notices get
+   a paragraph each (see `App::set_banner_sticky`), separated by real space
+   rather than run together into one wall. */
+.banner-lines {
+  flex: 1 1 22rem;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  line-height: 1.45;
+}
 /* A newer version of the app itself. Not a warning — nothing is wrong and
    nothing needs deciding — so it takes the "good news" colour and a faint
    tint of it, which is also what keeps it from being read as another
@@ -2857,6 +2910,10 @@ pre.devpre {
      inside the query, rather than by weakening `.mobile-only` — which the
      day strip also uses. */
   .day-list.mobile-only { display: flex; }
+  /* Same trap, same fix, one control along: the day strip is a `.seg`, and
+     `display: block` broke its row of buttons into a wrapped column that
+     showed one or two empty pill segments at 320 and 360px (R83). */
+  .seg.mobile-only { display: inline-flex; }
   .week-grid.day-mode-active,
   /* …and the sentence that describes its columns (views.rs), which is a
      sibling of the grid rather than inside it. */
@@ -3028,6 +3085,45 @@ pre.devpre {
    them; empty means no error, and it takes no space. */
 .form-error { color: var(--warn); margin: 0.5rem 0 0; }
 .form-error:empty { display: none; }
+
+/* A labelled field: the label above its control, both full width. Used by the
+   "Your own helper site" box in My data, where the label is a sentence and
+   putting it beside a full-width URL box would leave neither room. */
+label.field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  font-size: 0.88rem;
+  font-weight: 500;
+}
+label.field > input { width: 100%; }
+
+/* "Load the timetable from CMI's page" — the route that works when no server
+   in between will. Two identical blocks, one per CMI page, each with the
+   three ways in (open it, pick the saved file, paste the source) and a badge
+   that turns on when the app has something to read. */
+.load-how { margin: 0 0 0.9rem; padding-left: 1.1rem; line-height: 1.5; }
+.load-how li + li { margin-top: 0.2rem; }
+.load-page {
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  padding: 0.7rem 0.8rem;
+  margin-bottom: 0.7rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  background: var(--surface-2);
+}
+.load-page a.btn { text-decoration: none; }
+.load-paste {
+  width: 100%;
+  resize: vertical;
+  font-family: var(--font-mono);
+  /* Page source is long, and this box is a drop point rather than something
+     anyone reads back — small type keeps it from dominating the dialog. */
+  font-size: 0.75rem;
+  line-height: 1.35;
+}
 .course-form #ce-add-meeting { margin-top: 0.1rem; }
 
 /* "CMI lists this code too" — a decision point, gently boxed. */
@@ -3063,6 +3159,36 @@ pre.devpre {
    `.workagents/print-r80/probes/print_all.py` is the scale that says so, and
    the numbers after the work are in the CONTEXT.md R80 entry.
    ========================================================================== */
+
+/* ==========================================================================
+   Finger-sized targets — LAST, because that is the only place it works.
+
+   A media query adds no specificity. This block used to sit at line ~576,
+   and five of its nine selectors were re-declared further down the file at
+   the same specificity — `label.opt` (32px), the shared field rule (34px),
+   `details.facet > summary` (32px), `.seg button` (36px) — so on a phone the
+   eight filter buttons, every checkbox row in every dropdown, the search
+   field, the `<select>`s and the day strip were all smaller than the rule
+   written to make them big, silently, since the rule was added. Nothing was
+   unusable (32px still clears WCAG 2.5.8's 24px) but the promise was not
+   being kept (R83). Moved here, after every rule it has to beat, rather than
+   restated in two places where the two could drift apart.
+   ========================================================================== */
+@media (pointer: coarse) {
+  .chip,
+  .btn,
+  .btn.small,
+  .tab,
+  .seg button,
+  details.facet > summary,
+  label.opt,
+  input[type="text"], input[type="search"], input[type="date"],
+  input[type="time"], select {
+    min-height: 44px;
+  }
+  /* Height alone leaves a one-glyph button ~24px wide. */
+  .btn.icon, .filterchip button { min-width: 44px; }
+}
 
 .print-only { display: none; }
 .print-masthead { display: none; }
@@ -3290,6 +3416,13 @@ pre.devpre {
      Same reasoning, same fix, for the Master grid — which had the same well. */
   section[aria-label="Lecture halls"] table.tt,
   section[aria-label="Master grid"] table.tt { border: none; }
+  /* …except a closing rule under EVERY column of the halls table. The hall
+     name lives in a `rowspan=5` cell that STARTS its block, so on the final
+     hall it is not in `tr:last-child` and kept the `border-bottom` that every
+     cell beside it had just lost: the table ended in a ~175px stub under the
+     hall-name column with nothing under the others, and the two vertical
+     rules stopped in mid-air (R83). */
+  section[aria-label="Lecture halls"] table.tt { border-bottom: 0.6px solid #b9c0cc; }
   /* The helper sentence was the third-largest thing on this sheet — bigger
      than the column headings and every booking on a page whose whole job is
      the table. Annotation size, like the poster's footnote. */
@@ -3756,7 +3889,12 @@ pre.devpre {
     border: none !important;
     padding: 0 !important;
   }
-  .sheet-list .cs-pill + .cs-pill::before { content: "· "; color: #9aa1ad; }
+  /* #5a6170, not #9aa1ad: on the forced-white print ground that grey is
+     2.60:1, and on this sheet the middot is the ONLY thing separating "4
+     credits · 3 credits · 2 credits" — a 9px mark at 2.6:1 is the first thing
+     a photocopier loses. Every other grey in this block is 5.8:1 or better;
+     this one is 6.22:1 and is already the colour of the text around it (R83). */
+  .sheet-list .cs-pill + .cs-pill::before { content: "· "; color: #5a6170; }
   /* The branch chips sit on their own row in a course card, which is right on
      screen and costs a line per course on paper — where a five-course sheet
      spends five lines on 0.3rem of screen rhythm. `!important` because the
@@ -3803,6 +3941,21 @@ pre.devpre {
     height: 16px;
     min-height: 0;
     padding: 1px 3px;
+  }
+  /* …and the ✓ must not be what breaks that promise. The general print chip
+     is a flex COLUMN (code over hall), so the ✓ took a line of its own and a
+     chip for a SELECTED course grew to two lines — outgrowing the 16px row,
+     and, because the hall-name cell spans five rows, growing the whole block
+     by ~30% (measured off the PDF: 15.75pt row pitch against 12.00pt for
+     every other hall). Two row heights in one table is exactly what the
+     comment above says reads as two tables (R83).
+     A row here, not a column, because a halls chip carries no hall line —
+     `show_hall: false`, you are already in the hall's own row — so the code
+     and its mark simply sit side by side, which is what print already does
+     with the ⚠. */
+  section[aria-label="Lecture halls"] table.tt td .chip {
+    flex-direction: row;
+    gap: 3px;
   }
   section[aria-label="Lecture halls"] table.tt th.dayhead {
     padding: 1px 4px;
