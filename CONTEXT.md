@@ -5861,9 +5861,26 @@ session, which is not rate-limited. If you inherit this: read
 finished, so there is no side-by-side against the deployed build and no
 long-session leak measurement.
 
+**The three dimensions the fleets never reached were finished by hand**, because
+the WEEKLY agent budget ran out (resets 28 Aug) and no resume could bring them
+back. `runtime-hygiene`: no wasm panic, no unhandled rejection, no SEVERE console
+entry that is not the harness's own 404s, and click-to-painted of ~30ms warm /
+43-88ms with the CPU throttled 4x (measured across two animation frames in the
+page — an earlier number of ~450ms was my own instrumentation timing its own
+sleep). `visual-regression`: `origin/main` built into /tmp and both builds
+captured over the same 20 screens (1440px and 390px, dark and light, five tabs,
+`shots/vis/`); every difference is the new disabled Print button and the 19-42px
+of height it adds, and neither build overflows horizontally at either width.
+`browser-smoke`: the headed half was done earlier in the round — real Brave 151,
+Chromium 151 and Firefox 154, real print dialogs, real clicks — and **Xvfb has
+since been removed from this machine**, so no further headed run is possible
+until `xorg-server-xvfb` is reinstalled. That absence is worth knowing before
+the next round plans anything headed.
+
 Gates: **132/132 e2e**, 169 native, clippy + fmt clean, print budget re-measured
-(8 pages, 835 KB, 0 curves, 0 groups, 0 masks), and the two proved-by-breaking
-tests above.
+after every fix — **7 pages** now, 830 KB, 0 curves, 0 groups, 0 masks (Halls
+dropped a page: the ✓ chips stopped inflating its rows) — and the two
+proved-by-breaking tests above.
 
 ## 8. Open bugs — found, confirmed, NOT fixed (do not delete)
 
