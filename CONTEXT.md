@@ -54,6 +54,18 @@ and no committed mirror (fixtures exist only for tests/e2e seed).
   fleet with each worker told to READ ITS OWN PARTIAL FILE and continue
   from its last STATUS line rather than redo. This applies to every future
   round, unconditionally.
+  **Strengthened again in R88 (permanent, user verbatim intent): report
+  background workers at every stop.** Whenever a turn ends while any
+  worker/workflow is still running in the background, the closing message
+  MUST say so explicitly and say HOW MANY are running (and what they are);
+  when nothing is running, say that the round is fully finished. The user
+  cannot see background work — without this line they believe the work is
+  done and are surprised when a worker wakes later. Corollary for the
+  restore format: the partials exist to survive the session limits the
+  user actually hits (the 5-hour window, the per-model/Fable limit, and
+  the weekly limit), so every findings file must be written to be READ
+  COLD by a future session — full sentences, facts frontloaded, file paths
+  and receipts inline, STATUS line last.
 - **CONTEXT.md IS FOR A READER WITH NO CONTEXT (R43, permanent).** This
   file is read by an LLM in a fresh session that knows nothing about the
   project. Every section must stand alone: name things fully on first
