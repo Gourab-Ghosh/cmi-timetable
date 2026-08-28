@@ -3185,13 +3185,15 @@ fn catalog(app: App) -> impl IntoView {
                 // ⚠ in a red box and was the one sheet that never said what it
                 // meant. Same sentence as the other three sheets use.
                 let clashing = app.clashes();
-                if rows.iter().any(|c| {
-                    app.is_selected(&c.code)
-                        && clashing.iter().any(|cl| {
-                            cl.a.eq_ignore_ascii_case(&c.code)
-                                || cl.b.eq_ignore_ascii_case(&c.code)
-                        })
-                }) {
+                if app.marks.get().0
+                    && rows.iter().any(|c| {
+                        app.is_selected(&c.code)
+                            && clashing.iter().any(|cl| {
+                                cl.a.eq_ignore_ascii_case(&c.code)
+                                    || cl.b.eq_ignore_ascii_case(&c.code)
+                            })
+                    })
+                {
                     parts.push("⚠ marks a clash");
                 }
                 parts.join(" \u{b7} ")
@@ -3269,11 +3271,22 @@ fn catalog_row(app: App, course: Course) -> impl IntoView {
                             edited()
                                 .then(|| {
                                     view! {
+                                        // The ✎ and its accent follow the
+                                        // marks tweak; the WORDS stay,
+                                        // because "your times" is the fact
+                                        // and the fact is never hidden.
                                         <span
-                                            class="badge accent"
+                                            class="badge"
+                                            class:accent=move || app.marks.get().1
                                             title="These are the times you set, not CMI's."
                                         >
-                                            "✎ your times"
+                                            {move || {
+                                                if app.marks.get().1 {
+                                                    "✎ your times"
+                                                } else {
+                                                    "your times"
+                                                }
+                                            }}
                                         </span>
                                     }
                                 })

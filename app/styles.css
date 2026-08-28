@@ -983,6 +983,12 @@ table.tt.halls-merged tr.quiet:not(.today) th.dayhead { opacity: 0.68; }
 /* "Dim days with no classes" ticked off (R87): quiet rows keep their compact
    height — that is space, not emphasis — and give up only the fading. */
 .app.no-quiet-dim table.tt.halls-merged tr.quiet th.dayhead { opacity: 1; }
+/* Both off together: the no-today fallback above (today's row keeps only the
+   quiet dim) must not out-specify no-quiet-dim, or today's empty row becomes
+   the ONE row still dimmed — the removed mark coming back inverted. */
+.app.no-today.no-quiet-dim table.tt.halls-merged tr.quiet.today th.dayhead {
+  opacity: 1;
+}
 table.tt.halls-merged tbody tr:hover td:not(.extra) { background: var(--surface-2); }
 table.tt tbody tr.group-start:not(:first-child) > th,
 table.tt tbody tr.group-start:not(:first-child) > td {

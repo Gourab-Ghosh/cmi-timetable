@@ -481,6 +481,31 @@ fn is_editing_context(target: &Option<web_sys::EventTarget>) -> bool {
     )
 }
 
+/// Narrower than `is_editing_context`: only the contexts where Escape itself
+/// has a native job (clearing a `type=search` field, closing a select's
+/// dropdown, backing out of typed text). A checkbox or radio gives Escape
+/// nothing to do — swallowing the developer-mode exit there left a keyboard
+/// user pressing a dead key on every tweak row (both R88 verifiers hit it).
+fn escape_has_native_meaning(target: &Option<web_sys::EventTarget>) -> bool {
+    let Some(target) = target else { return false };
+    let Some(el) = target.dyn_ref::<web_sys::Element>() else {
+        return false;
+    };
+    match el.tag_name().to_ascii_lowercase().as_str() {
+        "textarea" | "select" => true,
+        // An input with no `type` is a text field; only the button-like and
+        // tick-like types leave Escape meaningless.
+        "input" => !matches!(
+            el.get_attribute("type")
+                .unwrap_or_default()
+                .to_ascii_lowercase()
+                .as_str(),
+            "checkbox" | "radio" | "button" | "submit" | "reset" | "range"
+        ),
+        _ => false,
+    }
+}
+
 fn on_key_down(app: App, ev: &web_sys::KeyboardEvent) {
     let key = ev.key();
 
@@ -507,13 +532,14 @@ fn on_key_down(app: App, ev: &web_sys::KeyboardEvent) {
             ev.prevent_default();
             return;
         }
-        // Last, and — unlike everything above — GUARDED by the editing
-        // context: leaving developer mode is navigation, not cancellation.
-        // Escape in the tweaks search box must clear the field (the native
-        // `type=search` behaviour), not eject the reader and unmount the
-        // page their focus was in; the cancels above run unguarded because
-        // cancelling has to work everywhere, and this is not a cancel.
-        if app.route.get_untracked().is_developer() && !is_editing_context(&ev.target()) {
+        // Last, and — unlike everything above — GUARDED, but only where
+        // Escape has a native job: leaving developer mode is navigation, not
+        // cancellation. Escape in the tweaks search box must clear the field
+        // (the native `type=search` behaviour), not eject the reader and
+        // unmount the page their focus was in. On a checkbox or radio the
+        // key would otherwise be dead, so there the exit runs; the cancels
+        // above run unguarded because cancelling has to work everywhere.
+        if app.route.get_untracked().is_developer() && !escape_has_native_meaning(&ev.target()) {
             app.goto_planner();
             domx::focus_soon(&["nav.tabs button.tab[tabindex='0']", "[data-mydata]"]);
             ev.prevent_default();

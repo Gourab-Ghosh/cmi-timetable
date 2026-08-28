@@ -8679,6 +8679,38 @@ def t143_the_developer_rail_cannot_eject_you_by_accident(app):
     WebDriverWait(app.d, 5).until(lambda d: selected() == "Storage")
     assert in_dev(app.d), "the wrap must skip the exit, not press it"
 
+    # Focus SURVIVES a step (R88). A category step is a route change, and
+    # until R88 the rail rebuilt on every one: the freshly focused button
+    # was unmounted, document.activeElement fell to <body>, and the SECOND
+    # arrow press was dead. Selenium's send_keys refocuses whatever it just
+    # found, which is exactly how the old test masked this — so this block
+    # deliberately never re-finds an element between presses.
+    app.css(".tabs .tab[tabindex='0']").send_keys(Keys.HOME)
+    WebDriverWait(app.d, 5).until(lambda d: selected() == "Overview")
+    app.d.switch_to.active_element.send_keys(Keys.ARROW_RIGHT)
+    WebDriverWait(app.d, 5).until(lambda d: selected() == "Tweaks")
+    focused = app.d.execute_script(
+        "const a = document.activeElement;"
+        "return a && a.classList && a.classList.contains('tab')"
+        " ? a.textContent.trim() : (a ? a.tagName : 'nothing')")
+    assert focused == "Tweaks", \
+        f"one step in, focus must rest on the Tweaks tab, not {focused!r}"
+    app.d.switch_to.active_element.send_keys(Keys.ARROW_RIGHT)
+    WebDriverWait(
+        app.d, 5,
+    ).until(
+        lambda d: selected() == "Sync",
+        message="the SECOND arrow press must work without anyone refocusing")
+    # A mouse click keeps focus on the pressed category too — a screen
+    # reader follows activeElement, and <body> is nowhere.
+    next(b for b in app.css_all(".tabs .tab") if b.text == "Storage").click()
+    WebDriverWait(app.d, 5).until(lambda d: selected() == "Storage")
+    clicked = app.d.execute_script(
+        "const a = document.activeElement;"
+        "return a ? (a.textContent.trim() || a.tagName) : 'nothing'")
+    assert clicked == "Storage", \
+        f"a click must not dump focus to the body (got {clicked!r})"
+
     # The wheel steps categories and STOPS at the ends — a trackpad flick
     # must never eject the whole mode.
     rail = app.css("nav.tabs")
@@ -8880,8 +8912,25 @@ def t145_hiding_a_mark_hides_the_sign_never_the_fact(app):
         "return document.querySelector("
         "  \"section[aria-label='Master grid'] .grid-legend\").textContent;")
 
+    # Catalog: the row badge keeps its words and loses only its ✎, and the
+    # print footnote's ⚠ clause is gone entirely. R88's print verifier found
+    # both the hard way: a marks-off Catalog PDF whose only ⚠ was inside the
+    # sentence explaining it, above a row still painting "✎ your times".
+    app.open_tab("Catalog")
+    cat = app.wait_css("section[aria-label='Catalog']")
+    assert "your times" in cat.text, \
+        "the fact (times are the reader's own) must stay in words"
+    assert "✎ your times" not in cat.text, \
+        "the ✎ sign must follow the tweak on the Catalog row badge"
+    cat_fn = app.d.execute_script(
+        "const el = document.querySelector("
+        "  \"section[aria-label='Catalog'] .print-footnote\");"
+        "return el ? el.textContent : '';")
+    assert "⚠" not in cat_fn and "✎" not in cat_fn, \
+        f"the Catalog footnote must not explain hidden marks: {cat_fn!r}"
+
     # The choice survives a reload, and ticking back restores everything.
-    # (The active tab persisted too — Master grid — so walk home first.)
+    # (The active tab persisted too — Catalog — so walk home first.)
     app.boot("/", fresh=False)
     app.open_tab("My timetable")
     app.wait_css("section[aria-label='My timetable']")
@@ -8943,6 +8992,66 @@ def t146_the_door_in_my_data_opens_and_escape_walks_back(app):
             "return a && a.matches(\"nav.tabs button.tab[tabindex='0']\")"),
         message="after Escape, focus must land on the planner rail")
 
+    # Escape works from a tweak CHECKBOX too. The key has no native job on a
+    # tick-box, so the editing guard must not swallow it there — both R88
+    # verifiers found the same dead key on every tweak row. (Focus without
+    # clicking: a click would flip the tweak.)
+    app.d.get(f"{BASE}/#/developer/tweaks")
+    app.wait_css("section[aria-label='Developer mode']")
+    cb = app.css("label.opt input[type='checkbox']")
+    app.d.execute_script("arguments[0].focus()", cb)
+    app.d.switch_to.active_element.send_keys(Keys.ESCAPE)
+    app.wait_css("section[aria-label='My timetable']")
+    assert not app.d.execute_script(
+        "return location.hash").startswith("#/developer"), \
+        "Escape on a checkbox is navigation, not a dead key"
+
+
+
+def t147_the_week_grid_tweaks_do_not_fight_each_other(app):
+    """"Highlight today's row" ticked off makes today's EMPTY halls row fall
+    back to the quiet dim — deliberate: the row stops being special, so it
+    takes whatever any other empty day gets. But with "Dim days with no
+    classes" ALSO off, no dim may survive anywhere: until R88 the fallback
+    rule out-specified the no-dim rule and today's empty row was the ONE row
+    still faded — the removed mark coming back inverted."""
+    pinned = app.pin_weekday(4)  # Friday: some hall always sits empty then
+    try:
+        app.boot("/", selection=["TOC", "ISS"])
+        app.open_tab("Halls")
+        section = app.wait_css("section[aria-label='Lecture halls']")
+        next(b for b in section.find_elements(By.CSS_SELECTOR, "[role='radio']")
+             if b.text == "Week").click()
+        app.wait_css("table.tt.halls-merged")
+        assert app.css_all("table.tt.halls-merged tr.quiet.today"), \
+            "the fixture must give some hall an empty Friday"
+
+        def quiet_today_dim():
+            return float(app.d.execute_script(
+                "const th = document.querySelector("
+                "  'table.tt.halls-merged tr.quiet.today th.dayhead');"
+                "return getComputedStyle(th).opacity;"))
+
+        def flip(label):
+            app.d.get(f"{BASE}/#/developer/tweaks")
+            app.wait_css("section[aria-label='Developer mode']")
+            app.xpath("//label[contains(@class,'opt')][.//span[normalize-space()="
+                      f'"{label}"]]//input').click()
+            app.css(".tabs .tab-exit").click()
+            app.wait_css("table.tt.halls-merged")
+
+        assert quiet_today_dim() == 1, "by default, today outranks quiet"
+        flip("Highlight today's row")
+        assert quiet_today_dim() < 1, \
+            "with today's mark off, the empty row falls back to the quiet dim"
+        flip("Dim days with no classes")
+        assert quiet_today_dim() == 1, \
+            "with BOTH off, no dim may survive on today's empty row"
+        # And the second tweak alone never dims anything either.
+        flip("Highlight today's row")
+        assert quiet_today_dim() == 1
+    finally:
+        app.unpin_weekday(pinned)
 
 
 TESTS = [
@@ -9092,6 +9201,7 @@ TESTS = [
     t144_the_tweaks_search_is_a_real_search_box,
     t145_hiding_a_mark_hides_the_sign_never_the_fact,
     t146_the_door_in_my_data_opens_and_escape_walks_back,
+    t147_the_week_grid_tweaks_do_not_fight_each_other,
 ]
 
 

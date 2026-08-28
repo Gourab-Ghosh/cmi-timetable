@@ -798,6 +798,14 @@ pub fn Tabs() -> impl IntoView {
 }
 
 fn tabs_nav(app: App) -> impl IntoView {
+    // Which rail is mounted follows the MODE, not the route. A Memo dedupes
+    // by value, so stepping between developer categories (each one a
+    // Route::Developer variant) never re-runs the swap closure below — only
+    // a real mode crossing does. Without this, every arrow press or click on
+    // a dev category replaced all five rail buttons and dumped keyboard
+    // focus to <body> (R88's verify fleet caught it; the roving tabindex
+    // survived, the focused node did not).
+    let rail_is_dev = Memo::new(move |_| app.route.get().is_developer());
     // The rail is a column on a desktop and a bar on a phone, and a screen
     // reader coaches the user toward one axis or the other from this. It is
     // the ONE place the 900px boundary is allowed to live — the keys below
@@ -899,7 +907,7 @@ fn tabs_nav(app: App) -> impl IntoView {
             // the exactly-one-rail promises t105 counts, and remounting the
             // nav would leak the forgotten media-query closure above.
             {move || {
-                if app.route.get().is_developer() {
+                if rail_is_dev.get() {
                     dev_rail(app, swiped).into_any()
                 } else {
                     planner_rail(app, swiped).into_any()
