@@ -1852,11 +1852,16 @@ pub fn filter_bar(app: App, scope: FilterScope, result_count: Signal<usize>) -> 
     let course_picked =
         Memo::new(move |_| app.with_filters_in(scope.mine(), |f| f.courses.clone()));
     let flag_picked = Memo::new(move |_| app.with_filters_in(scope.mine(), |f| f.flags.clone()));
-    // Day and Time slot read the SHARED set, not `scope.mine()`. That is what
-    // this code already did and it is kept verbatim so this change moves no
-    // pixel — it is also wrong on My courses, and is written up on its own.
+    // Scoped like every other facet above. These two read the SHARED set for
+    // several rounds (CONTEXT §8.18) while their count badges below read the
+    // scoped one, so on My courses the badge and the menu disagreed. The
+    // visible damage came from `with_picked`, which injects a ticked value the
+    // option list does not offer USING ITS RAW KEY AS THE LABEL: a day is keyed
+    // by index, so a Monday ticked on the Catalog appeared in My courses' Day
+    // menu as a row reading "0". Pinned by `t142`, which asserts on both the
+    // badge and the menu — half of this fix would still pass a badge-only test.
     let day_picked = Memo::new(move |_| {
-        app.with_filters(|f| {
+        app.with_filters_in(scope.mine(), |f| {
             f.days
                 .iter()
                 .map(|d| d.index().to_string())
@@ -1864,7 +1869,7 @@ pub fn filter_bar(app: App, scope: FilterScope, result_count: Signal<usize>) -> 
         })
     });
     let slot_picked = Memo::new(move |_| {
-        app.with_filters(|f| {
+        app.with_filters_in(scope.mine(), |f| {
             f.slot_starts
                 .iter()
                 .map(|s| s.to_string())

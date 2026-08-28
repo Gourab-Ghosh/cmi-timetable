@@ -8472,6 +8472,98 @@ def t140_a_footnote_never_explains_a_mark_that_is_not_there(app):
     check("section[aria-label='Catalog']", "Catalog, filtered")
 
 
+def t142_a_day_ticked_on_the_catalog_does_not_haunt_my_courses(app):
+    """My courses keeps its OWN Day and Time-slot filters — including inside
+    the menus, not just in the count badge.
+
+    CONTEXT 8.18: every facet read its ticked values with
+    `filters_in(scope.mine())` EXCEPT Day and Time slot, which read the shared
+    Catalog set. The badge and the menu therefore disagreed, and because
+    `with_picked` injects an unknown ticked value using its raw KEY as the
+    label, a day ticked on the Catalog appeared in My courses' Day menu as a
+    bare index — a row reading "0" where every other row names a weekday.
+
+    TOC and ISS both meet Tue+Thu only, so Monday can never be one of My
+    courses' own options and the injected row has nowhere to hide.
+    """
+    app.boot("/?c=TOC,ISS")
+
+    def day_menu(section):
+        """Open the Day facet inside one section and return its option rows."""
+        app.open_tab(section)
+        app.wait_css(f"section[aria-label='{section}'] .filterbar")
+        # Close whatever is open, so `details.facet[open]` is unambiguous.
+        for d in app.css_all("details.facet[open]"):
+            app.d.execute_script("arguments[0].removeAttribute('open')", d)
+        app.xpath(
+            f"//section[@aria-label='{section}']"
+            "//details[contains(@class,'facet')]"
+            "/summary[starts-with(normalize-space(),'Day')]"
+        ).click()
+        app.wait_css(f"section[aria-label='{section}'] details.facet[open] .menu")
+        return app.css_all(
+            f"section[aria-label='{section}'] details.facet[open] .menu label.opt")
+
+    def labels(rows):
+        return [r.text.strip() for r in rows if r.text.strip()]
+
+    def badge(section):
+        """The count the summary shows, via its aria-label ('Day, 1 selected')."""
+        s = app.xpath(
+            f"//section[@aria-label='{section}']"
+            "//details[contains(@class,'facet')]"
+            "/summary[starts-with(normalize-space(),'Day')]"
+        )
+        return s.get_attribute("aria-label") or ""
+
+    WEEKDAYS = {"Monday", "Tuesday", "Wednesday", "Thursday",
+                "Friday", "Saturday", "Sunday"}
+
+    # Tick Monday on the Catalog — a day none of the selected courses meet on.
+    rows = day_menu("Catalog")
+    monday = next((r for r in rows if r.text.strip() == "Monday"), None)
+    assert monday is not None, f"the Catalog Day menu should offer Monday, got {labels(rows)}"
+    monday.find_element(By.CSS_SELECTOR, "input[type='checkbox']").click()
+    WebDriverWait(app.d, 10).until(
+        lambda d: "1 selected" in badge("Catalog"),
+        message="ticking Monday must show on the Catalog's own Day badge")
+
+    # My courses must be untouched — in the BADGE and in the MENU. The badge
+    # was always right; the menu is what 8.18 was about, so assert both or the
+    # test passes on a half-fix.
+    rows = day_menu("My courses")
+    got = labels(rows)
+    assert badge("My courses") == "Day", \
+        f"My courses has no day of its own ticked, badge said {badge('My courses')!r}"
+    stray = [l for l in got if l not in WEEKDAYS]
+    assert not stray, \
+        f"the Catalog's Monday leaked into My courses' Day menu as {stray} (rows: {got})"
+    assert "Monday" not in got, \
+        f"My courses' courses never meet on Monday, yet its Day menu offers it: {got}"
+    for r in rows:
+        assert not r.find_element(By.CSS_SELECTOR, "input[type='checkbox']").is_selected(), \
+            f"nothing is ticked on My courses, but {r.text.strip()!r} is"
+
+    # And the reverse: a day ticked HERE stays here.
+    tuesday = next((r for r in rows if r.text.strip() == "Tuesday"), None)
+    assert tuesday is not None, f"My courses meet on Tuesday, menu offered {got}"
+    tuesday.find_element(By.CSS_SELECTOR, "input[type='checkbox']").click()
+    WebDriverWait(app.d, 10).until(
+        lambda d: "1 selected" in badge("My courses"),
+        message="ticking Tuesday must show on My courses' own Day badge")
+
+    rows = day_menu("Catalog")
+    got = labels(rows)
+    assert "1 selected" in badge("Catalog"), \
+        f"the Catalog still has only its own Monday, badge said {badge('Catalog')!r}"
+    checked = [r.text.strip() for r in rows
+               if r.find_element(By.CSS_SELECTOR, "input[type='checkbox']").is_selected()]
+    assert checked == ["Monday"], \
+        f"the Catalog should still show exactly its own Monday ticked, got {checked}"
+    stray = [l for l in got if l not in WEEKDAYS]
+    assert not stray, f"My courses' Tuesday leaked into the Catalog's Day menu as {stray}"
+
+
 TESTS = [
     t01_header_sync_button_and_hidden_dev,
     t02_developer_endpoint_only,
@@ -8614,6 +8706,7 @@ TESTS = [
     t139_a_second_tab_changing_your_timetable_is_not_silent,
     t140_a_footnote_never_explains_a_mark_that_is_not_there,
     t141_the_printed_clash_strip_says_what_the_screen_says,
+    t142_a_day_ticked_on_the_catalog_does_not_haunt_my_courses,
 ]
 
 

@@ -789,7 +789,7 @@ regenerates the .ics golden.
   NOWHERE on this page while still counting toward the credit total.
 - "Your changes" groups are headed by `.cg-head` (colour rail + small caps
   + count), coloured by `OwnChange::tone()`. See §4.
-- Tests: 169 native + 141/141 e2e green (as of R84; the native count from
+- Tests: 169 native + 142/142 e2e green (as of R86; the native count from
   `deploy.sh`'s own in-container run — 49+18+3+9+25+27+28+10).
 - **The e2e suite mocks the relays, so it can never tell you a real one has
   died** — which is exactly how R84's outage reached a user. Two probes cover
@@ -6324,6 +6324,49 @@ One honest gap, recorded rather than papered over: the live walk exercised only
 the `cors.sh` route, because that is the one that answered first every time. The
 other six were exercised by the census, not by the app.
 
+### R86 — "is everything done?", and the answer being no
+
+A status question, answered by checking rather than by remembering. The dev
+server was still up, the live site was still serving `de0c130`, the tree was
+clean — and §8 still held two entries. One of them was genuinely unfinished
+work from this session's own first instruction ("do the work whatever was not
+completed before").
+
+**§8.22 is not that.** The entry says so itself: R83 removed the word
+"silently" and nothing else, deliberately, because adopting the other tab's
+data would yank the page out from under someone mid-edit. Choosing between the
+two versions is a design decision, and it is the user's to make. It stays open.
+
+**§8.18 was.** Found by two R58 scouts, left open for five rounds, and still
+live: `day_picked` and `slot_picked` read `app.with_filters(…)` — the shared
+Catalog/Master-grid set — while every other facet above them, and their own
+count badges below them, read `app.with_filters_in(scope.mine(), …)`.
+
+The first read of this was WRONG and the record should say so. `facet_checkbox`
+resolves its tick state with `scope.mine()` and always has, so the code looked
+correct on inspection and the entry looked stale. The bug is one layer up, in
+the memos that feed `with_picked` — and `with_picked` is what makes it visible,
+because it injects a ticked value the option list does not offer **using its raw
+KEY as the label**. Days are keyed by index. So a Monday ticked on the Catalog
+appeared in My courses' Day menu as a row reading **"0"**, between Tuesday and
+Thursday, while the badge above it correctly said nothing was picked.
+
+The test was written first and run against the unfixed build, which is the only
+way to know it tests anything: `t142` failed with
+`the Catalog's Monday leaked into My courses' Day menu as ['0'] (rows: ['0',
+'Tuesday', 'Thursday'])`. The fixture is `?c=TOC,ISS`, whose courses meet on
+Tue+Thu only, so Monday can never be one of My courses' own options and the
+injected row has nowhere to hide.
+
+`t142` asserts on the BADGE and the MENU, and on both directions. The entry
+demanded exactly that, for a good reason: the badge was already right, so a
+badge-only test passes on a half-fix, and "the badge and the menu disagreeing is
+the symptom that would remain if only one side were changed".
+
+The fix is the one the entry specified — `with_filters` →
+`with_filters_in(scope.mine())` in two memos, mapping unchanged. §8.18 has moved
+out of §8 and into this entry, as that section's rules require.
+
 ## 8. Open bugs — found, confirmed, NOT fixed (do not delete)
 
 Rules for this section: entries stay until the bug is actually fixed and a
@@ -6338,8 +6381,12 @@ audit added (8.14–8.17) were fixed in R41 — same place, same rule. The seven
 the R37 audit added (8.7–8.13), deliberately deferred because each was a
 change of behaviour big enough to want its own look, were all fixed in R48 —
 R48's §7 entry says what each was, how it was fixed, and which test now
-fails without the fix. 8.6 below is not a bug and never leaves. 8.18 was
-found by the R58 scouts and is open. **8.23 (a share link replacing a picked
+fails without the fix. 8.6 below is not a bug and never leaves. **8.18 (the Day and Time-slot facets reading the WRONG filter set on My
+courses) was fixed in R86**, having been found by the R58 scouts and left
+open for five rounds: `day_picked`/`slot_picked` now read
+`with_filters_in(scope.mine())` like every other facet, and `t142` is the
+assertion the entry asked for — it fails without the fix with
+`the Catalog's Monday leaked into My courses' Day menu as ['0']`. **8.23 (a share link replacing a picked
 timetable in silence) was fixed in R83**: both things a link can destroy are
 weighed now, each with its own sentence, and `t138` is the assertion. **8.20
 (the whole app scrolling sideways
@@ -6350,27 +6397,6 @@ entry as the rules here require. 8.19 (a self-update landing on top of a
 live Undo offer, found by R72's screenshots) was fixed in R73 by removing every
 self-initiated reload — R73's §7 entry says what replaced it and which phase of
 t114 fails without it.
-
-### 8.18 The Day and Time-slot facets read the WRONG filter set on My courses
-
-Found by two independent R58 scouts reading the same lines, and confirmed
-against the code: in `filter_bar` (app/src/ui.rs) every facet reads its
-picked values with `filters_in(scope.mine())` EXCEPT Day and Time slot,
-which call `filters()` — always the shared Catalog/Master-grid set. Their
-count badges, a few lines below, correctly read the scoped set.
-
-So on My courses, whose filters are its own (t75), the Day and Time-slot
-menus show ticks belonging to the Catalog's filters, and a day ticked on My
-courses shows in the badge but not in the menu. R58 reproduced it verbatim —
-both the picked memos and the badge closures — because it was carrying ten
-other changes and this one changes what a student sees.
-
-Fixing it is one word in each of two places (`filters()` →
-`filters_in(scope.mine())`, keeping the `.days`/`.slot_starts` mapping), but
-it needs its own test: extend t75 to tick a day on My courses, switch to
-Catalog, and assert the Day menu there is untouched — and the reverse. Check
-`with_picked`'s callers at the same time, since the badge and the menu
-disagreeing is the symptom that would remain if only one side were changed.
 
 ### 8.22 Two tabs of the app overwrite each other's selection and changes
 
