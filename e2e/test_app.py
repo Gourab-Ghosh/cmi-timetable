@@ -8263,50 +8263,97 @@ def t138_a_link_that_replaces_your_courses_says_so(app):
         f"reopening the same link replaces nothing: {app.toasts_text()!r}"
 
 
-def t139_a_second_tab_changing_your_timetable_is_not_silent(app):
-    """Old §8.22, the half that can be fixed without a design decision.
+def t139_a_second_tabs_change_is_adopted_when_safe(app):
+    """Old §8.22, closed. Every tab holds the whole store in memory and
+    writes it back wholesale, so with two tabs open the one that saved LAST
+    used to win — the other's work gone in silence. R84 added a banner;
+    R87 adopts.
 
-    Every tab holds the whole store in memory and writes it back wholesale,
-    so with two tabs open the one that saves LAST wins and the other's work
-    is gone — with no message, and nothing in the undo stack of the tab still
-    on screen. Two tabs is an ordinary thing to have: a share link opens one,
-    and "open in a new tab" is a habit.
-
-    This does not stop the overwrite (adopting the other tab's data would
-    yank the page out from under someone mid-edit, which is its own kind of
-    loss). It ends the SILENCE, while both versions still exist and reloading
-    is one keystroke."""
+    The design decision the entry was open for, decided: an IDLE tab catches
+    up on its own (no banner, no reload), and the adoption is one undoable
+    step — Ctrl+Z is the deliberate "keep mine", and it persists, so the
+    stack can never silently re-clobber the other tab. A tab that is BUSY
+    (any open dialog — a clean editor's Save commits its whole store) gets
+    the sticky notice instead and catches up the moment the dialog closes,
+    at which point the notice retires by itself."""
     app.boot("/", selection=["TOC"])
     first = app.d.current_window_handle
     assert not app.css_all(".banner.warn"), "no warning before anything happens"
 
+    def storage_selection(d):
+        return d.execute_script(
+            "return localStorage.getItem('cmitt.v1.selection') || ''")
+
+    # --- another tab makes a real change -----------------------------------
     app.d.switch_to.new_window("tab")
     second = app.d.current_window_handle
-    try:
-        app.d.get(f"{BASE}/")
-        app.wait_css("section[aria-label='My timetable']")
-        # A real change, made the way a reader makes one: the catalog row's
-        # own Add button. (Its code CHIP opens the details popover — clicking
-        # that changes nothing, which is how the first version of this test
-        # managed to prove nothing.)
-        app.open_tab("Catalog")
-        app.wait_css("section[aria-label='Catalog'] .card")
+    app.d.get(f"{BASE}/")
+    app.wait_css("section[aria-label='My timetable']")
+    app.open_tab("Catalog")
+    app.wait_css("section[aria-label='Catalog'] .card")
+
+    def add_in_second(code):
         row = app.xpath("//section[@aria-label='Catalog']//div[contains(@class,'card')]"
-                        "[.//button[starts-with(@aria-label, 'RDBM,')]]")
+                        f"[.//button[starts-with(@aria-label, '{code},')]]")
         app.d.execute_script("arguments[0].scrollIntoView({block: 'center'});", row)
         row.find_element(By.XPATH, ".//button[normalize-space()='Add']").click()
         WebDriverWait(app.d, 5).until(
-            lambda d: "RDBM" in (d.execute_script(
-                "return localStorage.getItem('cmitt.v1.selection') || ''")),
-            message="the second tab did not save its change")
-    finally:
-        app.d.switch_to.window(first)
+            lambda d: code in storage_selection(d),
+            message=f"the second tab did not save {code}")
 
+    add_in_second("RDBM")
+
+    # --- the idle tab adopts, with no banner and no reload -----------------
+    app.d.switch_to.window(first)
+    WebDriverWait(app.d, 10).until(
+        lambda d: app.chips("RDBM"),
+        message="the idle first tab did not adopt the other tab's change")
+    assert not app.css_all(".banner.warn"), \
+        "an idle tab that adopted must not also warn"
+
+    # --- and the adoption is one honest undo step ---------------------------
+    # Ctrl+Z is the deliberate "keep mine": it must both restore this tab's
+    # version AND persist it, or the undo stack is the old bug wearing a
+    # keyboard shortcut.
+    app.xpath("//button[@aria-label='Undo']").click()
+    WebDriverWait(app.d, 10).until(
+        lambda d: "RDBM" not in storage_selection(d),
+        message="undoing the adoption must persist this tab's own version")
+    # toasts_text() returns ONE joined string, not a list — an `any(...)`
+    # over it iterates characters and can never match (found the hard way).
+    WebDriverWait(app.d, 5).until(
+        lambda d: "changes from another tab" in app.toasts_text(),
+        message="the undo toast must say what was undone")
+    app.xpath("//button[@aria-label='Redo']").click()
+    WebDriverWait(app.d, 10).until(
+        lambda d: "RDBM" in storage_selection(d),
+        message="redo must converge back to the other tab's version")
+
+    # --- a busy tab is warned instead, and catches up when it is done ------
+    app.xpath("//button[normalize-space()='My data']").click()
+    app.wait_css(".dialog")
+
+    app.d.switch_to.window(second)
+    add_in_second("SVA")
+
+    app.d.switch_to.window(first)
     banner = WebDriverWait(app.d, 10).until(
         lambda d: next(iter(app.css_all(".banner.warn")), None),
-        message="the first tab was not told another tab had changed its data")
+        message="a busy tab must still be told")
     assert "Another tab of this app has changed your timetable" in banner.text, banner.text
-    assert "reload it to catch up" in banner.text, banner.text
+    assert "catch up on its own" in banner.text, banner.text
+    # Not adopted yet: the My data dialog lists the selection reactively,
+    # and SVA must not be in it while the dialog is open.
+    assert "SVA" not in app.css(".dialog").text, \
+        "a tab with an open dialog must not adopt under it"
+
+    app.css(".dialog").send_keys(Keys.ESCAPE)
+    WebDriverWait(app.d, 10).until(
+        lambda d: app.chips("SVA"),
+        message="closing the dialog must let the deferred adoption land")
+    WebDriverWait(app.d, 10).until(
+        lambda d: not app.css_all(".banner.warn"),
+        message="the notice must retire once this tab has caught up")
 
     app.d.switch_to.window(second)
     app.d.close()
@@ -8703,7 +8750,7 @@ TESTS = [
     t136_a_sync_failure_says_which_thing_failed,
     t137_the_route_that_worked_last_time_is_the_only_one_asked,
     t138_a_link_that_replaces_your_courses_says_so,
-    t139_a_second_tab_changing_your_timetable_is_not_silent,
+    t139_a_second_tabs_change_is_adopted_when_safe,
     t140_a_footnote_never_explains_a_mark_that_is_not_there,
     t141_the_printed_clash_strip_says_what_the_screen_says,
     t142_a_day_ticked_on_the_catalog_does_not_haunt_my_courses,

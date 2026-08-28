@@ -586,10 +586,48 @@ fn install_theme_listener(app: App) {
 /// timetable" in the other tab, not a sync: nothing is adopted for it.
 fn install_cross_tab_sync(app: App) {
     let pending = RwSignal::new(false);
+    let user_pending = RwSignal::new(false);
     let closure =
         Closure::<dyn FnMut(web_sys::StorageEvent)>::new(move |ev: web_sys::StorageEvent| {
             if ev.key().as_deref() == Some(storage::KEY_SNAPSHOT) && ev.new_value().is_some() {
                 pending.set(true);
+            }
+            // Another tab of this app just wrote the user's OWN data — the
+            // one thing here that cannot be fetched again.
+            //
+            // Each tab holds the whole store in memory and writes it back
+            // wholesale, so whichever tab saved LAST used to win, with the
+            // other's work gone in silence (old §8.22 — found by R82's
+            // user-journeys agent; R84 added the banner; R87 closes it).
+            // Two tabs is an ordinary thing to have: a share link opens
+            // one, and "open in new tab" on the app itself is a habit.
+            //
+            // The fix is the same deferred adoption the snapshot above gets:
+            // mark it pending, and the effect below catches this tab up the
+            // moment it is safe. An IDLE tab adopts within a breath and gets
+            // a toast; a tab mid-edit gets the sticky notice instead —
+            // adopting under an open form would yank the page out from
+            // under someone, which is its own kind of loss — and catches up
+            // when the form closes. Note the guard: a REMOVAL counts too,
+            // because deleting the last custom course arrives as one
+            // (`persist_customs` removes the key for an empty store), and
+            // skipping it would quietly un-delete that course here.
+            if matches!(
+                ev.key().as_deref(),
+                Some(storage::KEY_SELECTION | storage::KEY_OVERRIDES | storage::KEY_CUSTOM)
+            ) && ev.new_value() != ev.old_value()
+            {
+                user_pending.set(true);
+                // Sticky, because it must outlive the background sync that
+                // clears transient banners on this same load — and retired
+                // by the adoption effect below, line-exactly, so a queued
+                // corrupt-storage notice beside it survives.
+                if app.busy_with_unsaved_work() || app.dialog.with_untracked(|d| d.is_some()) {
+                    app.set_banner_sticky(
+                        crate::state::BannerKind::Warn,
+                        crate::state::CROSS_TAB_NOTICE,
+                    );
+                }
             }
             // One preference has to cross tabs the moment it changes: whether
             // the app may look for new versions of itself.
@@ -601,39 +639,6 @@ fn install_cross_tab_sync(app: App) {
             // the blob would stomp this tab's filters, theme and day view,
             // which are deliberately per-tab until a refresh. Nothing is
             // written back from here either, or the two tabs would echo.
-            // Another tab of this app just wrote the user's OWN data — the
-            // one thing here that cannot be fetched again.
-            //
-            // Each tab holds the whole store in memory and writes it back
-            // wholesale, so whichever tab saves LAST wins and the other's
-            // work is gone with no message and nothing in the undo stack of
-            // the tab that is still open. Two tabs is an ordinary thing to
-            // have: a share link opens one, and "open in new tab" on the app
-            // itself is a habit (old §8.22 — found by R82's user-journeys
-            // agent, reproduced, and deferred there because the FIX is a
-            // design decision).
-            //
-            // This is not that fix, and does not pretend to be: adopting the
-            // other tab's data would yank the page out from under someone
-            // mid-edit, which is its own kind of loss. What it does is end
-            // the SILENCE — the reader is told, while both versions still
-            // exist, and reloading is one keystroke. Sticky, because it must
-            // outlive the background sync that clears transient banners on
-            // this same load.
-            if matches!(
-                ev.key().as_deref(),
-                Some(storage::KEY_SELECTION | storage::KEY_OVERRIDES | storage::KEY_CUSTOM)
-            ) && ev.new_value().is_some()
-                && ev.new_value() != ev.old_value()
-            {
-                app.set_banner_sticky(
-                    crate::state::BannerKind::Warn,
-                    "Another tab of this app has changed your timetable. This tab is \
-                     still showing the version from before — reload it to catch up. \
-                     If you carry on here instead, this tab's version is the one \
-                     that gets saved.",
-                );
-            }
             if ev.key().as_deref() == Some(storage::KEY_PREFS)
                 && let storage::Loaded::Value(stored) =
                     storage::load::<crate::state::Prefs>(storage::KEY_PREFS)
@@ -665,6 +670,30 @@ fn install_cross_tab_sync(app: App) {
         leptos::task::spawn_local(async move {
             fetch::adopt_stored(app);
             pending.set(false);
+        });
+    });
+
+    // The same shape for the user's own data (the §8.22 close), with one
+    // stricter gate: ANY open dialog defers it, not only a dirty one. A
+    // clean open editor is deliberately not `busy_with_unsaved_work` (its
+    // form must survive background syncs — t43/t45), but its Save commits
+    // the whole custom store from this tab's memory, and adopting under it
+    // would hand that Save a store it has never seen. The gate is not
+    // widened inside `busy_with_unsaved_work` itself because the snapshot
+    // adoption above depends on its current shape.
+    Effect::new(move |_| {
+        if !user_pending.get() || app.busy_with_unsaved_work() || app.dialog.with(|d| d.is_some()) {
+            return;
+        }
+        leptos::task::spawn_local(async move {
+            if app.adopt_user_data() {
+                app.toast("Another tab updated your timetable — showing the latest.");
+            }
+            // Retired even when nothing changed: this tab's own Save while
+            // busy makes storage match memory, and "it will catch up" has
+            // then been answered by keeping this tab's version.
+            app.retire_sticky_line(crate::state::CROSS_TAB_NOTICE);
+            user_pending.set(false);
         });
     });
 }

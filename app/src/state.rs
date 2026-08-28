@@ -625,6 +625,15 @@ pub struct UndoStack {
 
 const UNDO_MAX: usize = 100;
 
+/// The cross-tab notice, one paragraph, shared verbatim by the raise in
+/// `install_cross_tab_sync` and the retire after the deferred adoption
+/// lands — `retire_sticky_line` matches it line-exactly, so this string
+/// must exist in exactly one place.
+pub const CROSS_TAB_NOTICE: &str = "Another tab of this app has changed your timetable. \
+     This tab is still showing the version from before — it will catch up on its own \
+     the moment you finish what you're doing here. Saving here first keeps this tab's \
+     version instead.";
+
 #[derive(Clone, PartialEq)]
 pub struct FetchLogEntry {
     pub at: f64,
@@ -960,6 +969,35 @@ impl App {
         });
     }
 
+    /// Take one paragraph back out of a sticky banner — for a notice whose
+    /// moment has passed (the cross-tab warning, once this tab has caught
+    /// up). Line-exact, the same rule as the dedupe in `set_banner_sticky`,
+    /// because anything queued BESIDE it — a corrupt-storage notice from
+    /// boot — must survive untouched; a blanket `banner.set(None)` here
+    /// would swallow the one sentence that tells a reader their moved
+    /// classes were set aside. The banner's kind is left alone: with two
+    /// paragraphs it was already showing the louder one, and guessing the
+    /// survivor's original kind would restyle a warning as news.
+    pub fn retire_sticky_line(&self, line: &str) {
+        self.banner.update(|b| {
+            let Some(banner) = b else { return };
+            if !banner.sticky {
+                return;
+            }
+            let kept: Vec<String> = banner
+                .text
+                .split('\n')
+                .filter(|l| *l != line)
+                .map(str::to_string)
+                .collect();
+            if kept.is_empty() {
+                *b = None;
+            } else {
+                banner.text = kept.join("\n");
+            }
+        });
+    }
+
     pub fn say(&self, text: impl Into<String>) {
         self.announce.set(text.into());
     }
@@ -1225,6 +1263,68 @@ impl App {
             self.apply_entry(&entry);
             self.toast(format!("Redid: {}", entry.label));
         }
+    }
+
+    /// Catch this tab up to the user's own data as another tab last saved
+    /// it — the close of old §8.22 (two tabs of the app overwriting each
+    /// other's selection and changes, with only a banner between them).
+    ///
+    /// Reads the three user-data keys back from storage and takes them as
+    /// ONE undoable step. Going through the undo machinery is the point:
+    /// the entry pushed here holds THIS tab's version, so Ctrl+Z is the
+    /// deliberate "keep mine" — it persists this tab's copy back, the other
+    /// tab adopts that in turn the same way, and the two converge in either
+    /// direction. Adopting around the stack instead would leave a stale
+    /// entry whose undo re-clobbers the other tab in silence, which is the
+    /// original bug wearing a keyboard shortcut.
+    ///
+    /// A MISSING key is data, not an error: deleting the last custom course
+    /// arrives in this tab as a storage REMOVAL (`persist_customs` removes
+    /// the key for an empty store), and skipping it would quietly un-delete
+    /// that course here. Corrupt is different — `load` has already
+    /// quarantined the blob, and adopting the two readable keys around a
+    /// third that just vanished would tear one edit into halves — so any
+    /// corrupt key bails the whole adoption; the next boot's recovery
+    /// banner owns that story.
+    ///
+    /// The persists at the end write back the exact bytes storage already
+    /// holds, so no storage event fires in the other tab and two idle tabs
+    /// cannot echo.
+    pub fn adopt_user_data(&self) -> bool {
+        use crate::storage::Loaded;
+        let selection: Vec<String> = match storage::load(storage::KEY_SELECTION) {
+            Loaded::Value(v) => v,
+            Loaded::Missing => Vec::new(),
+            Loaded::Corrupt(_) => return false,
+        };
+        let overrides: OverridesStore = match storage::load(storage::KEY_OVERRIDES) {
+            Loaded::Value(v) => v,
+            Loaded::Missing => OverridesStore::default(),
+            Loaded::Corrupt(_) => return false,
+        };
+        let customs: CustomStore = match storage::load(storage::KEY_CUSTOM) {
+            Loaded::Value(v) => v,
+            Loaded::Missing => CustomStore::default(),
+            Loaded::Corrupt(_) => return false,
+        };
+        // Nothing new: this tab already holds what storage holds — either
+        // our own write echoing back through a deferred adoption, or the
+        // other tab saved while we were busy and its save matched ours.
+        let same = self.selection.with_untracked(|s| *s == selection)
+            && self.overrides.with_untracked(|o| *o == overrides)
+            && self.customs.with_untracked(|c| *c == customs);
+        if same {
+            return false;
+        }
+        self.push_undo("changes from another tab");
+        self.selection.set(selection);
+        self.overrides.set(overrides);
+        self.customs.set(customs);
+        self.persist_selection();
+        self.persist_overrides();
+        self.persist_customs();
+        self.sync_url();
+        true
     }
 
     // -- selection -----------------------------------------------------------
