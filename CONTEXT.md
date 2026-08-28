@@ -789,7 +789,7 @@ regenerates the .ics golden.
   NOWHERE on this page while still counting toward the credit total.
 - "Your changes" groups are headed by `.cg-head` (colour rail + small caps
   + count), coloured by `OwnChange::tone()`. See §4.
-- Tests: 169 native + 136/136 e2e green (as of R84; the native count from
+- Tests: 169 native + 140/140 e2e green (as of R84; the native count from
   `deploy.sh`'s own in-container run — 49+18+3+9+25+27+28+10).
 - **The e2e suite mocks the relays, so it can never tell you a real one has
   died** — which is exactly how R84's outage reached a user. Two probes cover
@@ -6156,6 +6156,49 @@ path and the CORS sentence had no test at all. The harness can now serve CMI
 **without** an `Access-Control-Allow-Origin` header (which is what the real
 cmi.ac.in does) and can drop a connection unanswered, so `t136` exercises four
 distinct failures and `t137` pins the head start.
+
+**The print verification found four footnotes still explaining marks that are
+nowhere on the paper** — the exact defect R83 set out to close, on the three
+sheets its fix did not reach. My courses asked `app.clashes()` (a fact about
+the whole selection) beside a `*` clause that had been fixed to ask the sheet,
+so filtering to one unclashing course printed a page whose ONLY ⚠ was the one
+inside the sentence explaining ⚠. The Master grid's ✓ key asked whether the
+reader has courses rather than whether a ✓ is on this grid. The Halls ✓ key
+asked the selection while that sheet shows ONE DAY by default — select a
+Tuesday class, print on a Friday, and the key explains a mark that is not
+there. All three now ask the sheet. And both the Master grid and the Catalog
+could print an entirely empty filtered sheet, because their Print buttons were
+unconditionally live; they now answer the same question My courses learned to
+ask in R83.
+
+The same pass caught **the printed Halls sheet marking today**: the print
+block's today-reset says `color: inherit`, which also overrode the quiet-day
+colour, so today's empty rows printed at full strength while every other empty
+row printed muted — a poster that quietly emphasises whichever weekday it left
+the printer on, all term. Proved by pinning the clock (14 full-strength Tuesday
+labels on a Tuesday, 14 Friday ones on a Friday). R82 checked the font weight,
+which is why it survived. The print quiet-day rule no longer excludes today:
+there is no today on paper. Halls (Week) drops 3 pages to 2 with the chip fix,
+so the five sheets are **835 KB / 7 pages**, still 0 curves, 0 groups, 0 masks,
+0 non-opaque ExtGStates, 0 raster images, 0 blank pages.
+
+**The a11y verification caught a regression in R83's own fix.** Giving each
+`<section aria-label="…">` `role="tabpanel"` completed the tablist pattern and
+destroyed something: a named `<section>` is a `region` LANDMARK, an element has
+exactly one role, and all five panels vanished from the landmark rotor
+(measured against a build without the change). The role now lives on a wrapper
+around the tab content, so the tablist relation and the five regions both
+stand.
+
+**And the visual verification found the finger-target fix was 4 of 5.** Moving
+the `@media (pointer: coarse)` block fixed four losers and could not fix the
+fifth: `details.facet .menu .menu-search` is (0,3,1) and beats a bare
+`input[type="search"]` (0,1,1) from ANYWHERE in the sheet — that one is
+specificity, not order. So 72 of the 81 search fields a phone can reach (eight
+per filter bar, three tabs) were still 28px. Restated at matching specificity.
+`.density-compact .chip` stays 40px deliberately and now says so, because it
+looks like the same oversight: tight rows are 34px cells, and a 44px chip in
+one would grow the Master grid by a third on the screen with least room.
 
 Six smaller ones from the same review are fixed too: the probe was uncached and
 unabortable and ran after the spinner stopped; the local-network explanation was

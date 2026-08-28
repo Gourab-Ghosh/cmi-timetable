@@ -573,7 +573,11 @@ Sheet by sheet:
 - A red strip listing every clash on the sheet.
 - A two-column course legend with names, instructors, credits and meetings.
 - The legend names **only the marks that are on the sheet** — an untouched
-  timetable prints no note about ✎, and a clash-free one none about ⚠.
+  timetable prints no note about ✎, and a clash-free one none about ⚠. This
+  holds on every sheet with a filter bar: narrow a list until a mark is gone
+  and its line in the footnote goes with it. **Print is disabled when the
+  filters leave nothing to print**, on My courses, the Master grid and the
+  Catalog alike.
 - A dense 12-course semester fits on **one page**, with nothing clipped —
   unless several of those courses meet three times a week, where the legend
   can run a few entries onto a second page. Nothing is ever clipped either
@@ -973,6 +977,8 @@ Being clear about these is part of the design:
   is your decision.
 - **It never ships or hosts a copy of CMI's timetable.** What you see was
   fetched from cmi.ac.in by your own browser.
+- **A printed sheet is timeless.** Nothing on paper marks today — a poster is
+  read all term, and "today" is only true once.
 - **It never guesses quietly.** An assumed credit says "assumed"; a page it
   cannot read says the app needs an update; and a failed sync names which of
   the four things went wrong rather than blaming CMI for all of them.

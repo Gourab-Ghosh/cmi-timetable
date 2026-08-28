@@ -27,13 +27,30 @@ pub fn planner(app: App) -> impl IntoView {
             } else {
                 view! {
                     {what_changed_panel(app)}
-                    {move || match tab.get() {
-                        Tab::MyTimetable => my_timetable(app).into_any(),
-                        Tab::MyCourses => my_courses(app).into_any(),
-                        Tab::MasterGrid => master_grid(app).into_any(),
-                        Tab::Catalog => catalog(app).into_any(),
-                        Tab::Halls => halls_view(app).into_any(),
-                    }}
+                    // The tabpanel is THIS wrapper, not the `<section>`
+                    // inside it, and the difference is a landmark. A
+                    // `<section aria-label="…">` is a `region` in the
+                    // accessibility tree — reachable with a screen reader's
+                    // landmark key — and an element has exactly one role, so
+                    // putting `role="tabpanel"` on the section removed every
+                    // panel from the landmark rotor. Measured, both ways,
+                    // against a build without it (R84's a11y verification).
+                    // One wrapper here keeps both: the tablist relation the
+                    // rail's `aria-controls` names, and the five regions a
+                    // reader could already jump between.
+                    <div
+                        role="tabpanel"
+                        id=move || tab.get().panel_id()
+                        aria-label=move || tab.get().label()
+                    >
+                        {move || match tab.get() {
+                            Tab::MyTimetable => my_timetable(app).into_any(),
+                            Tab::MyCourses => my_courses(app).into_any(),
+                            Tab::MasterGrid => master_grid(app).into_any(),
+                            Tab::Catalog => catalog(app).into_any(),
+                            Tab::Halls => halls_view(app).into_any(),
+                        }}
+                    </div>
                 }
                     .into_any()
             }
@@ -660,7 +677,7 @@ fn my_timetable(app: App) -> impl IntoView {
     let clash_list = move || app.clashes();
 
     view! {
-        <section aria-label="My timetable" role="tabpanel" id="panel-my-timetable">
+        <section aria-label="My timetable">
             {print_masthead(
                 app,
                 "My timetable",
@@ -1405,6 +1422,10 @@ fn my_timetable(app: App) -> impl IntoView {
                                                         },
                                                     );
                                             }
+                                            // Not filtered here: this legend
+                                            // lists the whole selection, so
+                                            // the sheet and `clashes()` ask
+                                            // the same question.
                                             if !app.clashes().is_empty() {
                                                 parts.push("⚠ and a red border mark a clash");
                                             }
@@ -1639,7 +1660,7 @@ fn my_courses(app: App) -> impl IntoView {
     let hidden = move || app.selection.with(|s| s.len()).saturating_sub(shown.get());
 
     view! {
-        <section aria-label="My courses" role="tabpanel" id="panel-my-courses" class="sheet-list">
+        <section aria-label="My courses" class="sheet-list">
             // Counts what is ON THE SHEET, not what is selected: this page has
             // a filter bar, the filter bar does not print, and a printout
             // headed "5 courses" listing three is a sheet that lies about
@@ -1934,7 +1955,18 @@ fn my_courses(app: App) -> impl IntoView {
                         "* credits the app guessed (CMI doesn't list them)"
                     });
                 }
-                if !app.clashes().is_empty() {
+                // Asked of the SHEET, like the `*` above it. `app.clashes()`
+                // is a fact about the whole timetable, and this page has a
+                // filter bar: narrow it to one course that clashes with
+                // nothing on the sheet and the only ⚠ on the paper was the
+                // one inside the sentence explaining ⚠ (R84's print
+                // verification).
+                let clashing = app.clashes();
+                if courses.iter().any(|c| {
+                    clashing.iter().any(|cl| {
+                        cl.a.eq_ignore_ascii_case(&c.code) || cl.b.eq_ignore_ascii_case(&c.code)
+                    })
+                }) {
                     parts.push("⚠ marks a clash");
                 }
                 parts.join(" \u{b7} ")
@@ -2464,7 +2496,7 @@ fn master_grid(app: App) -> impl IntoView {
     };
 
     view! {
-        <section aria-label="Master grid" role="tabpanel" id="panel-master-grid">
+        <section aria-label="Master grid">
             // `count` is what the filter bar reports and what the grid draws,
             // so the sheet's own headline number agrees with its own contents.
             {print_masthead(
@@ -2506,7 +2538,15 @@ fn master_grid(app: App) -> impl IntoView {
                         Density::Compact => "Rows: tight",
                     }}
                 </button>
-                {print_button(None)}
+                // Same rule as the Catalog and My courses: this grid prints
+                // what the filter bar leaves, and an empty grid is not a
+                // sheet anybody asked for.
+                {print_button(Some(Signal::derive(move || {
+                    filtered.with(|f| f.is_empty()).then_some(
+                        "Nothing matches these filters — clear one to put \
+                         courses back on the grid.",
+                    )
+                })))}
             </div>
             // A legend, not a sentence strung on middots: one symbol, one
             // plain line. ("Rearrange" read as reordering what you already
@@ -2646,7 +2686,16 @@ fn master_grid(app: App) -> impl IntoView {
             // which is not something a sheet of paper can be asked to do.
             {print_footnote(move || {
                 let mut parts: Vec<&str> = Vec::new();
-                if !app.selection.with(|s| s.is_empty()) {
+                // Whether a ✓ is ON THIS SHEET, not whether the reader has
+                // courses. The grid is filtered, and both Print buttons on
+                // this page and the Catalog are always live, so an entirely
+                // empty printed grid could carry a key to a mark it did not
+                // have (R84's print verification).
+                if filtered
+                    .get()
+                    .iter()
+                    .any(|c| app.is_selected(&c.code))
+                {
                     parts.push("✓ already on your timetable");
                 }
                 // The question has to be the one the GRID asks. `app.clashes()`
@@ -2723,7 +2772,7 @@ fn catalog(app: App) -> impl IntoView {
     let count = Signal::derive(move || filtered.get().len());
 
     view! {
-        <section aria-label="Catalog" role="tabpanel" id="panel-catalog" class="sheet-list">
+        <section aria-label="Catalog" class="sheet-list">
             {print_masthead(
                 app,
                 "Catalog",
@@ -2761,9 +2810,19 @@ fn catalog(app: App) -> impl IntoView {
                 >
                     "＋ Add your own course"
                 </button>
-                // Always live: the catalog is CMI's own list, so once there is
-                // a snapshot there is always something on this sheet.
-                {print_button(None)}
+                // Live whenever the sheet has rows. The catalog is CMI's own
+                // list, so a snapshot always HAS courses — but this page has
+                // a filter bar and the sheet prints `filtered`, so a search
+                // that matches nothing printed an empty list under a masthead
+                // counting zero (R84). My courses learned this in R83; the
+                // two pages that print a filtered list should answer the
+                // question the same way.
+                {print_button(Some(Signal::derive(move || {
+                    (count.get() == 0).then_some(
+                        "Nothing matches these filters — clear one to put \
+                         courses back on the sheet.",
+                    )
+                })))}
             </div>
             {filter_bar(app, FilterScope::Everything, count)}
             {deleted_note(app)}
@@ -4087,7 +4146,7 @@ fn halls_view(app: App) -> impl IntoView {
     let own_halls = Memo::new(move |_| app.user_halls());
 
     view! {
-        <section aria-label="Lecture halls" role="tabpanel" id="panel-halls">
+        <section aria-label="Lecture halls">
             // This sheet makes the most checkable claim in the app — which room
             // a class is in — and it printed with no title, no term, no date and
             // no caveat, while the timetable poster beside it on the same wall
@@ -4205,7 +4264,22 @@ fn halls_view(app: App) -> impl IntoView {
                 // On paper the key survives only if there is a ✓ on the sheet;
                 // the drag line never does, so with nothing selected the whole
                 // line goes rather than printing as a blank.
-                let has_selection = !app.selected_courses().is_empty();
+                //
+                // "On the sheet" means the DAYS THIS TABLE SHOWS. The tab
+                // opens on today unless the reader has chosen otherwise, so
+                // asking the selection instead printed a key to a ✓ that was
+                // not there for anyone whose courses meet on another day —
+                // select a Tuesday class, print on a Friday (R84's print
+                // verification).
+                let has_selection = {
+                    let shown = view_mode.get();
+                    app.selected_courses().iter().any(|c| {
+                        app.effective_meetings(c).iter().any(|e| match shown {
+                            crate::state::DayView::All => true,
+                            crate::state::DayView::Day(d) => e.meeting.day == d,
+                        })
+                    })
+                };
                 view! {
                     <p
                         class="muted small"

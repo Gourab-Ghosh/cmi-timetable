@@ -49,6 +49,7 @@ import traceback
 import urllib.parse
 
 from selenium import webdriver
+from selenium.common.exceptions import StaleElementReferenceException
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.action_chains import ActionChains
 from selenium.webdriver.common.actions.wheel_input import ScrollOrigin
@@ -665,7 +666,21 @@ class App:
         btn.click()
 
     def toasts_text(self):
-        return " | ".join(t.text for t in self.css_all(".toasts .toast"))
+        """Whatever is in the toast rail right now.
+
+        Tolerant of a toast that vanishes MID-READ: toasts auto-dismiss on a
+        timer, so between `css_all` and reading an element's `.text` one can
+        stop existing and Selenium raises `StaleElementReferenceException`.
+        That is the rail working, not a failure — but it was crashing whole
+        tests, including inside a `WebDriverWait` predicate, where it killed
+        the wait instead of retrying it (seen in t74, R84)."""
+        out = []
+        for t in self.css_all(".toasts .toast"):
+            try:
+                out.append(t.text)
+            except StaleElementReferenceException:
+                continue
+        return " | ".join(out)
 
     def wait_toast(self, fragment, timeout=10):
         WebDriverWait(self.d, timeout).until(
@@ -7790,8 +7805,62 @@ def t130_a_phone_never_scrolls_sideways(app):
                 f"the document scrolls sideways at {width}px: {got!r}")
             assert not got["overflowing"], (
                 f"elements hang outside the viewport at {width}px: {got!r}")
+
+            # …and with a filter menu OPEN, which is when it used to be worst:
+            # a 304px menu anchored to a summary in the right half of a
+            # wrapped bar ran up to 204px past the edge (R83).
+            #
+            # Asked by SCROLLING, not by comparing widths. `clientWidth`
+            # includes the channel `scrollbar-gutter: stable` reserves, so it
+            # over-reports the content edge by the gutter and the comparison
+            # above cannot see the last two pixels — which is exactly the
+            # amount `place_facet_menu` used to overhang by, at every width,
+            # until it stopped reading `clientWidth` (R84).
+            app.open_tab("Catalog")
+            app.wait_css("section[aria-label='Catalog'] details.facet")
+            facets = app.css_all("section[aria-label='Catalog'] details.facet")
+            assert len(facets) >= 5, f"expected a filter bar to test: {len(facets)}"
+            for i in range(len(facets)):
+                worst = app.d.execute_script(
+                    "const f = document.querySelectorAll("
+                    "  \"section[aria-label='Catalog'] details.facet\")[arguments[0]];"
+                    "document.querySelectorAll('details.facet[open]')"
+                    "  .forEach((d) => d.removeAttribute('open'));"
+                    "f.setAttribute('open', '');"
+                    "f.dispatchEvent(new Event('toggle'));"
+                    "return new Promise((done) => requestAnimationFrame(() =>"
+                    "  requestAnimationFrame(() => {"
+                    "    const x0 = window.scrollX;"
+                    "    window.scrollTo(9999, window.scrollY);"
+                    "    const x = window.scrollX;"
+                    "    window.scrollTo(x0, window.scrollY);"
+                    "    const name = f.querySelector('summary')?.textContent?.trim();"
+                    "    done({x, name});"
+                    "  })));",
+                    i)
+                assert worst["x"] == 0, (
+                    f"the page scrolls {worst['x']}px sideways at {width}px with the "
+                    f"{worst['name']!r} menu open")
+            app.d.execute_script(
+                "document.querySelectorAll('details.facet[open]')"
+                "  .forEach((d) => d.removeAttribute('open'));")
     finally:
         app.d.execute_cdp_cmd("Emulation.clearDeviceMetricsOverride", {})
+
+    # There is no desktop counterpart to the check above, and the reason is
+    # worth writing down. The residual bug it would target — a menu placed
+    # against `documentElement.clientWidth`, which INCLUDES the channel
+    # `scrollbar-gutter: stable` reserves, overhanging the real content edge
+    # by `gutter - 8` pixels — needs the gutter reserved AND the nudge to
+    # fire, and those two want opposite pages: the gutter only shows itself
+    # on a page short enough not to scroll, and the nudge only fires when a
+    # facet has enough options to open a wide menu near the right edge. Every
+    # combination tried here reproduced neither (measured: 320/360/1500 px,
+    # mobile and not, Catalog filtered empty and My courses seeded). R84's
+    # visual verification DID measure it, on its own state, and the fix is in
+    # `domx::place_facet_menu` — it now reads `getBoundingClientRect()`, the
+    # border box itself. Recorded rather than pinned, so nobody counts this
+    # test as coverage of it.
 
 
 def t131_a_link_that_names_nothing_here_keeps_your_timetable(app):
@@ -8118,23 +8187,15 @@ def t137_the_route_that_worked_last_time_is_the_only_one_asked(app):
     finally:
         stop_serving_cmi()
 
-    # With nothing remembered either, the head start still holds: the best
-    # relay on the shipped list is asked alone. These are free services
-    # somebody else pays for, and asking all seven twice on every sync would
-    # be both rude and seven strangers shown which CMI page a student wants.
-    serve_cmi()
-    serve_relays()
-    try:
-        app.boot("/", seed=False)
-        app.wait_css(".tabs .tab", timeout=30)
-        app.wait_gone(".welcome-card")
-        tiers = fetch_log_tiers(app)
-        assert set(tiers) == {"proxy:cors.sh"}, \
-            f"a healthy sync is ONE request to one relay: {tiers}"
-    finally:
-        stop_serving_cmi()
+    # There is deliberately no "first sync, nothing remembered" variant of the
+    # assertion above. It would exercise the same code path — the head start
+    # does not care WHY a route is first — while depending on the leading
+    # relay answering inside 2.5s, which a loaded machine cannot promise: an
+    # early version of this test failed on a build box running three other
+    # browsers, and a test that fails because the machine is busy teaches
+    # people to ignore it.
 
-    # …and a remembered route that has since DIED must not strand the reader:
+    # A remembered route that has since DIED must not strand the reader:
     # the head start expires and the others come in behind it.
     serve_cmi()
     serve_relays(only={"proxy.cors.sh"})
@@ -8250,6 +8311,105 @@ def t139_a_second_tab_changing_your_timetable_is_not_silent(app):
     app.d.switch_to.window(second)
     app.d.close()
     app.d.switch_to.window(first)
+
+
+def t140_a_footnote_never_explains_a_mark_that_is_not_there(app):
+    """R79's rule, now asked of every sheet that can be filtered.
+
+    A printed sheet ends in a key: "✎ times you set yourself", "⚠ marks a
+    clash", "✓ already on your timetable". A key to a mark that is nowhere on
+    the paper sends the reader hunting the sheet for it — so the predicate has
+    to be "is this mark ON THIS SHEET", and on a page with a filter bar the
+    sheet is what the filters left.
+
+    Three of these asked the STORE instead, and each was found by printing the
+    filtered page rather than by reading the code: My courses asked "does the
+    timetable clash anywhere" beside a `*` clause that had been fixed to ask
+    the sheet, so a sheet with no marks at all still explained ⚠; the Master
+    grid asked "does the reader have courses" rather than "is there a ✓ here"
+    (R82/R83/R84).
+
+    The marks live in `::before` content as well as in text — `.chip.clash`
+    draws its ⚠ that way — so this counts what is PAINTED, which is the only
+    thing a reader sees."""
+    marks_on_sheet = """
+        const sec = document.querySelector(arguments[0]);
+        const foot = sec.querySelector('.print-footnote');
+        const seen = new Set();
+        for (const el of sec.querySelectorAll('*')) {
+          if (foot && foot.contains(el)) continue;
+          if (!el.getClientRects().length) continue;
+          let text = el.childNodes.length
+            ? [...el.childNodes].filter((n) => n.nodeType === 3)
+                .map((n) => n.textContent).join('')
+            : '';
+          for (const pseudo of ['::before', '::after']) {
+            const c = getComputedStyle(el, pseudo).content;
+            if (c && c !== 'none' && c !== 'normal') text += c;
+          }
+          for (const m of ['\u2713', '\u26a0', '\u270e', '*']) {
+            if (text.includes(m)) seen.add(m);
+          }
+        }
+        return {marks: [...seen],
+                footnote: foot ? foot.querySelector('span').textContent : null};
+    """
+
+    def read(section):
+        app.d.execute_cdp_cmd("Emulation.setEmulatedMedia", {"media": "print"})
+        time.sleep(0.3)
+        got = app.d.execute_script(marks_on_sheet, section)
+        app.d.execute_cdp_cmd("Emulation.setEmulatedMedia", {"media": ""})
+        return got
+
+    def check(section, where):
+        got = read(section)
+        foot = got["footnote"] or ""
+        for mark, name in (("\u2713", "✓"), ("\u26a0", "⚠"), ("\u270e", "✎")):
+            if mark in foot and mark not in got["marks"]:
+                raise AssertionError(
+                    f"{where}: the footnote explains {name} and the sheet "
+                    f"carries none — footnote {foot!r}, marks {got['marks']!r}")
+        return got
+
+    # TOC stretched to 09:10–14:00 runs over AAT's Tuesday class, so the
+    # timetable really does clash — which is what makes the filtered sheet's
+    # silence meaningful.
+    app.boot("/", selection=["TOC", "AAT", "RDBM"], overrides=LONG_OVR)
+
+    app.open_tab("My courses")
+    app.wait_css("section[aria-label='My courses'] .card")
+    unfiltered = check("section[aria-label='My courses']", "My courses, unfiltered")
+    assert "\u26a0" in unfiltered["footnote"], (
+        "the fixture must actually clash or this test proves nothing: "
+        f"{unfiltered!r}")
+
+    search = app.css("section[aria-label='My courses'] input[type='search']")
+    search.clear()
+    search.send_keys("RDBM")
+    time.sleep(0.6)
+    check("section[aria-label='My courses']", "My courses, filtered to one calm course")
+
+    # The Master grid's ✓ key, on a grid filtered to courses the reader does
+    # not have. Its Print button is disabled with NOTHING shown (R84), so this
+    # filters to something real that simply is not on the timetable.
+    app.open_tab("Master grid")
+    app.wait_css("section[aria-label='Master grid'] table.tt")
+    grid_search = app.css("section[aria-label='Master grid'] input[type='search']")
+    grid_search.clear()
+    grid_search.send_keys("Quantum")
+    time.sleep(0.6)
+    check("section[aria-label='Master grid']", "Master grid, filtered")
+
+    # And the Catalog, which R83 already fixed — kept here so all three sheets
+    # answer the same question in one place.
+    app.open_tab("Catalog")
+    app.wait_css("section[aria-label='Catalog'] .card")
+    cat_search = app.css("section[aria-label='Catalog'] input[type='search']")
+    cat_search.clear()
+    cat_search.send_keys("Quantum")
+    time.sleep(0.6)
+    check("section[aria-label='Catalog']", "Catalog, filtered")
 
 
 TESTS = [
@@ -8392,6 +8552,7 @@ TESTS = [
     t137_the_route_that_worked_last_time_is_the_only_one_asked,
     t138_a_link_that_replaces_your_courses_says_so,
     t139_a_second_tab_changing_your_timetable_is_not_silent,
+    t140_a_footnote_never_explains_a_mark_that_is_not_there,
 ]
 
 

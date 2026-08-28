@@ -2912,7 +2912,14 @@ pre.devpre {
   .day-list.mobile-only { display: flex; }
   /* Same trap, same fix, one control along: the day strip is a `.seg`, and
      `display: block` broke its row of buttons into a wrapped column that
-     showed one or two empty pill segments at 320 and 360px (R83). */
+     showed one or two empty pill segments at 320 and 360px (R83).
+
+     It COMPUTES to `flex`, not `inline-flex`, and that is correct: the strip
+     is a flex item of `.toolbar`, and CSS blockifies an inline-level flex
+     item. The declaration still does its job — it beats `block` — but an
+     assertion looking for `inline-flex` here would fail forever on a working
+     implementation. What to assert is `flex-wrap: nowrap`, one row, and no
+     empty pill (R84's visual verification). */
   .seg.mobile-only { display: inline-flex; }
   .week-grid.day-mode-active,
   /* …and the sentence that describes its columns (views.rs), which is a
@@ -3186,6 +3193,21 @@ label.field > input { width: 100%; }
   input[type="time"], select {
     min-height: 44px;
   }
+  /* Moving the block was enough for four of the five losers, and not for the
+     fifth: `details.facet .menu .menu-search` is (0,3,1) and beats a bare
+     `input[type="search"]` (0,1,1) from anywhere in the sheet, because that
+     one is SPECIFICITY rather than order. So the per-facet search box — 72
+     of the 81 search fields a phone can reach, eight per filter bar on three
+     tabs — was still 28px while the rule above said 44 (R84's visual
+     verification measured every instance). Restated at the same specificity
+     as the rule it has to beat. */
+  details.facet .menu .menu-search { min-height: 44px; }
+  /* NOT `.density-compact .chip`, which is 40px on a phone by an explicit
+     rule of its own (styles.css:973) and stays that way. Tight rows are
+     34px cells, and a 44px chip in one would grow the Master grid by a third
+     on the screen with the least room for it; 40 still clears WCAG 2.5.8's
+     24px floor twice over. Said here because it looks like the same
+     oversight and is not one. */
   /* Height alone leaves a one-glyph button ~24px wide. */
   .btn.icon, .filterchip button { min-width: 44px; }
 }
@@ -3513,7 +3535,17 @@ label.field > input { width: 100%; }
      measures 4.0:1, the exact number this stylesheet rejects further down
      for 8px type ("thin on paper and hopeless on a photocopy"), and the
      halls sheet is the one that gets photocopied. Same hierarchy, real ink. */
-  table.tt.halls-merged tr.quiet:not(.today) th.dayhead {
+  /* No `:not(.today)` on paper. The screen keeps today's quiet row at full
+     strength on purpose — it is the row the reader is standing in — but a
+     printed sheet is read all term, and the exclusion meant today's empty
+     rows printed at #232a3a while every other empty row printed muted. So
+     the poster quietly emphasised whichever weekday it left the printer on,
+     for the rest of the semester. Proved by pinning the clock: 14 full-
+     strength Tuesday labels on a Tuesday, 14 Friday ones on a Friday (R84's
+     print verification). Both inks are legible; the mark is the defect, not
+     the contrast. `!important` beats the today reset above at equal
+     specificity. */
+  table.tt.halls-merged tr.quiet th.dayhead {
     opacity: 1;
     color: #4a5160 !important;
   }

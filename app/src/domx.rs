@@ -507,9 +507,15 @@ pub fn keep_place_after_row_removal(ev: &web_sys::MouseEvent) {
     let Some(host) = btn.closest(HOSTS).ok().flatten() else {
         return;
     };
-    // The region behind the panel, for the case where undoing the last change
-    // takes the panel off the page with it.
-    let region = btn.closest("section[aria-label]").ok().flatten();
+    // Whatever is behind the panel, for the case where undoing the last change
+    // takes the panel off the page with it. `.dialog` is in the list because
+    // inside the My data dialog there IS no `section[aria-label]` ancestor —
+    // that fallback measured null there, and it only never bit because that
+    // dialog's own `.data-section` survives its list emptying. Make it
+    // conditional one day and the last "Put it back" would drop focus to
+    // `<body>` with nothing to catch it, and outside the dialog's Tab trap at
+    // that (R84's a11y verification).
+    let region = btn.closest("section[aria-label], .dialog").ok().flatten();
     let row_buttons = |el: &web_sys::Element| -> Vec<web_sys::HtmlElement> {
         el.query_selector_all("ul.changes button")
             .ok()
@@ -598,11 +604,24 @@ pub fn place_facet_menu(facet: &web_sys::Element) {
     // from the last time this menu was open reads as its natural position and
     // the shifts accumulate.
     let _ = menu.style().remove_property("--menu-nudge");
-    // clientWidth, not innerWidth: the scrollbar's channel is not somewhere a
-    // menu may sit, and overflowing INTO it is what mints the page scrollbar.
+    // The real content edge, and getting this wrong is worth two pixels of
+    // sideways scroll on every width: `documentElement.clientWidth` INCLUDES
+    // the channel `scrollbar-gutter: stable` reserves (320 against a content
+    // edge of 310 on a 320px phone), so a menu placed against it overhangs by
+    // exactly `gutter - GUTTER`. `getBoundingClientRect()` is the border box
+    // itself and agrees with `offsetWidth` and a 100%-wide probe (R84's
+    // visual verification measured all four). `clientWidth` is the fallback
+    // for a document that somehow has no box.
     let vw = document()
         .document_element()
-        .map(|e| f64::from(e.client_width()))
+        .map(|e| {
+            let w = e.get_bounding_client_rect().width();
+            if w > 0.0 {
+                w
+            } else {
+                f64::from(e.client_width())
+            }
+        })
         .unwrap_or_default();
     if vw <= 0.0 {
         return;
