@@ -278,10 +278,13 @@ catalog and the master grid.
   is one nobody can trust.
 - A share link naming a deleted course **lifts the deletion** rather than
   contradicting it.
-- **Two tabs no longer change your timetable behind your back.** Each tab
-  saves its whole copy, so the last one to save wins — if another tab changes
-  something, this one says so while both versions still exist, and reloading
-  catches it up.
+- **Two tabs converge instead of overwriting each other.** A tab that is
+  just sitting there adopts the other tab's change on its own — no reload, a
+  toast says so, and the adoption is one undo step, so Ctrl+Z is the
+  deliberate "keep mine" and the tabs converge the other way instead. A tab
+  that is mid-something (an open dialog, a drag, a half-written form) is told
+  while both versions still exist, and catches up the moment it is free —
+  the notice retires itself.
 - **A link that replaces what you had says so, and is undoable.** Opening one
   overwrites your picked courses and any times and credits you set; whichever
   of those it actually takes away is named in a message with an Undo beside
@@ -955,17 +958,45 @@ GitHub Pages. The parsing, validation, merging, calendar generation and URL
 codecs live in a separate crate with no browser dependencies, so they can be
 tested on their own.
 
-**Tested like it matters:** 168 native tests — including a synthetic CMI
+**Tested like it matters:** 169 native tests — including a synthetic CMI
 website the tests generate themselves, with other semesters, other time
-formats, renamed halls and ten different kinds of broken page — plus 116
+formats, renamed halls and ten different kinds of broken page — plus 146
 end-to-end browser tests driving the real app in a real browser: drag & drop,
 touch gestures, keyboard-only flows, storage corruption, and a stand-in CMI
 that lets the true sync path be exercised end to end.
 
-**Developer mode** is deliberately not linked anywhere in the interface.
-Navigate to `#/developer` for build info, the fetch log, per-branch parse
-reports, a storage inspector, a raw-HTML viewer, and simulators that prove the
-fail-closed behaviour actually fails closed.
+**Developer mode** is a real mode of its own (R87). The door is in **My data →
+"Under the hood"** — out of the everyday view, never a sixth tab — and the
+`#/developer` URL still works directly. Entering swaps the tab rail for the
+mode's own categories, each with its address:
+
+- **Overview** (`#/developer`) — build info, the update check, what this
+  browser stores, and a **Copy diagnostics** button that copies everything a
+  bug report needs (versions, the snapshot line, sizes, the last few fetches —
+  and deliberately no course data).
+- **Tweaks** (`#/developer/tweaks`) — every small choice about how the
+  timetable looks, searchable with the same **Aa / ab / .*** switches every
+  search box in the app has. Ten in v1: the three mark toggles (⚠ clashes,
+  ✎ your changes, ✓ your courses on the Master grid and Halls — each hides
+  the *sign*, never the *fact*: the Clashes list, "Your changes" and the
+  credit numbers keep saying everything, and the printed key stops mentioning
+  a mark the moment it stops being painted), today's-row highlight, quiet-day
+  dimming, hall names on chips, coloured-vs-plain chips, animations, plus the
+  theme and the Master grid's row height (with the one path back to "follow
+  this device" short of a reset). One **Reset all tweaks** puts the page back
+  to how the app ships.
+- **Sync** (`#/developer/sync`) — the simulators (force a tier, run a sync,
+  simulate a parse failure) directly above the fetch log and parse reports
+  they feed.
+- **Storage** (`#/developer/storage`) — every stored key with copy/export/
+  import/clear, and the raw-HTML viewer with **Re-parse now**.
+
+The way back is everywhere it should be: **← Back** first in the rail, the
+toolbar button, **Escape** (except while typing in the search box, where
+Escape belongs to the box), and the browser's own Back button — entering and
+leaving is a same-page hop, never a reload. The wheel, a swipe, and the arrow
+keys move between categories and **cannot** throw you out of the mode by
+accident: leaving is always a deliberate act.
 
 ---
 
@@ -1005,10 +1036,12 @@ you will find. If you spot a difference, the app is right and this is a bug.*
   storage works: every tab reads and writes the same saved data. Sync with
   CMI in one tab and the other picks the new timetable up on its own — the
   whole update, not just the clock on it, so what the "Synced …" pill says is
-  always true of the timetable underneath it. If that other tab is in the
+  always true of the timetable underneath it. Your own changes travel the
+  same way (R87): add a course in one tab and an idle second tab shows it
+  within a breath, undoably. If that other tab is in the
   middle of something — a course form with unsaved typing, a drag, a conflict
   you are answering — it waits until you have finished and then catches up in
-  one step. Everything else still shows in the other tab after a refresh.
+  one step.
   A durable "separate
   timetable per tab" doesn't exist in the web platform — the only per-tab
   storage a browser offers is wiped when the tab closes, which would break

@@ -85,6 +85,72 @@ impl Tab {
     }
 }
 
+/// The developer rail's categories (R87). A PARALLEL enum, deliberately not
+/// new `Tab` variants: `Prefs.tab` persists a `Tab`, so a developer variant
+/// would come back as the planner's restored tab on reload and poison stored
+/// prefs for older builds. This one is carried only in the hash
+/// (`#/developer/<slug>`) — zero new persisted state, every category
+/// bookmarkable, and reload restores it for free.
+#[derive(Clone, Copy, PartialEq, Eq, Default, Debug)]
+pub enum DevTab {
+    #[default]
+    Overview,
+    Tweaks,
+    Sync,
+    Storage,
+}
+
+impl DevTab {
+    pub const ALL: [DevTab; 4] = [
+        DevTab::Overview,
+        DevTab::Tweaks,
+        DevTab::Sync,
+        DevTab::Storage,
+    ];
+
+    pub fn label(&self) -> &'static str {
+        match self {
+            DevTab::Overview => "Overview",
+            DevTab::Tweaks => "Tweaks",
+            DevTab::Sync => "Sync",
+            DevTab::Storage => "Storage",
+        }
+    }
+
+    pub fn panel_id(&self) -> &'static str {
+        match self {
+            DevTab::Overview => "panel-dev-overview",
+            DevTab::Tweaks => "panel-dev-tweaks",
+            DevTab::Sync => "panel-dev-sync",
+            DevTab::Storage => "panel-dev-storage",
+        }
+    }
+
+    /// The hash for this category. Overview is the bare endpoint — the URL
+    /// that has been typed, bookmarked and tested since the beginning stays
+    /// exactly what it was, and t114 boots it verbatim.
+    pub fn hash(&self) -> &'static str {
+        match self {
+            DevTab::Overview => "#/developer",
+            DevTab::Tweaks => "#/developer/tweaks",
+            DevTab::Sync => "#/developer/sync",
+            DevTab::Storage => "#/developer/storage",
+        }
+    }
+
+    /// Parse whatever follows `#/developer`. Unknown or empty suffixes land
+    /// on Overview: an old link, a typo, or a category renamed in some
+    /// future build must open the mode, not bounce to the planner.
+    pub fn from_hash_suffix(rest: &str) -> DevTab {
+        match rest.trim_start_matches('/') {
+            "tweaks" => DevTab::Tweaks,
+            "sync" => DevTab::Sync,
+            "storage" => DevTab::Storage,
+            _ => DevTab::Overview,
+        }
+    }
+}
+
 /// Facets are multi-select: OR within a facet, AND across facets.
 #[derive(Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(default)]
@@ -275,6 +341,53 @@ pub struct Prefs {
     /// costing the reader their timeout every time.
     #[serde(default)]
     pub last_good_route: Option<String>,
+    // -- the tweaks (R87, developer mode → Tweaks) --------------------------
+    // Every one of these is named the OFF way round, like `update_checks_off`
+    // above, and for the same serde reason: this struct serializes every
+    // field on every save, so prefs stored by older builds simply lack the
+    // field and `#[serde(default)]` fills in `false` — which must mean
+    // "today's behaviour", or an update would silently change what a reader
+    // chose by never choosing. The checkboxes on the Tweaks page are phrased
+    // feature-positive ("Mark clashes with ⚠…"), matching the app's one
+    // pref-checkbox precedent; only the stored polarity is inverted.
+    //
+    /// Hide the ⚠ clash marks — the marks, never the facts: the Clashes
+    /// panel, the printed clash strip, the details dialog, the editor's
+    /// clash note and the add-toast all keep saying everything. Gated in
+    /// Rust at every site that paints OR explains the mark (chips' class +
+    /// `::before` ⚠ + aria, the Master grid's ⚠ badge, legend lines and
+    /// print-footnote pushes), because a CSS-only hide would leave paper
+    /// explaining a mark it no longer carries (t140) and screen readers
+    /// hearing warnings sighted users cannot see.
+    #[serde(default)]
+    pub marks_clash_off: bool,
+    /// Hide the ✎ marks on things the reader changed. Same shape as above;
+    /// "Your changes" and the overwrites pill keep the full story.
+    #[serde(default)]
+    pub marks_edits_off: bool,
+    /// Hide the ✓ ticks that pick the reader's courses out of the Master
+    /// grid and Halls. Same shape; the printed key mentions ✓ only while
+    /// the ticks are on.
+    #[serde(default)]
+    pub marks_ticks_off: bool,
+    /// Stop highlighting today's row in the week tables.
+    #[serde(default)]
+    pub today_highlight_off: bool,
+    /// Stop dimming days with no classes.
+    #[serde(default)]
+    pub quiet_dim_off: bool,
+    /// Take hall names off the chips (tight rows already do this to save
+    /// space; this makes it a choice at any density).
+    #[serde(default)]
+    pub chip_halls_off: bool,
+    /// Every chip in one plain shade instead of a colour per programme —
+    /// for readers the shades read alike to.
+    #[serde(default)]
+    pub chips_plain: bool,
+    /// The stillness `prefers-reduced-motion` asks for, without needing the
+    /// device set: no sliding, no animation.
+    #[serde(default)]
+    pub reduce_motion: bool,
 }
 
 /// A day strip's selection: one day, or all of them.
@@ -315,6 +428,17 @@ impl Default for Prefs {
             update_checks_off: false,
             helper_site: None,
             last_good_route: None,
+            // The tweaks all default to "how the app ships" — false is
+            // today's behaviour by construction (see the field docs), and
+            // "Reset all tweaks" leans on exactly this.
+            marks_clash_off: false,
+            marks_edits_off: false,
+            marks_ticks_off: false,
+            today_highlight_off: false,
+            quiet_dim_off: false,
+            chip_halls_off: false,
+            chips_plain: false,
+            reduce_motion: false,
         }
     }
 }
@@ -326,7 +450,15 @@ impl Default for Prefs {
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Route {
     Planner,
-    Developer,
+    Developer(DevTab),
+}
+
+impl Route {
+    /// Whether this is any developer-mode category — the question most
+    /// callers ask; the payload matters only to the dev view itself.
+    pub fn is_developer(&self) -> bool {
+        matches!(self, Route::Developer(_))
+    }
 }
 
 #[derive(Clone, PartialEq)]
@@ -811,6 +943,13 @@ pub struct App {
     /// pointer and key handlers in `dnd.rs`, which the browser calls with no
     /// reactive owner: a context lookup there would find nothing and panic.
     pub grid_days_memo: Memo<Vec<Day>>,
+    /// The three mark tweaks as one deduped `(clash, edits, ticks)` triple,
+    /// `true` = the mark is ON. Every chip's clash memo and every legend,
+    /// badge and footnote gate reads THIS, never `prefs` directly: `prefs`
+    /// is one blob that changes on every search keystroke, and four hundred
+    /// chips re-running their clash walk per keypress is the exact cost the
+    /// memo's value-dedupe exists to avoid.
+    pub marks: Memo<(bool, bool, bool)>,
 }
 
 impl App {
@@ -1403,6 +1542,17 @@ impl App {
                     // itself, and one nobody makes by accident — an import
                     // must ask before putting it back.
                     && !p.update_checks_off
+                    // The tweaks are decisions too: someone who chose to
+                    // hide the clash marks must be asked before a whole-file
+                    // import quietly paints them back.
+                    && !p.marks_clash_off
+                    && !p.marks_edits_off
+                    && !p.marks_ticks_off
+                    && !p.today_highlight_off
+                    && !p.quiet_dim_off
+                    && !p.chip_halls_off
+                    && !p.chips_plain
+                    && !p.reduce_motion
                     && p.filters.is_empty()
                     && p.my_filters.is_empty()
                     && p.filters.switches_are_default()
@@ -3161,8 +3311,61 @@ impl App {
         domx::set_hash("#/developer");
     }
 
+    /// Move to one developer category. Only the hash is written — the
+    /// `hashchange` listener owns `route`, exactly like `goto_developer`,
+    /// so a category is one line of history and browser Back walks it.
+    pub fn goto_dev_tab(&self, tab: DevTab) {
+        domx::set_hash(tab.hash());
+    }
+
     pub fn goto_planner(&self) {
         domx::set_hash("#/");
+    }
+
+    // -- the tweaks (R87) ---------------------------------------------------
+
+    /// The three mark tweaks, read the tracked way at every site that
+    /// paints or explains the mark. `true` means the mark is ON (the
+    /// stored field is named the off way round for serde's sake).
+    pub fn marks_clash(&self) -> bool {
+        self.marks.get().0
+    }
+
+    pub fn marks_edits(&self) -> bool {
+        self.marks.get().1
+    }
+
+    pub fn marks_ticks(&self) -> bool {
+        self.marks.get().2
+    }
+
+    /// Flip one boolean tweak. Instant pref, not an undo step — the
+    /// `set_changes_mine_only` line applies: it changes what the app shows,
+    /// never what the timetable holds.
+    pub fn set_tweak(&self, set: fn(&mut Prefs, bool), on: bool) {
+        self.prefs.update(|p| set(p, on));
+        self.persist_prefs();
+    }
+
+    /// Everything the Tweaks page owns, back to how the app ships: the
+    /// eight booleans plus theme and row height. Exactly the fields the
+    /// page shows — a reset that reaches further than its own page is how
+    /// a reset button starts lying.
+    pub fn reset_tweaks(&self) {
+        self.prefs.update(|p| {
+            let d = Prefs::default();
+            p.marks_clash_off = d.marks_clash_off;
+            p.marks_edits_off = d.marks_edits_off;
+            p.marks_ticks_off = d.marks_ticks_off;
+            p.today_highlight_off = d.today_highlight_off;
+            p.quiet_dim_off = d.quiet_dim_off;
+            p.chip_halls_off = d.chip_halls_off;
+            p.chips_plain = d.chips_plain;
+            p.reduce_motion = d.reduce_motion;
+            p.theme = d.theme;
+            p.density = d.density;
+        });
+        self.persist_prefs();
     }
 
     /// Change one of the two filter sets as one undoable step, like any

@@ -5,7 +5,10 @@
 //! hard-codes a pathname-based BrowserUrl location provider and cannot route
 //! on `location.hash`. Hash routing is the load-bearing requirement for
 //! GitHub Pages (no server rewrites), so this app uses a minimal hash router
-//! instead — two routes, `#/` and `#/developer`. See README for details.
+//! instead — `#/` for the planner and `#/developer[/<category>]` for
+//! developer mode (R87: the category rides in the hash so it is
+//! bookmarkable and survives reload with no new stored state). Developer
+//! mode is linked from My data → "Under the hood"; the URL keeps working.
 
 use crate::state::{App, DragState, Route, SyncMeta};
 use crate::{dev, dnd, domx, fetch, storage, ui, views};
@@ -93,6 +96,7 @@ fn init_app() -> (App, bool) {
     // derived from it in the same breath. See `App::drop_target`.
     let drag = RwSignal::new(None::<DragState>);
 
+    let prefs = RwSignal::new(prefs);
     let app = App {
         sync: RwSignal::new(sync),
         snapshot,
@@ -100,7 +104,7 @@ fn init_app() -> (App, bool) {
         selection: RwSignal::new(selection),
         overrides: RwSignal::new(overrides),
         customs: RwSignal::new(customs),
-        prefs: RwSignal::new(prefs),
+        prefs,
         device_density: if domx::is_phone_viewport() {
             crate::state::Density::Compact
         } else {
@@ -160,6 +164,11 @@ fn init_app() -> (App, bool) {
         // after this literal: anything that reads `grid_days` in between
         // would look the app up before it was there.
         grid_days_memo: Memo::new(|_| App::use_ctx().compute_grid_days()),
+        // See the field doc: the triple dedupes, so a prefs write that
+        // changes no mark wakes none of the memo's readers.
+        marks: Memo::new(move |_| {
+            prefs.with(|p| (!p.marks_clash_off, !p.marks_edits_off, !p.marks_ticks_off))
+        }),
     };
     provide_context(app);
     // One index for every chip on the page: name, hue and "CMI lists no
@@ -505,11 +514,14 @@ pub fn apply_theme(app: App) {
 fn install_routing(app: App) {
     let set_route = move || {
         let hash = domx::current_hash();
-        app.route.set(if hash.starts_with("#/developer") {
-            Route::Developer
-        } else {
-            Route::Planner
-        });
+        app.route
+            .set(if let Some(rest) = hash.strip_prefix("#/developer") {
+                // The suffix picks the category; anything unknown (an old link,
+                // a typo) lands on Overview rather than bouncing to the planner.
+                Route::Developer(crate::state::DevTab::from_hash_suffix(rest))
+            } else {
+                Route::Planner
+            });
     };
     set_route();
     let closure = Closure::<dyn FnMut()>::new(set_route);
@@ -749,14 +761,26 @@ pub fn Root() -> impl IntoView {
     view! {
         // Before the first sync there is no tab rail, so the desktop grid
         // must not reserve its sidebar column.
-        <div class="app" class:no-data=move || !app.has_data()>
+        <div
+            class="app"
+            class:no-data=move || !app.has_data()
+            // The CSS-only tweaks (R87). Each class states the DEPARTURE
+            // from how the app ships, so the stylesheet's base rules stay
+            // exactly what they were and a class only ever appears when a
+            // reader chose something.
+            class:no-today=move || app.prefs.with(|p| p.today_highlight_off)
+            class:no-quiet-dim=move || app.prefs.with(|p| p.quiet_dim_off)
+            class:no-chip-halls=move || app.prefs.with(|p| p.chip_halls_off)
+            class:chips-plain=move || app.prefs.with(|p| p.chips_plain)
+            class:still=move || app.prefs.with(|p| p.reduce_motion)
+        >
             <ui::Header />
             <ui::Tabs />
             <main class="main">
                 <ui::BannerView />
                 {move || match app.route.get() {
                     Route::Planner => views::planner(app).into_any(),
-                    Route::Developer => dev::developer(app).into_any(),
+                    Route::Developer(tab) => dev::developer(app, tab).into_any(),
                 }}
             </main>
             <ui::DialogHost />

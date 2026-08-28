@@ -283,13 +283,19 @@ with custom changes"). When both are present, `s` wins. The query stays
   the same code, your version keeps winning and a note offers a one-click
   switch to CMI's.
 
-### Developer mode (hidden endpoint)
+### Developer mode
 
-Developer mode is not linked anywhere in the UI. Open it by navigating to
-the **`#/developer`** endpoint directly, e.g.
-`https://<host>/<repo>/#/developer` (or `http://127.0.0.1:8080/#/developer`
-during development). It exposes the fetch log, parse reports, storage
-inspector, raw-HTML viewer and fail-closed simulators.
+Developer mode is a mode of its own: the tab rail swaps to its categories —
+Overview (`#/developer`), Tweaks (`#/developer/tweaks`), Sync
+(`#/developer/sync`) and Storage (`#/developer/storage`) — with **← Back**
+first in the rail, Escape, and the browser's Back button as the ways out.
+The in-app door is **My data → "Under the hood"**; the URL also works
+directly, e.g. `https://<host>/<repo>/#/developer` (or
+`http://127.0.0.1:8080/#/developer` during development). It exposes the
+fetch log, parse reports, storage inspector, raw-HTML viewer, fail-closed
+simulators, a diagnostics copier, and the Tweaks page — every small display
+choice (hide the clash ⚠ marks, for one), searchable with the same three
+switches every search box in the app has.
 
 ### A note on routing (deliberate deviation)
 

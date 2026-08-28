@@ -789,7 +789,7 @@ regenerates the .ics golden.
   NOWHERE on this page while still counting toward the credit total.
 - "Your changes" groups are headed by `.cg-head` (colour rail + small caps
   + count), coloured by `OwnChange::tone()`. See §4.
-- Tests: 169 native + 142/142 e2e green (as of R86; the native count from
+- Tests: 169 native + 146/146 e2e green (as of R87; the native count from
   `deploy.sh`'s own in-container run — 49+18+3+9+25+27+28+10).
 - **The e2e suite mocks the relays, so it can never tell you a real one has
   died** — which is exactly how R84's outage reached a user. Two probes cover
@@ -6367,6 +6367,133 @@ The fix is the one the entry specified — `with_filters` →
 `with_filters_in(scope.mine())` in two memos, mapping unchanged. §8.18 has moved
 out of §8 and into this entry, as that section's rules require.
 
+### R87 — developer mode becomes a real mode, and the last open bug closes
+
+The round the user asked for with "you can spawn more AI agents… different
+agents can give different ideas… verifier agents verify if those ideas are
+worth implementing": 8 scouts → 3 rival designers → 3 judges → hand
+implementation → 4 adversarial verifiers, with every agent's output saved
+under `.workagents/devmode-r87/` and `PLAN.md` there as the restore point
+(one session break landed mid-round; the restore found all 8 scout files
+intact and nothing to resurrect).
+
+**What the user asked.** `#/developer` was URL-only and the URL is hard to
+remember. Wanted: an in-app door that is findable but out of the everyday
+view; entering becomes a real MODE (the tab rail swaps to developer
+categories, with an obvious way back); the content grouped — app details,
+then every smallest tweak, "grouped as the app's own sections are" as a
+sketch, not an order; a search over the tweaks with the three switches every
+editor has; every previously built rail behaviour preserved; not bloated;
+and one mandatory tweak from a real user: hide the ⚠ clash marks. Plus:
+"fix the bugs which are left to fix" — §8.22.
+
+**§8.22, closed** (commit 90cffba, before the mode work). The design
+decision the entry was open for, decided: an IDLE tab adopts the other
+tab's selection/overrides/customs on its own — no banner, no reload, a
+toast — and the adoption is ONE undo step, so Ctrl+Z is the deliberate
+"keep mine" that persists and converges the tabs the other way; adopting
+around the stack would have left a stale entry whose undo re-clobbers the
+other tab in silence, the original bug wearing a keyboard shortcut. A BUSY
+tab (anything `busy_with_unsaved_work`, plus ANY open dialog — a clean
+editor is deliberately not "busy" so forms survive syncs, but its Save
+commits the whole custom store) gets the sticky notice and catches up the
+moment the dialog closes; the notice retires line-exactly
+(`retire_sticky_line`), so a corrupt-storage paragraph queued beside it
+survives. A REMOVED key counts as data (deleting the last custom course
+arrives as a storage removal); a corrupt key bails the whole adoption. The
+final persists write back the bytes storage already holds, so no event
+echoes. `t139` rewritten to pin every clause; the entry's body has moved
+here from §8 as that section's rules require. (The old entry cited
+app.rs:515; the listener lives at app.rs:587 — noted by the crosstab scout,
+moot now.)
+
+**The design fight, and what the judges caught.** Three complete designs
+(minimalist: 5 tweaks, zero new CSS; librarian: 10 tweaks, the app's voice;
+poweruser: 15 controls, simulators beside their instruments) split the
+judges 2-1-0 across three lenses — and the panel's real value was four
+defects ALL THREE designs shipped, each verified against the code before
+implementation: (1) Home (or one overshot arrow) landed on the exit row and
+silently ejected the whole mode — `group_neighbour` wraps and
+`tab_rail_keydown` click()s whatever it lands on; (2) Escape appended to
+the global chain would fire while typing in the tweaks search, because the
+chain deliberately runs BEFORE `is_editing_context`; (3) a rail exit
+wearing `role="tab"` announces "tab, 1 of 5" for a button that navigates
+away; (4) every design's §8.22 copy was already stale against the landed
+P3. The synthesis is in `designs/SYNTHESIS.md` and is what got built.
+
+**What shipped.**
+
+- `DevTab` (Overview/Tweaks/Sync/Storage), hash-carried
+  (`#/developer[/slug]`, bare = Overview with the hash untouched, unknown
+  suffix = Overview) — a PARALLEL enum, never new `Tab` variants, because
+  `Prefs.tab` persists a Tab and old builds would restore a developer
+  variant as the planner's tab. `Route::Developer(DevTab)`.
+- ONE mounted `nav.tabs`, contents swapped by route (a second rail breaks
+  t105's counts; remounting leaks the forgotten media-query closure). The
+  exit is `.tab-exit` — no `role=tab`, no `class="tab"`, so the keydown
+  walk skips it (a bounded skip-loop in `tab_rail_keydown` preserves the
+  wrap contract across it) and `step_tab`'s dev branch walks categories
+  only and STOPS at the ends: wheel, swipe and arrows cannot eject the
+  mode; leaving is the exit button, the toolbar button, guarded Escape, or
+  browser Back. Focus follows every crossing (`domx::focus_soon`): in →
+  the mode's tabpanel; out → the planner rail's roving tab, falling back
+  to the header's My data button (`data-mydata`) pre-sync.
+- The door: My data → "Under the hood", between Settings and Files-and-
+  links (the tail beside Start-fresh was rejected by a judge as the worst
+  spot for a feature meant to be findable). Same-document hop — t72/t73/
+  t133/t134/t137 read the SESSION fetch log through `fetch_log_tiers`, and
+  a reload would empty it.
+- Tweaks: ten (three A-shape mark toggles; today-highlight, quiet-dim,
+  chip-halls, chips-plain, reduce-motion as reactive classes on `.app`;
+  theme + row-height segs — the seg's third option "Follow this device"
+  writes `density: None`, the one path back to the default short of Reset).
+  Labels feature-positive (checked = ON, the app's one checkbox precedent);
+  stored fields off-way-round with `#[serde(default)]` so old prefs blobs
+  mean "as it ships"; all in `nothing_saved_to_lose`, so an import asks.
+  Hints carry the word "hide" — the verb someone types into the search.
+  Search = `.search-group > .searchbox` DOM copied exactly (t115's aria) over
+  four session-local signals, ONE `ttcore::search::Matcher` per pass in a
+  `Vec<bool>` memo; `Matcher::Bad` = zero rows + the error line and NO
+  empty-state beside it. A pointer line that never hides names where the
+  non-tweaks live (My data). One "Reset all tweaks", no confirm (the
+  Settings-Reset precedent), resets exactly the page's ten.
+- The honesty gate, both directions: the pref that hides a mark's paint
+  gates, in Rust, the SAME sites that explain it — chip class + `::before`
+  ⚠ + "clashes with" aria in one `sel_clash` edit, `warn_wont_fit` made
+  reactive at the span (t90: chips are not rebuilt), covered-band caller,
+  card and meeting-row badges (reactive closures — the cards don't rebuild
+  on a prefs write), legend lines, and every print-footnote push. The
+  facts deliberately NOT gated: Clashes panel, print clash strip, details
+  dialog, editor clash note, add-toast, Your changes, overwrites pill,
+  credit numbers and sentences, and the ✎/✓ aria FACTS ("your custom
+  time", "in your timetable") — the sign hides, the fact never. New
+  `App::marks` memo `(clash, edits, ticks)` so four hundred chips
+  subscribe to a deduped triple instead of re-running clash walks on
+  every prefs keystroke.
+- Overview grew "This browser" (storage total, the cross-tab adoption
+  story in prose, Copy diagnostics — versions, snapshot line, sizes, last
+  five fetches, non-default tweaks, NO course data) and kept Build info
+  byte-for-byte: t114 needed ZERO edits because bare `#/developer` still
+  lands on `[data-update-check]`.
+
+**What the tests caught while being written.** t143's 320px phase failed
+with 30px of sideways scroll — not the rail: the Overview `dl.kv`'s long
+mono values (`min-width:auto` in a grid) had ALWAYS forced the page wide;
+unreachable at phone widths until the rail made dev mode reachable there
+(`.kv dd { min-width:0; overflow-wrap:anywhere }`, plus the exit's word
+hides ≤380px, the header's `.btn-word` trick). t144's "reload starts
+clean" phase proved nothing at first: `boot()` to the same URL with a
+different hash IS the same-document navigation the mode guarantees —
+`d.refresh()` is the only honest reload. And the harness taught two more:
+headless Chrome won't size a window under ~500px (CDP device metrics,
+t130's way), and a `<section>` can't take `send_keys`.
+
+Suite: 146/146 e2e (t143 rail-cannot-eject incl. 320px sweep of all four
+categories; t144 search contract; t145 marks honesty end-to-end incl.
+persistence and restore; t146 the door + guarded Escape + focus), t01/t02
+rewritten as the discoverability/re-shelving specs, t58 + `fetch_log_tiers`
+one-string edits, 169 native, clippy + fmt clean.
+
 ## 8. Open bugs — found, confirmed, NOT fixed (do not delete)
 
 Rules for this section: entries stay until the bug is actually fixed and a
@@ -6388,7 +6515,11 @@ open for five rounds: `day_picked`/`slot_picked` now read
 assertion the entry asked for — it fails without the fix with
 `the Catalog's Monday leaked into My courses' Day menu as ['0']`. **8.23 (a share link replacing a picked
 timetable in silence) was fixed in R83**: both things a link can destroy are
-weighed now, each with its own sentence, and `t138` is the assertion. **8.20
+weighed now, each with its own sentence, and `t138` is the assertion. **8.22 (two tabs
+of the app overwriting each other's selection and changes) was fixed in
+R87**: an idle tab adopts the other tab's write as one undoable step, a busy
+tab is told and catches up when its dialog closes, and `t139` — rewritten —
+fails without any clause of it. The full story is R87's §7 entry. **8.20
 (the whole app scrolling sideways
 at 320 and 360px) was fixed in R82** — a sentence inside a `white-space:
 nowrap` pill was the app's layout floor; `.badge.wraps` is the fix and `t130`
@@ -6397,57 +6528,6 @@ entry as the rules here require. 8.19 (a self-update landing on top of a
 live Undo offer, found by R72's screenshots) was fixed in R73 by removing every
 self-initiated reload — R73's §7 entry says what replaced it and which phase of
 t114 fails without it.
-
-### 8.22 Two tabs of the app overwrite each other's selection and changes
-
-**R83 took the word "silently" out of the title, and that is all it took out.**
-The overwrite still happens; it is now announced while both versions still
-exist. `install_cross_tab_sync` watches `cmitt.v1.{selection,overrides,custom}`
-for a write from another tab and raises a sticky banner — "Another tab of this
-app has changed your timetable. This tab is still showing the version from
-before — reload it to catch up. If you carry on here instead, this tab's
-version is the one that gets saved." — pinned by `t139`, which drives two real
-tabs. Adopting the other tab's data was deliberately NOT done: it would yank
-the page out from under someone mid-edit, which is its own kind of loss, and
-choosing between the two is the design decision this entry is still open for.
-Everything below is the original report, unchanged.
-
-Found by R82's `user-journeys` agent, confirmed against the code by hand.
-**Pre-existing: `install_cross_tab_sync` is untouched in `origin/main..HEAD`,
-so this is already live on the deployed site — publishing R82 does not
-introduce it.** Recorded here because it is data loss, and this app has no
-server to recover from.
-
-`app/src/app.rs:515` (`install_cross_tab_sync`) listens for exactly two things:
-`KEY_SNAPSHOT`, and the single `update_checks_off` field of `KEY_PREFS`. It does
-NOT watch `KEY_SELECTION`, `KEY_OVERRIDES` or `KEY_CUSTOM` — and every `act()` /
-`act_customs()` writes the selection and the overrides wholesale from that tab's
-own in-memory copy. So the last tab to touch anything wins, and neither tab says
-a word.
-
-Reproduced (`.workagents/predeploy-r82/probes/uj_d2_two_tabs_dataloss.py`):
-
-```text
-tab 2: My courses -> Edit this course (TOC) -> move a meeting to Sat -> Save
-       cmitt.v1.overrides now holds the move
-tab 1: (still showing the old week, no banner) add any course from the catalog
-       cmitt.v1.overrides == {"next_id":0,"items":[],"credits":[]}   <- gone
-```
-
-Round 1 of the same probe loses a *selection* entry the same way: tab 2 adds
-MFD (`['TOC','QCOM','MFD']`), tab 1 then adds RFLR and storage becomes
-`['TOC','QCOM','RFLR']` while tab 2 goes on showing MFD with a live Remove
-button. A course of the reader's OWN survives by luck — `persist_customs` is
-only called when the custom store itself changes, so an unrelated write does
-not carry a stale copy of it.
-
-Why it is not fixed here: the fix is a design decision, not a patch. Adopting
-the other tab's store mid-edit can spoil work in progress (the snapshot path
-already has `busy_with_unsaved_work` for exactly that reason), and refusing the
-write needs a message the reader can act on. What a fix must come with: the
-three keys added to the same listener with the same deferred-adoption shape,
-and a test that drives TWO REAL TABS — a single-tab assertion cannot see this
-at all, which is why 129 tests never did.
 
 ### 8.24 A reader who loaded the page in the 10 minutes before a deploy stays on the old build for one navigation
 

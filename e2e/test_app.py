@@ -763,7 +763,8 @@ class App:
 # ---------------------------------------------------------------------------
 
 def t01_header_sync_button_and_hidden_dev(app):
-    """'Sync now' button present; no Developer tab or link anywhere."""
+    """'Sync now' present; developer mode is out of the everyday view but
+    findable: never a rail tab, always a quiet door inside My data (R87)."""
     app.boot("/")
     app.xpath("//button[normalize-space()='Sync now']")
     app.xpath("//button[normalize-space()='My data']")
@@ -772,16 +773,43 @@ def t01_header_sync_button_and_hidden_dev(app):
     assert tabs == [
         "My timetable", "My courses", "Master grid", "Catalog", "Halls",
     ], tabs
+    # The one discoverable path: My data → "Under the hood".
+    app.xpath("//button[normalize-space()='My data']").click()
+    app.wait_css(".dialog")
+    app.xpath("//div[contains(@class,'dialog')]"
+              "//button[normalize-space()='Open developer mode']")
+    assert "Under the hood" in app.css(".dialog").text
+    app.css(".dialog").send_keys(Keys.ESCAPE)
+    WebDriverWait(app.d, 5).until(lambda d: not app.css_all(".dialog"))
 
 
 def t02_developer_endpoint_only(app):
-    """Developer mode still works when its endpoint is opened directly."""
+    """The endpoint still works opened directly, and the R87 re-shelving
+    renamed nothing load-bearing: every original panel heading still exists,
+    each on its own category of the developer rail."""
     app.boot("/#/developer")
     section = app.wait_css("section[aria-label='Developer mode']")
     assert "Developer mode" in section.text
-    for panel in ("Build info", "Fetch log", "Parse reports",
-                  "Storage inspector", "Raw HTML viewer", "Simulators"):
-        assert panel in section.text, f"missing panel {panel}"
+    # Bare #/developer lands on Overview, hash untouched.
+    assert app.d.execute_script("return location.hash") == "#/developer"
+    expected = {
+        "Overview": ("Build info", "This browser"),
+        "Sync": ("Simulators", "Fetch log", "Parse reports"),
+        "Storage": ("Storage inspector", "Raw HTML viewer"),
+        "Tweaks": ("Marks", "The week grid", "Colour and motion"),
+    }
+    rail = [t.text for t in app.css_all(".tabs .tab")]
+    assert rail == ["Overview", "Tweaks", "Sync", "Storage"], rail
+    for label, panels in expected.items():
+        app.open_tab(label)
+        section = app.wait_css("section[aria-label='Developer mode']")
+        for panel in panels:
+            assert panel in section.text, f"{label}: missing panel {panel}"
+    # The way out is first in the rail, and it is a button, not a tab.
+    exit_btn = app.css(".tabs .tab-exit")
+    assert exit_btn.get_attribute("role") != "tab"
+    exit_btn.click()
+    app.wait_css("section[aria-label='My timetable']")
 
 
 def t03_url_selection_and_clash(app):
@@ -3159,7 +3187,7 @@ def t58_simulated_parse_failure_keeps_everything(app):
     ever stops failing, this button demonstrates nothing. The toast and the
     banner below only exist on the far side of that check, so this also
     catches the simulator taking the whole app down with it."""
-    app.boot("/#/developer", selection=["TOC"])
+    app.boot("/#/developer/sync", selection=["TOC"])
     section = app.wait_css("section[aria-label='Developer mode']")
     section.find_element(
         By.XPATH, ".//button[normalize-space()='Simulate parse failure']"
@@ -3933,7 +3961,9 @@ def t71_what_changed_never_opens_with_nothing_to_say(app):
 def fetch_log_tiers(app):
     """The tiers this session's fetches used, oldest first. The developer
     fetch log renders newest-first, so this reverses it back."""
-    app.d.get(f"{BASE}/#/developer")
+    # A hash change on the same document — never a reload, or the session's
+    # fetch log would empty and five tests would fail looking like fetch bugs.
+    app.d.get(f"{BASE}/#/developer/sync")
     app.wait_css("section[aria-label='Developer mode']")
     # Scoped to the Fetch log panel: developer mode has more than one
     # `.devlog` table, and the others have nothing in their second column.
@@ -8611,6 +8641,310 @@ def t142_a_day_ticked_on_the_catalog_does_not_haunt_my_courses(app):
     assert not stray, f"My courses' Tuesday leaked into the Catalog's Day menu as {stray}"
 
 
+
+def t143_the_developer_rail_cannot_eject_you_by_accident(app):
+    """The dev rail is the planner rail's twin — one Tab stop, arrows that
+    wrap, a wheel that stops at the ends — with one addition and one rule:
+    the ← Back exit sits first, and NO walking gesture can land on it. All
+    three R87 design drafts shipped a rail where Home (or one overshot
+    arrow) silently threw the reader out of the mode; every judge flagged
+    it, and this test is the fence."""
+    app.boot("/#/developer")
+    app.wait_css("section[aria-label='Developer mode']")
+
+    tabs = [t.text for t in app.css_all(".tabs .tab")]
+    assert tabs == ["Overview", "Tweaks", "Sync", "Storage"], tabs
+    exit_btn = app.css(".tabs .tab-exit")
+    assert exit_btn.get_attribute("role") != "tab", \
+        "the exit navigates away — a tab claiming otherwise breaks ARIA"
+    stops = [t for t in app.css_all(".tabs .tab") if t.get_attribute("tabindex") == "0"]
+    assert len(stops) == 1, "the categories must stay ONE Tab stop"
+
+    def selected():
+        return app.css("nav.tabs button[aria-selected='true']").text
+
+    def in_dev(d):
+        return d.execute_script("return location.hash").startswith("#/developer")
+
+    # Arrows walk categories; the walk WRAPS — and never lands on the exit.
+    active = app.css(".tabs .tab[tabindex='0']")
+    active.send_keys(Keys.ARROW_RIGHT)
+    WebDriverWait(app.d, 5).until(lambda d: selected() == "Tweaks")
+    app.css(".tabs .tab[tabindex='0']").send_keys(Keys.END)
+    WebDriverWait(app.d, 5).until(lambda d: selected() == "Storage")
+    app.css(".tabs .tab[tabindex='0']").send_keys(Keys.HOME)
+    WebDriverWait(app.d, 5).until(lambda d: selected() == "Overview")
+    assert in_dev(app.d), "Home must land on the first CATEGORY, not the exit"
+    app.css(".tabs .tab[tabindex='0']").send_keys(Keys.ARROW_LEFT)
+    WebDriverWait(app.d, 5).until(lambda d: selected() == "Storage")
+    assert in_dev(app.d), "the wrap must skip the exit, not press it"
+
+    # The wheel steps categories and STOPS at the ends — a trackpad flick
+    # must never eject the whole mode.
+    rail = app.css("nav.tabs")
+
+    def wheel(dy, times=1):
+        for _ in range(times):
+            app.d.execute_script(
+                """const el = arguments[0];
+                   const r = el.getBoundingClientRect();
+                   el.dispatchEvent(new WheelEvent('wheel', {
+                     deltaY: arguments[1], bubbles: true, cancelable: true,
+                     clientX: r.left + r.width / 2,
+                     clientY: r.top + r.height / 2}));""",
+                rail, dy)
+            time.sleep(0.15)
+
+    wheel(120, times=3)
+    assert selected() == "Storage" and in_dev(app.d), selected()
+    wheel(-120, times=8)
+    assert selected() == "Overview" and in_dev(app.d), \
+        "the wheel must stop at the first category, never exit"
+
+    # The deliberate exits work, and focus lands somewhere real.
+    app.css(".tabs .tab-exit").click()
+    app.wait_css("section[aria-label='My timetable']")
+    WebDriverWait(app.d, 5).until(
+        lambda d: d.execute_script(
+            "const a = document.activeElement;"
+            "return a && a.matches(\"nav.tabs button.tab[tabindex='0']\")"),
+        message="after ← Back, focus must land on the planner rail")
+
+    # And the phone that fits five planner tabs fits this mode too — every
+    # category, at the narrowest width still sold (t130's method: a window
+    # cannot go this narrow, device metrics can).
+    try:
+        app.d.execute_cdp_cmd("Emulation.setDeviceMetricsOverride", {
+            "width": 320, "height": 760, "deviceScaleFactor": 2,
+            "mobile": True,
+        })
+        app.boot("/#/developer", fresh=False)
+        app.wait_css("section[aria-label='Developer mode']")
+        for label in ("Overview", "Tweaks", "Sync", "Storage"):
+            app.open_tab(label)
+            app.wait_css("section[aria-label='Developer mode']")
+            overflow = app.d.execute_script(
+                "return document.documentElement.scrollWidth"
+                " - document.documentElement.clientWidth")
+            assert overflow <= 1, \
+                f"{label} forces {overflow}px of sideways scroll at 320px"
+    finally:
+        app.d.execute_cdp_cmd("Emulation.clearDeviceMetricsOverride", {})
+
+
+def t144_the_tweaks_search_is_a_real_search_box(app):
+    """The tweaks search carries the same three switches every search box in
+    the app has (t115's contract), narrows the groups as you type, treats a
+    half-typed pattern as zero rows plus one explanation — never two — and
+    forgets everything on reload: a lens, not work product."""
+    app.boot("/#/developer/tweaks")
+    app.wait_css("section[aria-label='Developer mode']")
+    box = app.css("input[aria-label='Search the tweaks']")
+
+    def visible_rows():
+        return len(app.css_all(".tweak"))
+
+    def visible_groups():
+        return [h.text for h in app.css_all(
+            "section[aria-label='Developer mode'] .panel h3")]
+
+    all_rows = visible_rows()
+    assert all_rows == 10, f"the v1 roster is ten rows, got {all_rows}"
+    assert visible_groups() == ["Marks", "The week grid", "Colour and motion"]
+
+    # Narrowing hides rows AND whole groups.
+    box.send_keys("clash")
+    WebDriverWait(app.d, 5).until(lambda d: visible_rows() == 1)
+    assert visible_groups() == ["Marks"], visible_groups()
+    # The pointer line is the recovery path and never hides.
+    assert "live in My data" in app.css(
+        "section[aria-label='Developer mode']").text
+
+    # The three switches, by their established aria.
+    for name in ("Match case", "Whole word", "Regular expression"):
+        sw = app.css(f"button[aria-label='{name}']")
+        assert sw.get_attribute("aria-pressed") == "false"
+
+    # Whole word: "mark" stops matching "marks".
+    app.css("button[aria-label='Clear search']").click()
+    WebDriverWait(app.d, 5).until(lambda d: visible_rows() == all_rows)
+    assert app.d.execute_script(
+        "return document.activeElement === arguments[0]", box), \
+        "clearing must hand the caret back"
+    app.css("button[aria-label='Whole word']").click()
+    box.send_keys("highlight")
+    WebDriverWait(app.d, 5).until(lambda d: visible_rows() == 1)
+
+    # A half-typed pattern: zero rows, ONE explanation.
+    app.css("button[aria-label='Whole word']").click()
+    app.css("button[aria-label='Regular expression']").click()
+    app.css("button[aria-label='Clear search']").click()
+    box.send_keys("(unclosed")
+    err = app.wait_css("#search-pattern-error")
+    assert "Not a pattern yet" in err.text, err.text
+    assert visible_rows() == 0, "a broken pattern matches NOTHING"
+    assert not app.css_all(".empty.panel"), \
+        "the error line is the explanation — an empty-state beside it is two"
+    assert box.get_attribute("aria-invalid") == "true"
+
+    # A working pattern narrows.
+    app.css("button[aria-label='Clear search']").click()
+    box.send_keys("ticks|rows")
+    WebDriverWait(app.d, 5).until(
+        lambda d: 0 < visible_rows() < all_rows and not app.css_all(
+            "#search-pattern-error"))
+
+    # Nonsense gets the honest empty state.
+    app.css("button[aria-label='Regular expression']").click()
+    app.css("button[aria-label='Clear search']").click()
+    box.send_keys("zzzz")
+    WebDriverWait(app.d, 5).until(lambda d: visible_rows() == 0)
+    assert app.css_all(".empty.panel"), "no match deserves its sentence"
+    assert "live in My data" in app.css(
+        "section[aria-label='Developer mode']").text
+
+    # Session-only: a REAL reload starts clean. (`boot` to the same URL is
+    # a same-document hash change — the exact thing the mode guarantees —
+    # so refresh() is the only honest way to ask this question.)
+    app.d.refresh()
+    app.wait_css("section[aria-label='Developer mode']")
+    box = app.css("input[aria-label='Search the tweaks']")
+    assert box.get_attribute("value") == ""
+    assert visible_rows() == all_rows
+
+
+def t145_hiding_a_mark_hides_the_sign_never_the_fact(app):
+    """The tweak a real user asked for, end to end: with the ⚠/✎/✓ marks
+    ticked off, every chip, badge, legend line and print footnote loses the
+    MARK — while the Clashes panel, the printed clash strip, "Your changes"
+    and the credit numbers keep saying everything. Paint and prose read the
+    same pref, so t140's rule (a footnote never explains a mark that is not
+    there) holds in the new direction too."""
+    # TOC×ISS still clash on Thu; TOC_OVR moves the Tue meeting (a ✎) and
+    # sets custom credits (a second ✎).
+    app.boot("/?c=TOC,ISS", selection=["TOC", "ISS"], overrides=TOC_OVR)
+    app.wait_css("button.chip.clash")
+
+    def poster_footnote():
+        return app.d.execute_script(
+            "const el = document.querySelector("
+            "  \"section[aria-label='My timetable'] .print-footnote\");"
+            "return el ? el.textContent : '';")
+
+    assert "⚠" in poster_footnote() and "✎" in poster_footnote()
+
+    # Flip all three marks off, from the Tweaks page.
+    app.d.get(f"{BASE}/#/developer/tweaks")
+    app.wait_css("section[aria-label='Developer mode']")
+    for label in ("Mark clashes with ⚠ and a red border",
+                  "Mark what you changed with ✎",
+                  "Tick your courses with ✓ on the Master grid and Halls"):
+        app.xpath(f"//label[contains(@class,'opt')][.//span[normalize-space()="
+                  f'"{label}"]]//input').click()
+    app.wait_toast("The ✓ ticks are hidden")
+    app.css(".tabs .tab-exit").click()
+
+    # My timetable: the signs are gone…
+    app.wait_css("section[aria-label='My timetable']")
+    assert not app.css_all("button.chip.clash"), "the chip clash class must go"
+    labels = " ".join(
+        c.get_attribute("aria-label") or "" for c in app.css_all("button.chip"))
+    assert "clashes with" not in labels, "aria must not warn of a hidden mark"
+    fn = poster_footnote()
+    assert "⚠" not in fn and "✎ you changed this" not in fn, fn
+    # …the facts are not.
+    panel = app.xpath("//div[contains(@class,'panel')][.//h3[contains(.,'Clashes')]]")
+    assert "TOC" in panel.text and "ISS" in panel.text, \
+        "the Clashes panel states facts and never follows the tweak"
+    strip = app.d.execute_script(
+        "const el = document.querySelector('.print-clashes');"
+        "return el ? el.textContent : '';")
+    assert "TOC" in strip and "ISS" in strip, \
+        "the printed clash strip is self-explaining and stays"
+
+    # My courses: badge marks follow, numbers stay.
+    app.open_tab("My courses")
+    cards = app.wait_css("section[aria-label='My courses']")
+    assert "⚠ clash" not in cards.text
+    assert "3 cr" in cards.text and "3 cr ✎" not in cards.text, \
+        "the custom credit NUMBER stays; only its ✎ goes"
+    assert "your time" in cards.text and "✎ your time" not in cards.text, \
+        "the moved meeting stays named; only its ✎ goes"
+
+    # Master grid: no ✓, no ⚠, and no legend lines explaining either.
+    app.open_tab("Master grid")
+    grid = app.wait_css("section[aria-label='Master grid']")
+    assert not app.css_all("section[aria-label='Master grid'] .sel-mark")
+    assert not app.css_all("section[aria-label='Master grid'] .wontfit")
+    assert "on your timetable" not in app.d.execute_script(
+        "return document.querySelector("
+        "  \"section[aria-label='Master grid'] .grid-legend\").textContent;")
+
+    # The choice survives a reload, and ticking back restores everything.
+    # (The active tab persisted too — Master grid — so walk home first.)
+    app.boot("/", fresh=False)
+    app.open_tab("My timetable")
+    app.wait_css("section[aria-label='My timetable']")
+    assert not app.css_all("button.chip.clash"), "the tweak must persist"
+    app.d.get(f"{BASE}/#/developer/tweaks")
+    app.wait_css("section[aria-label='Developer mode']")
+    app.xpath("//label[contains(@class,'opt')][.//span[normalize-space()="
+              '"Mark clashes with ⚠ and a red border"]]//input').click()
+    app.wait_toast("Clash marks are back")
+    app.css(".tabs .tab-exit").click()
+    app.wait_css("button.chip.clash")
+
+
+def t146_the_door_in_my_data_opens_and_escape_walks_back(app):
+    """The way in: My data → "Under the hood" → Open developer mode — a
+    same-document hop that lands focus on the mode itself. The way back:
+    Escape — except while typing in the tweaks search, where Escape belongs
+    to the box (the trap two of three R87 designs shipped)."""
+    app.boot("/")
+    app.d.execute_script("window.__no_reload_marker = 1")
+    app.xpath("//button[normalize-space()='My data']").click()
+    app.wait_css(".dialog")
+    door = app.xpath("//button[normalize-space()='Open developer mode']")
+    # The dialog's action row is sticky; centre the button first or the
+    # click lands on the footer floating over it.
+    app.d.execute_script("arguments[0].scrollIntoView({block: 'center'});", door)
+    door.click()
+
+    app.wait_css("section[aria-label='Developer mode']")
+    WebDriverWait(app.d, 5).until(lambda d: not app.css_all(".dialog"),
+                                  message="the dialog must close under the mode")
+    assert app.d.execute_script("return window.__no_reload_marker") == 1, \
+        "entering developer mode must never reload the document"
+    WebDriverWait(app.d, 5).until(
+        lambda d: d.execute_script(
+            "const a = document.activeElement;"
+            "return a && a.id && a.id.startsWith('panel-dev-')"),
+        message="focus must land on the mode, not fall back to the opener")
+
+    # Escape in the tweaks search stays in the mode.
+    app.open_tab("Tweaks")
+    box = app.wait_css("input[aria-label='Search the tweaks']")
+    box.send_keys("mark")
+    box.send_keys(Keys.ESCAPE)
+    time.sleep(0.3)
+    assert app.d.execute_script("return location.hash").startswith("#/developer"), \
+        "Escape while typing belongs to the search box"
+
+    # Escape anywhere else is the way back, and focus lands on the rail.
+    # (A <section> cannot take keys; press it from a focused rail button —
+    # which is also the realistic hand position.)
+    active_tab = app.css(".tabs .tab[tabindex='0']")
+    active_tab.click()
+    active_tab.send_keys(Keys.ESCAPE)
+    app.wait_css("section[aria-label='My timetable']")
+    WebDriverWait(app.d, 5).until(
+        lambda d: d.execute_script(
+            "const a = document.activeElement;"
+            "return a && a.matches(\"nav.tabs button.tab[tabindex='0']\")"),
+        message="after Escape, focus must land on the planner rail")
+
+
+
 TESTS = [
     t01_header_sync_button_and_hidden_dev,
     t02_developer_endpoint_only,
@@ -8754,6 +9088,10 @@ TESTS = [
     t140_a_footnote_never_explains_a_mark_that_is_not_there,
     t141_the_printed_clash_strip_says_what_the_screen_says,
     t142_a_day_ticked_on_the_catalog_does_not_haunt_my_courses,
+    t143_the_developer_rail_cannot_eject_you_by_accident,
+    t144_the_tweaks_search_is_a_real_search_box,
+    t145_hiding_a_mark_hides_the_sign_never_the_fact,
+    t146_the_door_in_my_data_opens_and_escape_walks_back,
 ]
 
 

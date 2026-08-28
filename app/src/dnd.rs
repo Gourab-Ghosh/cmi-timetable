@@ -507,6 +507,18 @@ fn on_key_down(app: App, ev: &web_sys::KeyboardEvent) {
             ev.prevent_default();
             return;
         }
+        // Last, and — unlike everything above — GUARDED by the editing
+        // context: leaving developer mode is navigation, not cancellation.
+        // Escape in the tweaks search box must clear the field (the native
+        // `type=search` behaviour), not eject the reader and unmount the
+        // page their focus was in; the cancels above run unguarded because
+        // cancelling has to work everywhere, and this is not a cancel.
+        if app.route.get_untracked().is_developer() && !is_editing_context(&ev.target()) {
+            app.goto_planner();
+            domx::focus_soon(&["nav.tabs button.tab[tabindex='0']", "[data-mydata]"]);
+            ev.prevent_default();
+            return;
+        }
         return;
     }
 

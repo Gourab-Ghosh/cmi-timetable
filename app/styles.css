@@ -205,6 +205,14 @@ button {
     scroll-behavior: auto !important;
   }
 }
+/* "Animate panels and toasts" ticked off (R87): the block above, by choice
+   rather than by device setting. Kept a literal twin of it — two drifting
+   definitions of stillness would be worse than none. */
+.app.still *, .app.still *::before, .app.still *::after {
+  animation: none !important;
+  transition: none !important;
+  scroll-behavior: auto !important;
+}
 
 /* ==========================================================================
    App frame: header on top, left rail (desktop) / bottom tab bar (mobile)
@@ -416,6 +424,34 @@ button {
   background: linear-gradient(120deg, var(--accent-wash), var(--accent2-wash));
   font-weight: 650;
 }
+/* Developer mode's way out (R87): first in the rail, a plain button — NOT a
+   tab, because it navigates away (arrows, Home and End skip it; see
+   tab_rail_keydown). It wears the tab's own geometry so the rail reads as
+   one piece, plus a divider on its trailing edge so the exit is visibly not
+   a category. Base = the horizontal bar; the desktop column re-aims the
+   divider below. */
+.tab-exit {
+  position: relative;
+  padding: 0.42rem 0.85rem;
+  margin-right: 0.4rem;
+  border-radius: var(--r-sm);
+  font-size: 0.88rem;
+  font-weight: 500;
+  color: var(--muted);
+  white-space: nowrap;
+  min-height: 36px;
+  transition: background 140ms var(--ease), color 140ms var(--ease);
+}
+.tab-exit:hover { color: var(--text); background: var(--surface-2); }
+.tab-exit::after {
+  content: "";
+  position: absolute;
+  right: -0.28rem;
+  top: 20%;
+  bottom: 20%;
+  width: 1px;
+  background: var(--line-strong);
+}
 
 .main {
   padding: 1rem;
@@ -447,6 +483,15 @@ button {
     top: 62px;
   }
   .tab { text-align: left; }
+  .tab-exit { text-align: left; margin-right: 0; margin-bottom: 0.5rem; }
+  .tab-exit::after {
+    right: 0.2rem;
+    left: 0.2rem;
+    top: auto;
+    bottom: -0.3rem;
+    width: auto;
+    height: 1px;
+  }
   .tab[aria-selected="true"]::before {
     content: "";
     position: absolute;
@@ -489,7 +534,7 @@ button {
     touch-action: pan-y;
   }
   .app { grid-template-rows: auto 1fr auto; grid-template-columns: minmax(0, 1fr); }
-  .tab { padding: 0.5rem 0.55rem; font-size: 0.8rem; min-height: 44px; }
+  .tab, .tab-exit { padding: 0.5rem 0.55rem; font-size: 0.8rem; min-height: 44px; }
 }
 
 @media (max-width: 640px) {
@@ -502,7 +547,7 @@ button {
   .btn-word { display: none; }
   /* Five tabs must fit the bottom bar whole — a navigation bar that
      scrolls sideways hides pages. */
-  .tab { padding: 0.5rem 0.3rem; font-size: 0.76rem; }
+  .tab, .tab-exit { padding: 0.5rem 0.3rem; font-size: 0.76rem; }
 }
 
 /* The narrowest phones still sold. At 320px the five tabs wanted 362px, so
@@ -513,7 +558,11 @@ button {
    The 42px come out of padding and gaps, never out of the 44px height. */
 @media (max-width: 380px) {
   .tabs { padding: 0.4rem 0.2rem; gap: 0.1rem; }
-  .tab { padding: 0.5rem 0.18rem; font-size: 0.74rem; letter-spacing: -0.01em; }
+  .tab, .tab-exit { padding: 0.5rem 0.18rem; font-size: 0.74rem; letter-spacing: -0.01em; }
+  /* The exit keeps its arrow and its aria-label; the word is the one thing
+     the 320px bar has no room for (same trick as the header's .btn-word). */
+  .tab-exit { margin-right: 0.2rem; }
+  .tab-exit .tab-exit-word { display: none; }
   /* The week grid squeezes politely: slimmer day gutter, smaller time
      headings, tighter cells. (The day buttons above it are the real phone
      view — the grid opens on today there.) */
@@ -559,6 +608,10 @@ button {
    hue arrives as an inline style (hues.rs already picks a neutral slate for
    these), and an inline custom property wins over anything written here. */
 .chip.neutral { --chip-sat: 10%; }
+/* "Colour chips by programme" ticked off (R87): every chip drains to the
+   same quiet slate. Saturation only, the .chip.neutral trick — the hue
+   arrives as an inline style, and at 10% every hue reads alike. */
+.app.chips-plain .chip { --chip-sat: 10%; }
 /* The inverse of the affordance bug: only a chip you can PRESS may promise
    it. The branch chips in a dialog and the drag ghost are <span>s that open
    nothing, and the pointer cursor they inherited advertised a details popup
@@ -912,6 +965,24 @@ table.tt.halls-merged tr.quiet th.dayhead {
    whole job is "which room, when" (R83). 0.68 clears it and still reads as
    the quiet state beside a booked row. */
 table.tt.halls-merged tr.quiet:not(.today) th.dayhead { opacity: 0.68; }
+/* "Highlight today's row" ticked off (R87): the marker comes off both week
+   gutters — only what TODAY adds, so the row matches its siblings (the week
+   rowheads keep their shared accent, the halls dayheads their muted ink).
+   And the interlock keeps its promise the other way round: the dimming
+   exception above exists to protect today's marker, so with the marker gone
+   today's empty row dims like any other quiet day. */
+.app.no-today table.tt.halls-merged tr.today th.dayhead {
+  color: var(--muted);
+  box-shadow: none;
+}
+.app.no-today table.tt:not(.halls-merged) tbody tr.today > th.rowhead {
+  font-weight: 650;
+  box-shadow: none;
+}
+.app.no-today table.tt.halls-merged tr.quiet.today th.dayhead { opacity: 0.68; }
+/* "Dim days with no classes" ticked off (R87): quiet rows keep their compact
+   height — that is space, not emphasis — and give up only the fading. */
+.app.no-quiet-dim table.tt.halls-merged tr.quiet th.dayhead { opacity: 1; }
 table.tt.halls-merged tbody tr:hover td:not(.extra) { background: var(--surface-2); }
 table.tt tbody tr.group-start:not(:first-child) > th,
 table.tt tbody tr.group-start:not(:first-child) > td {
@@ -977,6 +1048,10 @@ table.tt td.kbd-cursor { box-shadow: inset 0 0 0 2px var(--accent); }
   .density-compact .chip { min-height: 40px; }
 }
 .density-compact .chip .hall { display: none; }
+/* "Show hall names on chips" ticked off (R87): the same absence tight rows
+   choose, made a choice at any density — and on paper too, deliberately: a
+   printed sheet must match the screen that printed it. */
+.app.no-chip-halls .chip .hall { display: none; }
 /* Tight rows shrink the band with the chips; it stays one quiet line. */
 .density-compact .covered { font-size: 0.66rem; padding: 0.06rem 0.35rem; }
 
@@ -2666,7 +2741,12 @@ body.modal-open { overflow: hidden; }
 /* Details popover (rendered as a centered dialog for reliability) */
 .kv { display: grid; grid-template-columns: max-content 1fr; gap: 0.3rem 1rem; margin: 0.6rem 0; }
 .kv dt { color: var(--muted); font-size: 0.84rem; padding-top: 0.1rem; }
-.kv dd { margin: 0; }
+/* min-width:0 + anywhere: a grid item defaults to min-width:auto, so one
+   long mono value (a build id, the snapshot line) set the page's minimum
+   width and dragged a sideways scrollbar onto the narrowest phones —
+   found by t143's 320px phase the day the dev rail made these pages
+   reachable there. */
+.kv dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
 
 /* "What changed" — structured, readable diff */
 .diff-section { margin: 0.9rem 0 0; }
@@ -2746,6 +2826,13 @@ body.modal-open { overflow: hidden; }
 .diff-lines.changes li + li { border-top: none; }
 
 /* Developer mode */
+/* The Tweaks page (R87): one row = a checkbox (or a seg) and its hint,
+   indented under the box so the page scans as a list of choices. */
+.tweak { margin: 0.6rem 0; }
+.tweak > p { margin: 0.1rem 0 0 1.7rem; }
+.tweak-seg { display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; min-height: 32px; }
+.tweak-seg > span { font-size: 0.92rem; font-weight: 500; }
+
 .devlog {
   width: 100%;
   border-collapse: collapse;

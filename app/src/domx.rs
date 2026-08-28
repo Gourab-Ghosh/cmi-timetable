@@ -175,6 +175,31 @@ pub fn scroll_nearest(selector: &str) {
     });
 }
 
+/// Focus the first of `selectors` that matches, one tick from now — behind
+/// the Leptos effect that re-renders whatever the caller just changed (the
+/// `focus_moved_chip` idiom). For the mode switches (R87): entering or
+/// leaving developer mode swaps the rail and unmounts the very control that
+/// was pressed, and without a named destination focus falls to `<body>` and
+/// a screen reader goes silent. The list is a fallback chain, because the
+/// first choice can legitimately be absent — a planner with nothing synced
+/// yet has no rail at all, and the header's My data button is always there.
+pub fn focus_soon(selectors: &'static [&'static str]) {
+    leptos::task::spawn_local(async move {
+        gloo_timers::future::TimeoutFuture::new(0).await;
+        for sel in selectors {
+            if let Some(el) = document()
+                .query_selector(sel)
+                .ok()
+                .flatten()
+                .and_then(|e| e.dyn_into::<web_sys::HtmlElement>().ok())
+            {
+                let _ = el.focus();
+                return;
+            }
+        }
+    });
+}
+
 /// Select the whole value when a read-only box takes focus.
 ///
 /// Everything in one of these — a share link, a short link — is meant to be

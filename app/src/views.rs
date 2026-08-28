@@ -651,6 +651,11 @@ fn my_timetable(app: App) -> impl IntoView {
                     }) || list
                         .iter()
                         .any(|(c2, s2)| !c2.eq_ignore_ascii_case(code) && s2.overlaps(mslot));
+                    // Same gate as the chips' own clash memo: the tweak
+                    // hides the sign wherever it is painted, and a covered
+                    // span staying red beside a chip that went quiet would
+                    // be half a tweak.
+                    let clash = clash && app.marks.get().0;
                     out.push(crate::ui::covered_band(app, code.clone(), *mslot, clash).into_any());
                 }
             }
@@ -1321,7 +1326,7 @@ fn my_timetable(app: App) -> impl IntoView {
                                                         if let Some(hall) = &e.meeting.hall {
                                                             s.push_str(&format!(" · {hall}"));
                                                         }
-                                                        if e.overridden {
+                                                        if e.overridden && app.marks.get().1 {
                                                             s.push_str(" ✎");
                                                         }
                                                         s
@@ -1330,7 +1335,9 @@ fn my_timetable(app: App) -> impl IntoView {
                                             };
                                             let credits = {
                                                 let n = app.course_credits(&course);
-                                                if app.credits_custom(&course.code).is_some() {
+                                                if app.credits_custom(&course.code).is_some()
+                                                    && app.marks.get().1
+                                                {
                                                     format!("· {n} cr ✎")
                                                 } else if course.credits_assumed() {
                                                     format!("· {n} cr*")
@@ -1396,15 +1403,21 @@ fn my_timetable(app: App) -> impl IntoView {
                                             // and sent the reader hunting for it.
                                             let courses = app.selected_courses();
                                             let mut parts: Vec<&str> = Vec::new();
-                                            if courses
-                                                .iter()
-                                                .any(|c| {
-                                                    app.credits_custom(&c.code).is_some()
-                                                        || app
-                                                            .effective_meetings(c)
-                                                            .iter()
-                                                            .any(|e| e.overridden)
-                                                })
+                                            // Each mark clause carries the
+                                            // same gate as its paint: a
+                                            // footnote must never explain a
+                                            // mark the tweak has hidden
+                                            // (t140, in the new direction).
+                                            if app.marks.get().1
+                                                && courses
+                                                    .iter()
+                                                    .any(|c| {
+                                                        app.credits_custom(&c.code).is_some()
+                                                            || app
+                                                                .effective_meetings(c)
+                                                                .iter()
+                                                                .any(|e| e.overridden)
+                                                    })
                                             {
                                                 parts.push("✎ you changed this");
                                             }
@@ -1439,7 +1452,7 @@ fn my_timetable(app: App) -> impl IntoView {
                                             // lists the whole selection, so
                                             // the sheet and `clashes()` ask
                                             // the same question.
-                                            if !app.clashes().is_empty() {
+                                            if app.marks.get().0 && !app.clashes().is_empty() {
                                                 parts.push("⚠ and a red border mark a clash");
                                             }
                                             parts.join(" · ")
@@ -1942,10 +1955,12 @@ fn my_courses(app: App) -> impl IntoView {
             {print_footnote(move || {
                 let courses = filtered.get();
                 let mut parts: Vec<&str> = Vec::new();
-                if courses.iter().any(|c| {
-                    app.credits_custom(&c.code).is_some()
-                        || app.effective_meetings(c).iter().any(|e| e.overridden)
-                }) {
+                if app.marks.get().1
+                    && courses.iter().any(|c| {
+                        app.credits_custom(&c.code).is_some()
+                            || app.effective_meetings(c).iter().any(|e| e.overridden)
+                    })
+                {
                     parts.push("✎ you changed this");
                 }
                 // "(CMI doesn't list them)" is only true of CMI's courses.
@@ -1975,11 +1990,14 @@ fn my_courses(app: App) -> impl IntoView {
                 // one inside the sentence explaining ⚠ (R84's print
                 // verification).
                 let clashing = app.clashes();
-                if courses.iter().any(|c| {
-                    clashing.iter().any(|cl| {
-                        cl.a.eq_ignore_ascii_case(&c.code) || cl.b.eq_ignore_ascii_case(&c.code)
+                if app.marks.get().0
+                    && courses.iter().any(|c| {
+                        clashing.iter().any(|cl| {
+                            cl.a.eq_ignore_ascii_case(&c.code)
+                                || cl.b.eq_ignore_ascii_case(&c.code)
+                        })
                     })
-                }) {
+                {
                     parts.push("⚠ marks a clash");
                 }
                 parts.join(" \u{b7} ")
@@ -2037,13 +2055,24 @@ fn course_card(app: App, course: Course) -> impl IntoView {
                 <strong>{course.display_name()}</strong>
                 <span class="muted">{course.instructors.join(" / ")}</span>
                 <div class="grow" style="flex:1"></div>
-                <span class="badge" class:accent=move || app.credits_custom(&cr_code).is_some()>
+                <span
+                    class="badge"
+                    class:accent=move || {
+                        app.credits_custom(&cr_code).is_some() && app.marks.get().1
+                    }
+                >
                     // The same marks the printed sheet uses and explains:
                     // * = the app's guess, ✎ = the student's own number.
+                    // The ✎ (and the accent above) follow the marks tweak;
+                    // the NUMBER is the fact and stays the reader's own.
                     {move || {
                         let n = app.course_credits(&cr_course);
                         if app.credits_custom(&cr_course.code).is_some() {
-                            format!("{n} cr ✎")
+                            if app.marks.get().1 {
+                                format!("{n} cr ✎")
+                            } else {
+                                format!("{n} cr")
+                            }
                         } else if cr_assumed {
                             format!("{n} cr*")
                         } else {
@@ -2234,19 +2263,21 @@ fn course_card(app: App, course: Course) -> impl IntoView {
                     })}
                 {(!notes.is_empty())
                     .then(|| view! { <span class="badge">{notes.join(" · ")}</span> })}
-                {clash
-                    .then(|| {
-                        view! {
-                            <span
-                                class="badge alarm"
-                                title="Meets at the same time as another course on your \
-                                       timetable — the Clashes list on My timetable says \
-                                       which one."
-                            >
-                                "⚠ clash"
-                            </span>
-                        }
-                    })}
+                {move || {
+                    (clash && app.marks.get().0)
+                        .then(|| {
+                            view! {
+                                <span
+                                    class="badge alarm"
+                                    title="Meets at the same time as another course on your \
+                                           timetable — the Clashes list on My timetable says \
+                                           which one."
+                                >
+                                    "⚠ clash"
+                                </span>
+                            }
+                        })
+                }}
                 {removed
                     .then(|| {
                         view! { <span class="badge warn">"No longer on CMI's timetable"</span> }
@@ -2582,8 +2613,31 @@ fn master_grid(app: App) -> impl IntoView {
                  want — dropping it there adds it too."
             </p>
             <ul class="grid-legend muted small">
-                <li><span class="legend-mark">"✓"</span>" on your timetable"</li>
-                <li><span class="legend-mark">"⚠"</span>" clashes with a course you have"</li>
+                // The two mark lines follow their tweaks: a key must not
+                // explain a mark the reader has hidden.
+                {move || {
+                    app.marks
+                        .get()
+                        .2
+                        .then(|| {
+                            view! {
+                                <li><span class="legend-mark">"✓"</span>" on your timetable"</li>
+                            }
+                        })
+                }}
+                {move || {
+                    app.marks
+                        .get()
+                        .0
+                        .then(|| {
+                            view! {
+                                <li>
+                                    <span class="legend-mark">"⚠"</span>
+                                    " clashes with a course you have"
+                                </li>
+                            }
+                        })
+                }}
                 <li>
                     <span class="legend-mark">"ⓘ"</span>
                     " full details — or Tab to a course and press i"
@@ -2704,10 +2758,8 @@ fn master_grid(app: App) -> impl IntoView {
                 // this page and the Catalog are always live, so an entirely
                 // empty printed grid could carry a key to a mark it did not
                 // have (R84's print verification).
-                if filtered
-                    .get()
-                    .iter()
-                    .any(|c| app.is_selected(&c.code))
+                if app.marks.get().2
+                    && filtered.get().iter().any(|c| app.is_selected(&c.code))
                 {
                     parts.push("✓ already on your timetable");
                 }
@@ -2719,7 +2771,8 @@ fn master_grid(app: App) -> impl IntoView {
                 // `clashes()` is empty, while every overlapping course on the
                 // page wears a ⚠ — nine of them, with no key anywhere on the
                 // paper (R82's views audit). Same rule, same predicate.
-                if app.selection.with(|s| !s.is_empty())
+                if app.marks.get().0
+                    && app.selection.with(|s| !s.is_empty())
                     && filtered.get().iter().any(|c| {
                         !app.is_selected(&c.code) && !app.would_clash_with(c).is_empty()
                     })
@@ -3119,9 +3172,10 @@ fn catalog(app: App) -> impl IntoView {
                 // rule, R83's repair).
                 let rows = filtered.get();
                 let mut parts: Vec<&str> = Vec::new();
-                if rows
-                    .iter()
-                    .any(|c| app.effective_meetings(c).iter().any(|e| e.overridden))
+                if app.marks.get().1
+                    && rows
+                        .iter()
+                        .any(|c| app.effective_meetings(c).iter().any(|e| e.overridden))
                 {
                     parts.push("✎ times you set yourself, not CMI's");
                 }
@@ -4284,7 +4338,7 @@ fn halls_view(app: App) -> impl IntoView {
                 // not there for anyone whose courses meet on another day —
                 // select a Tuesday class, print on a Friday (R84's print
                 // verification).
-                let has_selection = {
+                let has_selection = app.marks.get().2 && {
                     let shown = view_mode.get();
                     app.selected_courses().iter().any(|c| {
                         app.effective_meetings(c).iter().any(|e| match shown {
