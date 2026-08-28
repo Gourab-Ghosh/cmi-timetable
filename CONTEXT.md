@@ -41,6 +41,19 @@ and no committed mirror (fixtures exist only for tests/e2e seed).
   can recover the finished work from disk instead of redoing it. Workflow
   journals under the session dir help, but session dirs change; the repo
   dir is the durable copy.
+  **Strengthened in R88 (permanent, user verbatim intent): workers save AS
+  THEY GO, not at the end.** A session limit can kill any agent mid-run at
+  any moment (all four of R87's verifiers died that way at once), so every
+  worker's prompt must order it to (1) create its findings/notes file
+  FIRST, (2) extend it incrementally after every completed check —
+  frontloading the most important facts, ending sections with a STATUS
+  line, (3) never hold results for a final write. Every fleet gets a
+  PLAN.md-style restore point in its `.workagents/<round>/` dir carrying
+  the run IDs, journal paths and per-worker file names BEFORE launch, so
+  "continue the work" restores from disk: read the partials, relaunch the
+  fleet with each worker told to READ ITS OWN PARTIAL FILE and continue
+  from its last STATUS line rather than redo. This applies to every future
+  round, unconditionally.
 - **CONTEXT.md IS FOR A READER WITH NO CONTEXT (R43, permanent).** This
   file is read by an LLM in a fresh session that knows nothing about the
   project. Every section must stand alone: name things fully on first
