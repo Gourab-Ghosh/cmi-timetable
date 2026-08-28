@@ -8313,6 +8313,66 @@ def t139_a_second_tab_changing_your_timetable_is_not_silent(app):
     app.d.switch_to.window(first)
 
 
+def t141_the_printed_clash_strip_says_what_the_screen_says(app):
+    """A wall poster has to shout about overlaps at least as loudly as the
+    screen, and say the same thing. It did not, twice over.
+
+    It formatted `a_slot` for BOTH courses, so a poster of a term with a
+    stretched class told its reader that the other course ran 09:10-14:00 —
+    the on-screen panel had been fixed to wear a code per range and the strip
+    forty lines above it had not (R83). And it listed raw clashes while the
+    panel grouped them by pair, so two courses meeting at the same hour twice
+    a week were one problem on screen and two on paper (R84).
+
+    Both halves are the same rule: the sheet and the screen are one app."""
+    # TOC stretched to Tue 09:10-14:00 runs over AAT's Tue 10:30 class, so the
+    # two ranges genuinely differ — which is what makes the wrong version
+    # wrong rather than accidentally right. AAT also gets a SECOND meeting
+    # inside that span, so the pair collides twice: without it the grouping
+    # half of this test would pass on one collision and prove nothing.
+    twice = {
+        "next_id": 2,
+        "items": [
+            LONG_OVR["items"][0],
+            {
+                "id": 1, "course": "AAT", "base": None,
+                "to": {"day": "Tue",
+                       "slot": {"start_min": 720, "end_min": 795},
+                       "hall": "Lecture Hall 5", "temp_booking": False},
+                "created_at": 1754000001000.0,
+            },
+        ],
+        "credits": [],
+    }
+    app.boot("/", selection=["TOC", "AAT"], overrides=twice)
+    app.wait_css("section[aria-label='My timetable'] table.tt")
+
+    panel = app.css(".clash-list").text
+    assert "TOC" in panel and "AAT" in panel, panel
+
+    app.d.execute_cdp_cmd("Emulation.setEmulatedMedia", {"media": "print"})
+    time.sleep(0.3)
+    strip = app.css(".print-clashes").text
+    app.d.execute_cdp_cmd("Emulation.setEmulatedMedia", {"media": ""})
+
+    # Each range wears its own code, on paper as on screen.
+    assert "TOC 09:10–14:00" in strip, \
+        f"the strip must name whose time each range is: {strip!r}"
+    assert "AAT 10:30–11:45" in strip, strip
+    # …and it must not hand AAT the other course's hours, which is the exact
+    # sentence the old `a_slot`-only format printed.
+    assert "AAT (Tue 09:10–14:00)" not in strip, strip
+
+    # Two real collisions for one pair…
+    assert strip.count("12:00") == 1, \
+        f"the second collision must be on the sheet at all: {strip!r}"
+    # …and ONE entry for it, the way the screen panel counts.
+    assert strip.count("TOC × AAT") == 1, \
+        f"a pair is one problem, however many times it happens: {strip!r}"
+    assert len(app.css_all(".clash-list li")) == 1, \
+        "the screen groups the pair too, or these two are not being compared"
+
+
 def t140_a_footnote_never_explains_a_mark_that_is_not_there(app):
     """R79's rule, now asked of every sheet that can be filtered.
 
@@ -8553,6 +8613,7 @@ TESTS = [
     t138_a_link_that_replaces_your_courses_says_so,
     t139_a_second_tab_changing_your_timetable_is_not_silent,
     t140_a_footnote_never_explains_a_mark_that_is_not_there,
+    t141_the_printed_clash_strip_says_what_the_screen_says,
 ]
 
 

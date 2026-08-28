@@ -1161,17 +1161,30 @@ fn my_timetable(app: App) -> impl IntoView {
                 let clashes = clash_list();
                 (!clashes.is_empty())
                     .then(|| {
-                        let lines = clashes
-                            .iter()
-                            .map(|c| {
-                                format!(
-                                    "{} × {} ({} {})",
-                                    c.a,
-                                    c.b,
-                                    c.day.short(),
-                                    clash_times(c),
-                                )
-                            })
+                        // One entry per PAIR, with every time they collide
+                        // on it — the same grouping the on-screen panel below
+                        // does, and for the same reason: two courses meeting
+                        // at the same hour twice a week are one problem, and
+                        // printing the pair twice reads as two. The strip was
+                        // listing raw clashes while the panel grouped them,
+                        // so the paper and the screen counted differently
+                        // (R84's print verification).
+                        let mut groups: Vec<((String, String), Vec<String>)> = Vec::new();
+                        for c in &clashes {
+                            let when = format!("{} {}", c.day.short(), clash_times(c));
+                            let key = (c.a.clone(), c.b.clone());
+                            match groups.iter_mut().find(|(k, _)| *k == key) {
+                                Some((_, whens)) => {
+                                    if !whens.contains(&when) {
+                                        whens.push(when);
+                                    }
+                                }
+                                None => groups.push((key, vec![when])),
+                            }
+                        }
+                        let lines = groups
+                            .into_iter()
+                            .map(|((a, b), whens)| format!("{a} × {b} ({})", whens.join(", ")))
                             .collect::<Vec<_>>()
                             .join("  ·  ");
                         view! {

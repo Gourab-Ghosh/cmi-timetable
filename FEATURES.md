@@ -570,7 +570,9 @@ Sheet by sheet:
   code centred and the room beneath it.
 - **Dashed border + ✎** marks a time you changed; **red border + ⚠** marks a
   clash, so the meaning survives a black-and-white printer.
-- A red strip listing every clash on the sheet.
+- A red strip listing every clash on the sheet — one entry per pair with all
+  its colliding times, and each time range wearing its own course code, the
+  same words the on-screen Clashes panel uses.
 - A two-column course legend with names, instructors, credits and meetings.
 - The legend names **only the marks that are on the sheet** — an untouched
   timetable prints no note about ✎, and a clash-free one none about ⚠. This

@@ -291,7 +291,11 @@ button {
    was never a conformance failure, but the disabled PRIMARY eight lines below
    drops `opacity` for exactly this reason and states its measured numbers.
    The five Print buttons are plain `.btn`s, so they were the ones sitting at
-   2.86:1. Muted ink and a quiet fill instead: 5.8:1 / 6.7:1 (R83). */
+   2.86:1. Muted ink and a quiet fill instead: **5.50:1 light / 6.27:1 dark**,
+   measured against the `--surface-2` this rule itself paints — not against
+   the page, which is what an earlier draft of this comment did and why it
+   claimed 5.8/6.7 (R84's visual verification re-measured every number here
+   and matched the rest within 0.11). */
 .btn:disabled {
   cursor: default;
   box-shadow: none;

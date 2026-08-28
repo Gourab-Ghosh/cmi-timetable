@@ -789,7 +789,7 @@ regenerates the .ics golden.
   NOWHERE on this page while still counting toward the credit total.
 - "Your changes" groups are headed by `.cg-head` (colour rail + small caps
   + count), coloured by `OwnChange::tone()`. See §4.
-- Tests: 169 native + 140/140 e2e green (as of R84; the native count from
+- Tests: 169 native + 141/141 e2e green (as of R84; the native count from
   `deploy.sh`'s own in-container run — 49+18+3+9+25+27+28+10).
 - **The e2e suite mocks the relays, so it can never tell you a real one has
   died** — which is exactly how R84's outage reached a user. Two probes cover
@@ -6126,6 +6126,14 @@ that a real one has died. Run both before a deploy.
 Verified against the real internet, not only the harness: the rebuilt app
 fetched **79 real courses from cmi.ac.in** over the live network.
 
+The printed clash strip also stopped agreeing with the panel below it in a
+second way: it listed raw clashes while the panel grouped them by pair, so two
+courses meeting at the same hour twice a week were one problem on screen and
+two on paper. Grouped now, and `t141` pins BOTH halves — the per-range codes
+and the grouping — with a fixture where the same pair really does collide
+twice, because a single-collision fixture would make the grouping assertion
+pass on a build that does not group.
+
 `t133` (any one of the seven relays alive carries the sync on its own, and the
 app names which), `t134` (a supplied helper site is asked first and ALONE —
 `set(tiers) == {"proxy:your helper site"}`, which is the only form of that
@@ -6199,6 +6207,17 @@ per filter bar, three tabs) were still 28px. Restated at matching specificity.
 `.density-compact .chip` stays 40px deliberately and now says so, because it
 looks like the same oversight: tight rows are 34px cells, and a 44px chip in
 one would grow the Master grid by a third on the screen with least room.
+
+All three verifications ran against the BUILT artifact, and each proved its
+counterfactual rather than reporting an after-value: the old `covered_columns`
+predicate hand-evaluated on the live column grid (it really does emit "RFLR
+until 22:45" into the 20:30 column), `scrollbar-gutter: auto` re-injected to
+reproduce the 10px dialog shift exactly, and the pre-R83 opacity rules put
+back to reproduce 2.90 / 3.96 / 3.94 / 4.29 / 4.17 — within 0.11 of every
+number the stylesheet's own comments claim, except one: the disabled button is
+5.50:1 / 6.27:1 measured against the `--surface-2` its rule paints, not the
+5.8 / 6.7 an earlier draft claimed by measuring against the page. Corrected in
+place, because a number in a comment is a claim like any other.
 
 Six smaller ones from the same review are fixed too: the probe was uncached and
 unabortable and ran after the spinner stopped; the local-network explanation was
