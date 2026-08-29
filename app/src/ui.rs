@@ -90,6 +90,21 @@ impl ChipProps {
 /// with the halls grid so the two can never drift apart.
 pub const BARE_BOOKING_LABEL: &str = "booked";
 
+/// The faint dashed outline in the slot a moved class came from ("Show a
+/// ghost where CMI's time was", R89). A label, never a control: aria-hidden
+/// (the ✎ badge and "Your changes" speak the same fact), no handlers, no
+/// tabindex, and `pointer-events: none` in CSS — the DOM side of a drop can
+/// never meet it (drop targets read state, not DOM, but belt and braces).
+/// Always in the DOM; `.app.move-ghosts` is what shows it, so the tweak
+/// flip reaches every mounted cell without a rebuild (the chip-name shape).
+pub fn ghost_marker(code: String) -> impl IntoView {
+    view! {
+        <span class="ghost" aria-hidden="true">
+            {code}
+        </span>
+    }
+}
+
 pub fn covered_band(
     app: App,
     code: String,
@@ -3065,6 +3080,11 @@ pub fn ConfirmHost() -> impl IntoView {
             ConfirmAction::DiscardCourseEdits => {
                 app.dialog_dirty.set(false);
                 app.dialog.set(None);
+            }
+            ConfirmAction::ResetTweaks => {
+                app.reset_tweaks();
+                crate::apply_theme(app);
+                app.toast("All tweaks are back to how the app ships.");
             }
             ConfirmAction::ClearStorageKey(key) => {
                 storage::remove(&key);

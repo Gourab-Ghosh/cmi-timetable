@@ -209,6 +209,55 @@ impl Filters {
         self.active_count() == 0
     }
 
+    /// The active facets, spoken — for the printed sheet's stats line when
+    /// "Say on the sheet which filters narrowed it" is on. Names exactly
+    /// what `active_count` counts (the switches and the search scope stay
+    /// out — they change HOW the text matches, they hide nothing on their
+    /// own). Up to three facts verbatim; past that, an honest count beats
+    /// a stats line that swallows the masthead.
+    pub fn describe(&self) -> Option<String> {
+        let mut parts: Vec<String> = Vec::new();
+        for b in &self.branches {
+            parts.push(b.clone());
+        }
+        for i in &self.instructors {
+            parts.push(i.clone());
+        }
+        for d in &self.days {
+            parts.push(d.short().to_string());
+        }
+        for s in &self.slot_starts {
+            parts.push(format!("{:02}:{:02}", s / 60, s % 60));
+        }
+        for h in &self.halls {
+            parts.push(h.clone());
+        }
+        for c in &self.credits {
+            parts.push(if c == "?" {
+                "unknown credits".to_string()
+            } else {
+                format!("{c} cr")
+            });
+        }
+        for f in &self.flags {
+            parts.push(f.clone());
+        }
+        for c in &self.courses {
+            parts.push(c.clone());
+        }
+        if !self.text.trim().is_empty() {
+            parts.push(format!("\u{201c}{}\u{201d}", self.text.trim()));
+        }
+        if self.fits {
+            parts.push("fits my timetable".to_string());
+        }
+        match parts.len() {
+            0 => None,
+            1..=3 => Some(format!("filtered: {}", parts.join(" \u{b7} "))),
+            n => Some(format!("filtered by {n} things")),
+        }
+    }
+
     /// Are the three search switches all off? Separate from `is_empty`,
     /// because `active_count` counts things that HIDE courses and a switch on
     /// its own hides nothing — but a switch the reader turned on is still a
@@ -498,6 +547,44 @@ pub struct Prefs {
     /// status, milliseconds, bytes — so a bug report can carry the console.
     #[serde(default)]
     pub console_fetch_log_on: bool,
+
+    // --- The R89 tweaks. Same law as every field above.
+    /// Draw a faint dashed outline in the slot a moved class came from, on
+    /// My timetable and the Master grid. A sign, never a fact — "Your
+    /// changes" lists the same move in words; it never prints (the poster
+    /// already marks moves with ✎ and t140's census must stay whole).
+    #[serde(default)]
+    pub move_ghosts: bool,
+    /// Stop shrinking booking-free days on the Halls week to a slim line.
+    #[serde(default)]
+    pub halls_shrink_off: bool,
+    /// Stop banding every other room on the Halls week.
+    #[serde(default)]
+    pub halls_band_off: bool,
+    /// Print the poster desk-sized: shorter rows, tighter grid, nothing
+    /// dropped. False = today's wall-sized sheet.
+    #[serde(default)]
+    pub print_poster_compact: bool,
+    /// Name the filters that narrowed a printed sheet in its stats line,
+    /// beside the "5 of 12" count the sheet already carries.
+    #[serde(default)]
+    pub print_filters_named: bool,
+    /// How long any one helper site may take to answer before the app
+    /// gives up on it, in seconds. None = the shipped 12; the read site
+    /// clamps to 4..=60.
+    #[serde(default)]
+    pub proxy_timeout_s: Option<u8>,
+    /// The head start the first sync route gets before the rest are raced
+    /// in behind it, in milliseconds. None = the shipped 2500; the read
+    /// site clamps to 0..=10_000. Zero fans out to every relay at once.
+    #[serde(default)]
+    pub head_start_ms: Option<u32>,
+    /// The free-hall finder's two dropdowns arrive set to today and the
+    /// slot happening now. A seeded dropdown SAYS its value — this
+    /// knowingly amends the finder's "never assume a default day" rule,
+    /// and the comment at the seed site records that.
+    #[serde(default)]
+    pub finder_now: bool,
 }
 
 /// A day strip's selection: one day, or all of them.
@@ -574,6 +661,14 @@ impl Default for Prefs {
             ics_desc_off: false,
             dev_button_on: false,
             console_fetch_log_on: false,
+            move_ghosts: false,
+            halls_shrink_off: false,
+            halls_band_off: false,
+            print_poster_compact: false,
+            print_filters_named: false,
+            proxy_timeout_s: None,
+            head_start_ms: None,
+            finder_now: false,
         }
     }
 }
@@ -684,6 +779,8 @@ pub enum ConfirmAction {
     DiscardCourseEdits,
     /// Developer panel: clear one storage key.
     ClearStorageKey(String),
+    /// Developer panel: every tweak back to how the app ships.
+    ResetTweaks,
 }
 
 #[derive(Clone, PartialEq)]
@@ -1738,6 +1835,14 @@ impl App {
                     && !p.ics_desc_off
                     && !p.dev_button_on
                     && !p.console_fetch_log_on
+                    && !p.move_ghosts
+                    && !p.halls_shrink_off
+                    && !p.halls_band_off
+                    && !p.print_poster_compact
+                    && !p.print_filters_named
+                    && p.proxy_timeout_s.is_none()
+                    && p.head_start_ms.is_none()
+                    && !p.finder_now
                     && p.filters.is_empty()
                     && p.my_filters.is_empty()
                     && p.filters.switches_are_default()
@@ -3586,8 +3691,104 @@ impl App {
             p.ics_desc_off = d.ics_desc_off;
             p.dev_button_on = d.dev_button_on;
             p.console_fetch_log_on = d.console_fetch_log_on;
+            p.move_ghosts = d.move_ghosts;
+            p.halls_shrink_off = d.halls_shrink_off;
+            p.halls_band_off = d.halls_band_off;
+            p.print_poster_compact = d.print_poster_compact;
+            p.print_filters_named = d.print_filters_named;
+            p.proxy_timeout_s = d.proxy_timeout_s;
+            p.head_start_ms = d.head_start_ms;
+            p.finder_now = d.finder_now;
         });
         self.persist_prefs();
+    }
+
+    /// Every tweak whose value differs from how the app ships, as short
+    /// human-readable names — the Tweaks page's "what differs" counter and
+    /// Copy diagnostics both read THIS, so a bug report and the page agree.
+    /// The fields here are exactly the ones `reset_tweaks` above resets;
+    /// grow the two together or the counter starts lying about the reset.
+    pub fn tweak_deltas(&self) -> Vec<String> {
+        self.prefs.with(|p| {
+            let mut out: Vec<String> = Vec::new();
+            fn flag(out: &mut Vec<String>, on: bool, name: &str) {
+                if on {
+                    out.push(name.to_string());
+                }
+            }
+            flag(&mut out, p.marks_clash_off, "clash marks off");
+            flag(&mut out, p.marks_edits_off, "edit marks off");
+            flag(&mut out, p.marks_ticks_off, "course ticks off");
+            flag(&mut out, p.today_highlight_off, "today highlight off");
+            flag(&mut out, p.quiet_dim_off, "quiet-day dim off");
+            flag(&mut out, p.chip_halls_off, "hall names off chips");
+            flag(&mut out, p.chips_plain, "plain chip colours");
+            flag(&mut out, p.reduce_motion, "animations off");
+            match p.theme {
+                ThemePref::Auto => {}
+                ThemePref::Light => out.push("theme light".to_string()),
+                ThemePref::Dark => out.push("theme dark".to_string()),
+            }
+            match p.density {
+                None => {}
+                Some(Density::Comfortable) => out.push("row height roomy".to_string()),
+                Some(Density::Compact) => out.push("row height tight".to_string()),
+            }
+            flag(&mut out, p.chip_names, "course names on chips");
+            flag(&mut out, p.density_everywhere, "row height everywhere");
+            flag(&mut out, p.weekend_rows, "weekend rows on");
+            flag(&mut out, p.grid_hints_off, "how-to hints off");
+            flag(&mut out, p.chips_vivid, "vivid chip colours");
+            flag(&mut out, p.strong_lines, "stronger lines");
+            if let Some(t) = p.landing_tab {
+                out.push(format!("opens on {}", t.label()));
+            }
+            flag(&mut out, p.day_picks_forget, "day pickers forgotten");
+            if let Some(secs) = p.toast_life_secs {
+                out.push(if secs == 0 {
+                    "notices until dismissed".to_string()
+                } else {
+                    format!("notices {secs} s")
+                });
+            }
+            flag(&mut out, p.scrim_close_off, "scrim close off");
+            flag(&mut out, p.wheel_step_off, "wheel stepping off");
+            flag(&mut out, p.rail_gestures_off, "rail gestures off");
+            flag(&mut out, p.drag_without_edit, "drags without Edit layout");
+            if let Some(d) = p.undo_depth {
+                out.push(format!("undo depth {d}"));
+            }
+            if let Some(mode) = p.auto_sync.as_deref() {
+                out.push(format!("auto-sync {mode}"));
+            }
+            flag(&mut out, p.public_relays_off, "public relays off");
+            flag(&mut out, p.direct_route_off, "direct route off");
+            if let Some(d) = p.stale_after_days {
+                out.push(format!("amber after {d} d"));
+            }
+            flag(&mut out, p.print_plain, "plain-ink printing");
+            if let Some(shape) = p.print_page.as_deref() {
+                out.push(format!("page shape {shape}"));
+            }
+            flag(&mut out, p.print_credit_off, "printed credit off");
+            flag(&mut out, p.ics_link_off, "calendar link off");
+            flag(&mut out, p.ics_desc_off, "calendar description off");
+            flag(&mut out, p.dev_button_on, "header Developer button");
+            flag(&mut out, p.console_fetch_log_on, "console fetch echo");
+            flag(&mut out, p.move_ghosts, "move ghosts on");
+            flag(&mut out, p.halls_shrink_off, "halls empty days full height");
+            flag(&mut out, p.halls_band_off, "halls banding off");
+            flag(&mut out, p.print_poster_compact, "desk-sized poster");
+            flag(&mut out, p.print_filters_named, "filters named on sheets");
+            if let Some(t) = p.proxy_timeout_s {
+                out.push(format!("helper timeout {t} s"));
+            }
+            if let Some(ms) = p.head_start_ms {
+                out.push(format!("head start {:.1} s", f64::from(ms) / 1000.0));
+            }
+            flag(&mut out, p.finder_now, "finder opens on now");
+            out
+        })
     }
 
     /// Change one of the two filter sets as one undoable step, like any

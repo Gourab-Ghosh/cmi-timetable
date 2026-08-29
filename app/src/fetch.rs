@@ -795,6 +795,12 @@ pub async fn run_update(app: App, manual: bool) {
     app.persist_prefs();
 
     let force = app.force_tier.get_untracked();
+    // Consumed by THIS sync (R89): the control says "on next sync", and
+    // before this line cleared it the forced tier silently steered every
+    // later sync of the session — background ones included. The Sync page's
+    // select watches this signal and snaps its display back to "(all
+    // tiers…)" the moment the force is spent.
+    app.force_tier.set(None);
     // Gate failure on a PROXY response only means that relay may have mangled
     // the page — the chain carries on, and CMI itself gets the last word.
     // Gate failure on DIRECT content is terminal: those are CMI's own bytes,
@@ -843,6 +849,19 @@ pub async fn run_update(app: App, manual: bool) {
         // that FAILS starts the rest immediately; only a leader that goes
         // SILENT costs the 2.5s, which is the case worth waiting on anyway.
         let mine_first = !routes.is_empty();
+        // The two race tweaks, read once for the whole tier and clamped at
+        // this read site (the write site clamps identically — the R88
+        // symmetry rule), so a hand-edited blob can never wedge a sync.
+        let proxy_timeout = app
+            .prefs
+            .with_untracked(|p| p.proxy_timeout_s)
+            .map(|secs| u32::from(secs).clamp(4, 60) * 1000)
+            .unwrap_or(PROXY_TIMEOUT_MS);
+        let head_start = app
+            .prefs
+            .with_untracked(|p| p.head_start_ms)
+            .map(|ms| ms.min(10_000))
+            .unwrap_or(HELPER_HEAD_START_MS);
         let mut queue = routes
             .into_iter()
             .filter_map(|route| {
@@ -868,7 +887,7 @@ pub async fn run_update(app: App, manual: bool) {
                         format!("proxy:{name}"),
                         tt,
                         halls,
-                        PROXY_TIMEOUT_MS,
+                        proxy_timeout,
                         SourceTier::Proxy(name.clone()),
                         headers,
                     )
@@ -881,7 +900,10 @@ pub async fn run_update(app: App, manual: bool) {
                 ))
             })
             .collect::<Vec<_>>()
-            .into_iter();
+            .into_iter()
+            // Peekable, for the drained-queue check in the race loop below
+            // (R89): once nothing is left to start, a hedge has no job.
+            .peekable();
 
         let mut inflight = futures::stream::FuturesUnordered::new();
         // Which routes were ASKED, and which of them lived long enough to say
@@ -918,34 +940,44 @@ pub async fn run_update(app: App, manual: bool) {
             if inflight.is_empty() && !start_the_rest!() {
                 break;
             }
-            let hedge = gloo_timers::future::TimeoutFuture::new(HELPER_HEAD_START_MS);
-            // Dropping this future when the hedge wins leaves the requests
-            // themselves running — which is what makes this a head start and
-            // not a queue.
-            match select(Box::pin(inflight.next()), Box::pin(hedge)).await {
-                Either::Left((Some((name, result)), _)) => {
-                    finished.push(name.clone());
-                    match result {
-                        TierResult::Snapshot(snapshot) => {
-                            adopt(&app, *snapshot, true, Adoption::Fetched);
-                            adopted = true;
-                            remember_route(&app, &name);
-                        }
-                        // A relay may have mangled the content — wait for the
-                        // others, and start them NOW rather than waiting out a
-                        // head start for a runner that is already gone.
-                        TierResult::GateFailed => {
-                            gate_failed_any = true;
-                            start_the_rest!();
-                        }
-                        TierResult::Unreachable => {
-                            start_the_rest!();
-                        }
+            // Once the queue is drained a hedge has nothing left to start —
+            // await the racers plainly. Before R89 the hedge respun anyway,
+            // which idled harmlessly at 2500 ms but would busy-loop a
+            // ~4 ms-clamped timer for the whole tier at the tweak's 0 ms.
+            let outcome = if queue.peek().is_none() {
+                inflight.next().await
+            } else {
+                let hedge = gloo_timers::future::TimeoutFuture::new(head_start);
+                // Dropping this future when the hedge wins leaves the
+                // requests themselves running — which is what makes this a
+                // head start and not a queue.
+                match select(Box::pin(inflight.next()), Box::pin(hedge)).await {
+                    Either::Left((res, _)) => res,
+                    // Still silent. Bring the others in alongside it.
+                    Either::Right(((), _)) => {
+                        start_the_rest!();
+                        continue;
                     }
                 }
-                Either::Left((None, _)) => {}
-                // Still silent. Bring the others in alongside it.
-                Either::Right(((), _)) => {
+            };
+            let Some((name, result)) = outcome else {
+                continue;
+            };
+            finished.push(name.clone());
+            match result {
+                TierResult::Snapshot(snapshot) => {
+                    adopt(&app, *snapshot, true, Adoption::Fetched);
+                    adopted = true;
+                    remember_route(&app, &name);
+                }
+                // A relay may have mangled the content — wait for the
+                // others, and start them NOW rather than waiting out a
+                // head start for a runner that is already gone.
+                TierResult::GateFailed => {
+                    gate_failed_any = true;
+                    start_the_rest!();
+                }
+                TierResult::Unreachable => {
                     start_the_rest!();
                 }
             }

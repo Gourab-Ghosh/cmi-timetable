@@ -48,6 +48,7 @@ features = [
   "FocusEvent",
   "FocusOptions",
   "ServiceWorker",
+  "StorageManager",
   "ServiceWorkerContainer",
   "ServiceWorkerRegistration",
   "History",

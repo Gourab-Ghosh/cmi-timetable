@@ -865,6 +865,14 @@ pub fn dtstamp_utc_now() -> String {
 }
 
 /// Today's date in the browser's local time zone.
+/// Minutes since local midnight, through the ordinary `Date` constructor —
+/// the same clock `today_local` reads, so the e2e harness's clock pin
+/// reaches this too.
+pub fn now_local_minutes() -> u16 {
+    let d = js_sys::Date::new_0();
+    (d.get_hours() * 60 + d.get_minutes()) as u16
+}
+
 pub fn today_local() -> ttcore::date::CivilDate {
     let d = js_sys::Date::new_0();
     ttcore::date::CivilDate::new(

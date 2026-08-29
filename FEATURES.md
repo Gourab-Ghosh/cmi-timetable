@@ -166,8 +166,9 @@ day, columns are time slots, so a room's entire week reads straight down.
   and day gutters stay put when the week scrolls sideways.
 - Each room says **how busy it is** all week — "free all week" being the
   answer this page exists to give.
-- Empty days shrink to a line, alternate rooms carry a faint band, and today
-  is marked.
+- Empty days shrink to a line and alternate rooms carry a faint band — both
+  now tweaks of their own (developer mode → The Halls page) — and today is
+  marked.
 - **Places of your own** (a room CMI doesn't list, typed by you) get their own
   rows, badged as yours.
 - Courses on your timetable carry the same **✓** here as everywhere else —
@@ -587,6 +588,8 @@ Sheet by sheet:
 **My timetable** — a proper poster, not a screenshot of a web page:
 
 - Masthead with the semester and the date you last synced.
+- Wall-sized rows by default; a developer-mode tweak prints it desk-sized
+  instead — shorter rows for a binder or corkboard, nothing dropped.
 - Framed grid with a dark time band and chips in their branch colours, the
   code centred and the room beneath it.
 - **Dashed border + ✎** marks a time you changed; **red border + ⚠** marks a
@@ -727,7 +730,9 @@ The app asks **one** helper site at a time: the leading one alone, with the
 others brought in only if it fails or goes quiet. It remembers which route
 worked last time and starts there. So an ordinary sync is a single request to
 a single service — faster, and nobody else is shown which CMI page you are
-reading.
+reading. Both numbers in that race are developer-mode tweaks: how long the
+leader runs alone (down to zero — everyone at once, faster but less private)
+and how long any one helper site gets before the app gives up on it.
 
 ### Why the sync failed, exactly
 
@@ -984,7 +989,7 @@ tested on their own.
 
 **Tested like it matters:** 169 native tests — including a synthetic CMI
 website the tests generate themselves, with other semesters, other time
-formats, renamed halls and ten different kinds of broken page — plus 152
+formats, renamed halls and ten different kinds of broken page — plus 155
 end-to-end browser tests driving the real app in a real browser: drag & drop,
 touch gestures, keyboard-only flows, storage corruption, and a stand-in CMI
 that lets the true sync path be exercised end to end.
@@ -1000,24 +1005,33 @@ mode's own categories, each with its address:
   and deliberately no course data).
 - **Tweaks** (`#/developer/tweaks`) — every small choice about how the app
   looks *and acts*, searchable with the same **Aa / ab / .*** switches every
-  search box in the app has. Thirty-five in all (R88), shelved into eleven
-  collapsible groups whose headings are the disclosure buttons — the three
-  groups the page started with ship open, the rest closed, and a live search
-  reaches inside closed groups (a match renders its group expanded; clearing
-  the box restores your own open/closed choices, which are session-only like
-  the search itself):
+  search box in the app has. Forty-three in all (R88–R89), shelved into
+  twelve collapsible groups whose headings are the disclosure buttons —
+  every group ships open, **Open all groups / Close all groups** handles sit
+  under the search box, and a live search reaches inside closed groups (a
+  match renders its group expanded; clearing the box restores your own
+  open/closed choices, which are session-only like the search itself). A
+  quiet dot marks any row whose value differs from how the app ships, a
+  counter beside **Reset all tweaks** totals them, Reset asks before firing
+  and sleeps when nothing differs:
 
   - **Marks** — the three mark toggles (⚠ clashes, ✎ your changes, ✓ your
     courses — each hides the *sign*, never the *fact*: the Clashes list,
     "Your changes" and the credit numbers keep saying everything, and the
     printed key stops mentioning a mark the moment it stops being painted).
-  - **The week grid** — today's-row highlight, quiet-day dimming, hall names
-    on chips, course names on chips, the row height (with "follow this
-    device"), applying that row height beyond the Master grid, weekend rows
-    drawn even when empty, and the how-to hint lines.
+  - **The week grid** — today's-row highlight, quiet-day dimming (a
+    Halls-only fade, and its copy says so), hall names on chips, course
+    names on chips, the row height (with "follow this device"), applying
+    that row height beyond the Master grid, weekend rows drawn even when
+    empty, a faint **ghost** in the slot a moved class came from (never
+    printed — ✎ and "Your changes" carry the fact), and the how-to hint
+    lines.
   - **Colour and motion** — theme, coloured-vs-plain chips, vivid chip
     colours (plain still wins when both are set), stronger hairlines and
     small print, animations.
+  - **The Halls page** — the empty-day shrink, the alternate-room band, and
+    a free-hall finder that can open pre-set to today and the current slot
+    (a visible seed, never a silent assumption).
   - **Opening the app** — a fixed landing section (or "the section I left",
     how the app ships), and whether the day pickers are remembered between
     visits.
@@ -1029,11 +1043,14 @@ mode's own categories, each with its address:
   - **Editing and undo** — drags without the ✎ Edit layout toggle (mouse and
     pen only; a finger always needs the toggle), and the undo depth.
   - **Syncing** — the auto-sync cadence, whether public helper sites are
-    asked at all, whether cmi.ac.in is ever contacted directly, and when the
-    synced pill turns amber. However you tune these, the header never stops
-    saying how old the timetable is, and a failed sync names exactly the
-    routes that were really asked.
-  - **Printing** — colour or plain ink, page shape, the "made with…" credit.
+    asked at all, whether cmi.ac.in is ever contacted directly, when the
+    synced pill turns amber, how long any one helper site gets to answer,
+    and the head start the leading route runs alone. However you tune
+    these, the header never stops saying how old the timetable is, and a
+    failed sync names exactly the routes that were really asked.
+  - **Printing** — colour or plain ink, page shape, the "made with…"
+    credit, wall-sized or desk-sized poster rows, and naming on the sheet
+    the filters that narrowed it.
   - **Calendar files** — the planner link and the course description inside
     exported events.
   - **Developer mode** — a header Developer button, and a per-request

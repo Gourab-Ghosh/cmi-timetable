@@ -114,6 +114,19 @@ pub struct UpdateState {
     pub declined_at: f64,
 }
 
+/// The update check's schedule, for the Overview page (R89): when it last
+/// asked, when it plans to ask next, and whether that plan is one `due()`
+/// would ignore — a stored next-check further out than one full interval
+/// (the clock-moved guard) means "overdue: it will check on the next
+/// visit", and printing its timestamp as a promise would be a small lie.
+pub fn schedule_for_display() -> (Option<f64>, Option<f64>, bool) {
+    let st = load_state();
+    let last = (st.attempted_at > 0.0).then_some(st.attempted_at);
+    let next = (st.next_check_at > 0.0).then_some(st.next_check_at);
+    let overdue = st.next_check_at > crate::domx::now_ms() + CHECK_EVERY_MS;
+    (last, next, overdue)
+}
+
 fn load_state() -> UpdateState {
     match crate::storage::load::<UpdateState>(crate::storage::KEY_UPDATE) {
         crate::storage::Loaded::Value(v) => v,

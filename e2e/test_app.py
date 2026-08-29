@@ -8822,17 +8822,19 @@ def t144_the_tweaks_search_is_a_real_search_box(app):
                 for t in app.css_all(
                     ".tweak-group .group-toggle[aria-expanded='true']")]
 
-    # The R88 taxonomy: eleven groups, in the order a human wants them;
-    # the shipped page's three open, the eight new ones closed.
-    assert visible_groups() == [
-        "Marks", "The week grid", "Colour and motion", "Opening the app",
-        "Notices and dialogs", "Wheel and swipe", "Editing and undo",
-        "Syncing", "Printing", "Calendar files", "Developer mode",
-    ], visible_groups()
-    assert expanded_groups() == ["Marks", "The week grid", "Colour and motion"]
+    # The R89 taxonomy: twelve groups, in the order a human wants them —
+    # and EVERY group ships open (the user's own order): a first visit
+    # shows the whole page, the Close-all handle is the overview.
+    groups = [
+        "Marks", "The week grid", "Colour and motion", "The Halls page",
+        "Opening the app", "Notices and dialogs", "Wheel and swipe",
+        "Editing and undo", "Syncing", "Printing", "Calendar files",
+        "Developer mode",
+    ]
+    assert visible_groups() == groups, visible_groups()
+    assert expanded_groups() == groups, "every group ships open"
     open_rows = visible_rows()
-    assert open_rows == 16, \
-        f"the three open groups hold 3+8+5 rows, got {open_rows}"
+    assert open_rows == 43, f"the full roster is 43 rows, got {open_rows}"
 
     # A search reaches INSIDE a collapsed group: the one matching group
     # renders expanded, every non-matching group hides entirely.
@@ -8856,7 +8858,7 @@ def t144_the_tweaks_search_is_a_real_search_box(app):
     assert app.d.execute_script(
         "return document.activeElement === arguments[0]", box), \
         "clearing must hand the caret back"
-    assert expanded_groups() == ["Marks", "The week grid", "Colour and motion"], \
+    assert expanded_groups() == groups, \
         "clearing the search must restore the reader's own open/closed state"
 
     # Whole word: "mark" alone stops matching "marks".
@@ -8895,7 +8897,7 @@ def t144_the_tweaks_search_is_a_real_search_box(app):
     # Session-only, search AND collapse alike: a REAL reload starts clean.
     # (`boot` to the same URL is a same-document hash change — the exact
     # thing the mode guarantees — so refresh() is the only honest way to
-    # ask this question. The Syncing group is opened with no search live,
+    # ask this question. The Syncing group is CLOSED with no search live,
     # because a hidden group has no toggle and a held-open one ignores it.)
     app.css("button[aria-label='Clear search']").click()
     next(t for t in app.css_all(".tweak-group .group-toggle")
@@ -8905,7 +8907,8 @@ def t144_the_tweaks_search_is_a_real_search_box(app):
     box = app.css("input[aria-label='Search the tweaks']")
     assert box.get_attribute("value") == ""
     assert visible_rows() == open_rows
-    assert expanded_groups() == ["Marks", "The week grid", "Colour and motion"]
+    assert expanded_groups() == groups, \
+        "a reload forgets the session's closings — every group opens again"
 
 
 def t145_hiding_a_mark_hides_the_sign_never_the_fact(app):
@@ -9136,15 +9139,16 @@ def t148_the_tweak_groups_open_and_close_by_hand(app):
             f"    '{title}'));"
             "return g ? g.querySelectorAll('.tweak').length : -1;")
 
-    # Closed ships closed; one press opens; the next closes.
-    assert toggle("Syncing").get_attribute("aria-expanded") == "false"
-    assert rows_in("Syncing") == 0
-    toggle("Syncing").click()
-    WebDriverWait(app.d, 5).until(lambda d: rows_in("Syncing") == 4)
+    # Every group ships OPEN (the user's order, R89); one press closes,
+    # the next reopens. The Syncing lede states the honesty floor.
     assert toggle("Syncing").get_attribute("aria-expanded") == "true"
-    # The Syncing lede states the honesty floor.
+    assert rows_in("Syncing") == 6
     assert "never stops saying how old" in app.css(
         "section[aria-label='Developer mode']").text
+    toggle("Syncing").click()
+    WebDriverWait(app.d, 5).until(lambda d: rows_in("Syncing") == 0)
+    toggle("Syncing").click()
+    WebDriverWait(app.d, 5).until(lambda d: rows_in("Syncing") == 6)
     toggle("Syncing").click()
     WebDriverWait(app.d, 5).until(lambda d: rows_in("Syncing") == 0)
 
@@ -9163,6 +9167,52 @@ def t148_the_tweak_groups_open_and_close_by_hand(app):
     WebDriverWait(app.d, 5).until(
         lambda d: toggle("Syncing").get_attribute("aria-expanded") == "false",
         message="clearing must restore the reader's own closed state")
+
+    # The shelf handles (R89): the whole cupboard open, then shut — and both
+    # handles sleep while a search holds matching groups open, for the same
+    # reason the headings do.
+    def expanded_count():
+        return len(app.css_all(
+            ".tweak-group .group-toggle[aria-expanded='true']"))
+
+    open_all = app.xpath("//button[normalize-space()='Open all groups']")
+    close_all = app.xpath("//button[normalize-space()='Close all groups']")
+    close_all.click()
+    WebDriverWait(app.d, 5).until(lambda d: expanded_count() == 0)
+    open_all.click()
+    WebDriverWait(app.d, 5).until(lambda d: expanded_count() == 12)
+    box = app.css("input[aria-label='Search the tweaks']")
+    box.send_keys("marks")
+    WebDriverWait(app.d, 5).until(
+        lambda d: open_all.get_attribute("disabled"),
+        message="a live search must put the handles to sleep")
+    assert close_all.get_attribute("disabled")
+    app.css("button[aria-label='Clear search']").click()
+    WebDriverWait(app.d, 5).until(
+        lambda d: not open_all.get_attribute("disabled"))
+
+    # The counter and the sleeping Reset (R89): a fresh profile differs in
+    # nothing, so Reset sleeps and the line says so; one flip wakes both,
+    # and the reset puts both back.
+    assert "how the app ships" in app.css("[data-tweak-count]").text
+    reset = app.xpath("//button[normalize-space()='Reset all tweaks']")
+    assert reset.get_attribute("disabled"), \
+        "with nothing to reset, the Reset button must sleep"
+    app.xpath('//label[contains(@class,"opt")][.//span[normalize-space()='
+              '"Mark clashes with ⚠ and a red border"]]//input').click()
+    WebDriverWait(app.d, 5).until(
+        lambda d: "1 tweak differs" in app.css("[data-tweak-count]").text)
+    assert not reset.get_attribute("disabled")
+    # Reset asks first now (R89): forty-odd prefs are not Ctrl+Z-undoable,
+    # and every other danger button in the app asks.
+    reset.click()
+    assert "Reset all tweaks?" in app.confirm_text()
+    app.answer_confirm(True)
+    app.wait_toast("back to how the app ships")
+    WebDriverWait(app.d, 5).until(
+        lambda d: "how the app ships" in app.css("[data-tweak-count]").text
+        and app.xpath("//button[normalize-space()='Reset all tweaks']")
+        .get_attribute("disabled"))
 
 
 def t149_dialogs_and_notices_obey_their_tweaks(app):
@@ -9337,6 +9387,134 @@ def t152_a_mouse_may_earn_dragging_without_the_toggle(app):
         "with the tweak re-ticked, a toggle-less drag must be inert again"
 
 
+def t153_a_ghost_marks_where_a_moved_class_came_from(app):
+    """"Show a ghost where CMI's time was": with the tweak on, moving a
+    class leaves a faint dashed outline in the slot CMI gave it — a label,
+    never a control — on the Master grid and My timetable both. It is
+    inert to drops, never printed, and vanishes with the move itself."""
+    app.boot("/?c=TOC")
+    _flip_tweak(app, "ghost", "Show a ghost where CMI's time was")
+    app.css(".tabs .tab-exit").click()
+    app.wait_css("section[aria-label='My timetable']")
+
+    app.open_tab("Master grid")
+    app.wait_css("section[aria-label='Master grid'] table.tt")
+    app.xpath("//button[contains(.,'Edit layout')]").click()
+    app.drag_hover(app.chip("TOC", "td[data-day='1'][data-slot='550']"),
+                   app.cell(2, 1020))
+    app.drop()
+    app.wait_toast("Moved TOC")
+
+    old_cell = "td[data-day='1'][data-slot='550']"
+    ghost = app.css(f"{old_cell} .ghost")
+    assert ghost.tag_name == "span", "a ghost is a label, never a control"
+    assert ghost.get_attribute("aria-hidden") == "true", \
+        "the ✎ badge and Your changes speak the move; the ghost is decor"
+    assert "TOC" in ghost.text
+    assert not app.chips("TOC", old_cell), \
+        "the ghost must not read as the chip still being there"
+
+    # My timetable draws the same ghost.
+    app.open_tab("My timetable")
+    app.wait_css("section[aria-label='My timetable'] table.tt")
+    assert app.css_all(f"section[aria-label='My timetable'] {old_cell} .ghost")
+
+    # Paper never shows it, whatever the screen does (t140's census must
+    # never meet a second dashed box).
+    app.d.execute_cdp_cmd("Emulation.setEmulatedMedia", {"media": "print"})
+    time.sleep(0.2)
+    display = app.d.execute_script(
+        "const g = document.querySelector('.ghost');"
+        "return g ? getComputedStyle(g).display : 'missing';")
+    app.d.execute_cdp_cmd("Emulation.setEmulatedMedia", {"media": ""})
+    assert display == "none", f"a ghost must never print (display: {display})"
+
+    # A drop onto the ghost's cell lands exactly as it would on any empty
+    # cell — the ghost is pointer-inert by construction.
+    app.open_tab("Master grid")
+    app.wait_css("section[aria-label='Master grid'] table.tt")
+    app.drag_hover(app.chip("TOC", "td[data-day='2'][data-slot='1020']"),
+                   app.cell(1, 550))
+    app.drop()
+    app.wait_toast("Moved TOC")
+    time.sleep(0.3)
+    assert app.chips("TOC", old_cell), "the drop must land through the ghost"
+    assert not app.css_all(".ghost:not(:empty)") or not app.css_all(
+        f"{old_cell} .ghost"), \
+        "back in CMI's slot, there is no move left to ghost"
+
+
+def t154_the_halls_page_obeys_its_own_tweaks(app):
+    """The Halls page group: empty days keep full height when the shrink is
+    ticked off, the alternate-room band goes flat when banding is ticked
+    off, and the free-hall finder ships with blank pickers."""
+    app.boot("/?c=TOC", selection=["TOC"])
+    app.open_tab("Halls")
+    section = app.wait_css("section[aria-label='Lecture halls']")
+    next(b for b in section.find_elements(By.CSS_SELECTOR, "[role='radio']")
+         if b.text == "Week").click()
+    app.wait_css("table.tt.halls-merged")
+
+    # The finder ships blank — results wait for BOTH picks (the R87 rule;
+    # the finder_now tweak seeds VISIBLY, and only when asked).
+    selects = app.css_all("section[aria-label='Lecture halls'] .panel select")
+    finder_selects = [sel for sel in selects if sel.get_attribute("value") == ""]
+    assert len(finder_selects) >= 2, "the finder's two pickers ship blank"
+
+    def quiet_height():
+        return app.d.execute_script(
+            "const td = document.querySelector("
+            "  'table.tt.halls-merged tr.quiet td');"
+            "return td ? td.getBoundingClientRect().height : -1;")
+
+    def alt_band():
+        return app.d.execute_script(
+            "const td = document.querySelector("
+            "  'table.tt.halls-merged tr.alt td:not(.extra)');"
+            "return td ? getComputedStyle(td).backgroundColor : 'missing';")
+
+    h_shrunk = quiet_height()
+    assert 0 < h_shrunk <= 34, f"empty days ship shrunk (got {h_shrunk}px)"
+    band_on = alt_band()
+
+    _flip_tweak(app, "Shrink empty days", "Shrink empty days on Halls")
+    app.css(".tabs .tab-exit").click()
+    app.wait_css("table.tt.halls-merged")
+    WebDriverWait(app.d, 5).until(lambda d: quiet_height() > 40,
+                                  message="unticked, every row keeps full height")
+
+    _flip_tweak(app, "Band alternate rooms", "Band alternate rooms on the Halls page")
+    app.css(".tabs .tab-exit").click()
+    app.wait_css("table.tt.halls-merged")
+    WebDriverWait(app.d, 5).until(
+        lambda d: alt_band() != band_on,
+        message="unticked, the alternate-room band goes flat")
+    # The 2px room boundary is not the band's job and must survive it.
+    boundary = app.d.execute_script(
+        "const th = document.querySelector("
+        "  'table.tt.halls-merged tbody tr.group-start:not(:first-child) > th');"
+        "return th ? getComputedStyle(th).borderTopWidth : 'missing';")
+    assert boundary == "2px", f"the line between rooms stays (got {boundary})"
+
+
+def t155_the_forced_tier_is_spent_by_the_sync_that_uses_it(app):
+    """R89's confirmed defect, both halves: "Force tier on next sync" used
+    to steer every later sync of the session (the force was never cleared),
+    and the select forgot its own display on remount. Now the sync CONSUMES
+    the force, and the select snaps back to "(all tiers…)" the moment it is
+    spent — whatever became of the sync itself."""
+    app.boot("/#/developer/sync")
+    app.wait_css("section[aria-label='Developer mode']")
+    sel = app.css("#force-tier")
+    Select(sel).select_by_value("proxy")
+    assert sel.get_attribute("value") == "proxy"
+
+    app.xpath("//button[normalize-space()='Run sync']").click()
+    WebDriverWait(app.d, 20).until(
+        lambda d: app.css("#force-tier").get_attribute("value") == "",
+        message="the sync must consume the force and the select must show it")
+
+
 TESTS = [
     t01_header_sync_button_and_hidden_dev,
     t02_developer_endpoint_only,
@@ -9490,6 +9668,9 @@ TESTS = [
     t150_weekend_rows_are_a_choice_not_a_growth,
     t151_the_landing_section_is_a_choice,
     t152_a_mouse_may_earn_dragging_without_the_toggle,
+    t153_a_ghost_marks_where_a_moved_class_came_from,
+    t154_the_halls_page_obeys_its_own_tweaks,
+    t155_the_forced_tier_is_spent_by_the_sync_that_uses_it,
 ]
 
 

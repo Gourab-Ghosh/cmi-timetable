@@ -124,6 +124,40 @@ fn build_info(app: App) -> impl IntoView {
                 </dd>
                 <dt>"This build's id"</dt>
                 <dd>{crate::update::own_id_for_display()}</dd>
+                // The update check's schedule (R89): the one fact this
+                // panel's own "Check for an update" button manipulates and
+                // could not show — it lived only on the Storage page, as raw
+                // epoch milliseconds nobody can read.
+                <dt>"Update check"</dt>
+                <dd>
+                    {
+                        let (last, _, _) = crate::update::schedule_for_display();
+                        match last {
+                            Some(t) => format!("last asked {}", domx::fmt_local(t)),
+                            None => "never yet in this browser".to_string(),
+                        }
+                    }
+                </dd>
+                <dt>"Next scheduled check"</dt>
+                <dd>
+                    {
+                        let (_, next, overdue) = crate::update::schedule_for_display();
+                        let off = app.prefs.with_untracked(|p| p.update_checks_off);
+                        if off {
+                            "checks are off — the switch is in My data".to_string()
+                        } else if overdue {
+                            // due() ignores a stored time further out than
+                            // one whole interval (the clock-moved guard) —
+                            // printing it as a promise would be a small lie.
+                            "overdue — it will check on the next visit".to_string()
+                        } else {
+                            match next {
+                                Some(t) => domx::fmt_local(t),
+                                None => "on the next visit".to_string(),
+                            }
+                        }
+                    }
+                </dd>
             </dl>
             // The daily self-update check, on demand. The app asks the server
             // it was loaded from which build it is serving and, if it differs,
@@ -150,17 +184,38 @@ fn simulators(app: App) -> impl IntoView {
             <h3>"Simulators"</h3>
             <div class="row" style="display:flex;gap:0.5rem;flex-wrap:wrap;align-items:center">
                 <label for="force-tier" class="muted small">"Force tier on next sync"</label>
-                <select
-                    id="force-tier"
-                    on:change=move |ev| {
-                        let v = event_target_value(&ev);
-                        app.force_tier.set((!v.is_empty()).then_some(v));
+                // The select's DISPLAY follows the signal through a NodeRef
+                // and an isolated Effect (never a reactive `prop:` closure —
+                // the documented R14/R45 trap): run_update now CONSUMES the
+                // force, and a select still showing "direct" over a spent
+                // signal was half of the R89 defect (the other half: the
+                // force never cleared, so "on next sync" quietly meant
+                // "every sync this session").
+                {
+                    let sel_ref = NodeRef::<leptos::html::Select>::new();
+                    Effect::new(move |_| {
+                        let v = app.force_tier.get().unwrap_or_default();
+                        if let Some(el) = sel_ref.get() {
+                            el.set_value(&v);
+                        }
+                    });
+                    view! {
+                        <select
+                            id="force-tier"
+                            node_ref=sel_ref
+                            on:change=move |ev| {
+                                let v = event_target_value(&ev);
+                                app.force_tier.set((!v.is_empty()).then_some(v));
+                            }
+                        >
+                            <option value="">"(all tiers: relays, then CMI itself)"</option>
+                            <option value="proxy">"relays only"</option>
+                            <option value="direct">
+                                "CMI itself only (may prompt for local network)"
+                            </option>
+                        </select>
                     }
-                >
-                    <option value="">"(all tiers: relays, then CMI itself)"</option>
-                    <option value="proxy">"relays only"</option>
-                    <option value="direct">"CMI itself only (may prompt for local network)"</option>
-                </select>
+                }
                 <button class="btn small" on:click=move |_| {
                     leptos::task::spawn_local(async move {
                         fetch::run_update(app, true).await;
@@ -440,6 +495,80 @@ fn storage_inspector(app: App) -> impl IntoView {
                  cache — CMI can be asked for it again; the rest is your own work and \
                  exists nowhere else. Import replaces a key and reloads."
             </p>
+            // navigator.storage.persist() as a one-press ACTION (R89): asks
+            // the browser to shield this origin's data from storage-pressure
+            // eviction. A REQUEST, not a setting — Chromium answers by its
+            // own heuristics, usually without any prompt — so the echoed
+            // answer says what the browser said and promises nothing more.
+            // Session state, never a Prefs field: the browser owns this fact.
+            {
+                let persist_answer = RwSignal::new(None::<&'static str>);
+                view! {
+                    <div class="row" style="align-items:center; gap:0.6rem">
+                        <button
+                            class="btn small"
+                            on:click=move |_| {
+                                leptos::task::spawn_local(async move {
+                                    let storage_mgr = domx::window().navigator().storage();
+                                    // persist() itself can throw (an
+                                    // insecure context, an ancient browser)
+                                    // — treat that exactly like a decline.
+                                    let granted = match storage_mgr.persist() {
+                                        Ok(promise) => {
+                                            match wasm_bindgen_futures::JsFuture::from(promise)
+                                                .await
+                                            {
+                                                Ok(v) => v.as_bool().unwrap_or(false),
+                                                Err(_) => false,
+                                            }
+                                        }
+                                        Err(_) => false,
+                                    };
+                                    persist_answer.set(Some(if granted {
+                                        "The browser agreed: this data is now marked \
+                                         persistent and won't be evicted under storage \
+                                         pressure."
+                                    } else {
+                                        "The browser declined, in its own quiet way — \
+                                         it decides by its own rules (often: is the \
+                                         site installed or frequently used?). Your \
+                                         data stays saved as before; this only \
+                                         affects eviction under storage pressure."
+                                    }));
+                                });
+                            }
+                        >
+                            "Ask the browser to keep this data"
+                        </button>
+                        {move || {
+                            persist_answer
+                                .get()
+                                .map(|a| view! { <span class="muted small">{a}</span> })
+                        }}
+                    </div>
+                }
+            }
+            // The corrupt-backup explainer (R89), shown only while such a
+            // key exists (a fact that cannot act is not shown): the banner
+            // deliberately keeps the key name to the console, so THIS page —
+            // the one place the key is actually listed — is where "is it
+            // safe to Clear?" must be answered.
+            {move || {
+                bump.get();
+                storage::all_entries()
+                    .iter()
+                    .any(|(k, _)| k.starts_with("cmitt.corrupt."))
+                    .then(|| {
+                        view! {
+                            <p class="muted small">
+                                "cmitt.corrupt.* keys are copies the app saved when it \
+                                 couldn't read its own data — the app never reads them \
+                                 again. Export one to attach to a bug report; Clear it \
+                                 when you're done."
+                            </p>
+                        }
+                    })
+            }}
             {move || {
                 bump.get();
                 let entries = storage::all_entries();
@@ -577,17 +706,62 @@ fn raw_html_viewer(app: App) -> impl IntoView {
                         let halls = ttcore::rawhtml::decompress_from_b64(&raw.lecturehalls_b64)
                             .unwrap_or_else(|| "(could not decompress)".to_string());
                         view! {
+                            // Export completes the parser round trip (R89):
+                            // save the exact page the parser read, edit it,
+                            // feed it back through My data → "Load it from
+                            // CMI's page" — a reproducible test case with no
+                            // new machinery. Object-named buttons, and no
+                            // toast: a download is its own feedback, like
+                            // the inspector's Export.
                             <div class="row" style="margin-bottom:0.5rem">
                                 <button class="btn small" on:click=move |_| fetch::reparse_stored(app, true)>
                                     "Re-parse now"
                                 </button>
+                                {
+                                    let tt_copy = tt.clone();
+                                    view! {
+                                        <button
+                                            class="btn small"
+                                            on:click=move |_| {
+                                                domx::download_text(
+                                                    "cmi-timetable.html",
+                                                    "text/html",
+                                                    &tt_copy,
+                                                );
+                                            }
+                                        >
+                                            "Export timetable.php"
+                                        </button>
+                                    }
+                                }
+                                {
+                                    let halls_copy = halls.clone();
+                                    view! {
+                                        <button
+                                            class="btn small"
+                                            on:click=move |_| {
+                                                domx::download_text(
+                                                    "cmi-lecturehalls.html",
+                                                    "text/html",
+                                                    &halls_copy,
+                                                );
+                                            }
+                                        >
+                                            "Export lecturehalls.php"
+                                        </button>
+                                    }
+                                }
                             </div>
                             <details>
-                                <summary>"timetable.php"</summary>
+                                <summary>
+                                    {format!("timetable.php · {} KB", tt.len() / 1024)}
+                                </summary>
                                 <pre class="devpre">{tt}</pre>
                             </details>
                             <details>
-                                <summary>"lecturehalls.php"</summary>
+                                <summary>
+                                    {format!("lecturehalls.php · {} KB", halls.len() / 1024)}
+                                </summary>
                                 <pre class="devpre">{halls}</pre>
                             </details>
                         }
@@ -681,44 +855,18 @@ fn diagnostics_text(app: App) -> String {
     });
     let entries = storage::all_entries();
     let bytes: usize = entries.iter().map(|(k, v)| k.len() + v.len()).sum();
-    let tweaks = app.prefs.with_untracked(|p| {
-        let mut t: Vec<&str> = Vec::new();
-        if p.marks_clash_off {
-            t.push("clash marks hidden");
-        }
-        if p.marks_edits_off {
-            t.push("✎ marks hidden");
-        }
-        if p.marks_ticks_off {
-            t.push("✓ ticks hidden");
-        }
-        if p.today_highlight_off {
-            t.push("today unhighlighted");
-        }
-        if p.quiet_dim_off {
-            t.push("quiet days undimmed");
-        }
-        if p.chip_halls_off {
-            t.push("hall names off chips");
-        }
-        if p.chips_plain {
-            t.push("plain chips");
-        }
-        if p.reduce_motion {
-            t.push("reduced motion");
-        }
-        if p.theme != ThemePref::Auto {
-            t.push("theme chosen");
-        }
-        if p.density.is_some() {
-            t.push("row height chosen");
-        }
-        if t.is_empty() {
+    // ONE list shared with the Tweaks page's own counter (state.rs
+    // tweak_deltas), so a bug report and the page can never disagree about
+    // what differs from how the app ships. R89 closed the gap where this
+    // knew only the original eight bools while the page had grown to 35.
+    let tweaks = {
+        let deltas = app.tweak_deltas();
+        if deltas.is_empty() {
             "none".to_string()
         } else {
-            t.join(", ")
+            deltas.join(", ")
         }
-    });
+    };
     let mut out = format!(
         "CMI Timetable Planner diagnostics\n\
          app {} · parser v{} · commit {} · built {}\n\
@@ -765,6 +913,26 @@ fn diagnostics_text(app: App) -> String {
 /// round. The hint under it carries the honesty and the search words: every
 /// mark tweak's hint contains "hide", because that is the verb someone types.
 #[allow(clippy::too_many_arguments)]
+/// The quiet dot beside a row whose value differs from how the app ships
+/// (R89) — the row-level twin of the counter beside Reset. Decoration for
+/// the eye; the words ride in a visually-hidden span for everyone else.
+fn changed_dot(changed: impl Fn() -> bool + Copy + Send + Sync + 'static) -> impl IntoView {
+    view! {
+        {move || {
+            changed()
+                .then(|| {
+                    view! {
+                        <span class="tweak-dot" aria-hidden="true">" ●"</span>
+                        <span class="visually-hidden">
+                            " — changed from how the app ships"
+                        </span>
+                    }
+                })
+        }}
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 fn tweak_toggle(
     app: App,
     visible: Signal<bool>,
@@ -775,6 +943,9 @@ fn tweak_toggle(
     toast_on: &'static str,
     toast_off: &'static str,
 ) -> impl IntoView {
+    // The shipped answer, taken once: the dot below marks any row whose
+    // current answer differs from it.
+    let shipped = on_now(&Prefs::default());
     view! {
         {move || {
             visible
@@ -796,6 +967,7 @@ fn tweak_toggle(
                                     }
                                 />
                                 <span>{label}</span>
+                                {changed_dot(move || app.prefs.with(on_now) != shipped)}
                             </label>
                             <p class="muted small">{hint}</p>
                         </div>
@@ -906,6 +1078,7 @@ fn tweak_number(
     min: u32,
     max: u32,
     placeholder: &'static str,
+    unit: &'static str,
     get: fn(&Prefs) -> Option<u32>,
     set: fn(&mut Prefs, Option<u32>),
     toast_set: fn(u32) -> String,
@@ -953,6 +1126,10 @@ fn tweak_number(
                                         }
                                     }
                                 />
+                                // The unit word: without it the row ends
+                                // mid-sentence ("amber after 2" — 2 what?).
+                                <span class="tweak-unit">{unit}</span>
+                                {changed_dot(move || app.prefs.with(get).is_some())}
                             </div>
                             <p class="muted small">{hint}</p>
                         </div>
@@ -1002,14 +1179,14 @@ fn rows_marks(app: App, v: [Signal<bool>; 3]) -> AnyView {
     .into_any()
 }
 
-/// Group 2 — The week grid (8 rows; 4 joined in R88).
-fn rows_week(app: App, v: [Signal<bool>; 8]) -> AnyView {
+/// Group 2 — The week grid (9 rows; 4 joined in R88, the ghost in R89).
+fn rows_week(app: App, v: [Signal<bool>; 9]) -> AnyView {
     view! {
         {tweak_toggle(
             app,
             v[0],
             "Highlight today's row",
-            "The accent line on today's row in every week table. Paper never \
+            "The coloured line on today's row in every week table. Paper never \
              marks today either way.",
             |p| !p.today_highlight_off,
             |p, on| p.today_highlight_off = !on,
@@ -1020,11 +1197,14 @@ fn rows_week(app: App, v: [Signal<bool>; 8]) -> AnyView {
             app,
             v[1],
             "Dim days with no classes",
-            "Days with nothing on them keep quiet, so full days stand out.",
+            "On the Lecture halls week, the day names of days with no bookings \
+             fade so the busy days stand out. Untick for full ink on every day \
+             name — empty rows stay short either way, to keep a room's whole \
+             week in view.",
             |p| !p.quiet_dim_off,
             |p, on| p.quiet_dim_off = !on,
-            "Days with no classes are dimmed again.",
-            "Days with no classes now look like every other day.",
+            "Empty days fade again on the Halls week.",
+            "Empty days keep full ink now. They stay short to save space.",
         )}
         {tweak_toggle(
             app,
@@ -1040,10 +1220,10 @@ fn rows_week(app: App, v: [Signal<bool>; 8]) -> AnyView {
         {tweak_toggle(
             app,
             v[3],
-            "Course names on chips",
-            "The course's name written under its code on every week grid, for \
-             weeks when the codes haven't stuck yet. Tight rows leave names \
-             off to save space, and paper keeps its legend either way.",
+            "Show course names on chips",
+            "The course's name, written under its code on every chip. Handy in \
+             the first weeks, before the codes have stuck. Tight rows leave \
+             names off to save space, and paper keeps its legend either way.",
             |p| p.chip_names,
             |p, on| p.chip_names = on,
             "Course names are on the chips now.",
@@ -1056,6 +1236,7 @@ fn rows_week(app: App, v: [Signal<bool>; 8]) -> AnyView {
                         <div class="tweak">
                             <div class="tweak-seg">
                                 <span>"Row height"</span>
+                                {changed_dot(move || app.prefs.with(|p| p.density.is_some()))}
                                 <div
                                     class="seg"
                                     role="radiogroup"
@@ -1074,11 +1255,13 @@ fn rows_week(app: App, v: [Signal<bool>; 8]) -> AnyView {
                                 {move || {
                                     if app.prefs.with(|p| p.density_everywhere) {
                                         "Every week table's rows — “Apply the row height \
-                                         everywhere” below is on. Until you choose, they \
-                                         follow the screen the app is opened on."
+                                         everywhere” below is on. Until you choose, a \
+                                         phone opens Tight and a larger screen Roomy — \
+                                         decided when the app opens."
                                     } else {
-                                        "The Master grid's rows. Until you choose, they \
-                                         follow the screen the app is opened on."
+                                        "The Master grid's rows. Until you choose, a \
+                                         phone opens Tight and a larger screen Roomy — \
+                                         decided when the app opens."
                                     }
                                 }}
                             </p>
@@ -1090,9 +1273,9 @@ fn rows_week(app: App, v: [Signal<bool>; 8]) -> AnyView {
             app,
             v[5],
             "Apply the row height everywhere",
-            "Your Roomy or Tight choice reaches My timetable and Halls too, \
-             not only the Master grid. Tight everywhere fits a whole week on \
-             a laptop screen.",
+            "Your Roomy or Tight choice — or the one this device picked — \
+             reaches My timetable and Halls too, not only the Master grid. \
+             Tight everywhere fits a whole week on a laptop screen.",
             |p| p.density_everywhere,
             |p, on| p.density_everywhere = on,
             "Your row height now reaches My timetable and Halls too.",
@@ -1102,9 +1285,9 @@ fn rows_week(app: App, v: [Signal<bool>; 8]) -> AnyView {
             app,
             v[6],
             "Show Saturday and Sunday even when empty",
-            "Every week grid draws all seven days, instead of growing a \
-             weekend row only once something meets there. Handy for dragging \
-             a course of your own onto a Saturday that doesn't exist yet.",
+            "Every week grid draws all seven days, instead of a weekend row \
+             appearing only once a class meets there. Handy for dragging a \
+             course of your own onto an empty Saturday.",
             |p| p.weekend_rows,
             |p, on| p.weekend_rows = on,
             "Every week grid now draws Saturday and Sunday.",
@@ -1113,6 +1296,19 @@ fn rows_week(app: App, v: [Signal<bool>; 8]) -> AnyView {
         {tweak_toggle(
             app,
             v[7],
+            "Show a ghost where CMI's time was",
+            "A faint dashed outline in the slot a moved class came from, on My \
+             timetable and the Master grid, so the grid shows both halves of \
+             every move. It never prints — paper already marks moves with ✎ — \
+             and “Your changes” lists the same fact in words.",
+            |p| p.move_ghosts,
+            |p, on| p.move_ghosts = on,
+            "Ghosts now mark where moved classes came from.",
+            "Ghosts are gone — “Your changes” still lists every move.",
+        )}
+        {tweak_toggle(
+            app,
+            v[8],
             "Show the how-to hints under the grids",
             "The one-line instructions, like how ✎ Edit layout drags work. \
              Untick once you know the app — every control they describe \
@@ -1136,6 +1332,9 @@ fn rows_colour(app: App, v: [Signal<bool>; 5]) -> AnyView {
                         <div class="tweak">
                             <div class="tweak-seg">
                                 <span>"Theme"</span>
+                                {changed_dot(move || {
+                                    app.prefs.with(|p| p.theme != ThemePref::Auto)
+                                })}
                                 <div
                                     class="seg"
                                     role="radiogroup"
@@ -1182,7 +1381,7 @@ fn rows_colour(app: App, v: [Signal<bool>; 5]) -> AnyView {
             app,
             v[3],
             "Stronger lines and small print",
-            "Darker grid lines and darker fine print, in both themes — for \
+            "Darker grid lines and darker small print, in both themes — for \
              screens where the hairlines fade, or eyes that wish they \
              wouldn't.",
             |p| p.strong_lines,
@@ -1193,8 +1392,9 @@ fn rows_colour(app: App, v: [Signal<bool>; 5]) -> AnyView {
         {tweak_toggle(
             app,
             v[4],
-            "Animate panels and toasts",
-            "Untick for the same stillness your device's reduce-motion \
+            "Animate panels and notices",
+            "Panels and notices slide and fade into place. Untick and they \
+             simply appear — the same stillness your device's reduce-motion \
              setting asks for, without needing it set.",
             |p| !p.reduce_motion,
             |p, on| p.reduce_motion = !on,
@@ -1205,7 +1405,53 @@ fn rows_colour(app: App, v: [Signal<bool>; 5]) -> AnyView {
     .into_any()
 }
 
-/// Group 4 — Opening the app (2 rows, R88).
+/// Group 4 — The Halls page (3 rows, R89): how the app's densest surface
+/// looks, and how its finder greets you.
+fn rows_halls(app: App, v: [Signal<bool>; 3]) -> AnyView {
+    view! {
+        {tweak_toggle(
+            app,
+            v[0],
+            "Shrink empty days on Halls",
+            "Days with no bookings drop to a slim line, so busy rooms stand \
+             out by size. Untick and every row keeps its full height — the \
+             printed hall sheet draws uniform rows either way.",
+            |p| !p.halls_shrink_off,
+            |p, on| p.halls_shrink_off = !on,
+            "Empty days on Halls shrink to a line again.",
+            "Every day on Halls keeps its full height now.",
+        )}
+        {tweak_toggle(
+            app,
+            v[1],
+            "Band alternate rooms on the Halls page",
+            "Every other room carries a faint background, so one room's days \
+             read as one block. Untick for a flat table — the line between \
+             rooms stays either way.",
+            |p| !p.halls_band_off,
+            |p, on| p.halls_band_off = !on,
+            "Alternate rooms wear their band again.",
+            "The Halls table is flat now — the line between rooms stays.",
+        )}
+        {tweak_toggle(
+            app,
+            v[2],
+            "Start the free-hall finder on today and the current slot",
+            "The finder's two dropdowns arrive already set to today and the \
+             hour happening now, so “which room is free right now” needs no \
+             clicks. They stay ordinary dropdowns — your own pick always \
+             wins, and outside teaching hours the slot simply waits for you \
+             to choose.",
+            |p| p.finder_now,
+            |p, on| p.finder_now = on,
+            "The free-hall finder will open on today and the current slot.",
+            "The free-hall finder will open blank.",
+        )}
+    }
+    .into_any()
+}
+
+/// Group 5 — Opening the app (2 rows, R88).
 fn rows_opening(app: App, v: [Signal<bool>; 2]) -> AnyView {
     view! {
         {move || {
@@ -1215,6 +1461,7 @@ fn rows_opening(app: App, v: [Signal<bool>; 2]) -> AnyView {
                         <div class="tweak">
                             <div class="tweak-seg">
                                 <span>"Open the app on"</span>
+                                {changed_dot(move || app.prefs.with(|p| p.landing_tab.is_some()))}
                                 // A dropdown, not a seg: six options do not
                                 // fit a pill row at 320px.
                                 <select
@@ -1282,7 +1529,7 @@ fn rows_opening(app: App, v: [Signal<bool>; 2]) -> AnyView {
     .into_any()
 }
 
-/// Group 5 — Notices and dialogs (2 rows, R88).
+/// Group 6 — Notices and dialogs (2 rows, R88).
 fn rows_notices(app: App, v: [Signal<bool>; 2]) -> AnyView {
     view! {
         {move || {
@@ -1292,6 +1539,9 @@ fn rows_notices(app: App, v: [Signal<bool>; 2]) -> AnyView {
                         <div class="tweak">
                             <div class="tweak-seg">
                                 <span>"Notices stay for"</span>
+                                {changed_dot(move || {
+                                    app.prefs.with(|p| p.toast_life_secs.is_some())
+                                })}
                                 <div
                                     class="seg"
                                     role="radiogroup"
@@ -1344,8 +1594,8 @@ fn rows_notices(app: App, v: [Signal<bool>; 2]) -> AnyView {
                                 </div>
                             </div>
                             <p class="muted small">
-                                "Every notice waits while you hover, focus or hold it, and \
-                                 every one has its own ✕. 6 seconds is how the app ships."
+                                "Every notice waits while you hover, focus or hold it. \
+                                 Every one has its own ✕. 6 seconds is how the app ships."
                             </p>
                         </div>
                     }
@@ -1361,13 +1611,13 @@ fn rows_notices(app: App, v: [Signal<bool>; 2]) -> AnyView {
             |p| !p.scrim_close_off,
             |p, on| p.scrim_close_off = !on,
             "Clicking beside a dialog closes it again.",
-            "Only Close or Escape leaves a dialog now.",
+            "Clicking beside a dialog does nothing now.",
         )}
     }
     .into_any()
 }
 
-/// Group 6 — Wheel and swipe (2 rows, R88).
+/// Group 7 — Wheel and swipe (2 rows, R88).
 fn rows_gestures(app: App, v: [Signal<bool>; 2]) -> AnyView {
     view! {
         {tweak_toggle(
@@ -1376,7 +1626,7 @@ fn rows_gestures(app: App, v: [Signal<bool>; 2]) -> AnyView {
             "Step values with the wheel",
             "Scroll over credits, a time, a date or a dropdown and it moves \
              one step. Untick and the wheel only ever scrolls — typing and \
-             the arrows still change every value.",
+             the arrow keys still change every value.",
             |p| !p.wheel_step_off,
             |p, on| p.wheel_step_off = !on,
             "The wheel steps values again.",
@@ -1393,13 +1643,13 @@ fn rows_gestures(app: App, v: [Signal<bool>; 2]) -> AnyView {
             |p| !p.rail_gestures_off,
             |p, on| p.rail_gestures_off = !on,
             "The wheel and swipes walk the sections again.",
-            "The section bar answers taps and arrow keys only now.",
+            "The section bar now answers only taps and arrow keys.",
         )}
     }
     .into_any()
 }
 
-/// Group 7 — Editing and undo (2 rows, R88).
+/// Group 8 — Editing and undo (2 rows, R88).
 fn rows_editing(app: App, v: [Signal<bool>; 2]) -> AnyView {
     view! {
         {tweak_toggle(
@@ -1408,8 +1658,8 @@ fn rows_editing(app: App, v: [Signal<bool>; 2]) -> AnyView {
             "Keep drags behind ✎ Edit layout",
             "Untick and a mouse or pen can drag a chip any time, no toggle \
              first. A finger still needs the toggle, so scrolling a phone \
-             never moves a class — and every move stays undoable and listed \
-             under Your changes.",
+             never moves a class. Every move stays undoable and listed under \
+             “Your changes”.",
             |p| !p.drag_without_edit,
             |p, on| p.drag_without_edit = !on,
             "Drags need ✎ Edit layout again.",
@@ -1422,10 +1672,11 @@ fn rows_editing(app: App, v: [Signal<bool>; 2]) -> AnyView {
             "Undo history depth",
             "How many steps Ctrl+Z can walk back — 100 unless you say \
              otherwise. Each step keeps a copy of your selection in memory, \
-             never in storage, so a very deep history costs RAM.",
+             never in storage, so a very deep history costs memory.",
             10,
             1000,
             "100",
+            "steps",
             |p| p.undo_depth.map(u32::from),
             |p, n| p.undo_depth = n.map(|v| v as u16),
             |n| format!("Ctrl+Z now keeps {n} steps."),
@@ -1435,8 +1686,8 @@ fn rows_editing(app: App, v: [Signal<bool>; 2]) -> AnyView {
     .into_any()
 }
 
-/// Group 8 — Syncing (4 rows, R88).
-fn rows_syncing(app: App, v: [Signal<bool>; 4]) -> AnyView {
+/// Group 9 — Syncing (6 rows; 4 from R88, the two race numbers from R89).
+fn rows_syncing(app: App, v: [Signal<bool>; 6]) -> AnyView {
     view! {
         {move || {
             v[0].get()
@@ -1445,6 +1696,7 @@ fn rows_syncing(app: App, v: [Signal<bool>; 4]) -> AnyView {
                         <div class="tweak">
                             <div class="tweak-seg">
                                 <span>"Check CMI on its own"</span>
+                                {changed_dot(move || app.prefs.with(|p| p.auto_sync.is_some()))}
                                 <div
                                     class="seg"
                                     role="radiogroup"
@@ -1498,8 +1750,9 @@ fn rows_syncing(app: App, v: [Signal<bool>; 4]) -> AnyView {
                             <p class="muted small">
                                 "How often the app fetches CMI's pages without being asked. \
                                  The header keeps counting how old the timetable is \
-                                 whichever you pick — and a browser that has never synced \
-                                 still fetches its first timetable."
+                                 whichever you pick. A browser that has never synced still \
+                                 fetches its first timetable. Twice a day is how the app \
+                                 ships."
                             </p>
                         </div>
                     }
@@ -1509,10 +1762,11 @@ fn rows_syncing(app: App, v: [Signal<bool>; 4]) -> AnyView {
             app,
             v[1],
             "Ask the public helper sites when syncing",
-            "Untick and no public relay is ever shown which CMI page you read \
-             — only your own helper site (set in My data) and CMI itself are \
-             asked. With “Ask CMI directly” also off and no helper site set, \
-             pasting CMI's page is the way left, and a failed sync says so.",
+            "Untick and no public helper site ever learns which CMI page you \
+             read — the sync asks only your own helper site (set in My data) \
+             and CMI itself. With “Ask CMI directly” also off and no helper \
+             site set, pasting CMI's page is the only way left, and a failed \
+             sync says so.",
             |p| !p.public_relays_off,
             |p, on| p.public_relays_off = !on,
             "Public helper sites are back in the sync.",
@@ -1525,8 +1779,8 @@ fn rows_syncing(app: App, v: [Signal<bool>; 4]) -> AnyView {
             "The last route of a sync is cmi.ac.in itself — on CMI's own \
              network that is what raises the browser's local-network \
              question. Untick and the app never contacts CMI's address from \
-             your browser, and a failed sync says this route was switched off \
-             here instead of pretending it was tried.",
+             your browser. A failed sync then says this route was switched \
+             off here, instead of pretending it was tried.",
             |p| !p.direct_route_off,
             |p, on| p.direct_route_off = !on,
             "cmi.ac.in is back as the sync's last resort.",
@@ -1537,12 +1791,13 @@ fn rows_syncing(app: App, v: [Signal<bool>; 4]) -> AnyView {
             v[3],
             "Turn the synced pill amber after",
             "How many days old the timetable gets before the header's pill \
-             wears its warning colour — 2 unless you say otherwise. The age \
-             itself is always written out and keeps counting; this only moves \
-             where the colour starts worrying.",
+             turns amber — 2 unless you say otherwise. The age itself is \
+             always written out and keeps counting; this only moves where the \
+             colour starts worrying.",
             1,
             14,
             "2",
+            "days",
             |p| p.stale_after_days.map(u32::from),
             |p, n| p.stale_after_days = n.map(|v| v as u8),
             |n| {
@@ -1554,19 +1809,113 @@ fn rows_syncing(app: App, v: [Signal<bool>; 4]) -> AnyView {
             },
             "The pill turns amber after 2 days again.",
         )}
+        {tweak_number(
+            app,
+            v[4],
+            "How long each helper site gets to answer",
+            "How long any one helper site may take to answer before the app \
+             gives up on it — 12 seconds unless you say otherwise. More suits \
+             a slow connection; less gives up on a silent sync sooner. CMI's \
+             own direct attempt keeps its short budget either way.",
+            4,
+            60,
+            "12",
+            "seconds",
+            |p| p.proxy_timeout_s.map(u32::from),
+            |p, n| p.proxy_timeout_s = n.map(|v| v as u8),
+            |n| format!("Helper sites now get {n} seconds to answer."),
+            "Helper sites get the app's 12 seconds again.",
+        )}
+        {move || {
+            v[5].get()
+                .then(|| {
+                    view! {
+                        <div class="tweak">
+                            <div class="tweak-seg">
+                                <span>"Ask the leading helper site alone for"</span>
+                                <input
+                                    type="number"
+                                    class="tweak-num"
+                                    min="0"
+                                    max="10"
+                                    step="0.5"
+                                    placeholder="2.5"
+                                    aria-label="Ask the leading helper site alone for"
+                                    prop:value=move || {
+                                        app.prefs
+                                            .with(|p| p.head_start_ms)
+                                            .map(|ms| {
+                                                let secs = f64::from(ms) / 1000.0;
+                                                if secs == secs.trunc() {
+                                                    format!("{secs:.0}")
+                                                } else {
+                                                    format!("{secs}")
+                                                }
+                                            })
+                                            .unwrap_or_default()
+                                    }
+                                    on:wheel=domx::step_on_wheel
+                                    on:change=move |ev| {
+                                        let raw = event_target_value(&ev);
+                                        match raw.trim().parse::<f64>().ok() {
+                                            Some(secs) => {
+                                                // Clamped identically at the read
+                                                // site (fetch.rs) — the symmetry
+                                                // rule, so the box always shows
+                                                // what the race really does.
+                                                let ms =
+                                                    (secs.clamp(0.0, 10.0) * 1000.0).round() as u32;
+                                                app.prefs.update(|p| p.head_start_ms = Some(ms));
+                                                app.persist_prefs();
+                                                app.toast(if ms == 0 {
+                                                    "Every helper site is asked at once — \
+                                                     faster, and less private."
+                                                        .to_string()
+                                                } else {
+                                                    format!(
+                                                        "The leading helper site gets {} seconds alone.",
+                                                        f64::from(ms) / 1000.0,
+                                                    )
+                                                });
+                                            }
+                                            None => {
+                                                app.prefs.update(|p| p.head_start_ms = None);
+                                                app.persist_prefs();
+                                                app.toast(
+                                                    "The leading helper site gets its 2.5 seconds back.",
+                                                );
+                                            }
+                                        }
+                                    }
+                                />
+                                <span class="tweak-unit">"seconds"</span>
+                                {changed_dot(move || app.prefs.with(|p| p.head_start_ms.is_some()))}
+                            </div>
+                            <p class="muted small">
+                                "The head start the first route gets before the rest are \
+                                 raced in behind it. Longer is quieter — one helper site \
+                                 asked instead of seven. Zero asks them all at once: faster \
+                                 when the leader is asleep, but every relay is shown which \
+                                 page you read. A route that fails outright never waits \
+                                 this long."
+                            </p>
+                        </div>
+                    }
+                })
+        }}
     }
     .into_any()
 }
 
-/// Group 9 — Printing (3 rows, R88).
-fn rows_printing(app: App, v: [Signal<bool>; 3]) -> AnyView {
+/// Group 10 — Printing (5 rows; 3 from R88, 2 from R89).
+fn rows_printing(app: App, v: [Signal<bool>; 5]) -> AnyView {
     view! {
         {tweak_toggle(
             app,
             v[0],
             "Print in colour",
             "Untick for plain-ink sheets: white header bands, grey-bordered \
-             chips, black rules — kinder to toner and photocopiers. ⚠, ✎ and \
+             chips, black lines — kinder to toner and photocopiers. ⚠, ✎ and \
              ✓ already say everything in black and white, and clash red \
              stays: it is a warning, not decoration.",
             |p| !p.print_plain,
@@ -1581,6 +1930,7 @@ fn rows_printing(app: App, v: [Signal<bool>; 3]) -> AnyView {
                         <div class="tweak">
                             <div class="tweak-seg">
                                 <span>"Page shape"</span>
+                                {changed_dot(move || app.prefs.with(|p| p.print_page.is_some()))}
                                 <div
                                     class="seg"
                                     role="radiogroup"
@@ -1646,11 +1996,37 @@ fn rows_printing(app: App, v: [Signal<bool>; 3]) -> AnyView {
             "The printed credit is back.",
             "Sheets print unsigned now.",
         )}
+        {tweak_toggle(
+            app,
+            v[3],
+            "Size the poster's rows for a wall",
+            "The printed poster's tall rows, made to be read across a room. \
+             Untick for a desk-sized sheet — shorter rows and a tighter grid, \
+             for a binder or a corkboard corner — and nothing is dropped: \
+             every chip and mark still prints.",
+            |p| !p.print_poster_compact,
+            |p, on| p.print_poster_compact = !on,
+            "The poster prints wall-sized again.",
+            "The poster prints desk-sized now — nothing is dropped.",
+        )}
+        {tweak_toggle(
+            app,
+            v[4],
+            "Say on the sheet which filters narrowed it",
+            "A filtered printout already counts itself — “5 of 12 courses”. \
+             Tick to also name the filters that did the narrowing — the day, \
+             the programme, the search — in the sheet's stats line. The count \
+             prints either way.",
+            |p| p.print_filters_named,
+            |p, on| p.print_filters_named = on,
+            "Filtered sheets now name their filters.",
+            "Filtered sheets keep the count only.",
+        )}
     }
     .into_any()
 }
 
-/// Group 10 — Calendar files (2 rows, R88). Named for what the files are —
+/// Group 11 — Calendar files (2 rows, R88). Named for what the files are —
 /// never "Exports", which would collide with My data's export buttons.
 fn rows_calendar(app: App, v: [Signal<bool>; 2]) -> AnyView {
     view! {
@@ -1659,8 +2035,8 @@ fn rows_calendar(app: App, v: [Signal<bool>; 2]) -> AnyView {
             v[0],
             "Put a link back to this planner in every calendar event",
             "Each event's notes end with a link that reopens this timetable. \
-             Untick to keep the file to class facts — the link also spells \
-             out which courses you take, which matters if you send the file \
+             Untick to keep the file to class facts. The link also spells out \
+             which courses you take — worth knowing before you send the file \
              to someone.",
             |p| !p.ics_link_off,
             |p, on| p.ics_link_off = !on,
@@ -1683,7 +2059,7 @@ fn rows_calendar(app: App, v: [Signal<bool>; 2]) -> AnyView {
     .into_any()
 }
 
-/// Group 11 — Developer mode (2 rows, R88).
+/// Group 12 — Developer mode (2 rows, R88).
 fn rows_devmode(app: App, v: [Signal<bool>; 2]) -> AnyView {
     view! {
         {tweak_toggle(
@@ -1703,8 +2079,8 @@ fn rows_devmode(app: App, v: [Signal<bool>; 2]) -> AnyView {
             "Echo every fetch to the browser console",
             "Each sync request also prints one line in your browser's \
              DevTools — route, status, milliseconds, bytes — so a bug report \
-             can carry the console. The Sync page's log shows the same rows \
-             either way.",
+             can include what the console saw. The Sync page's log shows the \
+             same rows either way.",
             |p| p.console_fetch_log_on,
             |p, on| p.console_fetch_log_on = on,
             "Every sync request now also prints one line in the browser \
@@ -1726,8 +2102,11 @@ fn tweaks_page(app: App) -> impl IntoView {
     let whole_word = RwSignal::new(false);
     let use_regex = RwSignal::new(false);
 
-    // What each row is findable BY: its group, its label, its hint — the
-    // words on the screen, nothing hidden. Index order = render order.
+    // What each row is findable BY: its group, its label, its hint — plus,
+    // on some entries, a deliberate synonym tail the screen does not show
+    // (toast, privacy, relay, ics, stale, debug…), so people who know a
+    // concept by another name still find its row. Index order = render
+    // order, always.
     let hay: Vec<String> = TWEAK_HAYSTACKS
         .iter()
         .map(|(group, label, hint)| format!("{group} {label} {hint}"))
@@ -1770,9 +2149,10 @@ fn tweaks_page(app: App) -> impl IntoView {
     let box_ref = NodeRef::<leptos::html::Input>::new();
     // Each group's disclosure, session-only (the search-switch precedent —
     // no Prefs field, so "Reset all tweaks" has nothing to know about it).
-    // The shipped page's three groups open, the eight R88 groups closed:
-    // a first visit shows the familiar page, depth one press away.
-    let open: [RwSignal<bool>; 11] = std::array::from_fn(|i| RwSignal::new(i < 3));
+    // EVERY group ships open — the user's own order (R89): a first visit
+    // shows the whole page; "Close all groups" is one press away for anyone
+    // who wants the twelve-line overview instead.
+    let open: [RwSignal<bool>; 12] = std::array::from_fn(|_| RwSignal::new(true));
 
     view! {
         <div class="filterbar noprint" role="group" aria-label="Find a tweak">
@@ -1856,6 +2236,51 @@ fn tweaks_page(app: App) -> impl IntoView {
             }}
         </div>
 
+        // The two shelf handles (R89): open the whole cupboard, or shut it.
+        // They write the same session-only signals the headings toggle, and
+        // sit ABOVE the groups — a handle below eleven shelves is only found
+        // after scrolling past everything it would have saved you. Disabled
+        // mid-search for the headings' own reason: a live query holds
+        // matching groups open, so the press would look broken.
+        <div class="row tweak-shelf noprint">
+            <button
+                class="btn small"
+                prop:disabled=move || has_text.get()
+                title=move || {
+                    if has_text.get() {
+                        "Clear the search first — a search holds matching groups open."
+                    } else {
+                        "Every group open, every tweak on show."
+                    }
+                }
+                on:click=move |_| {
+                    for o in open {
+                        o.set(true);
+                    }
+                }
+            >
+                "Open all groups"
+            </button>
+            <button
+                class="btn small"
+                prop:disabled=move || has_text.get()
+                title=move || {
+                    if has_text.get() {
+                        "Clear the search first — a search holds matching groups open."
+                    } else {
+                        "Just the group names, for finding your bearings."
+                    }
+                }
+                on:click=move |_| {
+                    for o in open {
+                        o.set(false);
+                    }
+                }
+            >
+                "Close all groups"
+            </button>
+        </div>
+
         {tweak_group(
             ga(0, 3),
             has_text,
@@ -1863,100 +2288,133 @@ fn tweaks_page(app: App) -> impl IntoView {
             "Marks",
             Some(
                 "Hiding a mark hides the sign, never the fact — the Clashes \
-                 list and “Your changes” keep saying everything.",
+                 panel and “Your changes” keep saying everything.",
             ),
             move || rows_marks(app, [vis(0), vis(1), vis(2)]),
         )}
         {tweak_group(
-            ga(3, 11),
+            ga(3, 12),
             has_text,
             open[1],
             "The week grid",
-            None,
+            Some(
+                "The tables that draw a week — My timetable, the Master grid \
+                 and Lecture halls. A row says so when it means only one of \
+                 them.",
+            ),
             move || {
                 rows_week(
                     app,
-                    [vis(3), vis(4), vis(5), vis(6), vis(7), vis(8), vis(9), vis(10)],
+                    [
+                        vis(3),
+                        vis(4),
+                        vis(5),
+                        vis(6),
+                        vis(7),
+                        vis(8),
+                        vis(9),
+                        vis(10),
+                        vis(11),
+                    ],
                 )
             },
         )}
         {tweak_group(
-            ga(11, 16),
+            ga(12, 17),
             has_text,
             open[2],
             "Colour and motion",
             None,
-            move || rows_colour(app, [vis(11), vis(12), vis(13), vis(14), vis(15)]),
+            move || rows_colour(app, [vis(12), vis(13), vis(14), vis(15), vis(16)]),
         )}
         {tweak_group(
-            ga(16, 18),
+            ga(17, 20),
             has_text,
             open[3],
-            "Opening the app",
+            "The Halls page",
             None,
-            move || rows_opening(app, [vis(16), vis(17)]),
-        )}
-        {tweak_group(
-            ga(18, 20),
-            has_text,
-            open[4],
-            "Notices and dialogs",
-            None,
-            move || rows_notices(app, [vis(18), vis(19)]),
+            move || rows_halls(app, [vis(17), vis(18), vis(19)]),
         )}
         {tweak_group(
             ga(20, 22),
             has_text,
-            open[5],
-            "Wheel and swipe",
+            open[4],
+            "Opening the app",
             None,
-            move || rows_gestures(app, [vis(20), vis(21)]),
+            move || rows_opening(app, [vis(20), vis(21)]),
         )}
         {tweak_group(
             ga(22, 24),
             has_text,
-            open[6],
-            "Editing and undo",
+            open[5],
+            "Notices and dialogs",
             None,
-            move || rows_editing(app, [vis(22), vis(23)]),
+            move || rows_notices(app, [vis(22), vis(23)]),
         )}
         {tweak_group(
-            ga(24, 28),
+            ga(24, 26),
+            has_text,
+            open[6],
+            "Wheel and swipe",
+            None,
+            move || rows_gestures(app, [vis(24), vis(25)]),
+        )}
+        {tweak_group(
+            ga(26, 28),
             has_text,
             open[7],
+            "Editing and undo",
+            None,
+            move || rows_editing(app, [vis(26), vis(27)]),
+        )}
+        {tweak_group(
+            ga(28, 34),
+            has_text,
+            open[8],
             "Syncing",
             Some(
                 "However you tune it, the header never stops saying how old \
                  the timetable is.",
             ),
-            move || rows_syncing(app, [vis(24), vis(25), vis(26), vis(27)]),
+            move || {
+                rows_syncing(
+                    app,
+                    [vis(28), vis(29), vis(30), vis(31), vis(32), vis(33)],
+                )
+            },
         )}
         {tweak_group(
-            ga(28, 31),
+            ga(34, 39),
             has_text,
-            open[8],
+            open[9],
             "Printing",
             Some(
                 "Paper hides signs, never facts — the clash strip and the \
-                 caveat line print always.",
+                 check-against-CMI line always print.",
             ),
-            move || rows_printing(app, [vis(28), vis(29), vis(30)]),
+            move || {
+                rows_printing(app, [vis(34), vis(35), vis(36), vis(37), vis(38)])
+            },
         )}
         {tweak_group(
-            ga(31, 33),
-            has_text,
-            open[9],
-            "Calendar files",
-            None,
-            move || rows_calendar(app, [vis(31), vis(32)]),
-        )}
-        {tweak_group(
-            ga(33, 35),
+            ga(39, 41),
             has_text,
             open[10],
+            "Calendar files",
+            Some(
+                "The .ics files the calendar export makes — these rows choose \
+                 what each event carries, never whether a class is in it. A \
+                 file you already saved keeps what it was given.",
+            ),
+            move || rows_calendar(app, [vis(39), vis(40)]),
+        )}
+        {tweak_group(
+            ga(41, 43),
+            has_text,
+            open[11],
             "Developer mode",
             None,
-            move || rows_devmode(app, [vis(33), vis(34)]),
+            move || rows_devmode(app, [vis(41), vis(42)]),
         )}
 
         {move || {
@@ -1972,18 +2430,57 @@ fn tweaks_page(app: App) -> impl IntoView {
             "Update checking, your own helper site, and everything the app \
              stores live in My data."
         </p>
-        <div class="row noprint" style="margin-top:0.4rem">
+        <div class="row noprint" style="margin-top:0.4rem; align-items:center; gap:0.6rem">
             <button
                 class="btn small danger"
-                title="Everything on this page, back to how the app ships"
+                prop:disabled=move || app.tweak_deltas().is_empty()
+                title=move || {
+                    if app.tweak_deltas().is_empty() {
+                        "Nothing differs from how the app ships."
+                    } else {
+                        "Everything on this page, back to how the app ships"
+                    }
+                }
+                // Asks first (R89): every other danger button in the app
+                // does, forty-odd prefs are not Ctrl+Z-undoable, and muscle
+                // memory is exactly what a confirm interrupts.
                 on:click=move |_| {
-                    app.reset_tweaks();
-                    crate::apply_theme(app);
-                    app.toast("All tweaks are back to how the app ships.");
+                    let n = app.tweak_deltas().len();
+                    app.ask(crate::state::ConfirmAsk {
+                        title: "Reset all tweaks?".into(),
+                        lede: "Every tweak on this page goes back to how the app \
+                               ships, theme and row height included."
+                            .into(),
+                        points: vec![
+                            match n {
+                                1 => "1 tweak currently differs.".to_string(),
+                                n => format!("{n} tweaks currently differ."),
+                            },
+                        ],
+                        confirm_label: "Reset them".into(),
+                        danger: true,
+                        // Not Ctrl+Z-undoable, but not data loss either: every
+                        // tweak can be set again by hand.
+                        irreversible: false,
+                        action: crate::state::ConfirmAction::ResetTweaks,
+                    });
                 }
             >
                 "Reset all tweaks"
             </button>
+            // The counter answers "is this browser tweaked?" at a glance —
+            // the same list Copy diagnostics reports, so the two never
+            // disagree. It doubles as the reason the Reset button sleeps.
+            <span class="muted small" data-tweak-count>
+                {move || {
+                    let n = app.tweak_deltas().len();
+                    match n {
+                        0 => "Everything here is how the app ships.".to_string(),
+                        1 => "1 tweak differs from how the app ships.".to_string(),
+                        n => format!("{n} tweaks differ from how the app ships."),
+                    }
+                }}
+            </span>
         </div>
     }
 }
@@ -1991,7 +2488,7 @@ fn tweaks_page(app: App) -> impl IntoView {
 /// The searchable words of each tweak row, in render order: group, label,
 /// hint. Kept beside the page that renders them; a row and its haystack
 /// drifting apart makes the search quietly lie.
-const TWEAK_HAYSTACKS: [(&str, &str, &str); 35] = [
+const TWEAK_HAYSTACKS: [(&str, &str, &str); 43] = [
     (
         "Marks",
         "Mark clashes with ⚠ and a red border",
@@ -2013,13 +2510,15 @@ const TWEAK_HAYSTACKS: [(&str, &str, &str); 35] = [
     (
         "The week grid",
         "Highlight today's row",
-        "The accent line on today's row in every week table. Paper never marks today \
-         either way.",
+        "The coloured line on today's row in every week table. Paper never marks today \
+         either way. accent",
     ),
     (
         "The week grid",
         "Dim days with no classes",
-        "Days with nothing on them keep quiet, so full days stand out.",
+        "On the Lecture halls week, the day names of days with no bookings fade so the \
+         busy days stand out. Untick for full ink on every day name — empty rows stay \
+         short either way, to keep a room's whole week in view. quiet",
     ),
     (
         "The week grid",
@@ -2029,29 +2528,39 @@ const TWEAK_HAYSTACKS: [(&str, &str, &str); 35] = [
     ),
     (
         "The week grid",
-        "Course names on chips",
-        "The course's name written under its code on every week grid, for weeks when \
-         the codes haven't stuck yet. Tight rows leave names off to save space, and \
-         paper keeps its legend either way.",
+        "Show course names on chips",
+        "The course's name, written under its code on every chip. Handy in the first \
+         weeks, before the codes have stuck. Tight rows leave names off to save space, \
+         and paper keeps its legend either way.",
     ),
     (
         "The week grid",
         "Row height",
-        "Follow this device Roomy Tight The Master grid's rows. Until you choose, they \
-         follow the screen the app is opened on.",
+        "Follow this device Roomy Tight The Master grid's rows. Until you choose, a \
+         phone opens Tight and a larger screen Roomy — decided when the app opens. \
+         everywhere",
     ),
     (
         "The week grid",
         "Apply the row height everywhere",
-        "Your Roomy or Tight choice reaches My timetable and Halls too, not only the \
-         Master grid. Tight everywhere fits a whole week on a laptop screen.",
+        "Your Roomy or Tight choice — or the one this device picked — reaches My \
+         timetable and Halls too, not only the Master grid. Tight everywhere fits a \
+         whole week on a laptop screen.",
     ),
     (
         "The week grid",
         "Show Saturday and Sunday even when empty",
-        "Every week grid draws all seven days, instead of growing a weekend row only \
-         once something meets there. Handy for dragging a course of your own onto a \
-         Saturday that doesn't exist yet.",
+        "Every week grid draws all seven days, instead of a weekend row appearing only \
+         once a class meets there. Handy for dragging a course of your own onto an \
+         empty Saturday. weekend",
+    ),
+    (
+        "The week grid",
+        "Show a ghost where CMI's time was",
+        "A faint dashed outline in the slot a moved class came from, on My timetable \
+         and the Master grid, so the grid shows both halves of every move. It never \
+         prints — paper already marks moves with ✎ — and Your changes lists the same \
+         fact in words. moved move changed",
     ),
     (
         "The week grid",
@@ -2080,14 +2589,37 @@ const TWEAK_HAYSTACKS: [(&str, &str, &str); 35] = [
     (
         "Colour and motion",
         "Stronger lines and small print",
-        "Darker grid lines and darker fine print, in both themes — for screens where \
-         the hairlines fade, or eyes that wish they wouldn't.",
+        "Darker grid lines and darker small print, in both themes — for screens where \
+         the hairlines fade, or eyes that wish they wouldn't. contrast",
     ),
     (
         "Colour and motion",
-        "Animate panels and toasts",
-        "Untick for the same stillness your device's reduce-motion setting asks for, \
-         without needing it set.",
+        "Animate panels and notices",
+        "Panels and notices slide and fade into place. Untick and they simply appear — \
+         the same stillness your device's reduce-motion setting asks for, without \
+         needing it set. toast",
+    ),
+    (
+        "The Halls page",
+        "Shrink empty days on Halls",
+        "Days with no bookings drop to a slim line, so busy rooms stand out by size. \
+         Untick and every row keeps its full height — the printed hall sheet draws \
+         uniform rows either way.",
+    ),
+    (
+        "The Halls page",
+        "Band alternate rooms on the Halls page",
+        "Every other room carries a faint background, so one room's days read as one \
+         block. Untick for a flat table — the line between rooms stays either way. \
+         stripe zebra",
+    ),
+    (
+        "The Halls page",
+        "Start the free-hall finder on today and the current slot",
+        "The finder's two dropdowns arrive already set to today and the hour happening \
+         now, so which room is free right now needs no clicks. They stay ordinary \
+         dropdowns — your own pick always wins, and outside teaching hours the slot \
+         simply waits for you to choose.",
     ),
     (
         "Opening the app",
@@ -2106,21 +2638,21 @@ const TWEAK_HAYSTACKS: [(&str, &str, &str); 35] = [
         "Notices and dialogs",
         "Notices stay for",
         "3 6 12 seconds Until dismissed Every notice waits while you hover, focus or \
-         hold it, and every one has its own ✕. 6 seconds is how the app ships. toast",
+         hold it. Every one has its own ✕. 6 seconds is how the app ships. toast",
     ),
     (
         "Notices and dialogs",
         "Close a dialog by clicking the dark area",
         "Untick and only Close, Escape or the browser's own ways leave a dialog — a \
          stray click beside it does nothing. A half-written form still asks before \
-         being thrown away.",
+         being thrown away. scrim overlay",
     ),
     (
         "Wheel and swipe",
         "Step values with the wheel",
         "Scroll over credits, a time, a date or a dropdown and it moves one step. \
-         Untick and the wheel only ever scrolls — typing and the arrows still change \
-         every value.",
+         Untick and the wheel only ever scrolls — typing and the arrow keys still \
+         change every value.",
     ),
     (
         "Wheel and swipe",
@@ -2132,53 +2664,69 @@ const TWEAK_HAYSTACKS: [(&str, &str, &str); 35] = [
         "Editing and undo",
         "Keep drags behind ✎ Edit layout",
         "Untick and a mouse or pen can drag a chip any time, no toggle first. A finger \
-         still needs the toggle, so scrolling a phone never moves a class — and every \
-         move stays undoable and listed under Your changes.",
+         still needs the toggle, so scrolling a phone never moves a class. Every move \
+         stays undoable and listed under Your changes.",
     ),
     (
         "Editing and undo",
         "Undo history depth",
-        "How many steps Ctrl+Z can walk back — 100 unless you say otherwise. Each step \
-         keeps a copy of your selection in memory, never in storage, so a very deep \
-         history costs RAM.",
+        "steps How many steps Ctrl+Z can walk back — 100 unless you say otherwise. Each \
+         step keeps a copy of your selection in memory, never in storage, so a very \
+         deep history costs memory.",
     ),
     (
         "Syncing",
         "Check CMI on its own",
         "Twice a day Every hour Only when I ask How often the app fetches CMI's pages \
          without being asked. The header keeps counting how old the timetable is \
-         whichever you pick — and a browser that has never synced still fetches its \
-         first timetable.",
+         whichever you pick. A browser that has never synced still fetches its first \
+         timetable. Twice a day is how the app ships.",
     ),
     (
         "Syncing",
         "Ask the public helper sites when syncing",
-        "Untick and no public relay is ever shown which CMI page you read — only your \
-         own helper site (set in My data) and CMI itself are asked. With Ask CMI \
-         directly also off and no helper site set, pasting CMI's page is the way left, \
-         and a failed sync says so. privacy",
+        "Untick and no public helper site ever learns which CMI page you read — the \
+         sync asks only your own helper site (set in My data) and CMI itself. With Ask \
+         CMI directly also off and no helper site set, pasting CMI's page is the only \
+         way left, and a failed sync says so. privacy relay",
     ),
     (
         "Syncing",
         "Ask CMI directly when every helper site fails",
         "The last route of a sync is cmi.ac.in itself — on CMI's own network that is \
          what raises the browser's local-network question. Untick and the app never \
-         contacts CMI's address from your browser, and a failed sync says this route \
-         was switched off here instead of pretending it was tried.",
+         contacts CMI's address from your browser. A failed sync then says this route \
+         was switched off here, instead of pretending it was tried.",
     ),
     (
         "Syncing",
         "Turn the synced pill amber after",
-        "days How many days old the timetable gets before the header's pill wears its \
-         warning colour — 2 unless you say otherwise. The age itself is always written \
-         out and keeps counting; this only moves where the colour starts worrying. \
-         stale",
+        "days How many days old the timetable gets before the header's pill turns \
+         amber — 2 unless you say otherwise. The age itself is always written out and \
+         keeps counting; this only moves where the colour starts worrying. stale",
+    ),
+    (
+        "Syncing",
+        "How long each helper site gets to answer",
+        "seconds How long any one helper site may take to answer before the app gives \
+         up on it — 12 seconds unless you say otherwise. More suits a slow connection; \
+         less gives up on a silent sync sooner. CMI's own direct attempt keeps its \
+         short budget either way. timeout relay",
+    ),
+    (
+        "Syncing",
+        "Ask the leading helper site alone for",
+        "seconds The head start the first route gets before the rest are raced in \
+         behind it. Longer is quieter — one helper site asked instead of seven. Zero \
+         asks them all at once: faster when the leader is asleep, but every relay is \
+         shown which page you read. A route that fails outright never waits this long. \
+         head start privacy",
     ),
     (
         "Printing",
         "Print in colour",
         "Untick for plain-ink sheets: white header bands, grey-bordered chips, black \
-         rules — kinder to toner and photocopiers. ⚠, ✎ and ✓ already say everything \
+         lines — kinder to toner and photocopiers. ⚠, ✎ and ✓ already say everything \
          in black and white, and clash red stays: it is a warning, not decoration.",
     ),
     (
@@ -2197,11 +2745,26 @@ const TWEAK_HAYSTACKS: [(&str, &str, &str); 35] = [
          stay, because those are facts about the timetable, not the app.",
     ),
     (
+        "Printing",
+        "Size the poster's rows for a wall",
+        "The printed poster's tall rows, made to be read across a room. Untick for a \
+         desk-sized sheet — shorter rows and a tighter grid, for a binder or a \
+         corkboard corner — and nothing is dropped: every chip and mark still prints. \
+         compact",
+    ),
+    (
+        "Printing",
+        "Say on the sheet which filters narrowed it",
+        "A filtered printout already counts itself — 5 of 12 courses. Tick to also \
+         name the filters that did the narrowing — the day, the programme, the search \
+         — in the sheet's stats line. The count prints either way.",
+    ),
+    (
         "Calendar files",
         "Put a link back to this planner in every calendar event",
         "Each event's notes end with a link that reopens this timetable. Untick to \
-         keep the file to class facts — the link also spells out which courses you \
-         take, which matters if you send the file to someone. ics privacy",
+         keep the file to class facts. The link also spells out which courses you \
+         take — worth knowing before you send the file to someone. ics privacy",
     ),
     (
         "Calendar files",
@@ -2220,8 +2783,8 @@ const TWEAK_HAYSTACKS: [(&str, &str, &str); 35] = [
         "Developer mode",
         "Echo every fetch to the browser console",
         "Each sync request also prints one line in your browser's DevTools — route, \
-         status, milliseconds, bytes — so a bug report can carry the console. The \
-         Sync page's log shows the same rows either way. debug",
+         status, milliseconds, bytes — so a bug report can include what the console \
+         saw. The Sync page's log shows the same rows either way. debug",
     ),
 ];
 
@@ -2263,10 +2826,18 @@ fn row_height_choice(app: App, value: Option<Density>, label: &'static str) -> i
             on:click=move |_| {
                 app.prefs.update(|p| p.density = value);
                 app.persist_prefs();
-                app.toast(match value {
-                    None => "Master grid rows follow this device again.",
-                    Some(Density::Comfortable) => "Master grid rows: roomy.",
-                    Some(Density::Compact) => "Master grid rows: tight.",
+                // The toast names the true scope, exactly like the hint one
+                // control up: "Apply the row height everywhere" widens what
+                // this click just re-rowed, and a toast still saying "Master
+                // grid" then lies about most of what happened.
+                let everywhere = app.prefs.with_untracked(|p| p.density_everywhere);
+                app.toast(match (value, everywhere) {
+                    (None, false) => "Master grid rows follow this device again.",
+                    (Some(Density::Comfortable), false) => "Master grid rows are roomy now.",
+                    (Some(Density::Compact), false) => "Master grid rows are tight now.",
+                    (None, true) => "Every week grid's rows follow this device again.",
+                    (Some(Density::Comfortable), true) => "Every week grid's rows are roomy now.",
+                    (Some(Density::Compact), true) => "Every week grid's rows are tight now.",
                 });
             }
         >

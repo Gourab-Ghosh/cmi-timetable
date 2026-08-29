@@ -814,7 +814,7 @@ regenerates the .ics golden.
   NOWHERE on this page while still counting toward the credit total.
 - "Your changes" groups are headed by `.cg-head` (colour rail + small caps
   + count), coloured by `OwnChange::tone()`. See §4.
-- Tests: 169 native + 152/152 e2e green (as of R88; the native count from
+- Tests: 169 native + 155/155 e2e green (as of R89; the native count from
   `deploy.sh`'s own in-container run — 49+18+3+9+25+27+28+10).
 - **The e2e suite mocks the relays, so it can never tell you a real one has
   died** — which is exactly how R84's outage reached a user. Two probes cover
@@ -6644,6 +6644,117 @@ by design so the test exits first; running-session navigation untouched),
 t152 (mouse drags without the toggle; finger fence untestable headless but
 the touch exclusion is in the pointerdown gate). 152/152 e2e, 169 native,
 clippy + fmt clean.
+
+### R89 — the shelf handles, the honest words, and the roster grown to 43
+
+**The ask** (29 Aug 2026, four parts, two arriving mid-turn): buttons like
+"expand all / collapse all" under the Tweaks section (name them myself);
+every tweak's text so clear a reader knows EXACTLY what changes on click;
+more tweaks and other-section additions wherever they truly make sense —
+and nothing where they don't; ALL groups open on first visit; and a visual
+pass ("no spacing between the buttons and the groups" — fixed, .tweak-shelf
+margin).
+
+**Fleet** (wf_c7cec9b5-598, 8/8): three copy lenses over all 35 rows → a
+merge judge (findings/r89-copy-final.md IS the copy spec: 21 rows changed,
+14 verbatim, exactly 2 label changes); a second-round selector over the R88
+rejects (roster-size grounds EXPIRED when the user asked for more — 7
+promoted, 28 stay cut, each with the ground that survives); a fresh-gaps
+proposer (exactly ONE new tweak found); a sections scout (6 items, one a
+CONFIRMED DEFECT); a feasibility sceptic (16 verdicts, 0 kills, three
+proposals would have shipped defects as written).
+
+**Shipped — the page:** "Open all groups" / "Close all groups" in a
+.tweak-shelf row under the search bar (disabled mid-search — a live query
+already holds matching groups open); EVERY group ships open (user order —
+the open array is all-true, session-only); a quiet accent dot on every row
+whose value differs from shipped (changed_dot; per-FIELD comparison, never
+whole-struct; visually-hidden words for AT); unit words on number rows
+("2 days", "100 steps" — a row must not end mid-sentence); Reset all tweaks
+now ASKS (ConfirmAction::ResetTweaks — every other danger button asks, and
+40+ prefs are not Ctrl+Z-undoable) and sleeps at zero deltas.
+
+**Shipped — the copy** (the judge's table, verbatim): two label changes —
+"Course names on chips" → "Show course names on chips", "Animate panels and
+toasts" → "Animate panels and notices" (haystack carries " toast" as a
+hidden synonym). The page's two real lies died: "Dim days with no classes"
+now says it fades ONLY the Halls week's day names (verified: views.rs sets
+class:quiet only on the halls path), and the Row height toasts follow
+density_everywhere at click time (six sentences). Ledes: Marks says
+"Clashes panel", Printing says "the check-against-CMI line always print",
+NEW ledes on The week grid (scope varies per row — the lede warns) and
+Calendar files (rows choose what events carry, never whether a class is
+in). The haystack doc-comment now admits the synonym tails exist.
+
+**Shipped — 8 new tweaks (43 rows / 12 groups):**
+- move_ghosts — "Show a ghost where CMI's time was" (the R88 curator's
+  "strongest second-round candidate"). Ghost memos beside placed/covered in
+  BOTH grids (same one-pass shape, t90's identity gate never widens);
+  ui::ghost_marker = aria-hidden span, pointer-events none, base-rule
+  display:none, shown by .app.move-ghosts (chip-names shape — no rebuild).
+  FOUR fences, all in: print-kill unconditional (@media print .ghost
+  display:none !important — the poster already prints moves as dashed+✎,
+  t140); inert decoration; fence A — gate on !eff.user_created (a
+  user-created meeting's base is the USER's time, and the label says CMI);
+  fence B — column_for_exact (no nearest-column fallback: a vanished extra
+  column must draw NO ghost, not a wrong one). Skip when base cell ==
+  current cell (hall-only change). Halls stays out (room-keyed table).
+  Pinned by t153 (presence, span-not-button, print-none via CDP media
+  emulation, drop-through, vanishes when moved home).
+- halls_shrink_off / halls_band_off — NEW group "The Halls page". Shrink
+  override wrapped in @media screen (print pins both row kinds to 16px and
+  the override would OUT-SPECIFY it — quiet rows printing 3× booked was the
+  sceptic's catch) with a .density-compact twin (34px) so the size
+  hierarchy survives; band override restores EACH element's own paint
+  (dayhead --surface, hallhead --surface-2 — one flat colour would leave a
+  gutter-stripe). Pinned by t154 (heights, band flat, 2px room boundary
+  survives).
+- finder_now — the finder's dropdowns arrive seeded to today + the current
+  slot. Mount-time seed wrapped WHOLE in untrack (the R45 lesson — a
+  tracked hall_days() read here remounts the Halls view per sync); seeds
+  only what exists (today ∈ hall_days; slot from hall_slot_grid whose
+  [start,end) contains domx::now_local_minutes — NEW helper reading the
+  ordinary Date so the harness clock pin reaches it). KNOWINGLY amends
+  R87's "never assume a default day" — the comment at the seed says so; a
+  seeded box SHOWS its value, the banned thing was silent assumption.
+- print_poster_compact — desk-sized poster: geometry-only print rules
+  before print-plain (heights stay minimums — nothing clipped in print).
+- print_filters_named — Filters::describe() (names exactly what
+  active_count counts; switches and search scope stay out; >3 facets → "
+  filtered by N things") + stats_filters(app, mine, narrowed) beside
+  stats_line; gated on the sheet ACTUALLY narrowed (My courses: shown !=
+  picked; Master: n < scheduled_total memo — snapshot+overrides sourced so
+  typing recomputes nothing; Catalog: n < courses.len()).
+- proxy_timeout_s (4..=60 s) + head_start_ms (0..=10 s, 0.5 steps) — the
+  two halves of the relay race, clamped identically at write AND read
+  sites. P6's proposed hint was mechanically FALSE ("before the next is
+  tried" — that is the head start's job); shipped with the sceptic's
+  reworded truth. head-start fence: the race loop now awaits inflight
+  PLAINLY once the queue is drained (peekable) — at 0 ms the old shape
+  would respin a ~4 ms timer for the whole tier.
+
+**Shipped — the sections:** S2 the force-tier defect (CONFIRMED, both
+halves): run_update now CONSUMES force_tier at its read ("on next sync" was
+silently "every sync this session", background included), and the select's
+display follows the signal via NodeRef + isolated Effect (NEVER a reactive
+prop closure — the R14/R45 trap; the sceptic caught the proposal itself
+making that mistake). Pinned by t155 (set proxy → Run sync → select snaps
+to ""). S3 Build info gains "Update check / Next scheduled check" rows
+(update::schedule_for_display() — with the overdue rider: a stored next
+beyond one interval prints "overdue", since due() would ignore it). S5 Raw
+HTML viewer: Export timetable.php / Export lecturehalls.php (text/html
+downloads — the parser bug-report round trip closes) + sizes on the
+summaries. S6 the inspector explains cmitt.corrupt.* keys, only while one
+exists. BN-1 "Ask the browser to keep this data" (navigator.storage
+.persist() — a REQUEST; the echoed answer says the browser declined
+without promising a prompt existed; StorageManager joined web-sys
+features). SKIPPED with reasons: S1 (six-state copy balloon; the Sync log
+answers post-hoc), S4 (narrowest, both judges ranked it last).
+
+**Coverage:** t144 (12 groups, 43 rows, ALL expanded, search reaches
+closed groups, reload restores all-open), t148 (all-open flow, handles
+0↔12, sleep mid-search, counter, Reset-asks-first), t153/t154/t155 NEW.
+155/155 e2e, 169 native, clippy + fmt clean.
 
 ## 8. Open bugs — found, confirmed, NOT fixed (do not delete)
 

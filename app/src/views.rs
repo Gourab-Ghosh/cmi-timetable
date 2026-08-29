@@ -121,6 +121,24 @@ fn stats_line(app: App, facts: String) -> String {
     }
 }
 
+/// The filters clause for a printed sheet's stats line ("Say on the sheet
+/// which filters narrowed it", R89). Two gates, both required: the tweak is
+/// on, and the sheet is ACTUALLY narrowed — a sheet showing everything
+/// gains nothing from naming filters that failed to narrow it. `mine`
+/// picks the filter set the way `act_filters_in` does.
+fn stats_filters(app: App, mine: bool, narrowed: bool) -> Option<String> {
+    if !narrowed || !app.prefs.with(|p| p.print_filters_named) {
+        return None;
+    }
+    app.prefs.with(|p| {
+        if mine {
+            p.my_filters.describe()
+        } else {
+            p.filters.describe()
+        }
+    })
+}
+
 /// The Print button, one per printable section.
 ///
 /// All five sections print — each as its own sheet, and only itself, because
@@ -440,6 +458,23 @@ pub fn column_for(slot_grid: &[Slot], meeting: &Meeting) -> Option<u16> {
         .map(|s| s.start_min)
 }
 
+/// `column_for` minus its nearest-column fallback, for the move ghosts:
+/// a base slot whose exact or containing column no longer exists must draw
+/// NO ghost rather than a ghost in a silently wrong column (R89 fence B —
+/// `display_slot_grid` builds extra columns from CURRENT effective
+/// meetings, so the column a base once had can vanish with the move).
+fn column_for_exact(slot_grid: &[Slot], slot: &Slot) -> Option<u16> {
+    let start = slot.start_min;
+    if slot_grid.iter().any(|s| s.start_min == start) {
+        return Some(start);
+    }
+    slot_grid
+        .iter()
+        .filter(|s| start >= s.start_min && start < s.end_min)
+        .max_by_key(|s| s.start_min)
+        .map(|s| s.start_min)
+}
+
 /// How a clash's time is written, wherever it is written.
 ///
 /// One range when both meetings really run it; otherwise each range wears its
@@ -614,6 +649,40 @@ fn my_timetable(app: App) -> impl IntoView {
         cells
     });
 
+    // Where each moved class CAME from ("Show a ghost where CMI's time
+    // was", R89) — its own memo beside `placed` and `covered`, the same
+    // one-pass shape, so the chips' PartialEq identity gate (t90) never
+    // widens. Only CMI bases (fence A: a user-created meeting's base is the
+    // USER's earlier time, and the row's label says CMI); only exact or
+    // containing columns (fence B, see `column_for_exact`); and only when
+    // the base cell differs from where the chip now sits — a hall-only
+    // change moved nothing, and its ghost would sit under its own chip.
+    let ghosts = Memo::new(move |_| {
+        let cols: Vec<Slot> = columns.get().into_iter().map(|(s, _)| s).collect();
+        let mut cells: HashMap<(Day, u16), Vec<String>> = HashMap::new();
+        for course in app.selected_courses() {
+            for eff in app.effective_meetings(&course) {
+                if !eff.overridden || eff.user_created {
+                    continue;
+                }
+                let Some(base) = eff.base.as_ref() else {
+                    continue;
+                };
+                let Some(bcol) = column_for_exact(&cols, &base.slot) else {
+                    continue;
+                };
+                if base.day == eff.meeting.day && column_for(&cols, &eff.meeting) == Some(bcol) {
+                    continue;
+                }
+                let entry = cells.entry((base.day, bcol)).or_default();
+                if !entry.contains(&course.code) {
+                    entry.push(course.code.clone());
+                }
+            }
+        }
+        cells
+    });
+
     let cell_chips = move |day: Day, slot: Slot| -> Vec<AnyView> {
         let mut out: Vec<AnyView> = placed.with(|cells| {
             cells
@@ -671,6 +740,16 @@ fn my_timetable(app: App) -> impl IntoView {
                     // be half a tweak.
                     let clash = clash && app.marks.get().0;
                     out.push(crate::ui::covered_band(app, code.clone(), *mslot, clash).into_any());
+                }
+            }
+        });
+        // Ghosts last: background to everything real in the cell. Always in
+        // the DOM, shown only by `.app.move-ghosts` — the chip-names shape,
+        // so the flip needs no rebuild.
+        ghosts.with(|cells| {
+            if let Some(list) = cells.get(&(day, slot.start_min)) {
+                for code in list {
+                    out.push(crate::ui::ghost_marker(code.clone()).into_any());
                 }
             }
         });
@@ -1737,7 +1816,12 @@ fn my_courses(app: App) -> impl IntoView {
                             format!("{shown_n} course{}", if shown_n == 1 { "" } else { "s" }),
                         )
                     } else {
-                        stats_line(app, format!("{shown_n} of {picked} courses"))
+                        let mut facts = format!("{shown_n} of {picked} courses");
+                        if let Some(f) = stats_filters(app, true, true) {
+                            facts.push_str(" · ");
+                            facts.push_str(&f);
+                        }
+                        stats_line(app, facts)
                     }
                 },
             )}
@@ -2392,6 +2476,17 @@ fn master_grid(app: App) -> impl IntoView {
     // `with`, not `get`, for both: these read a length, and `get` would
     // deep-clone every matching course to do it.
     let count = Signal::derive(move || filtered.with(Vec::len));
+    // The sheet's unnarrowed size, for the printed filters clause: how many
+    // courses CMI has given a time before any filter. Snapshot+overrides
+    // sourced, never the filters — typing recomputes nothing here.
+    let scheduled_total = Memo::new(move |_| {
+        app.snapshot.with(|s| {
+            s.courses
+                .iter()
+                .filter(|c| !app.effective_meetings(c).is_empty())
+                .count()
+        })
+    });
     // Dropping those from the count without a word would be its own small
     // lie — they match what was asked for, they are simply somewhere else.
     let unplaced = Signal::derive(move || matched.with(Vec::len) - filtered.with(Vec::len));
@@ -2489,6 +2584,38 @@ fn master_grid(app: App) -> impl IntoView {
         cells
     });
 
+    // Where each moved class came from, the master grid's copy of My
+    // timetable's ghosts memo (R89) — reads `filtered` and the overrides,
+    // never the selection, exactly like `covered` above (t90's pin). CMI
+    // bases only; exact/containing columns only; skip when the base cell is
+    // where the chip still sits (see the My timetable twin for the fences).
+    let ghosts = Memo::new(move |_| {
+        let slot_grid: Vec<Slot> = columns.get().into_iter().map(|(s, _)| s).collect();
+        let mut cells: HashMap<(Day, u16), Vec<String>> = HashMap::new();
+        for course in filtered.get() {
+            for eff in app.effective_meetings(&course) {
+                if !eff.overridden || eff.user_created {
+                    continue;
+                }
+                let Some(base) = eff.base.as_ref() else {
+                    continue;
+                };
+                let Some(bcol) = column_for_exact(&slot_grid, &base.slot) else {
+                    continue;
+                };
+                if base.day == eff.meeting.day && column_for(&slot_grid, &eff.meeting) == Some(bcol)
+                {
+                    continue;
+                }
+                let entry = cells.entry((base.day, bcol)).or_default();
+                if !entry.contains(&course.code) {
+                    entry.push(course.code.clone());
+                }
+            }
+        }
+        cells
+    });
+
     let cell_chips = move |day: Day, slot: Slot| -> Vec<AnyView> {
         let bands: Vec<AnyView> = covered.with(|cells| {
             cells
@@ -2559,6 +2686,15 @@ fn master_grid(app: App) -> impl IntoView {
             // following-sibling::button), and the shadow reads as
             // background to the real classes above it.
             out.extend(bands);
+            // Ghosts after the bands, for the same reason again: the
+            // faintest thing in the cell comes last.
+            ghosts.with(|cells| {
+                if let Some(list) = cells.get(&(day, slot.start_min)) {
+                    for code in list {
+                        out.push(crate::ui::ghost_marker(code.clone()).into_any());
+                    }
+                }
+            });
             out
         })
     };
@@ -2572,7 +2708,12 @@ fn master_grid(app: App) -> impl IntoView {
                 "Master grid",
                 move || {
                     let n = count.get();
-                    stats_line(app, format!("every course CMI has given a time · {n} shown"))
+                    let mut facts = format!("every course CMI has given a time · {n} shown");
+                    if let Some(f) = stats_filters(app, false, n < scheduled_total.get()) {
+                        facts.push_str(" · ");
+                        facts.push_str(&f);
+                    }
+                    stats_line(app, facts)
                 },
             )}
             <div class="toolbar noprint" style="margin-bottom:0.25rem">
@@ -2869,7 +3010,13 @@ fn catalog(app: App) -> impl IntoView {
                 "Catalog",
                 move || {
                     let n = count.get();
-                    stats_line(app, format!("{n} course{}", if n == 1 { "" } else { "s" }))
+                    let total = app.snapshot.with(|s| s.courses.len());
+                    let mut facts = format!("{n} course{}", if n == 1 { "" } else { "s" });
+                    if let Some(f) = stats_filters(app, false, n < total) {
+                        facts.push_str(" · ");
+                        facts.push_str(&f);
+                    }
+                    stats_line(app, facts)
                 },
             )}
             <div class="toolbar noprint">
@@ -4242,6 +4389,36 @@ fn halls_view(app: App) -> impl IntoView {
     let finder_day = RwSignal::new(None::<usize>); // day index
     let finder_start = RwSignal::new(None::<u16>); // slot start_min
 
+    // "Start the free-hall finder on today and the current slot" (R89): a
+    // mount-time seed, wrapped WHOLE in `untrack` — this body runs inside
+    // the tab dispatcher's reactive closure, and a tracked read here
+    // (`hall_days` reaches the snapshot) would remount the entire Halls
+    // view on the next sync or override write (the R45 day-strip lesson).
+    //
+    // R87 wrote "never assume a default day" on the finder; this tweak
+    // KNOWINGLY amends it. What that comment banned was a silent
+    // assumption — a seeded dropdown SAYS its value in its own box. Seed
+    // only what really exists: today must be a hall day, and the slot must
+    // be one the dropdown itself offers whose [start, end) contains local
+    // now — otherwise the boxes stay blank and the finder waits, exactly
+    // as it ships. Never reseeded while mounted; the reader's pick wins.
+    untrack(|| {
+        if app.prefs.with_untracked(|p| p.finder_now) {
+            let today = crate::domx::today_local().weekday();
+            if app.hall_days().contains(&today) {
+                finder_day.set(Some(today.index()));
+            }
+            let now_min = crate::domx::now_local_minutes();
+            if let Some((slot, _)) = app
+                .hall_slot_grid()
+                .into_iter()
+                .find(|(s, _)| now_min >= s.start_min && now_min < s.end_min)
+            {
+                finder_start.set(Some(slot.start_min));
+            }
+        }
+    });
+
     // Memoised, both of them. `halls_view()` asks `hall_days()`, which asks
     // `grid_days()`, which walks every course in the catalog building its
     // effective meetings — and the day strip alone asked for it fifteen
@@ -4437,7 +4614,10 @@ fn halls_view(app: App) -> impl IntoView {
             }}
 
             // Find a free hall — results appear once BOTH day and slot are
-            // picked (never assume a default day).
+            // picked. Never ASSUME a default day — the finder_now tweak
+            // (R89) may SEED the dropdowns at mount, which is different: a
+            // seeded box shows its value where an assumption would hide it.
+            // The seed and its full reasoning sit at the top of halls_view.
             //
             // `noprint`: two dropdowns and a heading are useless on paper, and
             // they were printing at the FOOT of the hall sheet, under the last

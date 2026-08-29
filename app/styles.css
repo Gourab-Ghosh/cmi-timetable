@@ -1026,6 +1026,59 @@ table.tt.halls-merged tr.quiet:not(.today) th.dayhead { opacity: 0.68; }
   --line-strong: #596273;
   --muted: #b8bfcb;
 }
+/* "Show a ghost where CMI's time was" (R89): always in the DOM (ui.rs
+   renders it unconditionally, the chip-name shape), shown only here. A
+   label, never a control: pointer-events none belongs to the BASE rule so
+   even an unshown ghost can never meet a pointer. Tokens only — both
+   themes come free. */
+.ghost { display: none; pointer-events: none; }
+.app.move-ghosts table.tt td .ghost {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 1 1 100%;
+  min-height: 22px;
+  padding: 1px 4px;
+  border: 1.5px dashed var(--line-strong);
+  border-radius: var(--r-sm);
+  color: var(--muted);
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+/* "Shrink empty days on Halls" ticked OFF (R89): booking-free rows keep
+   full height. @media screen, deliberately — print pins BOTH row kinds to
+   16px so the sheet reads as one table, and this override out-specifies
+   that rule; on paper the row's own hint promises uniform rows either way.
+   No hardcoded height: reverting to the base rules' own values keeps the
+   compact hierarchy (34px under .density-compact) intact. */
+@media screen {
+  .app.halls-full-rows table.tt.halls-merged tr.quiet td,
+  .app.halls-full-rows table.tt.halls-merged tr.quiet th.dayhead {
+    height: 52px;
+    padding-top: 0.3rem;
+    padding-bottom: 0.3rem;
+  }
+  .app.halls-full-rows .density-compact table.tt.halls-merged tr.quiet td,
+  .app.halls-full-rows .density-compact table.tt.halls-merged tr.quiet th.dayhead {
+    height: 34px;
+    padding-top: 0.2rem;
+    padding-bottom: 0.2rem;
+  }
+}
+/* "Band alternate rooms on the Halls page" ticked OFF (R89): each element
+   gets ITS OWN non-alt paint back — one flat colour would repaint the
+   sticky gutters and the band would survive as a gutter-stripe. The 2px
+   room-boundary rule is untouched, so rooms never blur together. */
+.app.no-hall-bands table.tt.halls-merged tr.alt td:not(.extra) {
+  background: transparent;
+}
+.app.no-hall-bands table.tt.halls-merged tr.alt th.dayhead {
+  background: var(--surface);
+}
+.app.no-hall-bands table.tt.halls-merged tr.alt th.hallhead {
+  background: var(--surface-2);
+}
 /* Both off together: the no-today fallback above (today's row keeps only the
    quiet dim) must not out-specify no-quiet-dim, or today's empty row becomes
    the ONE row still dimmed — the removed mark coming back inverted. */
@@ -2889,6 +2942,23 @@ body.modal-open { overflow: hidden; }
    ink, same size, the whole line pressable. The caret is the only thing
    that moves, and `.still` (and the device's own setting, further down)
    already zero every transition. */
+.tweak-shelf { display: flex; gap: 0.5rem; margin: 0.15rem 0 0.9rem; }
+/* The unit word after a number tweak's box ("2 days", "100 steps") — the
+   row must not end mid-sentence. */
+.tweak-unit { color: var(--muted); font-size: 0.85rem; }
+/* The changed-from-how-the-app-ships dot (R89): a quiet accent mark beside
+   a row whose value differs from the shipped default — the row-level twin
+   of the counter beside Reset. Decoration for the eye; the words for AT
+   ride in a visually-hidden span beside it. */
+.tweak-dot { color: var(--accent); font-size: 0.6rem; vertical-align: middle; }
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
 .tweak-group h3 { margin: 0; }
 .tweak-group .group-toggle {
   display: flex;
@@ -4225,6 +4295,31 @@ label.field > input { width: 100%; }
   /* "Course names on chips" never reaches paper: the printed key is the
      one place names live on a sheet, whatever the screen shows. */
   .chip .chip-name { display: none !important; }
+
+  /* Ghosts never print (R89, unconditional — no root-class qualifier): the
+     poster already marks a move with a dashed border and its ✎, and a
+     second dashed box is a mark the printed key has no line for (t140). */
+  .ghost { display: none !important; }
+
+  /* "Size the poster's rows for a wall" ticked OFF (R89): the desk-sized
+     poster. Heights stay MINIMUMS — the nothing-clipped-in-print law two
+     comments up — so a clash-heavy cell still grows; only geometry moves,
+     never content, and print-plain (below) keeps the last word on colour. */
+  .poster-compact section[aria-label="My timetable"] table.tt td {
+    height: 30px;
+  }
+  .poster-compact section[aria-label="My timetable"] table.tt td .chip {
+    min-height: 16px;
+    padding: 1px 3px;
+    font-size: 10.5px;
+  }
+  .poster-compact section[aria-label="My timetable"] table.tt td .chip .hall {
+    font-size: 7px;
+  }
+  .poster-compact section[aria-label="My timetable"] .covered {
+    font-size: 7.5px !important;
+    padding: 0.5px 3px;
+  }
 
   /* --- "Print in colour" ticked OFF (R88): plain-ink sheets. ---
      Appended LAST in this block on purpose: these repeat the specificity

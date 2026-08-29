@@ -814,6 +814,10 @@ pub fn Root() -> impl IntoView {
             class:strong-lines=move || app.prefs.with(|p| p.strong_lines)
             class:no-hints=move || app.prefs.with(|p| p.grid_hints_off)
             class:print-plain=move || app.prefs.with(|p| p.print_plain)
+            class:move-ghosts=move || app.prefs.with(|p| p.move_ghosts)
+            class:halls-full-rows=move || app.prefs.with(|p| p.halls_shrink_off)
+            class:no-hall-bands=move || app.prefs.with(|p| p.halls_band_off)
+            class:poster-compact=move || app.prefs.with(|p| p.print_poster_compact)
         >
             <ui::Header />
             <ui::Tabs />
