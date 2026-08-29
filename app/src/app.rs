@@ -38,7 +38,20 @@ fn load_or<T: serde::de::DeserializeOwned>(
 fn init_app() -> (App, bool) {
     let mut corrupt = false;
 
-    let prefs: crate::state::Prefs = load_or(storage::KEY_PREFS, &mut corrupt, Default::default);
+    let mut prefs: crate::state::Prefs =
+        load_or(storage::KEY_PREFS, &mut corrupt, Default::default);
+    // Two tweaks act at boot, before anything reads the fields they rewrite:
+    // a chosen landing section replaces the remembered one, and "forget the
+    // day pickers" clears both picks before `plan_view`/`halls_view` are
+    // ever read — the R70 read-ordering law stays untouched because the
+    // stored values are gone, not raced.
+    if let Some(t) = prefs.landing_tab {
+        prefs.tab = t;
+    }
+    if prefs.day_picks_forget {
+        prefs.plan_view = None;
+        prefs.halls_view = None;
+    }
     let selection: Vec<String> = load_or(storage::KEY_SELECTION, &mut corrupt, Vec::new);
     let overrides: OverridesStore = load_or(
         storage::KEY_OVERRIDES,
@@ -169,6 +182,8 @@ fn init_app() -> (App, bool) {
         marks: Memo::new(move |_| {
             prefs.with(|p| (!p.marks_clash_off, !p.marks_edits_off, !p.marks_ticks_off))
         }),
+        weekend_rows: Memo::new(move |_| prefs.with(|p| p.weekend_rows)),
+        drag_free: Memo::new(move |_| prefs.with(|p| p.drag_without_edit)),
     };
     provide_context(app);
     // One index for every chip on the page: name, hue and "CMI lists no
@@ -731,6 +746,13 @@ pub fn Root() -> impl IntoView {
     // `position: fixed` — that variant zeroes window.scrollY on every open,
     // and the app (and the whole e2e suite's scroll choreography) assumes the
     // page stays where it was.
+    // Mirror the wheel-step tweak into domx's thread_local: its handlers
+    // are plain functions with no App in scope. Same shape as the theme and
+    // modal-open mirrors around it — one document-level fact from a signal.
+    Effect::new(move |_| {
+        domx::set_wheel_step_off(app.prefs.with(|p| p.wheel_step_off));
+    });
+
     Effect::new(move |_| {
         let open = app.dialog.with(|d| d.is_some()) || app.confirm.with(|c| c.is_some());
         if let Some(body) = domx::document().body() {
@@ -749,6 +771,20 @@ pub fn Root() -> impl IntoView {
     fetch::reparse_stored_if_newer(app);
     apply_url_state(app);
     fetch::maybe_background_update(app);
+    // The "Every hour" cadence needs a tab open longer than an hour to mean
+    // anything, so a quiet ticker re-asks — gated on that one mode, so the
+    // shipped boot-only behaviour of the other modes is untouched.
+    leptos::task::spawn_local(async move {
+        loop {
+            gloo_timers::future::TimeoutFuture::new(15 * 60 * 1000).await;
+            if app
+                .prefs
+                .with_untracked(|p| p.auto_sync.as_deref() == Some("hourly"))
+            {
+                fetch::maybe_background_update(app);
+            }
+        }
+    });
     offline_note(app);
     // Last: everything above may itself adopt a snapshot, and the listener
     // has nothing to say about writes this tab made.
@@ -773,6 +809,11 @@ pub fn Root() -> impl IntoView {
             class:no-chip-halls=move || app.prefs.with(|p| p.chip_halls_off)
             class:chips-plain=move || app.prefs.with(|p| p.chips_plain)
             class:still=move || app.prefs.with(|p| p.reduce_motion)
+            class:chip-names=move || app.prefs.with(|p| p.chip_names)
+            class:chips-vivid=move || app.prefs.with(|p| p.chips_vivid)
+            class:strong-lines=move || app.prefs.with(|p| p.strong_lines)
+            class:no-hints=move || app.prefs.with(|p| p.grid_hints_off)
+            class:print-plain=move || app.prefs.with(|p| p.print_plain)
         >
             <ui::Header />
             <ui::Tabs />

@@ -358,11 +358,16 @@ pub fn chip(app: App, p: ChipProps) -> impl IntoView {
             class:selected=move || from_master && app.marks.get().2 && sel_clash.get().0
             class:neutral=move || identity.with(|(_, _, n)| *n)
             style=move || format!("--hue:{}", identity.with(|(_, h, _)| *h))
-            class:draggable=move || draggable && app.edit_mode.get()
+            class:draggable=move || draggable && (app.edit_mode.get() || app.drag_free.get())
             aria-label=move || aria.get()
             title=move || aria.get()
-            on:pointerdown=move |ev| {
-                if draggable && app.edit_mode.get_untracked() {
+            on:pointerdown=move |ev: web_sys::PointerEvent| {
+                // The drag-without-Edit tweak opens this gate for a mouse or
+                // pen only: a finger keeps needing the toggle, or scrolling
+                // a phone would move classes (the tweak's own fence).
+                let armed = app.edit_mode.get_untracked()
+                    || (app.drag_free.get_untracked() && ev.pointer_type() != "touch");
+                if draggable && armed {
                     dnd::chip_pointer_down(app, &ev, spec.clone());
                 }
             }
@@ -377,7 +382,10 @@ pub fn chip(app: App, p: ChipProps) -> impl IntoView {
             }
             on:keydown=move |ev| {
                 let key = ev.key();
-                if (key == "m" || key == "M") && draggable && app.edit_mode.get_untracked() {
+                if (key == "m" || key == "M")
+                    && draggable
+                    && (app.edit_mode.get_untracked() || app.drag_free.get_untracked())
+                {
                     ev.prevent_default();
                     dnd::enter_move_mode(app, spec_kbd.clone(), move_from.clone());
                 } else if key == "i" || key == "I" {
@@ -402,6 +410,14 @@ pub fn chip(app: App, p: ChipProps) -> impl IntoView {
                 }
             }
             <span class="code">{p.code}</span>
+            // The chip-names tweak: the span is always in the DOM and CSS
+            // shows it (`.app.chip-names`), so a flip reaches every mounted
+            // chip without a rebuild (t90's law). Reactive text from the
+            // identity memo, so a sync that renames the course reaches it;
+            // aria-hidden because the aria-label already speaks the name.
+            <span class="chip-name" aria-hidden="true">
+                {move || identity.with(|(n, _, _)| n.clone())}
+            </span>
             {sub.map(|s| view! { <span class="hall">{s}</span> })}
             {temp.then(|| view! { <span class="hall">"Temp"</span> })}
         </button>
@@ -642,7 +658,15 @@ pub fn Header() -> impl IntoView {
     };
     let stale = move || {
         let s = app.sync.get();
-        s.fetched_at <= 0.0 || now.get() - s.fetched_at > 48.0 * 3600e3
+        // The amber threshold follows the tweak; the counted age is the
+        // fact and shows regardless. Clamped here, the read site, so a
+        // hand-edited blob cannot park the warning a year away.
+        let days = app
+            .prefs
+            .with(|p| p.stale_after_days)
+            .map(|d| f64::from(d).clamp(1.0, 14.0))
+            .unwrap_or(2.0);
+        s.fetched_at <= 0.0 || now.get() - s.fetched_at > days * 24.0 * 3600e3
     };
 
     let theme_label = move || match app.prefs.with(|p| p.theme) {
@@ -712,9 +736,24 @@ pub fn Header() -> impl IntoView {
                     } else {
                         // Non-breaking space: with 320px of empty header to the
                         // right, this still broke after "a" and orphaned the
-                        // article from its noun.
-                        "The app checks CMI on its own, up to twice a\u{a0}day. Sync now for \
-                         the latest."
+                        // article from its noun. The sentence follows the
+                        // auto-sync tweak — a hint promising checks the
+                        // reader switched off would be the app lying about
+                        // itself in its own header.
+                        match app.prefs.with(|p| p.auto_sync.clone()).as_deref() {
+                            Some("manual") => {
+                                "Checking CMI on its own is switched off here — Sync now is \
+                                 the only fetch."
+                            }
+                            Some("hourly") => {
+                                "The app checks CMI on its own, up to once an\u{a0}hour. Sync \
+                                 now for the latest."
+                            }
+                            _ => {
+                                "The app checks CMI on its own, up to twice a\u{a0}day. Sync \
+                                 now for the latest."
+                            }
+                        }
                     }
                 }}
             </span>
@@ -781,6 +820,26 @@ pub fn Header() -> impl IntoView {
             >
                 {theme_label}
             </button>
+            // The header Developer door, off unless its tweak says so. The
+            // door in My data stays either way, so there is no state where
+            // the mode has no way in.
+            {move || {
+                app.prefs.with(|p| p.dev_button_on).then(|| {
+                    view! {
+                        <button
+                            class="btn noprint"
+                            title="Open developer mode"
+                            on:click=move |_| {
+                                app.goto_developer();
+                                domx::focus_soon(&["[id^='panel-dev-']"]);
+                            }
+                        >
+                            "{ } "
+                            <span class="btn-word">"Developer"</span>
+                        </button>
+                    }
+                })
+            }}
         </header>
     }
 }
@@ -847,6 +906,12 @@ fn tabs_nav(app: App) -> impl IntoView {
             // Same containment for the wheel: it only means "change section"
             // while the pointer is over the rail.
             on:wheel=move |ev: web_sys::WheelEvent| {
+                // The rail-gestures tweak: return before prevent_default,
+                // so with gestures off the wheel scrolls the page like
+                // anywhere else instead of dying silently over the bar.
+                if app.prefs.with_untracked(|p| p.rail_gestures_off) {
+                    return;
+                }
                 let Some(rail) = ev
                     .current_target()
                     .and_then(|t| t.dyn_into::<web_sys::Element>().ok())
@@ -875,6 +940,11 @@ fn tabs_nav(app: App) -> impl IntoView {
                     return;
                 };
                 press.set(None);
+                // Same tweak as the wheel above: `swiped` then never sets,
+                // so taps on the bar stay exactly as they were.
+                if app.prefs.with_untracked(|p| p.rail_gestures_off) {
+                    return;
+                }
                 let dx = ev.client_x() as f64 - x0;
                 let dy = ev.client_y() as f64 - y0;
                 // Along the rail, and far enough to be meant. Requiring the
@@ -2872,7 +2942,19 @@ pub fn DialogHost() -> impl IntoView {
                         Dialog::Shorten => shorten_dialog(app).into_any(),
                     };
                     view! {
-                        <div class="overlay" on:click=move |_| app.dismiss_dialog()>
+                        <div
+                            class="overlay"
+                            on:click=move |_| {
+                                // The scrim-close tweak: with it off, only
+                                // Close, Escape or the browser leave a
+                                // dialog. The confirm layer's scrim keeps
+                                // answering No — already the safe path.
+                                if app.prefs.with_untracked(|p| p.scrim_close_off) {
+                                    return;
+                                }
+                                app.dismiss_dialog()
+                            }
+                        >
                             <div
                                 class="dialog"
                                 role="dialog"
@@ -4783,8 +4865,23 @@ fn my_data_dialog(app: App) -> impl IntoView {
                     </p>
                     <ul class="confirm-points">
                         <li>
-                            "Fetching CMI's two pages — when you press Sync now, and on \
-                             its own at most twice a day."
+                            {move || {
+                                match app.prefs.with(|p| p.auto_sync.clone()).as_deref() {
+                                    Some("manual") => {
+                                        "Fetching CMI's two pages — only when you press Sync \
+                                         now (the automatic checks are switched off under \
+                                         Developer mode → Tweaks)."
+                                    }
+                                    Some("hourly") => {
+                                        "Fetching CMI's two pages — when you press Sync now, \
+                                         and on its own up to once an hour."
+                                    }
+                                    _ => {
+                                        "Fetching CMI's two pages — when you press Sync now, \
+                                         and on its own at most twice a day."
+                                    }
+                                }
+                            }}
                         </li>
                         {(!checks_off)
                             .then(|| {
@@ -4922,10 +5019,30 @@ fn my_data_dialog(app: App) -> impl IntoView {
                     }}
                 </p>
                 <p class="muted small">
-                    "CMI keeps editing its timetable through the semester, so the app \
-                     checks for changes on its own — at most twice a day, and only \
-                     while you have it open — and tells you what changed. Sync now \
-                     fetches CMI's pages immediately, for when you'd rather not wait."
+                    {move || {
+                        match app.prefs.with(|p| p.auto_sync.clone()).as_deref() {
+                            Some("manual") => {
+                                "CMI keeps editing its timetable through the semester. \
+                                 Checking on its own is switched off in this browser \
+                                 (Developer mode → Tweaks), so Sync now is how this app \
+                                 learns of changes."
+                            }
+                            Some("hourly") => {
+                                "CMI keeps editing its timetable through the semester, so \
+                                 the app checks for changes on its own — up to once an \
+                                 hour, and only while you have it open — and tells you \
+                                 what changed. Sync now fetches CMI's pages immediately, \
+                                 for when you'd rather not wait."
+                            }
+                            _ => {
+                                "CMI keeps editing its timetable through the semester, so \
+                                 the app checks for changes on its own — at most twice a \
+                                 day, and only while you have it open — and tells you what \
+                                 changed. Sync now fetches CMI's pages immediately, for \
+                                 when you'd rather not wait."
+                            }
+                        }
+                    }}
                 </p>
             </section>
 
@@ -6765,6 +6882,16 @@ fn export_dialog(app: App, scope: Option<String>) -> impl IntoView {
                 ttcore::ics::IcsCourse::from_course(&course, meetings)
             })
             .collect();
+        // The calendar-notes tweak: core already skips empty description
+        // parts, so emptying the lists here keeps events to title, room and
+        // time with zero core change.
+        let mut courses = courses;
+        if app.prefs.with_untracked(|p| p.ics_desc_off) {
+            for c in &mut courses {
+                c.instructors.clear();
+                c.branches.clear();
+            }
+        }
         if courses.iter().all(|c| c.meetings.is_empty()) {
             error.set(
                 "Nothing to export yet — there's no weekly meeting to put in the \
@@ -6784,7 +6911,15 @@ fn export_dialog(app: App, scope: Option<String>) -> impl IntoView {
                     .parse::<u16>()
                     .map_or(10, |m| m.clamp(1, 1440))
             }),
-            app_url: domx::share_url(&format!("?c={c_param}")),
+            // The calendar-link tweak: core skips the whole line for an
+            // empty URL — and the link spells out the reader's courses, so
+            // leaving it out of a file that gets sent on is a privacy
+            // choice, not a cosmetic one.
+            app_url: if app.prefs.with_untracked(|p| p.ics_link_off) {
+                String::new()
+            } else {
+                domx::share_url(&format!("?c={c_param}"))
+            },
             dtstamp: domx::dtstamp_utc_now(),
             calendar_name: format!("CMI Timetable {}", snapshot.semester_label_display()),
         };

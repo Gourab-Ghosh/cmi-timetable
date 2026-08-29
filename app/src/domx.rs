@@ -215,6 +215,17 @@ pub fn select_all_on_focus(ev: &web_sys::FocusEvent) {
     }
 }
 
+thread_local! {
+    /// The wheel-step tweak's mirror, written by the tweak effect in
+    /// `app.rs` at boot and on every prefs change. See `step_on_wheel`.
+    static WHEEL_STEP_OFF: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Mirror-writer for the wheel-step tweak (called from `app.rs`).
+pub fn set_wheel_step_off(off: bool) {
+    WHEEL_STEP_OFF.with(|c| c.set(off));
+}
+
 /// Turn the wheel over a box that has a step — credits, a meeting's start or
 /// end time, an export date, the reminder lead — and it moves by one step.
 ///
@@ -225,6 +236,13 @@ pub fn select_all_on_focus(ev: &web_sys::FocusEvent) {
 /// behind it stays put; the accepted tradeoff is that a scroll gesture
 /// passing over a box steps it.
 pub fn step_on_wheel(ev: web_sys::WheelEvent) {
+    // The wheel-step tweak, mirrored into a thread_local (these handlers are
+    // plain functions on hundreds of inputs, with no App in scope — the
+    // HOVERED_TOASTS idiom). Return before any prevent_default, so with
+    // stepping off the wheel scrolls the page like anywhere else.
+    if WHEEL_STEP_OFF.with(|c| c.get()) {
+        return;
+    }
     let Some(input) = ev
         .target()
         .and_then(|t| t.dyn_into::<web_sys::HtmlInputElement>().ok())
@@ -312,6 +330,10 @@ pub fn step_on_wheel(ev: web_sys::WheelEvent) {
 /// numbered — and having the wheel move the start time but not the Time
 /// slot next to it is the kind of gap that makes an app feel arbitrary.
 pub fn cycle_on_wheel(ev: web_sys::WheelEvent) {
+    // Same tweak, same gate, same ordering as `step_on_wheel`.
+    if WHEEL_STEP_OFF.with(|c| c.get()) {
+        return;
+    }
     let Some(select) = ev
         .target()
         .and_then(|t| t.dyn_into::<web_sys::HtmlSelectElement>().ok())
@@ -1048,8 +1070,13 @@ pub fn keep_number_with_word(name: &str) -> String {
 /// Falls back to a plain `window.print()` if the tab cannot be opened. A
 /// reader who cannot print at all is worse off than one whose background
 /// blinks.
-pub fn print_sheet(on_done: impl Fn() + Clone + 'static) {
-    if try_print_in_own_window(on_done.clone()).is_none() {
+/// `page` is the page-shape tweak's value at click time (None = the shipped
+/// wide sheet; "portrait"; "ask" = leave it to the print dialog). Only the
+/// app's own Print buttons come through here, which is why the tweak's hint
+/// owns that Ctrl+P keeps the wide design — an undocumented mismatch is how
+/// a tweak starts lying.
+pub fn print_sheet(page: Option<String>, on_done: impl Fn() + Clone + 'static) {
+    if try_print_in_own_window(page, on_done.clone()).is_none() {
         let _ = window().print();
         on_done();
     }
@@ -1087,12 +1114,25 @@ fn collect_css() -> String {
 /// second press replaces those rules instead of appending a second copy.
 const APP_CSS_ID: &str = "cmitt-app-css";
 
-fn try_print_in_own_window(on_done: impl Fn() + Clone + 'static) -> Option<()> {
+fn try_print_in_own_window(
+    page: Option<String>,
+    on_done: impl Fn() + Clone + 'static,
+) -> Option<()> {
     let doc = document();
     let app = doc.query_selector(".app").ok()??;
-    let css = collect_css();
+    let mut css = collect_css();
     if css.is_empty() {
         return None;
+    }
+    // The page-shape tweak rides in as one extra @page rule APPENDED to the
+    // collected text, so it wins the stylesheet's own `@page` on source
+    // order. A retired stored value falls through to the shipped shape (the
+    // `shorten_service` lesson). Margins swap with the axes for "portrait";
+    // "auto" hands the choice to the print dialog.
+    match page.as_deref() {
+        Some("portrait") => css.push_str("\n@page { size: A4 portrait; margin: 12mm 11mm; }"),
+        Some("ask") => css.push_str("\n@page { size: auto; }"),
+        _ => {}
     }
     let sheet = app.clone_node_with_deep(true).ok()?;
 

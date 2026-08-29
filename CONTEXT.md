@@ -814,7 +814,7 @@ regenerates the .ics golden.
   NOWHERE on this page while still counting toward the credit total.
 - "Your changes" groups are headed by `.cg-head` (colour rail + small caps
   + count), coloured by `OwnChange::tone()`. See §4.
-- Tests: 169 native + 146/146 e2e green (as of R87; the native count from
+- Tests: 169 native + 152/152 e2e green (as of R88; the native count from
   `deploy.sh`'s own in-container run — 49+18+3+9+25+27+28+10).
 - **The e2e suite mocks the relays, so it can never tell you a real one has
   died** — which is exactly how R84's outage reached a user. Two probes cover
@@ -6518,6 +6518,132 @@ categories; t144 search contract; t145 marks honesty end-to-end incl.
 persistence and restore; t146 the door + guarded Escape + focus), t01/t02
 rewritten as the discoverability/re-shelving specs, t58 + `fetch_log_tiers`
 one-string edits, 169 native, clippy + fmt clean.
+
+### R88 — restore the verifiers, then give the Tweaks page real depth
+
+**The ask** (29 Aug 2026): restore the four dead R87 verifiers and let them
+finish; then MANY more tweaks — "maximal control… tinker with each and
+everything in the app", advanced users only (that is why they live in
+developer mode), organised into findable subsections, workers proposing
+widely and the best selected. Plus two permanent process rules, both in §2:
+workers save AS THEY GO to be READ COLD (the 5-hour/model/weekly limits kill
+without warning), and every turn that ends with background workers says so
+and says how many.
+
+**The verify fleet came back 4/4** (restore protocol: each read its own
+partial and continued from its last STATUS line — nothing redone). a11y and
+visual PASS; code and print FAIL with five confirmed defects, all fixed and
+each pinned by a test that fails on b9d11b3:
+
+1. The dev rail REBUILT on every category step (the swap closure read the
+   whole route; a category change IS a route change) — keyboard focus fell
+   to `<body>`, the second arrow press was dead, and the old t143 masked it
+   by re-finding + send_keys-refocusing. Fix: the swap gates on a
+   `Memo<bool>` of `is_developer()` (value-dedupe ⇒ only mode crossings
+   rebuild). t143 now walks the rail WITHOUT re-finding between presses and
+   asserts activeElement after arrows AND clicks.
+2. The Catalog print footnote's ⚠ clause ignored the marks tweak (its ✎
+   sibling was gated in the same diff). Gated with `marks.get().0`.
+3. The Catalog row's "✎ your times" badge ignored the tweak — now the
+   meeting_row treatment (glyph + accent follow, the words stay). 2+3
+   pinned by t145's Catalog block.
+4. `.app.no-today`'s quiet-today fallback (6 classes) out-specified
+   `.app.no-quiet-dim` (5): with BOTH off, today's empty halls row was the
+   ONE row still dimmed. Fix: combined `.no-today.no-quiet-dim` rule.
+   Pinned by NEW t147 (pin Friday, halls Week view, computed opacity
+   through all three states).
+5. Escape was dead on tweak checkboxes (`is_editing_context` matches every
+   input). The dev-exit guard narrowed to `escape_has_native_meaning`
+   (textarea/select/text-like inputs stay guarded; checkbox/radio/button/
+   range let the exit run). Pinned in t146.
+
+**The ideation fleet** (wf_75dc18be-dfd, 6/6): 4 proposers → 61 ideas →
+sceptic (42 feasible / 16 risky / 3 kills) → curator roster of 25 in a
+subsection taxonomy (`findings/tweaks-judge-curator.md` IS the spec). All
+25 accepted. The Tweaks page now holds **35 rows in 11 collapsible groups**
+(Marks / The week grid / Colour and motion / Opening the app / Notices and
+dialogs / Wheel and swipe / Editing and undo / Syncing / Printing /
+Calendar files / Developer mode); the shipped three groups open, the eight
+new ones closed; the group heading is the disclosure button
+(aria-expanded); a live search overrides collapse (matching groups render
+expanded, others hide) and clearing restores the reader's own toggles —
+collapse state is session-only signals, like the search.
+
+**The 25 new prefs** (all `#[serde(default)]`, defaults = today, all in
+`nothing_saved_to_lose` and `reset_tweaks`): chip_names, density_everywhere,
+weekend_rows, grid_hints_off, chips_vivid, strong_lines, landing_tab
+(Option<Tab>), day_picks_forget, toast_life_secs (Option<u32>, 0 = never),
+scrim_close_off, wheel_step_off, rail_gestures_off, drag_without_edit,
+undo_depth (Option<u16>, clamped 10..=1000 at the read site), auto_sync
+(Option<String> — "hourly"/"manual", retired values fall back), 
+public_relays_off, direct_route_off, stale_after_days (Option<u8>, 1..=14),
+print_plain, print_page (Option<String>), print_credit_off, ics_link_off,
+ics_desc_off, dev_button_on, console_fetch_log_on.
+
+**Mechanism notes a future round must not re-learn:**
+- TWO new deduped memos on App, same law as `marks`: `weekend_rows` (read
+  inside `compute_grid_days` — a raw tracked prefs read there would re-walk
+  200 courses per filter keystroke) and `drag_free` (read by every chip's
+  cursor closure). `hall_days` calls `grid_days`, so Halls follows free.
+- `landing_tab`/`day_picks_forget` act ONCE at boot in `init_app`, before
+  anything reads the fields they rewrite — the R70 read-ordering law is
+  untouched because the stored values are gone, not raced.
+- Wheel stepping is gated through a domx thread_local mirror
+  (`set_wheel_step_off`, HOVERED_TOASTS idiom) written by an Effect in
+  app.rs; both handlers return BEFORE any prevent_default so the page
+  scrolls normally. The rail's wheel gate likewise returns before its
+  prevent_default; the swipe gate leaves `swiped` unset so taps are
+  untouched.
+- drag_without_edit widens exactly three gates, all in ui.rs `chip()`
+  (cursor class, pointerdown, keyboard M); pointerdown excludes
+  `pointer_type == "touch"` — a phone scroll must never move a class. t09
+  pins the shipped gate, NEW t152 pins the override (and re-ticking).
+- The direct-route tweak gates the tier-2 block AND the `answers_at_all`
+  probe (the probe alone can raise the local-network prompt) and WINS over
+  the Sync page's forced tier. The relays tweak short-circuits
+  `relay_routes` after the reader's own helper. Both feed the failure copy:
+  a failed sync names only routes actually asked ("truth in failure" —
+  three sentences branch on the two flags).
+- auto_sync: `maybe_background_update` keeps the empty-store carve-out for
+  every mode incl. "manual"; "hourly" needs a tab older than an hour, so a
+  15-min ticker in app.rs re-asks, gated on that one mode so the shipped
+  boot-only behaviour of the others is untouched.
+- THREE prose sites describe the cadence (header sync-hint, the network
+  disclosure list, My data's sync paragraph) — all three now branch on the
+  pref. The welcome screen's copy deliberately still describes the shipped
+  app (it can only show pre-first-sync).
+- Print credit: six format-string tails converged into ONE gated
+  `stats_line(app, facts)` helper (tracked read — stats lines are mounted
+  text). Page shape rides as an `@page` rule APPENDED to the collected CSS
+  text in `try_print_in_own_window` (source order wins); Ctrl+P divergence
+  is owned in the hint. print_plain is ~10 rules appended LAST inside
+  `@media print` (source order again), `:not(.clash)` keeps every red.
+- chip-name spans render unconditionally in `chip()` (t90: no rebuilds);
+  CSS shows them only in `table.tt td` cells (text-row chips already sit
+  beside the name), compact hides them, print never shows them.
+- chips_vivid uses `:not(.chips-plain)` (not source order) because its
+  dark-theme variant out-specifies the plain rule — plain means plain.
+- The Row height hint names its true scope reactively once
+  density_everywhere widens it. The halls quiet-row 30px shrink
+  out-specifies `.density-compact`'s 34px, so the size hierarchy survives
+  density-everywhere (checked, not assumed).
+- New dev.rs row kinds: `tweak_group` (collapse), `seg_choice`
+  (closure-driven segs), `tweak_number` (empty = back to shipped, clamps at
+  the write site to the same range as the read site). TWEAK_HAYSTACKS is
+  35 entries and MUST stay in render order — `vis(i)` indexes and the
+  group ranges (`ga(a, b)`) are hand-numbered.
+
+**Suite:** t144 rewritten (11 groups, 16 resting rows, search reaches into
+closed groups, collapse+search both session-only via d.refresh()); NEW t148
+(disclosure contract: open/close by hand, mid-search clicks inert, clearing
+restores), t149 (scrim tweak + Escape still works; "until dismissed" toast
+outlives 6 s and dies by ✕; "3 s" hurries away; print credit off — facts
+stay), t150 (weekend rows on My timetable AND Master grid, on and off),
+t151 (landing section on a REAL reload; #/developer reloads into the mode
+by design so the test exits first; running-session navigation untouched),
+t152 (mouse drags without the toggle; finger fence untestable headless but
+the touch exclusion is in the pointerdown gate). 152/152 e2e, 169 native,
+clippy + fmt clean.
 
 ## 8. Open bugs — found, confirmed, NOT fixed (do not delete)
 

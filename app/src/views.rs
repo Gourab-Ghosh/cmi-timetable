@@ -108,6 +108,19 @@ fn print_masthead(
 /// ends with, so the sheet says what made it wherever it is pinned up.
 const MADE_WITH: &str = "made with the CMI Timetable Planner";
 
+/// Every sheet's stats line goes through this ONE helper, so the six format
+/// strings cannot drift apart on whether the sheet is signed: the credit
+/// follows its tweak, the facts before the "·" never do. A tracked read —
+/// stats lines are mounted text, and a flip must reach the paper-bound DOM
+/// without a remount.
+fn stats_line(app: App, facts: String) -> String {
+    if app.prefs.with(|p| p.print_credit_off) {
+        facts
+    } else {
+        format!("{facts} · {MADE_WITH}")
+    }
+}
+
 /// The Print button, one per printable section.
 ///
 /// All five sections print — each as its own sheet, and only itself, because
@@ -169,7 +182,8 @@ fn print_button(nothing: Option<Signal<Option<&'static str>>>) -> impl IntoView 
             // see `domx::print_sheet`, which measured 8.8 seconds of it.
             on:click=move |_| {
                 printing.set(true);
-                crate::domx::print_sheet(move || printing.set(false));
+                let page = App::use_ctx().prefs.with_untracked(|p| p.print_page.clone());
+                crate::domx::print_sheet(page, move || printing.set(false));
             }
         >
             {move || if printing.get() { "Printing…" } else { "Print" }}
@@ -692,12 +706,15 @@ fn my_timetable(app: App) -> impl IntoView {
                         .iter()
                         .map(|c| u32::from(app.course_credits(c)))
                         .sum();
-                    format!(
-                        "{} course{} · {} credit{} · {MADE_WITH}",
-                        courses.len(),
-                        if courses.len() == 1 { "" } else { "s" },
-                        total,
-                        if total == 1 { "" } else { "s" },
+                    stats_line(
+                        app,
+                        format!(
+                            "{} course{} · {} credit{}",
+                            courses.len(),
+                            if courses.len() == 1 { "" } else { "s" },
+                            total,
+                            if total == 1 { "" } else { "s" },
+                        ),
                     )
                 },
             )}
@@ -798,6 +815,13 @@ fn my_timetable(app: App) -> impl IntoView {
                         <div
                             class="grid-scroll week-grid"
                             class:day-mode-active=move || day_mode.get().is_some()
+                            // The density-everywhere tweak: the Row height
+                            // choice reaches this table too. Same class the
+                            // Master grid sets; all its rules are relative.
+                            class:density-compact=move || {
+                                app.prefs.with(|p| p.density_everywhere)
+                                    && app.density() == Density::Compact
+                            }
                         >
                             <table class="tt">
                                 <thead>
@@ -1708,12 +1732,12 @@ fn my_courses(app: App) -> impl IntoView {
                     let shown_n = filtered.get().len();
                     let picked = app.selection.with(|s| s.len());
                     if shown_n == picked {
-                        format!(
-                            "{shown_n} course{} · {MADE_WITH}",
-                            if shown_n == 1 { "" } else { "s" },
+                        stats_line(
+                            app,
+                            format!("{shown_n} course{}", if shown_n == 1 { "" } else { "s" }),
                         )
                     } else {
-                        format!("{shown_n} of {picked} courses · {MADE_WITH}")
+                        stats_line(app, format!("{shown_n} of {picked} courses"))
                     }
                 },
             )}
@@ -2548,9 +2572,7 @@ fn master_grid(app: App) -> impl IntoView {
                 "Master grid",
                 move || {
                     let n = count.get();
-                    format!(
-                        "every course CMI has given a time · {n} shown · {MADE_WITH}",
-                    )
+                    stats_line(app, format!("every course CMI has given a time · {n} shown"))
                 },
             )}
             <div class="toolbar noprint" style="margin-bottom:0.25rem">
@@ -2607,7 +2629,10 @@ fn master_grid(app: App) -> impl IntoView {
             // was also the widest line on a page whose whole job is the grid.
             // The two marks that DO survive — ✓ and ⚠ — are named in the
             // print footnote at the foot of the section.
-            <p class="muted small noprint" style="margin:0 0 0.4rem">
+            // `hint`: the how-to tweak hides this (the control it teaches
+            // stays on screen; the tray hint is excluded — it doubles as the
+            // tray's explanation).
+            <p class="muted small noprint hint" style="margin:0 0 0.4rem">
                 "Click a course to add it to your timetable. Click it again to remove \
                  it. Turn on ✎ Edit layout to drag one straight into the slot you \
                  want — dropping it there adds it too."
@@ -2844,10 +2869,7 @@ fn catalog(app: App) -> impl IntoView {
                 "Catalog",
                 move || {
                     let n = count.get();
-                    format!(
-                        "{n} course{} · {MADE_WITH}",
-                        if n == 1 { "" } else { "s" },
-                    )
+                    stats_line(app, format!("{n} course{}", if n == 1 { "" } else { "s" }))
                 },
             )}
             <div class="toolbar noprint">
@@ -4086,7 +4108,12 @@ fn hall_table(
     };
     let today = crate::domx::today_local().weekday();
     view! {
-        <div class="grid-scroll">
+        <div
+            class="grid-scroll"
+            class:density-compact=move || {
+                app.prefs.with(|p| p.density_everywhere) && app.density() == Density::Compact
+            }
+        >
             <table class="tt" class:halls-merged=merged>
                 <thead>
                     <tr>
@@ -4247,10 +4274,9 @@ fn halls_view(app: App) -> impl IntoView {
                     // count that disagreed with the rows would be worse than
                     // no count at all.
                     let halls = app.snapshot.with(|s| s.halls.len()) + own_halls.get().len();
-                    format!(
-                        "{} hall{} · {MADE_WITH}",
-                        halls,
-                        if halls == 1 { "" } else { "s" },
+                    stats_line(
+                        app,
+                        format!("{} hall{}", halls, if halls == 1 { "" } else { "s" }),
                     )
                 },
             )}
@@ -4367,12 +4393,14 @@ fn halls_view(app: App) -> impl IntoView {
                         style="margin:0 0 0.6rem"
                     >
                         {has_selection.then_some("✓ marks the courses on your timetable. ")}
-                        <span class="noprint">
+                        <span class="noprint hint">
                             // The separating space belongs to the ✓ clause, not
                             // to this one: with nothing selected this span is
                             // the paragraph's whole content, and a leading
                             // space rendered as an indent no other line on the
-                            // page has (R83).
+                            // page has (R83). `hint`: the how-to tweak hides
+                            // this line; the ✓ key beside it is a mark's key
+                            // and follows the marks tweak instead.
                             "✎ Edit layout lets you drag a course to another room or time."
                         </span>
                     </p>

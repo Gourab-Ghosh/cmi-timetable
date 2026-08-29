@@ -30,6 +30,7 @@ features = [
   "Blob",
   "BlobPropertyBag",
   "Clipboard",
+  "console",
   "CssRule",
   "CssRuleList",
   "CssStyleDeclaration",

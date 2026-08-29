@@ -388,6 +388,116 @@ pub struct Prefs {
     /// device set: no sliding, no animation.
     #[serde(default)]
     pub reduce_motion: bool,
+
+    // --- The R88 tweaks. Same law as the eight above: every field is
+    // #[serde(default)] and its default IS today's behaviour, so a prefs
+    // blob written by any older build loads without changing anything.
+    // Positive names store a feature someone turned ON; `_off` names store
+    // a default someone turned OFF.
+    /// Write each course's name on its chips, under the code.
+    #[serde(default)]
+    pub chip_names: bool,
+    /// The Row height choice reaches My timetable and Halls too, not only
+    /// the Master grid.
+    #[serde(default)]
+    pub density_everywhere: bool,
+    /// Every week grid draws Saturday and Sunday even when nothing meets
+    /// there (the grids normally grow a weekend row only once it is used).
+    #[serde(default)]
+    pub weekend_rows: bool,
+    /// Hide the one-line how-to hints under the grids. The controls they
+    /// describe all stay, so CSS may carry this one alone.
+    #[serde(default)]
+    pub grid_hints_off: bool,
+    /// Turn the programme shades up a notch. "Colour chips by programme"
+    /// unticked still wins — plain means plain.
+    #[serde(default)]
+    pub chips_vivid: bool,
+    /// Darker grid lines and darker fine print, in both themes.
+    #[serde(default)]
+    pub strong_lines: bool,
+    /// Which section a fresh visit lands on. None = wherever the reader
+    /// last was (today's behaviour, via the persisted `tab`).
+    #[serde(default)]
+    pub landing_tab: Option<Tab>,
+    /// Forget the day-strip picks between visits: every boot clears
+    /// `plan_view` and `halls_view` before anything reads them, so each
+    /// visit opens on today while in-session picks still hold.
+    #[serde(default)]
+    pub day_picks_forget: bool,
+    /// How long a notice stays, in seconds; 0 = until dismissed by hand.
+    /// None = the shipped 6 seconds.
+    #[serde(default)]
+    pub toast_life_secs: Option<u32>,
+    /// A click on the dark area beside a dialog stops closing it.
+    #[serde(default)]
+    pub scrim_close_off: bool,
+    /// The wheel stops stepping values (credits, times, dropdowns) and only
+    /// ever scrolls. Typing and the arrow keys still change every value.
+    #[serde(default)]
+    pub wheel_step_off: bool,
+    /// The section bar stops answering the wheel and swipes. Taps and the
+    /// arrow keys still walk it.
+    #[serde(default)]
+    pub rail_gestures_off: bool,
+    /// A mouse or pen may drag chips without arming ✎ Edit layout first.
+    /// A finger still needs the toggle — scrolling a phone must never move
+    /// a class. This deliberately overrides the drag-on-purpose default.
+    #[serde(default)]
+    pub drag_without_edit: bool,
+    /// How many steps Ctrl+Z can walk back. None = the shipped 100; the
+    /// read site clamps to 10..=1000.
+    #[serde(default)]
+    pub undo_depth: Option<u16>,
+    /// How often the app fetches CMI's pages unasked. None = the shipped
+    /// twice-a-day throttle; "hourly"; "manual" = only when asked (except a
+    /// browser that has never synced, which still fetches its first
+    /// timetable). A String so a retired value still loads — the
+    /// `shorten_service` lesson.
+    #[serde(default)]
+    pub auto_sync: Option<String>,
+    /// Never show a public relay which CMI page is being read: syncs ask
+    /// only the reader's own helper site (My data) and CMI itself.
+    #[serde(default)]
+    pub public_relays_off: bool,
+    /// Never contact cmi.ac.in from this browser (the route that raises the
+    /// local-network question on CMI's own network) — not as the last sync
+    /// route and not as the answers-at-all probe.
+    #[serde(default)]
+    pub direct_route_off: bool,
+    /// How many days old the timetable gets before the header's pill wears
+    /// amber. None = the shipped 2 days; the read site clamps to 1..=14.
+    /// The counted age is the fact and always shows; this moves the sign.
+    #[serde(default)]
+    pub stale_after_days: Option<u8>,
+    /// Plain-ink sheets: white bands, grey-bordered chips, black rules.
+    /// Clash red stays — a warning, not decoration.
+    #[serde(default)]
+    pub print_plain: bool,
+    /// The printed page's shape. None = the shipped wide (A4 landscape);
+    /// "portrait"; "ask" = leave it to the print dialog. Only the app's own
+    /// Print buttons obey — the hint owns that honestly.
+    #[serde(default)]
+    pub print_page: Option<String>,
+    /// Leave the "made with…" credit off every printed sheet. The facts on
+    /// the stats line (semester, sync date, caveat) stay.
+    #[serde(default)]
+    pub print_credit_off: bool,
+    /// Keep the planner link out of calendar events' notes (the link also
+    /// spells out which courses the reader takes — a privacy choice).
+    #[serde(default)]
+    pub ics_link_off: bool,
+    /// Keep the instructor and branch lines out of calendar events' notes.
+    #[serde(default)]
+    pub ics_desc_off: bool,
+    /// A one-press Developer door in the header, beside the theme button.
+    /// The door in My data stays either way.
+    #[serde(default)]
+    pub dev_button_on: bool,
+    /// Echo every sync request as one line in the browser console — route,
+    /// status, milliseconds, bytes — so a bug report can carry the console.
+    #[serde(default)]
+    pub console_fetch_log_on: bool,
 }
 
 /// A day strip's selection: one day, or all of them.
@@ -439,6 +549,31 @@ impl Default for Prefs {
             chip_halls_off: false,
             chips_plain: false,
             reduce_motion: false,
+            chip_names: false,
+            density_everywhere: false,
+            weekend_rows: false,
+            grid_hints_off: false,
+            chips_vivid: false,
+            strong_lines: false,
+            landing_tab: None,
+            day_picks_forget: false,
+            toast_life_secs: None,
+            scrim_close_off: false,
+            wheel_step_off: false,
+            rail_gestures_off: false,
+            drag_without_edit: false,
+            undo_depth: None,
+            auto_sync: None,
+            public_relays_off: false,
+            direct_route_off: false,
+            stale_after_days: None,
+            print_plain: false,
+            print_page: None,
+            print_credit_off: false,
+            ics_link_off: false,
+            ics_desc_off: false,
+            dev_button_on: false,
+            console_fetch_log_on: false,
         }
     }
 }
@@ -950,6 +1085,13 @@ pub struct App {
     /// chips re-running their clash walk per keypress is the exact cost the
     /// memo's value-dedupe exists to avoid.
     pub marks: Memo<(bool, bool, bool)>,
+    /// The weekend-rows tweak as its own deduped memo, for the same reason
+    /// as `marks`: `compute_grid_days` walks the whole catalog, and it must
+    /// re-run when THIS flips — never on every prefs keystroke.
+    pub weekend_rows: Memo<bool>,
+    /// The drag-without-Edit-layout tweak, deduped for the same reason as
+    /// `marks`: every draggable chip's cursor-affordance closure reads it.
+    pub drag_free: Memo<bool>,
 }
 
 impl App {
@@ -981,9 +1123,20 @@ impl App {
         let id = self.toast_seq.get_untracked() + 1;
         self.toast_seq.set(id);
         self.toasts.update(|t| t.push(Toast { id, text, undo }));
+        // The notice-life tweak; 0 means "until dismissed" — no timer at
+        // all, the ✕ and hover-hold remain the ways out. Untracked: a toast
+        // takes the life the moment it is pushed and keeps it.
+        let life_ms = self
+            .prefs
+            .with_untracked(|p| p.toast_life_secs)
+            .map(|secs| secs.saturating_mul(1000))
+            .unwrap_or(6000);
+        if life_ms == 0 {
+            return id;
+        }
         let toasts = self.toasts;
         leptos::task::spawn_local(async move {
-            gloo_timers::future::TimeoutFuture::new(6000).await;
+            gloo_timers::future::TimeoutFuture::new(life_ms).await;
             // A hovered (or focused) toast stays until the reader lets go.
             while HOVERED_TOASTS.with(|h| h.borrow().contains(&id)) {
                 gloo_timers::future::TimeoutFuture::new(700).await;
@@ -1308,9 +1461,16 @@ impl App {
             my_filters: self.prefs.with_untracked(|p| p.my_filters.clone()),
             customs: self.customs.get_untracked(),
         };
+        // The depth tweak, clamped at the read site so a hand-edited blob
+        // cannot make Ctrl+Z useless (too few) or eat RAM without limit.
+        let max = self
+            .prefs
+            .with_untracked(|p| p.undo_depth)
+            .map(|d| (d as usize).clamp(10, 1000))
+            .unwrap_or(UNDO_MAX);
         self.undo_stack.update(|s| {
             s.undo.push(entry);
-            if s.undo.len() > UNDO_MAX {
+            while s.undo.len() > max {
                 s.undo.remove(0);
             }
             s.redo.clear();
@@ -1553,6 +1713,31 @@ impl App {
                     && !p.chip_halls_off
                     && !p.chips_plain
                     && !p.reduce_motion
+                    && !p.chip_names
+                    && !p.density_everywhere
+                    && !p.weekend_rows
+                    && !p.grid_hints_off
+                    && !p.chips_vivid
+                    && !p.strong_lines
+                    && p.landing_tab.is_none()
+                    && !p.day_picks_forget
+                    && p.toast_life_secs.is_none()
+                    && !p.scrim_close_off
+                    && !p.wheel_step_off
+                    && !p.rail_gestures_off
+                    && !p.drag_without_edit
+                    && p.undo_depth.is_none()
+                    && p.auto_sync.is_none()
+                    && !p.public_relays_off
+                    && !p.direct_route_off
+                    && p.stale_after_days.is_none()
+                    && !p.print_plain
+                    && p.print_page.is_none()
+                    && !p.print_credit_off
+                    && !p.ics_link_off
+                    && !p.ics_desc_off
+                    && !p.dev_button_on
+                    && !p.console_fetch_log_on
                     && p.filters.is_empty()
                     && p.my_filters.is_empty()
                     && p.filters.switches_are_default()
@@ -3008,6 +3193,18 @@ impl App {
     /// at most seven `Day`s, so every reader has to share one answer.
     pub(crate) fn compute_grid_days(&self) -> Vec<Day> {
         let mut days = vec![Day::Mon, Day::Tue, Day::Wed, Day::Thu, Day::Fri];
+        // The weekend tweak seeds both days up front, so a reader can drag a
+        // meeting of their own onto a Saturday that does not exist yet.
+        // Read through the deduped memo, tracked FIRST — before any store
+        // read could branch this walk away from it (the plan_view lesson
+        // below: a reactive-graph memo with no sources is clean forever).
+        if self.weekend_rows.get() {
+            for d in [Day::Sat, Day::Sun] {
+                if !days.contains(&d) {
+                    days.push(d);
+                }
+            }
+        }
         // `with`, not `get`, for BOTH stores: this runs for every grid body,
         // day strip and facet, and `get` would deep-clone the whole Snapshot
         // (gzipped raw pages included) and every override each time.
@@ -3347,10 +3544,10 @@ impl App {
         self.persist_prefs();
     }
 
-    /// Everything the Tweaks page owns, back to how the app ships: the
-    /// eight booleans plus theme and row height. Exactly the fields the
-    /// page shows — a reset that reaches further than its own page is how
-    /// a reset button starts lying.
+    /// Everything the Tweaks page owns, back to how the app ships — every
+    /// tweak field plus theme and row height. Exactly the fields the page
+    /// shows — a reset that reaches further than its own page is how a
+    /// reset button starts lying.
     pub fn reset_tweaks(&self) {
         self.prefs.update(|p| {
             let d = Prefs::default();
@@ -3364,6 +3561,31 @@ impl App {
             p.reduce_motion = d.reduce_motion;
             p.theme = d.theme;
             p.density = d.density;
+            p.chip_names = d.chip_names;
+            p.density_everywhere = d.density_everywhere;
+            p.weekend_rows = d.weekend_rows;
+            p.grid_hints_off = d.grid_hints_off;
+            p.chips_vivid = d.chips_vivid;
+            p.strong_lines = d.strong_lines;
+            p.landing_tab = d.landing_tab;
+            p.day_picks_forget = d.day_picks_forget;
+            p.toast_life_secs = d.toast_life_secs;
+            p.scrim_close_off = d.scrim_close_off;
+            p.wheel_step_off = d.wheel_step_off;
+            p.rail_gestures_off = d.rail_gestures_off;
+            p.drag_without_edit = d.drag_without_edit;
+            p.undo_depth = d.undo_depth;
+            p.auto_sync = d.auto_sync;
+            p.public_relays_off = d.public_relays_off;
+            p.direct_route_off = d.direct_route_off;
+            p.stale_after_days = d.stale_after_days;
+            p.print_plain = d.print_plain;
+            p.print_page = d.print_page;
+            p.print_credit_off = d.print_credit_off;
+            p.ics_link_off = d.ics_link_off;
+            p.ics_desc_off = d.ics_desc_off;
+            p.dev_button_on = d.dev_button_on;
+            p.console_fetch_log_on = d.console_fetch_log_on;
         });
         self.persist_prefs();
     }

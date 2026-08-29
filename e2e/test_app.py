@@ -802,6 +802,11 @@ def t02_developer_endpoint_only(app):
     assert rail == ["Overview", "Tweaks", "Sync", "Storage"], rail
     for label, panels in expected.items():
         app.open_tab(label)
+        # A category hop is a hash change, and hashchange is asynchronous —
+        # the OLD category's section is still mounted for a beat after the
+        # click, so waiting on the section alone reads yesterday's panels.
+        # The tabpanel's per-category id is the proof the swap landed.
+        app.wait_css(f"#panel-dev-{label.lower()}")
         section = app.wait_css("section[aria-label='Developer mode']")
         for panel in panels:
             assert panel in section.text, f"{label}: missing panel {panel}"
@@ -8754,7 +8759,9 @@ def t143_the_developer_rail_cannot_eject_you_by_accident(app):
         app.wait_css("section[aria-label='Developer mode']")
         for label in ("Overview", "Tweaks", "Sync", "Storage"):
             app.open_tab(label)
-            app.wait_css("section[aria-label='Developer mode']")
+            # Same async-hashchange beat as t02: measure the category that
+            # actually arrived, not the one on its way out.
+            app.wait_css(f"#panel-dev-{label.lower()}")
             overflow = app.d.execute_script(
                 "return document.documentElement.scrollWidth"
                 " - document.documentElement.clientWidth")
@@ -8764,11 +8771,41 @@ def t143_the_developer_rail_cannot_eject_you_by_accident(app):
         app.d.execute_cdp_cmd("Emulation.clearDeviceMetricsOverride", {})
 
 
+def _reveal_tweak(app, search_term):
+    """From anywhere: open the Tweaks page and reveal a row by searching for
+    it — a live query overrides the groups' collapse, so this works whether
+    the row's group ships open or closed. Returns the search box."""
+    app.d.get(f"{BASE}/#/developer/tweaks")
+    app.wait_css("section[aria-label='Developer mode']")
+    box = app.css("input[aria-label='Search the tweaks']")
+    if app.css_all("button[aria-label='Clear search']"):
+        app.css("button[aria-label='Clear search']").click()
+    box.send_keys(search_term)
+    time.sleep(0.2)
+    return box
+
+
+def _flip_tweak(app, search_term, label):
+    """Reveal one tweak row by search and flip its checkbox."""
+    _reveal_tweak(app, search_term)
+    app.xpath(f"//label[contains(@class,'opt')][.//span[normalize-space()="
+              f'"{label}"]]//input').click()
+
+
+def _pick_seg(app, search_term, group_aria, option_label):
+    """Reveal a segmented tweak by search and pick one of its options."""
+    _reveal_tweak(app, search_term)
+    app.xpath(f"//div[@role='radiogroup'][@aria-label='{group_aria}']"
+              f"//button[normalize-space()='{option_label}']").click()
+
+
 def t144_the_tweaks_search_is_a_real_search_box(app):
     """The tweaks search carries the same three switches every search box in
-    the app has (t115's contract), narrows the groups as you type, treats a
-    half-typed pattern as zero rows plus one explanation — never two — and
-    forgets everything on reload: a lens, not work product."""
+    the app has (t115's contract), narrows rows AND whole groups as you
+    type, reaches inside collapsed groups (a match renders its group
+    expanded), treats a half-typed pattern as zero rows plus one explanation
+    — never two — and forgets everything on reload: a lens, not work
+    product."""
     app.boot("/#/developer/tweaks")
     app.wait_css("section[aria-label='Developer mode']")
     box = app.css("input[aria-label='Search the tweaks']")
@@ -8777,17 +8814,33 @@ def t144_the_tweaks_search_is_a_real_search_box(app):
         return len(app.css_all(".tweak"))
 
     def visible_groups():
-        return [h.text for h in app.css_all(
-            "section[aria-label='Developer mode'] .panel h3")]
+        return [t.text.replace("▸", "").strip()
+                for t in app.css_all(".tweak-group .group-toggle")]
 
-    all_rows = visible_rows()
-    assert all_rows == 10, f"the v1 roster is ten rows, got {all_rows}"
-    assert visible_groups() == ["Marks", "The week grid", "Colour and motion"]
+    def expanded_groups():
+        return [t.text.replace("▸", "").strip()
+                for t in app.css_all(
+                    ".tweak-group .group-toggle[aria-expanded='true']")]
 
-    # Narrowing hides rows AND whole groups.
-    box.send_keys("clash")
+    # The R88 taxonomy: eleven groups, in the order a human wants them;
+    # the shipped page's three open, the eight new ones closed.
+    assert visible_groups() == [
+        "Marks", "The week grid", "Colour and motion", "Opening the app",
+        "Notices and dialogs", "Wheel and swipe", "Editing and undo",
+        "Syncing", "Printing", "Calendar files", "Developer mode",
+    ], visible_groups()
+    assert expanded_groups() == ["Marks", "The week grid", "Colour and motion"]
+    open_rows = visible_rows()
+    assert open_rows == 16, \
+        f"the three open groups hold 3+8+5 rows, got {open_rows}"
+
+    # A search reaches INSIDE a collapsed group: the one matching group
+    # renders expanded, every non-matching group hides entirely.
+    box.send_keys("console")
     WebDriverWait(app.d, 5).until(lambda d: visible_rows() == 1)
-    assert visible_groups() == ["Marks"], visible_groups()
+    assert visible_groups() == ["Developer mode"], visible_groups()
+    assert expanded_groups() == ["Developer mode"], \
+        "a match must expand its group, or the search found nothing visible"
     # The pointer line is the recovery path and never hides.
     assert "live in My data" in app.css(
         "section[aria-label='Developer mode']").text
@@ -8797,12 +8850,16 @@ def t144_the_tweaks_search_is_a_real_search_box(app):
         sw = app.css(f"button[aria-label='{name}']")
         assert sw.get_attribute("aria-pressed") == "false"
 
-    # Whole word: "mark" stops matching "marks".
+    # Clearing hands the caret back and restores the resting page.
     app.css("button[aria-label='Clear search']").click()
-    WebDriverWait(app.d, 5).until(lambda d: visible_rows() == all_rows)
+    WebDriverWait(app.d, 5).until(lambda d: visible_rows() == open_rows)
     assert app.d.execute_script(
         "return document.activeElement === arguments[0]", box), \
         "clearing must hand the caret back"
+    assert expanded_groups() == ["Marks", "The week grid", "Colour and motion"], \
+        "clearing the search must restore the reader's own open/closed state"
+
+    # Whole word: "mark" alone stops matching "marks".
     app.css("button[aria-label='Whole word']").click()
     box.send_keys("highlight")
     WebDriverWait(app.d, 5).until(lambda d: visible_rows() == 1)
@@ -8823,7 +8880,7 @@ def t144_the_tweaks_search_is_a_real_search_box(app):
     app.css("button[aria-label='Clear search']").click()
     box.send_keys("ticks|rows")
     WebDriverWait(app.d, 5).until(
-        lambda d: 0 < visible_rows() < all_rows and not app.css_all(
+        lambda d: 0 < visible_rows() and not app.css_all(
             "#search-pattern-error"))
 
     # Nonsense gets the honest empty state.
@@ -8835,14 +8892,20 @@ def t144_the_tweaks_search_is_a_real_search_box(app):
     assert "live in My data" in app.css(
         "section[aria-label='Developer mode']").text
 
-    # Session-only: a REAL reload starts clean. (`boot` to the same URL is
-    # a same-document hash change — the exact thing the mode guarantees —
-    # so refresh() is the only honest way to ask this question.)
+    # Session-only, search AND collapse alike: a REAL reload starts clean.
+    # (`boot` to the same URL is a same-document hash change — the exact
+    # thing the mode guarantees — so refresh() is the only honest way to
+    # ask this question. The Syncing group is opened with no search live,
+    # because a hidden group has no toggle and a held-open one ignores it.)
+    app.css("button[aria-label='Clear search']").click()
+    next(t for t in app.css_all(".tweak-group .group-toggle")
+         if "Syncing" in t.text).click()
     app.d.refresh()
     app.wait_css("section[aria-label='Developer mode']")
     box = app.css("input[aria-label='Search the tweaks']")
     assert box.get_attribute("value") == ""
-    assert visible_rows() == all_rows
+    assert visible_rows() == open_rows
+    assert expanded_groups() == ["Marks", "The week grid", "Colour and motion"]
 
 
 def t145_hiding_a_mark_hides_the_sign_never_the_fact(app):
@@ -9054,6 +9117,226 @@ def t147_the_week_grid_tweaks_do_not_fight_each_other(app):
         app.unpin_weekday(pinned)
 
 
+def t148_the_tweak_groups_open_and_close_by_hand(app):
+    """The eleven groups' disclosure is the reader's own: a closed group
+    opens on one press of its heading and closes on the next, a live search
+    holds matching groups open without touching those choices, and clearing
+    the search hands them back exactly as they were."""
+    app.boot("/#/developer/tweaks")
+    app.wait_css("section[aria-label='Developer mode']")
+
+    def toggle(title):
+        return next(t for t in app.css_all(".tweak-group .group-toggle")
+                    if title in t.text)
+
+    def rows_in(title):
+        return app.d.execute_script(
+            "const g = [...document.querySelectorAll('.tweak-group')].find("
+            "  x => x.querySelector('.group-toggle').textContent.includes("
+            f"    '{title}'));"
+            "return g ? g.querySelectorAll('.tweak').length : -1;")
+
+    # Closed ships closed; one press opens; the next closes.
+    assert toggle("Syncing").get_attribute("aria-expanded") == "false"
+    assert rows_in("Syncing") == 0
+    toggle("Syncing").click()
+    WebDriverWait(app.d, 5).until(lambda d: rows_in("Syncing") == 4)
+    assert toggle("Syncing").get_attribute("aria-expanded") == "true"
+    # The Syncing lede states the honesty floor.
+    assert "never stops saying how old" in app.css(
+        "section[aria-label='Developer mode']").text
+    toggle("Syncing").click()
+    WebDriverWait(app.d, 5).until(lambda d: rows_in("Syncing") == 0)
+
+    # A live search holds a matching group open — but the reader's own
+    # choice underneath is untouched, and a click mid-search is inert
+    # rather than silently flipping hidden state.
+    box = app.css("input[aria-label='Search the tweaks']")
+    box.send_keys("helper site")
+    WebDriverWait(app.d, 5).until(
+        lambda d: toggle("Syncing").get_attribute("aria-expanded") == "true")
+    toggle("Syncing").click()
+    time.sleep(0.2)
+    assert toggle("Syncing").get_attribute("aria-expanded") == "true", \
+        "mid-search the group stays held open"
+    app.css("button[aria-label='Clear search']").click()
+    WebDriverWait(app.d, 5).until(
+        lambda d: toggle("Syncing").get_attribute("aria-expanded") == "false",
+        message="clearing must restore the reader's own closed state")
+
+
+def t149_dialogs_and_notices_obey_their_tweaks(app):
+    """Three behaviour tweaks end to end: the dialog scrim stops closing on
+    a stray click (Escape still works), a notice can be kept until dismissed
+    by hand or hurried to three seconds, and the printed credit line follows
+    its tweak while the sheet's facts stay."""
+    app.boot("/?c=TOC", selection=["TOC"])
+
+    # Default: a click on the dark area closes the dialog.
+    app.xpath("//button[normalize-space()='My data']").click()
+    app.wait_css(".dialog")
+    app.d.execute_script(
+        "document.querySelector('.overlay').dispatchEvent("
+        "  new MouseEvent('click', {bubbles: true}))")
+    WebDriverWait(app.d, 5).until(lambda d: not app.css_all(".dialog"))
+
+    # Tweaked off: the same click does nothing; Escape still leaves.
+    _flip_tweak(app, "dark area", "Close a dialog by clicking the dark area")
+    app.css(".tabs .tab-exit").click()
+    app.wait_css("section[aria-label='My timetable']")
+    app.xpath("//button[normalize-space()='My data']").click()
+    app.wait_css(".dialog")
+    app.d.execute_script(
+        "document.querySelector('.overlay').dispatchEvent("
+        "  new MouseEvent('click', {bubbles: true}))")
+    time.sleep(0.4)
+    assert app.css_all(".dialog"), "the scrim click must be inert now"
+    app.css(".dialog").send_keys(Keys.ESCAPE)
+    WebDriverWait(app.d, 5).until(lambda d: not app.css_all(".dialog"))
+
+    # "Until dismissed": the flip's own toast is the proof — it outlives the
+    # shipped six seconds and goes only by its ✕.
+    _pick_seg(app, "Notices stay for", "Notices stay for", "Until dismissed")
+    app.wait_toast("until you close them")
+    time.sleep(7.5)
+    assert "until you close them" in app.toasts_text(), \
+        "an until-dismissed notice must outlive the 6s default"
+    app.css(".toast button[aria-label='Dismiss']").click()
+    WebDriverWait(app.d, 5).until(
+        lambda d: "until you close them" not in app.toasts_text())
+
+    # "3 s": the flip's toast hurries itself away.
+    _pick_seg(app, "Notices stay for", "Notices stay for", "3 s")
+    app.wait_toast("3 seconds")
+    time.sleep(4.5)
+    assert "3 seconds" not in app.toasts_text(), \
+        "a 3-second notice must be gone by 4.5s"
+
+    # The printed credit follows its tweak; the facts before it stay.
+    stats = lambda: app.d.execute_script(
+        "const el = document.querySelector('.pm-stats');"
+        "return el ? el.textContent : '';")
+    app.css(".tabs .tab-exit").click()
+    app.wait_css("section[aria-label='My timetable']")
+    assert "made with the CMI Timetable Planner" in stats()
+    _flip_tweak(app, "Sign each sheet",
+                "Sign each sheet “made with the CMI Timetable Planner”")
+    app.css(".tabs .tab-exit").click()
+    app.wait_css("section[aria-label='My timetable']")
+    assert "made with" not in stats(), "the sheet prints unsigned now"
+    assert "course" in stats(), "the facts on the stats line stay"
+
+
+def t150_weekend_rows_are_a_choice_not_a_growth(app):
+    """The week grids ship Mon–Fri and grow a weekend row only when
+    something meets there; the tweak seeds all seven days — so a reader can
+    drag a course of their own onto a Saturday that doesn't exist yet — and
+    ticking it back shrinks the week again."""
+    app.boot("/?c=TOC", selection=["TOC"])
+
+    def day_heads(section):
+        return [th.text.strip() for th in app.css_all(
+            f"section[aria-label='{section}'] table.tt tbody tr > th.rowhead")]
+
+    app.open_tab("My timetable")
+    app.wait_css("section[aria-label='My timetable'] table.tt")
+    before = day_heads("My timetable")
+    assert "Sat" not in before and "Sun" not in before, before
+
+    _flip_tweak(app, "Saturday and Sunday",
+                "Show Saturday and Sunday even when empty")
+    app.css(".tabs .tab-exit").click()
+    app.wait_css("section[aria-label='My timetable'] table.tt")
+    WebDriverWait(app.d, 5).until(
+        lambda d: "Sat" in day_heads("My timetable")
+        and "Sun" in day_heads("My timetable"))
+    # The Master grid reads the same seed.
+    app.open_tab("Master grid")
+    app.wait_css("section[aria-label='Master grid'] table.tt")
+    heads = day_heads("Master grid")
+    assert "Sat" in heads and "Sun" in heads, heads
+
+    _flip_tweak(app, "Saturday and Sunday",
+                "Show Saturday and Sunday even when empty")
+    app.css(".tabs .tab-exit").click()
+    app.wait_css("section[aria-label='Master grid'] table.tt")
+    WebDriverWait(app.d, 5).until(
+        lambda d: "Sat" not in day_heads("Master grid"))
+
+
+def t151_the_landing_section_is_a_choice(app):
+    """"Open the app on" replaces the remembered section on a REAL load —
+    and only then: switching sections in a running session works exactly as
+    before, and putting the choice back hands landing to the remembered
+    section again."""
+    app.boot("/?c=TOC", selection=["TOC"])
+    _reveal_tweak(app, "Open the app on")
+    sel = app.css("select[aria-label='Open the app on']")
+    Select(sel).select_by_visible_text("Catalog")
+    app.wait_toast("opens on Catalog")
+    # Leave the mode first: a #/developer URL reloads INTO developer mode
+    # (the mode's own promise) — the landing choice picks the planner
+    # section, never the route.
+    app.css(".tabs .tab-exit").click()
+    app.wait_css("section[aria-label='My timetable']")
+
+    app.d.refresh()
+    app.wait_css("section[aria-label='Catalog']")
+    # A running session still walks anywhere.
+    app.open_tab("Halls")
+    app.wait_css("section[aria-label='Lecture halls']")
+
+    _reveal_tweak(app, "Open the app on")
+    Select(app.css("select[aria-label='Open the app on']")).select_by_visible_text(
+        "The section I left (how the app ships)")
+    app.wait_toast("wherever you last were")
+    app.css(".tabs .tab-exit").click()
+    # The exit is an async hash hop; the planner SECTION arriving is the
+    # proof the planner rail is back (a bare `.tab` wait matches the dev
+    # rail's own categories and proves nothing). And the section is CATALOG:
+    # _reveal_tweak's d.get drops the ?c= query, so it is a REAL reload —
+    # and that boot ran while the landing choice still said Catalog,
+    # overwriting the Halls pick above. The tweak applying on that reload is
+    # itself the behaviour under test, so assert it rather than dodge it.
+    app.wait_css("section[aria-label='Catalog']")
+    app.open_tab("My courses")
+    app.wait_css("section[aria-label='My courses']")
+    app.d.refresh()
+    app.wait_css("section[aria-label='My courses']")
+
+
+def t152_a_mouse_may_earn_dragging_without_the_toggle(app):
+    """t09 pins the shipped gate: drags do nothing until ✎ Edit layout. This
+    is the advanced-user override — with "Keep drags behind ✎ Edit layout"
+    unticked, a MOUSE drag moves a chip with no toggle armed, the move is a
+    real override (undoable, listed), and re-ticking restores the gate."""
+    app.boot("/?c=TOC")
+    _flip_tweak(app, "Keep drags behind", "Keep drags behind ✎ Edit layout")
+    app.css(".tabs .tab-exit").click()
+    # Same async hop as t151: wait for the planner section before asking
+    # the planner rail for anything.
+    app.wait_css("section[aria-label='My timetable']")
+
+    app.open_tab("Master grid")
+    app.wait_css("section[aria-label='Master grid'] table.tt")
+    target = app.cell(2, 1020)  # Wed 17:00 — empty
+    # No Edit layout press anywhere in this test.
+    app.drag(app.chip("TOC", "td[data-day='1'][data-slot='550']"), target)
+    app.wait_toast("Moved TOC")
+    moved = app.chip("TOC", "td[data-day='2'][data-slot='1020']")
+    assert "overridden" in moved.get_attribute("class")
+
+    # Re-tick: the gate is back, exactly t09's opening state.
+    _flip_tweak(app, "Keep drags behind", "Keep drags behind ✎ Edit layout")
+    app.css(".tabs .tab-exit").click()
+    app.wait_css("section[aria-label='Master grid'] table.tt")
+    app.drag(app.chip("TOC", "td[data-day='2'][data-slot='1020']"),
+             app.cell(1, 550))
+    time.sleep(0.4)
+    assert app.chips("TOC", "td[data-day='2'][data-slot='1020']"), \
+        "with the tweak re-ticked, a toggle-less drag must be inert again"
+
+
 TESTS = [
     t01_header_sync_button_and_hidden_dev,
     t02_developer_endpoint_only,
@@ -9202,6 +9485,11 @@ TESTS = [
     t145_hiding_a_mark_hides_the_sign_never_the_fact,
     t146_the_door_in_my_data_opens_and_escape_walks_back,
     t147_the_week_grid_tweaks_do_not_fight_each_other,
+    t148_the_tweak_groups_open_and_close_by_hand,
+    t149_dialogs_and_notices_obey_their_tweaks,
+    t150_weekend_rows_are_a_choice_not_a_growth,
+    t151_the_landing_section_is_a_choice,
+    t152_a_mouse_may_earn_dragging_without_the_toggle,
 ]
 
 

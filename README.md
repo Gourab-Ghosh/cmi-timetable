@@ -293,9 +293,11 @@ The in-app door is **My data → "Under the hood"**; the URL also works
 directly, e.g. `https://<host>/<repo>/#/developer` (or
 `http://127.0.0.1:8080/#/developer` during development). It exposes the
 fetch log, parse reports, storage inspector, raw-HTML viewer, fail-closed
-simulators, a diagnostics copier, and the Tweaks page — every small display
-choice (hide the clash ⚠ marks, for one), searchable with the same three
-switches every search box in the app has.
+simulators, a diagnostics copier, and the Tweaks page — thirty-five small
+choices about how the app looks and acts (hide the clash ⚠ marks, drag
+without the Edit toggle, tune the sync cadence and routes, plain-ink
+printing…), shelved in eleven collapsible groups and searchable with the
+same three switches every search box in the app has.
 
 ### A note on routing (deliberate deviation)
 

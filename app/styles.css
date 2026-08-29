@@ -608,6 +608,13 @@ button {
    hue arrives as an inline style (hues.rs already picks a neutral slate for
    these), and an inline custom property wins over anything written here. */
 .chip.neutral { --chip-sat: 10%; }
+/* "Vivid chip colours" (R88): the programme shades up a notch, for screens
+   or eyes that wash them out. Saturation only, like its two neighbours —
+   and `:not(.chips-plain)` rather than source order, because the dark
+   variant below would otherwise out-specify the plain rule and vivid would
+   beat the tweak that promises "plain means plain". */
+.app.chips-vivid:not(.chips-plain) .chip { --chip-sat: 82%; }
+:root[data-theme="dark"] .app.chips-vivid:not(.chips-plain) .chip { --chip-sat: 62%; }
 /* "Colour chips by programme" ticked off (R87): every chip drains to the
    same quiet slate. Saturation only, the .chip.neutral trick — the hue
    arrives as an inline style, and at 10% every hue reads alike. */
@@ -983,6 +990,42 @@ table.tt.halls-merged tr.quiet:not(.today) th.dayhead { opacity: 0.68; }
 /* "Dim days with no classes" ticked off (R87): quiet rows keep their compact
    height — that is space, not emphasis — and give up only the fading. */
 .app.no-quiet-dim table.tt.halls-merged tr.quiet th.dayhead { opacity: 1; }
+/* "Course names on chips" (R88): the span is in every chip's DOM (ui.rs
+   renders it unconditionally so a flip needs no rebuild — t90's law); this
+   class is what makes it visible. Tight rows keep names off — the same
+   space law as `.density-compact .chip .hall` — and paper never shows them:
+   the printed key is the one place names live on a sheet. */
+.chip .chip-name { display: none; }
+.app.chip-names table.tt td .chip .chip-name {
+  display: block;
+  font-size: 0.62rem;
+  font-weight: 400;
+  line-height: 1.15;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* Grid cells only: a chip in a text row (My courses, the Catalog, dialogs)
+   already sits beside the course's written-out name. */
+.app.chip-names .density-compact table.tt td .chip .chip-name { display: none; }
+/* "Show the how-to hints under the grids" ticked off (R88): the one-line
+   instructions go; every control they describe stays, which is why CSS may
+   carry this tweak alone (no aria, legend or footnote explains these). */
+.app.no-hints .hint { display: none; }
+/* "Stronger lines and small print" (R88): the three quietest tokens step
+   toward the text colour, once per theme; everything downstream reads
+   tokens, so both themes and every hairline come along for free. */
+.app.strong-lines {
+  --line: #b7bdc9;
+  --line-strong: #99a1b0;
+  --muted: #3f4754;
+}
+:root[data-theme="dark"] .app.strong-lines {
+  --line: #454c5a;
+  --line-strong: #596273;
+  --muted: #b8bfcb;
+}
 /* Both off together: the no-today fallback above (today's row keeps only the
    quiet dim) must not out-specify no-quiet-dim, or today's empty row becomes
    the ONE row still dimmed — the removed mark coming back inverted. */
@@ -2838,6 +2881,37 @@ body.modal-open { overflow: hidden; }
 .tweak > p { margin: 0.1rem 0 0 1.7rem; }
 .tweak-seg { display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; min-height: 32px; }
 .tweak-seg > span { font-size: 0.92rem; font-weight: 500; }
+/* Under a seg row, the hint hangs from the label like a checkbox row's does
+   — but there is no 1.7rem checkbox to align past. */
+.tweak-seg + p { margin-left: 0; }
+.tweak-num { width: 5.5rem; }
+/* The tweak groups' disclosure (R88): the heading IS the button — same
+   ink, same size, the whole line pressable. The caret is the only thing
+   that moves, and `.still` (and the device's own setting, further down)
+   already zero every transition. */
+.tweak-group h3 { margin: 0; }
+.tweak-group .group-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  width: 100%;
+  padding: 0.15rem 0;
+  background: none;
+  border: none;
+  color: inherit;
+  font: inherit;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+.tweak-group .group-toggle .caret {
+  display: inline-block;
+  transition: transform 120ms var(--ease);
+  color: var(--muted);
+}
+.tweak-group .group-toggle[aria-expanded="true"] .caret { transform: rotate(90deg); }
+.tweak-group .group-body { margin-top: 0.35rem; }
+.tweak-group .group-lede { margin: 0.15rem 0 0.4rem; }
 
 .devlog {
   width: 100%;
@@ -4147,4 +4221,43 @@ label.field > input { width: 100%; }
     font-size: 8.4px;
     color: #5a6170 !important;
   }
+
+  /* "Course names on chips" never reaches paper: the printed key is the
+     one place names live on a sheet, whatever the screen shows. */
+  .chip .chip-name { display: none !important; }
+
+  /* --- "Print in colour" ticked OFF (R88): plain-ink sheets. ---
+     Appended LAST in this block on purpose: these repeat the specificity
+     (and !important) of the colour rules above, so source order is what
+     makes them win. Everything clash-red is EXEMPT via :not(.clash) — a
+     warning is not decoration, and `.chip.clash`'s red border (above) must
+     keep beating the grey here. Greys measured like R83's pass: chip ink
+     #23272e on white is 15.9:1, the hall line #464b55 is 8.4:1, the covered
+     band's #3f4754 on #f3f4f7 is 8.9:1 — nothing here re-introduces the
+     2.6:1 photocopier failures R83 fixed. */
+  .print-plain .chip:not(.clash) {
+    background: #fff !important;
+    color: #23272e !important;
+    border: 1px solid #6b7280 !important;
+  }
+  .print-plain .chip:not(.clash) .hall { color: #464b55 !important; }
+  /* A clash chip keeps its red border and glyph; only the tint drains, so
+     the warning is the one colour left on the sheet. */
+  .print-plain .chip.clash {
+    background: #fff !important;
+    color: #23272e !important;
+  }
+  .print-plain table.tt thead th {
+    background: #fff !important;
+    color: #10131b !important;
+    border-right: 0.5px solid #b7bdc9 !important;
+    border-bottom: 1.4px solid #232a3a !important;
+  }
+  .print-plain .covered:not(.clash) {
+    border-left: 2.5px solid #8a919e !important;
+    background: #f3f4f7 !important;
+    color: #3f4754 !important;
+  }
+  .print-plain .print-masthead { border-bottom-color: #232a3a; }
+  .print-plain .pm-sem { color: #10131b; }
 }

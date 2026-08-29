@@ -224,7 +224,10 @@ in a single form: every weekly meeting's day, time and hall, its credits, and
 ### Drag and drop, on purpose
 
 Drag & drop lives behind an explicit **✎ Edit layout** toggle, so scrolling on
-a phone and ordinary clicking stay accident-free.
+a phone and ordinary clicking stay accident-free. (Advanced users who find the
+toggle a speed bump can untick the developer-mode tweak **Keep drags behind
+✎ Edit layout** — a mouse or pen then drags any time, while a finger still
+needs the toggle, so a phone scroll can never move a class.)
 
 - **Mouse or pen**: drag a chip to a new slot.
 - **Touch**: long-press to lift, then drag.
@@ -377,7 +380,9 @@ control.)
 
 ### Undo, for everything
 
-- **100 steps deep**, with redo.
+- **100 steps deep**, with redo — and a developer-mode tweak (**Undo
+  history depth**) can take that anywhere from 10 to 1000 for readers who
+  plan a whole semester in one sitting.
 - **Ctrl+Z** / **Ctrl+Y** / **Ctrl+Shift+Z** (⌘ on a Mac).
 - Filters ride the same history — one step per change, and one per burst of
   typing rather than one per keystroke.
@@ -466,6 +471,11 @@ says this rather than showing a button that cannot work.
   dates.
 - It says plainly that CMI's holidays are **not** excluded, rather than
   pretending otherwise.
+- Two developer-mode tweaks trim what each event's notes carry: **Put a link
+  back to this planner in every calendar event** (untick before sending the
+  file on — the link spells out which courses you take) and **Describe the
+  course inside each calendar event** (untick to keep events to title, room
+  and time — some calendar apps read the notes aloud with every reminder).
 
 ### JSON, for your own tools
 
@@ -556,6 +566,14 @@ toolbar, and printing one prints only that one — never a stack of everything.
 The five share a masthead, a dark header band, hairline rules and a closing
 line, so a term's worth of printing comes out as one document in five parts
 rather than five screenshots of an app.
+
+Three developer-mode tweaks tune the paper itself: **Print in colour**
+(untick for plain-ink sheets — white bands, grey-bordered chips, black rules,
+with clash red kept: a warning, not decoration), **Page shape** (wide as
+designed, tall for binders, or left to the print dialog — the app's own Print
+buttons obey; Ctrl+P keeps the wide design, and the tweak's hint says so), and
+**Sign each sheet** (untick to drop the "made with…" credit while the sheet's
+facts stay).
 
 They are also built to be **light to open**. Paper has no use for a rounded
 corner, a drop shadow, a gradient or a half-transparent fill, and those are
@@ -649,11 +667,17 @@ The app ships **no timetable data at all**. On first load it asks for one
 sync; after that everything works offline, and it re-checks on its own at most
 twice a day, whenever you have it open. That first fetch is the only one it
 ever asks you for — **Sync now** is there for when you'd rather not wait, not
-as a chore to remember. The header says so in as many words.
+as a chore to remember. The header says so in as many words — and if the
+developer-mode tweak **Check CMI on its own** moves that cadence (every hour,
+or only when asked), every sentence in the app that describes it, the header's
+included, changes with it. A browser that has never synced still fetches its
+first timetable whatever the cadence says.
 
 The header always says **when it last synced** and by which route, counting up
 on its own as time passes — "just now", "12 min ago", "2 days ago" — and
-turning a warning colour once the data is two days old. CMI edits its
+turning a warning colour once the data is two days old (a developer-mode
+tweak, **Turn the synced pill amber after**, moves that threshold anywhere
+from 1 to 14 days — the counted age itself always shows). CMI edits its
 timetable all semester, and a planner that can't tell you how old it is isn't
 worth much. Each successful sync says where it came from as it happens —
 *"Timetable updated (through the helper site cors.sh)."* or
@@ -883,7 +907,7 @@ itself has been published. If there is one, it **asks**.
 | **Theme** | Auto (follows your system), light, or dark — including the controls the browser draws for itself. Checkboxes, date and number fields and the scrollbars follow the theme too, so nothing on a dark page is left painted for a light one |
 | **Row height** | Roomy or tight in the Master grid. Until you choose, it follows the screen you opened it on — tight on a phone, where roomy rows push most of the week off the bottom edge, and roomy on a computer. Press the button once and that is your answer everywhere, on every screen and every reload; Reset in My data hands the decision back to the device |
 | **On a phone** | The timetable opens on today's classes until you pick otherwise — and then it stays picked (the whole week is one tap away), tap targets sized for fingers, a header that packs tight, and long-press to drag |
-| **Motion** | Animations respect "reduce motion" |
+| **Motion** | Animations respect "reduce motion" — and a tweak turns them off without the device setting |
 | **The wheel** | Scroll over any box with a step — credits, a meeting's start or end time, an export date, the reminder lead, or any dropdown — and it moves one step. Hovering is enough, no click first; while the wheel is over a box, the box takes the scroll and the page behind it stays put. The reminder lead nudges by single minutes on the wheel while its arrows jump by fives. A trackpad flick counts by full notches — a step or two per gesture, not ten — an empty box is never filled by a passing wheel, and the wheel never moves a value opposite to the way you scrolled |
 | **Enter** | Saves in the editor, downloads in Export, and dismisses the keyboard in a search box |
 | **Escape** | Cancels a drag, then a keyboard move, then an open filter menu, then a dialog — in that order |
@@ -960,7 +984,7 @@ tested on their own.
 
 **Tested like it matters:** 169 native tests — including a synthetic CMI
 website the tests generate themselves, with other semesters, other time
-formats, renamed halls and ten different kinds of broken page — plus 146
+formats, renamed halls and ten different kinds of broken page — plus 152
 end-to-end browser tests driving the real app in a real browser: drag & drop,
 touch gestures, keyboard-only flows, storage corruption, and a stand-in CMI
 that lets the true sync path be exercised end to end.
@@ -974,17 +998,48 @@ mode's own categories, each with its address:
   browser stores, and a **Copy diagnostics** button that copies everything a
   bug report needs (versions, the snapshot line, sizes, the last few fetches —
   and deliberately no course data).
-- **Tweaks** (`#/developer/tweaks`) — every small choice about how the
-  timetable looks, searchable with the same **Aa / ab / .*** switches every
-  search box in the app has. Ten in v1: the three mark toggles (⚠ clashes,
-  ✎ your changes, ✓ your courses on the Master grid and Halls — each hides
-  the *sign*, never the *fact*: the Clashes list, "Your changes" and the
-  credit numbers keep saying everything, and the printed key stops mentioning
-  a mark the moment it stops being painted), today's-row highlight, quiet-day
-  dimming, hall names on chips, coloured-vs-plain chips, animations, plus the
-  theme and the Master grid's row height (with the one path back to "follow
-  this device" short of a reset). One **Reset all tweaks** puts the page back
-  to how the app ships.
+- **Tweaks** (`#/developer/tweaks`) — every small choice about how the app
+  looks *and acts*, searchable with the same **Aa / ab / .*** switches every
+  search box in the app has. Thirty-five in all (R88), shelved into eleven
+  collapsible groups whose headings are the disclosure buttons — the three
+  groups the page started with ship open, the rest closed, and a live search
+  reaches inside closed groups (a match renders its group expanded; clearing
+  the box restores your own open/closed choices, which are session-only like
+  the search itself):
+
+  - **Marks** — the three mark toggles (⚠ clashes, ✎ your changes, ✓ your
+    courses — each hides the *sign*, never the *fact*: the Clashes list,
+    "Your changes" and the credit numbers keep saying everything, and the
+    printed key stops mentioning a mark the moment it stops being painted).
+  - **The week grid** — today's-row highlight, quiet-day dimming, hall names
+    on chips, course names on chips, the row height (with "follow this
+    device"), applying that row height beyond the Master grid, weekend rows
+    drawn even when empty, and the how-to hint lines.
+  - **Colour and motion** — theme, coloured-vs-plain chips, vivid chip
+    colours (plain still wins when both are set), stronger hairlines and
+    small print, animations.
+  - **Opening the app** — a fixed landing section (or "the section I left",
+    how the app ships), and whether the day pickers are remembered between
+    visits.
+  - **Notices and dialogs** — how long notices stay (3 s / 6 s / 12 s /
+    until dismissed by their ✕), and whether a click on the dark area closes
+    a dialog.
+  - **Wheel and swipe** — wheel-steps-values on or off, and the section
+    bar's wheel/swipe walking on or off (taps and arrow keys always work).
+  - **Editing and undo** — drags without the ✎ Edit layout toggle (mouse and
+    pen only; a finger always needs the toggle), and the undo depth.
+  - **Syncing** — the auto-sync cadence, whether public helper sites are
+    asked at all, whether cmi.ac.in is ever contacted directly, and when the
+    synced pill turns amber. However you tune these, the header never stops
+    saying how old the timetable is, and a failed sync names exactly the
+    routes that were really asked.
+  - **Printing** — colour or plain ink, page shape, the "made with…" credit.
+  - **Calendar files** — the planner link and the course description inside
+    exported events.
+  - **Developer mode** — a header Developer button, and a per-request
+    console echo of every fetch.
+
+  One **Reset all tweaks** puts the whole page back to how the app ships.
 - **Sync** (`#/developer/sync`) — the simulators (force a tier, run a sync,
   simulate a parse failure) directly above the fetch log and parse reports
   they feed.

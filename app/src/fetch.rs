@@ -254,6 +254,14 @@ fn relay_routes(app: &App) -> Vec<RelayRoute> {
             headers: &[],
         });
     }
+    // The public-relays tweak: with it on, no shipped relay is ever shown
+    // which CMI page a student is reading — only the reader's own helper
+    // site (above) and CMI itself (tier 2) are asked. The failure copy in
+    // `run_update` knows about this, so a failed sync never blames helper
+    // sites that were never asked.
+    if prefs.public_relays_off {
+        return routes;
+    }
     let mut shipped: Vec<&ProxyDef> = PROXIES.iter().collect();
     if let Some(good) = prefs.last_good_route.as_deref() {
         shipped.sort_by_key(|p| p.name != good);
@@ -400,6 +408,20 @@ async fn fetch_text_with(
 }
 
 fn log(app: &App, tier: &str, url: &str, result: &Result<FetchOk, String>) {
+    // The console-echo tweak: one line per request, mirroring exactly what
+    // the Sync page's log records — so a bug report can carry the browser
+    // console. Info-level, which the e2e console gate (SEVERE-only, §8.21)
+    // ignores by construction.
+    if app.prefs.with_untracked(|p| p.console_fetch_log_on) {
+        let line = match result {
+            Ok(ok) => format!(
+                "[sync] {tier} {url} → HTTP {} in {:.0} ms, {} bytes",
+                ok.status, ok.duration_ms, ok.bytes
+            ),
+            Err(e) => format!("[sync] {tier} {url} → {e}"),
+        };
+        web_sys::console::log_1(&line.into());
+    }
     let entry = match result {
         Ok(ok) => FetchLogEntry {
             at: domx::now_ms(),
@@ -782,6 +804,10 @@ pub async fn run_update(app: App, manual: bool) {
     let mut gate_failed_direct = false;
     let mut adopted = false;
     let mut direct_tried = false;
+    // The two route tweaks, read once for the whole run so the attempts and
+    // the failure story cannot disagree about what was switched off.
+    let relays_off = app.prefs.with_untracked(|p| p.public_relays_off);
+    let direct_off = app.prefs.with_untracked(|p| p.direct_route_off);
     // The "asking cmi.ac.in directly" note, kept so the failure banner can
     // take it down rather than repeat it underneath.
     let mut asking_note: Option<u64> = None;
@@ -945,7 +971,11 @@ pub async fn run_update(app: App, manual: bool) {
     // local network — and a question like that deserves to be explained
     // BEFORE it appears, by the app that caused it, rather than looked up
     // afterwards by a worried student.
-    if !adopted && (force.is_none() || force.as_deref() == Some("direct")) {
+    // The direct-route tweak wins even over the Sync page's forced tier:
+    // "never contacts cmi.ac.in from this browser" is a promise, and the
+    // failure banner below says the route was switched off here rather than
+    // pretending it was tried.
+    if !adopted && !direct_off && (force.is_none() || force.as_deref() == Some("direct")) {
         direct_tried = true;
         progress(&app, "That didn't work — asking cmi.ac.in directly…");
         // Kept by id so the failure banner below can take it down. It is
@@ -1064,7 +1094,10 @@ pub async fn run_update(app: App, manual: bool) {
     // browser refuses to let the page READ fails exactly like one that never
     // left the machine; `answers_at_all` asks the only question that can
     // still tell them apart. Only asked when it can change the sentence.
-    let cmi_answers = if online && !gate_failed_any && !direct_answered {
+    // The probe is gated by the same tweak as the direct tier: a no-cors
+    // request to cmi.ac.in can raise the very local-network prompt the
+    // tweak exists to prevent, so forgetting it here would defeat the tweak.
+    let cmi_answers = if online && !gate_failed_any && !direct_answered && !direct_off {
         progress(&app, "Working out what went wrong…");
         // `uncached`, like every other request that must reflect right now
         // rather than a cache: a probe answered from a disk cache would say
@@ -1130,13 +1163,22 @@ pub async fn run_update(app: App, manual: bool) {
         } else {
             format!("You're still seeing your saved timetable from {saved_date}.")
         };
+        // Which helper-site sentence is true depends on the relays tweak —
+        // a banner blaming helper sites the app never asked would send the
+        // reader debugging the wrong thing.
+        let helpers = if relays_off {
+            "The public helper sites are switched off in this browser \
+             (Developer mode → Tweaks), so none was asked."
+        } else {
+            "Every helper site it knows is unavailable right now."
+        };
         format!(
             "CMI's timetable page is up — this app just isn't allowed to read it. A \
              web page may only read another site's pages if that site says it may, \
              and cmi.ac.in doesn't say so, which is why the app normally goes \
-             through a helper site. Every helper site it knows is unavailable right \
-             now. {kept} You can load the timetable straight from CMI's own page \
-             instead — it takes a minute, and nothing leaves your browser.{lan_note}"
+             through a helper site. {helpers} {kept} You can load the timetable \
+             straight from CMI's own page instead — it takes a minute, and nothing \
+             leaves your browser.{lan_note}"
         )
     } else {
         let kept = if no_data {
@@ -1144,12 +1186,39 @@ pub async fn run_update(app: App, manual: bool) {
         } else {
             format!("You're still seeing your saved timetable from {saved_date}.")
         };
-        format!(
-            "Nothing answered when the app went looking for CMI's timetable — not \
-             cmi.ac.in and not any of the helper sites it goes through. {kept} Try \
-             syncing again later. If CMI's page opens fine in another tab, you can \
-             load the timetable from it yourself.{lan_note}"
-        )
+        if relays_off || direct_off {
+            // Routes the tweaks switched off were never asked, and the
+            // banner must not pretend otherwise.
+            let off_note = match (relays_off, direct_off) {
+                (true, true) => {
+                    "The public helper sites and the direct route to cmi.ac.in \
+                     are both switched off in this browser (Developer mode → \
+                     Tweaks), so only what was left got asked."
+                }
+                (true, false) => {
+                    "The public helper sites are switched off in this browser \
+                     (Developer mode → Tweaks), so they weren't asked."
+                }
+                (false, true) => {
+                    "Asking cmi.ac.in directly is switched off in this browser \
+                     (Developer mode → Tweaks), so it wasn't tried."
+                }
+                (false, false) => unreachable!(),
+            };
+            format!(
+                "Nothing that the app was allowed to ask answered when it went \
+                 looking for CMI's timetable. {off_note} {kept} Try syncing again \
+                 later — or turn those routes back on. If CMI's page opens fine in \
+                 another tab, you can load the timetable from it yourself.{lan_note}"
+            )
+        } else {
+            format!(
+                "Nothing answered when the app went looking for CMI's timetable — not \
+                 cmi.ac.in and not any of the helper sites it goes through. {kept} Try \
+                 syncing again later. If CMI's page opens fine in another tab, you can \
+                 load the timetable from it yourself.{lan_note}"
+            )
+        }
     };
     // Every branch but one ends with a route the reader can take, so the
     // banner carries the button for it rather than describing it. The
@@ -1245,9 +1314,22 @@ pub fn load_from_pages(app: App, tt_html: &str, halls_html: &str) -> Result<(), 
 /// must not lock the app empty for 12 hours).
 pub fn maybe_background_update(app: App) {
     let has_data = app.snapshot.with_untracked(|s| s.has_data());
-    let last = app.prefs.with_untracked(|p| p.last_update_attempt);
-    if has_data && domx::now_ms() - last < AUTO_UPDATE_INTERVAL_MS {
-        return;
+    // The cadence tweak. A browser that has never synced is exempt from
+    // every mode including "manual" — a failed first sync must not lock the
+    // app empty, and an empty planner is what the tweak's own hint promises
+    // still fetches.
+    if has_data {
+        let interval = match app.prefs.with_untracked(|p| p.auto_sync.clone()).as_deref() {
+            Some("manual") => return,
+            Some("hourly") => 3600.0 * 1000.0,
+            // None and any retired value fall back to how the app ships —
+            // the `shorten_service` lesson: an old blob must still load.
+            _ => AUTO_UPDATE_INTERVAL_MS,
+        };
+        let last = app.prefs.with_untracked(|p| p.last_update_attempt);
+        if domx::now_ms() - last < interval {
+            return;
+        }
     }
     leptos::task::spawn_local(async move {
         run_update(app, false).await;
