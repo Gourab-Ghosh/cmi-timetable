@@ -841,6 +841,14 @@ fn my_timetable(app: App) -> impl IntoView {
                             .collect_view()
                     }}
                 </div>
+                {follow_today_button(
+                    Memo::new(move |_| app.prefs.with(|p| p.plan_view.is_some())),
+                    true,
+                    move || {
+                        app.clear_plan_view();
+                        app.toast("The day strip follows today again.");
+                    },
+                )}
                 {custom_changes_pill(app)}
                 {edit_toggle(app)}
                 <button
@@ -4385,6 +4393,43 @@ fn hall_table(
     .into_any()
 }
 
+/// The day pickers' hand-back (R90): a button that appears only while a
+/// pick is stored, and clears it — the view follows the clock again, the
+/// way the app first shipped. It appears on need, like
+/// `custom_changes_pill`: while the app is already following today there
+/// is nothing to undo, and a dead button would only raise a question it
+/// cannot answer. `pinned` is a deduped memo on purpose — prefs changes on
+/// every filter keystroke, and the memo lets this closure sleep through
+/// all of them.
+fn follow_today_button(
+    pinned: Memo<bool>,
+    mobile_only: bool,
+    on_click: impl Fn() + Copy + Send + Sync + 'static,
+) -> impl IntoView {
+    view! {
+        {move || {
+            pinned.get()
+                .then(|| {
+                    view! {
+                        <button
+                            class=if mobile_only {
+                                "btn small noprint mobile-only"
+                            } else {
+                                "btn small noprint"
+                            }
+                            title="Forget this pick — the view opens on today \
+                                   again (and on the whole week when today has \
+                                   no classes). Picking a day pins it back."
+                            on:click=move |_| on_click()
+                        >
+                            "Follow today"
+                        </button>
+                    }
+                })
+        }}
+    }
+}
+
 fn halls_view(app: App) -> impl IntoView {
     let finder_day = RwSignal::new(None::<usize>); // day index
     let finder_start = RwSignal::new(None::<u16>); // slot start_min
@@ -4523,6 +4568,14 @@ fn halls_view(app: App) -> impl IntoView {
                             .collect_view()
                     }}
                 </div>
+                {follow_today_button(
+                    Memo::new(move |_| app.prefs.with(|p| p.halls_view.is_some())),
+                    false,
+                    move || {
+                        app.clear_halls_view();
+                        app.toast("Halls follows today again.");
+                    },
+                )}
                 <div class="grow"></div>
                 {custom_changes_pill(app)}
                 {edit_toggle(app)}

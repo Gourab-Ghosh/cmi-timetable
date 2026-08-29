@@ -814,7 +814,7 @@ regenerates the .ics golden.
   NOWHERE on this page while still counting toward the credit total.
 - "Your changes" groups are headed by `.cg-head` (colour rail + small caps
   + count), coloured by `OwnChange::tone()`. See §4.
-- Tests: 169 native + 155/155 e2e green (as of R89; the native count from
+- Tests: 169 native + 157/157 e2e green (as of R90; the native count from
   `deploy.sh`'s own in-container run — 49+18+3+9+25+27+28+10).
 - **The e2e suite mocks the relays, so it can never tell you a real one has
   died** — which is exactly how R84's outage reached a user. Two probes cover
@@ -6755,6 +6755,91 @@ answers post-hoc), S4 (narrowest, both judges ranked it last).
 closed groups, reload restores all-open), t148 (all-open flow, handles
 0↔12, sleep mid-search, counter, Reset-asks-first), t153/t154/t155 NEW.
 155/155 e2e, 169 native, clippy + fmt clean.
+
+### R90 — the pick handed back to the clock, and a page that fits its screen
+
+The user's ask (with explicit latitude to "implement everything yourself, the
+best way"): (1) the day pickers remember a pick across reloads (R70) — add a
+way to restore the default follow-today behaviour, suggested for the Tweaks
+page but "anywhere better is fine"; (2) think of further flexibility tweaks,
+keeping ONLY what truly makes sense; (3) the Tweaks page reads too large —
+fix it only with a genuinely smart idea; (4) the standing quality bar.
+
+**Follow today (shipped where the decision lives, not in Tweaks).** Each day
+strip grows a `Follow today` button that exists ONLY while a pick is stored
+(`prefs.plan_view` / `prefs.halls_view` is `Some`) — appear-on-need like
+`custom_changes_pill`. One press calls the new `App::clear_plan_view` /
+`clear_halls_view` (state.rs, beside `set_plan_view`): the pick is cleared,
+not overwritten, so the accessors fall back to today (All on a weekend or a
+pruned day). It is the day pickers' sibling of the density row's "Follow this
+device" — and the R90 verifier's sweep confirmed the lattice is now COMPLETE:
+every stored-choice-with-computed-fallback in the app has a hand-back (theme
+"System", density "Follow this device", landing_tab "The section I left",
+helper-site empty-field, filters "Clear all", force-tier auto-clear (R89),
+and now the two day picks). Mechanism notes: `follow_today_button(pinned,
+mobile_only, on_click)` in views.rs — `pinned` is a DEDUPED `Memo<bool>` (the
+prefs-is-hot law; the button closure sleeps through filter keystrokes); the
+My-timetable instance is `mobile-only` because the strip itself is (desktop
+`plan_view()` returns All and reads the pick PAST, never clears it), and the
+new `.btn.mobile-only { display:inline-flex }` lives inside the same 640px
+media query that `phone_viewport` (domx PHONE_MAX_PX=640) listens to — button,
+strip and accessor all flip at the same pixel. The button doubles as the only
+escape for a stale pick of a day CMI stopped teaching (accessor shows All,
+pick stays Some, button stays visible). Toasts: "The day strip follows today
+again." / "Halls follows today again." The `day_picks_forget` tweak row (and
+its TWEAK_HAYSTACKS mirror — copy only, NO index change) now names the button.
+
+**The page that fits (two balanced columns).** The 12 tweak-group cards are
+wrapped in `<div class="tweak-groups">` (dev.rs; only the groups — filterbar,
+shelf, none-match panel and Reset row stay full-width outside) and styles.css
+flows them at `@media screen and (min-width: 1100px)` into `columns: 2;
+column-gap: 0.9rem`, with `break-inside: avoid; margin: 0 0 0.9rem` on the
+cards (margins meeting a column break are truncated per spec — that is what
+keeps the right column's top aligned). Page height at the user's ~1707 CSS px
+viewport: ~5,600px → 2,825px. DOM order = Tab order = reading order (down the
+left, then the right). The `screen and` guard is a REAL defect the layout
+worker caught after the first cut shipped unguarded: A4 landscape ≈ 1123 CSS
+px > 1100, so Ctrl+P would have engaged two PRINT columns — multicol nested
+in page fragmentation is where Chromium misbehaves, and `.group-toggle` is
+not `.btn`, so group headings do print. `break-inside` stays unguarded on
+purpose (keeping a card whole on paper is a feature). Alternatives rejected
+with reasons in `.workagents/r90/findings/layout.md` (grid = tallest-card
+holes; hand-split 6+6 = cannot rebalance under search; native masonry = not
+cross-browser stable; sticky shelf = z-index plumbing for marginal gain;
+3 columns = 440px ragged columns; closed-by-default = contradicts the user's
+own R89 order).
+
+**Flexibility sweep: the honest zero.** The proposer read the R88 curator +
+R89 sceptic reject lists first (rejections stand unless the ground was roster
+size — and the whole roster-size shelf had already shipped in R89), classified
+every Prefs field and sticky signal, and returned an EMPTY keep list with 15
+considered-and-dropped (e.g. shorten_service hand-back: its fallback is the
+CONSTANT tinyurl, indistinguishable from re-picking it; joint "follow today
+everywhere": the two tabs answer different questions; per-group reset:
+knob-on-a-knob). The roster stays 43 in 12 groups. Nothing was added — the
+user's own "should not add anything which doesn't make sense" carried.
+
+**Fleet & restore (the session-limit rule, exercised for real).** Run
+wf_ad64321d-ac2 (2 proposers + 1 sceptic judge) died whole on the 5-hour
+session limit at ~13:50 IST with only file preambles written; per the
+persistence rule the script was edited (READ-YOUR-OWN-PARTIAL note + "Part A
+is already built — review as built") and relaunched via `resumeFromRunId` on
+the same run id after the reset. All three completed; verdicts SHIP/SHIP, and
+the Part-A sanity check (10 checks, receipts in
+`.workagents/r90/findings/handback.md`) found no defect, two precedented nits
+(focus drops to body on unmount, like custom_changes_pill; weekend toast says
+"today" while landing on All — the title copy carries the precise rule).
+
+Tests: **t156** (hand-back end to end: pick survives a real reload, Follow
+today returns the view to a `pin_weekday`-pinned Thursday, clears are per-tab,
+phone strip at 430px in the same test — `finally` unpins AND restores
+1500x1000) and **t157** (computed `columnCount` is "2" at the 1500px test
+window and "auto" at 430px — the guard change is invisible on screen, so the
+print half stays visual-check territory). Registry 155 → **157**. Gates:
+157/157 e2e, 169 native, clippy + fmt clean (the lone clippy line is the
+pre-existing proc-macro-error2 future-incompat note). Visual pass at
+2560x1600@1.5x in both themes + phone: `.workagents/r90/shots/`. Committed
+locally; NOT pushed, NOT deployed.
 
 ## 8. Open bugs — found, confirmed, NOT fixed (do not delete)
 

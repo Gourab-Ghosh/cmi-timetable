@@ -1519,7 +1519,8 @@ fn rows_opening(app: App, v: [Signal<bool>; 2]) -> AnyView {
             "Remember the day pickers between visits",
             "My timetable's day strip and the Halls day reopen where you left \
              them. Untick and every visit opens on today — a pick still holds \
-             until you close the tab.",
+             until you close the tab. Each strip's Follow today button hands \
+             a single pick back at any time.",
             |p| !p.day_picks_forget,
             |p, on| p.day_picks_forget = !on,
             "The day pickers are remembered between visits again.",
@@ -2281,6 +2282,10 @@ fn tweaks_page(app: App) -> impl IntoView {
             </button>
         </div>
 
+        // R90: the wrapper is what lets a wide screen flow the twelve
+        // cards into two balanced columns (styles.css .tweak-groups) —
+        // one column was a page nobody could see the ends of.
+        <div class="tweak-groups">
         {tweak_group(
             ga(0, 3),
             has_text,
@@ -2416,6 +2421,7 @@ fn tweaks_page(app: App) -> impl IntoView {
             None,
             move || rows_devmode(app, [vis(41), vis(42)]),
         )}
+        </div>
 
         {move || {
             (none_match.get() && bad.with(Option::is_none))
@@ -2632,7 +2638,8 @@ const TWEAK_HAYSTACKS: [(&str, &str, &str); 43] = [
         "Opening the app",
         "Remember the day pickers between visits",
         "My timetable's day strip and the Halls day reopen where you left them. Untick \
-         and every visit opens on today — a pick still holds until you close the tab.",
+         and every visit opens on today — a pick still holds until you close the tab. \
+         Each strip's Follow today button hands a single pick back at any time.",
     ),
     (
         "Notices and dialogs",

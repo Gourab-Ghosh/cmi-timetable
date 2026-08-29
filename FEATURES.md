@@ -54,6 +54,11 @@ Your week as a grid — days down the left, CMI's time slots across the top.
   what happens when you have never chosen, not something the app keeps
   deciding for you. A wider screen always shows the whole week, without
   forgetting what your phone was set to.
+  And when you want the app deciding again, a **Follow today** button
+  appears beside the strip the moment a pick is stored: one press hands the
+  choice back to the clock — today's day now, tomorrow's tomorrow, the whole
+  week on a day with no classes. The Halls day strip has the same button,
+  and each clears only its own tab's pick.
 - **Your changes** lists everything you have altered (see below).
 - **Print** produces a poster-style sheet — see *Taking it with you*, where
   every one of the five sections has one of its own.
@@ -989,7 +994,7 @@ tested on their own.
 
 **Tested like it matters:** 169 native tests — including a synthetic CMI
 website the tests generate themselves, with other semesters, other time
-formats, renamed halls and ten different kinds of broken page — plus 155
+formats, renamed halls and ten different kinds of broken page — plus 157
 end-to-end browser tests driving the real app in a real browser: drag & drop,
 touch gestures, keyboard-only flows, storage corruption, and a stand-in CMI
 that lets the true sync path be exercised end to end.
@@ -1008,7 +1013,10 @@ mode's own categories, each with its address:
   search box in the app has. Forty-three in all (R88–R89), shelved into
   twelve collapsible groups whose headings are the disclosure buttons —
   every group ships open, **Open all groups / Close all groups** handles sit
-  under the search box, and a live search reaches inside closed groups (a
+  under the search box — and where the screen has the room, the twelve cards
+  flow into two balanced columns (reading order kept, each card whole), so
+  the page reads like a spread rather than a scroll. A live search still
+  reaches inside closed groups (a
   match renders its group expanded; clearing the box restores your own
   open/closed choices, which are session-only like the search itself). A
   quiet dot marks any row whose value differs from how the app ships, a
@@ -1034,7 +1042,8 @@ mode's own categories, each with its address:
     (a visible seed, never a silent assumption).
   - **Opening the app** — a fixed landing section (or "the section I left",
     how the app ships), and whether the day pickers are remembered between
-    visits.
+    visits — each strip's **Follow today** button hands a single pick back
+    either way.
   - **Notices and dialogs** — how long notices stay (3 s / 6 s / 12 s /
     until dismissed by their ✕), and whether a click on the dark area closes
     a dialog.

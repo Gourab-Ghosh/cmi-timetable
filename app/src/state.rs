@@ -3542,6 +3542,25 @@ impl App {
         self.persist_prefs();
     }
 
+    /// Hand My timetable's day strip back to the clock (R90). The stored
+    /// pick is cleared, not overwritten: `plan_view()` goes back to working
+    /// the answer out fresh, so the strip opens on today now and on
+    /// tomorrow's day tomorrow. The sibling of the density row's "Follow
+    /// this device" — every decision the app keeps for someone should be
+    /// one press away from being handed back.
+    pub fn clear_plan_view(&self) {
+        self.prefs.update(|p| p.plan_view = None);
+        self.persist_prefs();
+    }
+
+    /// The same hand-back for the Halls tab, which keeps its own pick —
+    /// the two tabs answer different questions, so clearing one leaves the
+    /// other where it was left.
+    pub fn clear_halls_view(&self) {
+        self.prefs.update(|p| p.halls_view = None);
+        self.persist_prefs();
+    }
+
     /// Record which shortening service the reader picked, so the next visit
     /// opens on it — and, because links are remembered per service, shows
     /// the link they have actually been using.

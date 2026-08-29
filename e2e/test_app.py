@@ -9515,6 +9515,102 @@ def t155_the_forced_tier_is_spent_by_the_sync_that_uses_it(app):
         message="the sync must consume the force and the select must show it")
 
 
+def t156_a_pinned_day_can_be_handed_back_to_the_clock(app):
+    """The day pickers keep a pick across visits (R70); Follow today is the
+    hand-back (R90): it appears only while a pick is stored, clears just
+    that tab's pick, and the view opens on whatever day it is again — the
+    strips' sibling of the density row's "Follow this device"."""
+    ident = app.pin_weekday(3)  # Thursday: a teaching day, every real day
+    try:
+        app.boot("/?c=TOC", selection=["TOC"])
+        app.open_tab("Halls")
+        app.wait_css("section[aria-label='Lecture halls'] table.tt")
+
+        def follow_btns(section="Lecture halls"):
+            return [b for b in app.css_all(
+                f"section[aria-label='{section}'] .toolbar button")
+                if b.text.strip() == "Follow today"]
+
+        def checked_day():
+            return next(b.text.strip() for b in app.css_all(
+                "section[aria-label='Lecture halls'] .seg button")
+                if b.get_attribute("aria-checked") == "true")
+
+        # Following the clock from the start: today shown, and no hand-back
+        # button, because there is nothing to hand back yet.
+        assert checked_day() == "Thu", checked_day()
+        assert not follow_btns(), "no pick stored — the button has no job"
+
+        # Pick Tuesday: the pick survives a REAL reload, and the hand-back
+        # appears beside the strip.
+        next(b for b in app.css_all(
+            "section[aria-label='Lecture halls'] .seg button")
+            if b.text.strip() == "Tue").click()
+        WebDriverWait(app.d, 5).until(lambda d: checked_day() == "Tue")
+        assert len(follow_btns()) == 1
+        app.d.refresh()
+        app.wait_css("section[aria-label='Lecture halls'] table.tt")
+        assert checked_day() == "Tue", checked_day()
+        assert len(follow_btns()) == 1, "the pick survived, so must the button"
+
+        # Hand it back: the view returns to today, the button leaves, and a
+        # reload keeps following the clock rather than resurrecting Tuesday.
+        follow_btns()[0].click()
+        app.wait_toast("Halls follows today again")
+        WebDriverWait(app.d, 5).until(lambda d: checked_day() == "Thu")
+        assert not follow_btns()
+        app.d.refresh()
+        app.wait_css("section[aria-label='Lecture halls'] table.tt")
+        assert checked_day() == "Thu" and not follow_btns()
+
+        # My timetable's strip (phones only) has the same hand-back — and
+        # the two tabs' picks stay separate: pinning Monday here leaves
+        # Halls following the clock.
+        app.d.set_window_size(430, 900)
+        app.open_tab("My timetable")
+        app.wait_css("section[aria-label='My timetable'] .seg.mobile-only")
+        assert not follow_btns("My timetable")
+        next(b for b in app.css_all(
+            "section[aria-label='My timetable'] .seg.mobile-only button")
+            if b.text.strip() == "Mon").click()
+        WebDriverWait(app.d, 5).until(
+            lambda d: len(follow_btns("My timetable")) == 1)
+        app.open_tab("Halls")
+        app.wait_css("section[aria-label='Lecture halls'] table.tt")
+        assert not follow_btns(), "clearing is per tab, and so is pinning"
+        app.open_tab("My timetable")
+        app.wait_css("section[aria-label='My timetable'] .seg.mobile-only")
+        follow_btns("My timetable")[0].click()
+        app.wait_toast("day strip follows today again")
+        WebDriverWait(app.d, 5).until(
+            lambda d: not follow_btns("My timetable"))
+    finally:
+        app.unpin_weekday(ident)
+        app.d.set_window_size(1500, 1000)
+
+
+def t157_twelve_cards_share_a_wide_screens_width(app):
+    """One column of twelve open cards was a page nobody could see the ends
+    of (R90): where the screen has the room the tweak groups flow into two
+    balanced CSS columns — reading order kept, each card whole — and a
+    phone keeps the single column it can actually use."""
+    app.boot("/#/developer/tweaks")
+    app.wait_css("section[aria-label='Developer mode']")
+    app.wait_css(".tweak-groups .tweak-group")
+
+    def column_count():
+        return app.d.execute_script(
+            "return getComputedStyle("
+            "document.querySelector('.tweak-groups')).columnCount;")
+
+    assert column_count() == "2", column_count()  # the window is 1500px wide
+    try:
+        app.d.set_window_size(430, 900)
+        WebDriverWait(app.d, 5).until(lambda d: column_count() == "auto")
+    finally:
+        app.d.set_window_size(1500, 1000)
+
+
 TESTS = [
     t01_header_sync_button_and_hidden_dev,
     t02_developer_endpoint_only,
@@ -9671,6 +9767,8 @@ TESTS = [
     t153_a_ghost_marks_where_a_moved_class_came_from,
     t154_the_halls_page_obeys_its_own_tweaks,
     t155_the_forced_tier_is_spent_by_the_sync_that_uses_it,
+    t156_a_pinned_day_can_be_handed_back_to_the_clock,
+    t157_twelve_cards_share_a_wide_screens_width,
 ]
 
 

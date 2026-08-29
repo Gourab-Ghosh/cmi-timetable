@@ -2982,6 +2982,21 @@ body.modal-open { overflow: hidden; }
 .tweak-group .group-toggle[aria-expanded="true"] .caret { transform: rotate(90deg); }
 .tweak-group .group-body { margin-top: 0.35rem; }
 .tweak-group .group-lede { margin: 0.15rem 0 0.4rem; }
+/* R90: twelve cards in one column made the page taller than anyone could
+   hold in their head. Where the screen has the room they flow into two
+   balanced columns instead — CSS columns keep reading (and Tab) order:
+   down the left, then down the right. break-inside keeps each card whole;
+   the bottom margin restates .panel's own so the rhythm inside columns is
+   deliberate, and margins meeting a column break are truncated per spec —
+   which is exactly what keeps the right column's top aligned. The columns
+   are screen-only: A4 landscape is wider than 1100px, and two PRINT
+   columns fragment across pages exactly where Chromium is flakiest —
+   break-inside stays unguarded, because keeping a card whole on paper is
+   a feature. */
+.tweak-groups .tweak-group { break-inside: avoid; margin: 0 0 0.9rem; }
+@media screen and (min-width: 1100px) {
+  .tweak-groups { columns: 2; column-gap: 0.9rem; }
+}
 
 .devlog {
   width: 100%;
@@ -3162,6 +3177,7 @@ pre.devpre {
      implementation. What to assert is `flex-wrap: nowrap`, one row, and no
      empty pill (R84's visual verification). */
   .seg.mobile-only { display: inline-flex; }
+  .btn.mobile-only { display: inline-flex; }
   .week-grid.day-mode-active,
   /* …and the sentence that describes its columns (views.rs), which is a
      sibling of the grid rather than inside it. */
