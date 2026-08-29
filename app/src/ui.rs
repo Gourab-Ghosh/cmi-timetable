@@ -343,21 +343,23 @@ pub fn chip(app: App, p: ChipProps) -> impl IntoView {
     let click_kind = p.click;
     let draggable = p.draggable;
 
-    let sub = if p.show_hall && p.eff.is_some() {
-        let mut text = String::new();
-        if let Some(s) = &p.sublabel {
-            text.push_str(s);
-            text.push(' ');
-        }
+    // TWO payloads, two spans — never one (R92 M4). The sublabel is the
+    // meeting's REAL time when it differs from the column it borrows: a
+    // fact. The hall name is a convenience. They shared a single
+    // `<span class="hall">`, so everything that hides hall names — tight
+    // rows, which every phone gets by default, and the "Show hall names on
+    // chips" tweak — deleted the corrected time with them, and the grid was
+    // left stating a time the class does not meet at. That is the honesty
+    // law (t140) broken by the app's own default; the print stylesheet had
+    // already noticed and papered over it with `display: block !important`.
+    let subtime = p.sublabel.clone();
+    let hall_label = (p.show_hall && p.eff.is_some()).then(|| {
         // A hall may break between its words but never before its number: a
         // 200px cell wrapped "09:10–14:00 Lecture Hall 803" so that "803" sat
         // alone on line 2, under a line already ending in digits, and read as
         // a second time value rather than a room.
-        text.push_str(&domx::keep_number_with_word(&hall_text));
-        Some(text)
-    } else {
-        p.sublabel.clone()
-    };
+        domx::keep_number_with_word(&hall_text)
+    });
 
     let from_master = p.from_master;
     view! {
@@ -433,7 +435,8 @@ pub fn chip(app: App, p: ChipProps) -> impl IntoView {
             <span class="chip-name" aria-hidden="true">
                 {move || identity.with(|(n, _, _)| n.clone())}
             </span>
-            {sub.map(|s| view! { <span class="hall">{s}</span> })}
+            {subtime.map(|s| view! { <span class="subtime">{s}</span> })}
+            {hall_label.map(|s| view! { <span class="hall">{s}</span> })}
             {temp.then(|| view! { <span class="hall">"Temp"</span> })}
         </button>
     }
@@ -504,7 +507,18 @@ pub fn edit_toggle(app: App) -> impl IntoView {
             // days x times and that table stacks rooms down the side — so the
             // page that refuses the key must not be the page that teaches it.
             title=move || {
-                if keyboard_move() {
+                if app.edit_mode.get() {
+                    if keyboard_move() {
+                        "Edit layout is on. Drag a course to a new slot — or Tab to one, \
+                         press M, and move it with the arrow keys. Drop a moved course \
+                         back on CMI's slot to undo its move. Press ✎ Done editing when \
+                         you're finished."
+                    } else {
+                        "Edit layout is on. Drag a course onto another room and time. \
+                         Drop it back where CMI put it to undo the move. Press ✎ Done \
+                         editing when you're finished."
+                    }
+                } else if keyboard_move() {
                     "Turn this on to drag courses between slots — or Tab to one, press \
                      M, and move it with the arrow keys. Drop a moved course back on \
                      CMI's slot to undo its move."
@@ -522,15 +536,35 @@ pub fn edit_toggle(app: App) -> impl IntoView {
                     // route gets said out loud — a hover tooltip is no use
                     // to the person who needs it, and none at all on a
                     // touch screen.
-                    app.toast(if keyboard_move() {
-                        "Edit layout is on. Drag a course to a new slot — or Tab to \
-                         one, press M, and move it with the arrow keys. Enter drops \
-                         it; Esc cancels the move. Press ✎ Done editing when you're \
-                         finished."
-                    } else {
-                        "Edit layout is on. Drag a course onto another room and time. \
-                         Esc cancels the move. Press ✎ Done editing when you're \
-                         finished."
+                    // The gesture named must be the gesture that works. A
+                    // finger has to PRESS AND HOLD first — a drag that starts
+                    // moving before the long-press timer is simply cancelled,
+                    // silently — so telling a phone reader to "drag" sent them
+                    // to do the one thing that does nothing (R92 M11).
+                    let touch = crate::domx::is_coarse_pointer();
+                    app.toast(match (touch, keyboard_move()) {
+                        (true, true) => {
+                            "Edit layout is on. Press and hold a course, then drag it to \
+                             a new slot — or Tab to one, press M, and move it with the \
+                             arrow keys. Enter drops it; Esc cancels the move. Press ✎ \
+                             Done editing when you're finished."
+                        }
+                        (true, false) => {
+                            "Edit layout is on. Press and hold a course, then drag it onto \
+                             another room and time. Esc cancels the move. Press ✎ Done \
+                             editing when you're finished."
+                        }
+                        (false, true) => {
+                            "Edit layout is on. Drag a course to a new slot — or Tab to \
+                             one, press M, and move it with the arrow keys. Enter drops \
+                             it; Esc cancels the move. Press ✎ Done editing when you're \
+                             finished."
+                        }
+                        (false, false) => {
+                            "Edit layout is on. Drag a course onto another room and time. \
+                             Esc cancels the move. Press ✎ Done editing when you're \
+                             finished."
+                        }
                     });
                 } else {
                     app.move_mode.set(None);
@@ -1281,6 +1315,16 @@ pub fn Toasts() -> impl IntoView {
                 return;
             }
             let height = node.map_or(0, |n| n.offset_height());
+            // Capped here as well as in the stylesheet (the clamp law): a
+            // stack taller than a third of the window must never be able to
+            // reserve that room away from a dialog (R92 M1).
+            let cap = domx::window()
+                .inner_height()
+                .ok()
+                .and_then(|v| v.as_f64())
+                .map(|h| (h / 3.0) as i32)
+                .unwrap_or(i32::MAX);
+            let height = height.min(cap.max(0));
             let _ = root
                 .style()
                 .set_property("--toast-band", &format!("{height}px"));
@@ -1313,16 +1357,28 @@ pub fn Toasts() -> impl IntoView {
                                 on:pointerdown=move |_| app.set_toast_hovered(id, true)
                             >
                                 <span>{toast.text.clone()}</span>
-                                {toast
-                                    .undo
-                                    .then(|| {
-                                        view! {
-                                            <button on:click=move |_| {
-                                                app.dismiss_toast(id);
-                                                app.undo();
-                                            }>"Undo"</button>
-                                        }
-                                    })}
+                                {
+                                    // Offered only while the action this
+                                    // notice names is still the top of the
+                                    // stack (R92 M2). Tracked, so the button
+                                    // leaves the moment another undoable
+                                    // action lands rather than reverting it.
+                                    let undo_at = toast.undo_at;
+                                    move || {
+                                        undo_at
+                                            .is_some_and(|at| {
+                                                at == app.undo_stack.with(|s| s.undo.len())
+                                            })
+                                            .then(|| {
+                                                view! {
+                                                    <button on:click=move |_| {
+                                                        app.dismiss_toast(id);
+                                                        app.undo();
+                                                    }>"Undo"</button>
+                                                }
+                                            })
+                                    }
+                                }
                                 <button aria-label="Dismiss" on:click=move |_| app.dismiss_toast(id)>
                                     "✕"
                                 </button>
@@ -3661,8 +3717,14 @@ fn details_dialog(app: App, code: String) -> impl IntoView {
             <div>
                 <h2 id="dialog-title" class="mono">{code}</h2>
                 <p>
-                    "CMI's timetable no longer lists this course. It stays on your \
-                     timetable, with any times you set for it, until you remove it."
+                    {if selected {
+                        "CMI's timetable no longer lists this course. It stays on your \
+                         timetable, with any times you set for it, until you remove it."
+                    } else {
+                        "CMI's timetable no longer lists this course. It isn't on your \
+                         timetable; the changes you saved under it stay in Your changes \
+                         until you remove them."
+                    }}
                 </p>
                 {selected
                     .then(|| {
@@ -4135,7 +4197,9 @@ impl OwnChange {
         let plural = |one: &str, many: &str| if n == 1 { one.into() } else { many.into() };
         match self {
             OwnChange::CourseAdded => plural("Course you added", "Courses you added"),
-            OwnChange::CourseDeleted => plural("Course you deleted", "Courses you deleted"),
+            // Not "you deleted" (R92 M3): a share link brings the sender's
+            // deletions into this list, and the app cannot tell whose they are.
+            OwnChange::CourseDeleted => plural("Deleted course", "Deleted courses"),
             OwnChange::Time => plural("Moved to another time", "Moved to other times"),
             OwnChange::Room => plural("Moved to another room", "Moved to other rooms"),
             OwnChange::TimeAndRoom => "Moved to another time and room".to_string(),
@@ -4915,7 +4979,7 @@ fn my_data_dialog(app: App) -> impl IntoView {
                             })}
                         <li>
                             "Making a share link short — the only one that carries your \
-                             timetable away, and the only one that waits to be asked."
+                             timetable away, and it waits until you ask."
                         </li>
                     </ul>
                 }
@@ -6864,7 +6928,7 @@ fn export_dialog(app: App, scope: Option<String>) -> impl IntoView {
             return;
         };
         if start > end {
-            error.set("The start date must be before the end date.".to_string());
+            error.set("The start date can't be after the end date.".to_string());
             return;
         }
         // A mistyped year used to sail through and write weekly repeats for
@@ -6963,12 +7027,12 @@ fn export_dialog(app: App, scope: Option<String>) -> impl IntoView {
         app.toast(match empty.as_slice() {
             [] => "Calendar file downloaded.".to_string(),
             [one] => format!(
-                "Calendar file downloaded. {one} isn't in it — CMI hasn't given \
-                 it a weekly time."
+                "Calendar file downloaded. {one} isn't in it — it has no weekly \
+                 time yet."
             ),
             many => format!(
-                "Calendar file downloaded. {} aren't in it — CMI hasn't given \
-                 them weekly times.",
+                "Calendar file downloaded. {} aren't in it — they have no weekly \
+                 times yet.",
                 many.join(", ")
             ),
         });

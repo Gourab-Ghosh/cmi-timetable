@@ -61,6 +61,25 @@ pub fn is_phone_viewport() -> bool {
         .unwrap_or(false)
 }
 
+/// Is the pointer a finger?
+///
+/// Asked of the INPUT, not of the window width: a tablet is not a phone by
+/// `is_phone_viewport`, yet it drags the way a phone does — with a press and
+/// hold — and a desktop window dragged narrow is still a mouse. The copy that
+/// teaches the gesture branches on this (R92 M11): touch drags are gated
+/// behind a long press (`dnd::LONGPRESS_MS`), so a sentence that just says
+/// "drag" tells a student to do the one thing that does nothing.
+/// Unknowable means "not touch": the mouse wording is the safe answer,
+/// because a keyboard route is named beside it either way.
+pub fn is_coarse_pointer() -> bool {
+    window()
+        .match_media("(pointer: coarse)")
+        .ok()
+        .flatten()
+        .map(|m| m.matches())
+        .unwrap_or(false)
+}
+
 /// One step up or down, done by the browser. `stepUp()` / `stepDown()` are
 /// not bound in this web-sys version, so the DOM methods are called by name.
 /// Doing the arithmetic here instead would mean teaching this file what one
@@ -829,7 +848,28 @@ pub fn reload_without_query() {
     let location = window().location();
     let path = location.pathname().unwrap_or_else(|_| "/".to_string());
     let hash = location.hash().unwrap_or_default();
-    if location.replace(&format!("{path}{hash}")).is_err() {
+    let target = format!("{path}{hash}");
+    // With no query to drop, `target` IS the current address — and replacing
+    // an address with itself is a same-document fragment navigation, so the
+    // page does not reload and not even `hashchange` fires. `replace` still
+    // returns Ok, so the error fallback below never ran: every caller that
+    // promises a reload after rewriting storage ("Delete all app data",
+    // "Clear this key", both backup imports) silently kept showing data
+    // localStorage no longer held (R92 M7). An empty selection writes
+    // `replace_query("")`, and developer mode leaves a hash behind, so this
+    // is the ordinary case for anyone who has not picked a course yet.
+    let unchanged = location
+        .href()
+        .map(|href| {
+            href.ends_with(&target)
+                && href.len() == location.origin().map(|o| o.len()).unwrap_or(0) + target.len()
+        })
+        .unwrap_or(false);
+    if unchanged {
+        let _ = location.reload();
+        return;
+    }
+    if location.replace(&target).is_err() {
         let _ = location.reload();
     }
 }

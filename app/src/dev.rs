@@ -183,7 +183,7 @@ fn simulators(app: App) -> impl IntoView {
         <div class="panel">
             <h3>"Simulators"</h3>
             <div class="row" style="display:flex;gap:0.5rem;flex-wrap:wrap;align-items:center">
-                <label for="force-tier" class="muted small">"Force tier on next sync"</label>
+                <label for="force-tier" class="muted small">"Limit the next sync to"</label>
                 // The select's DISPLAY follows the signal through a NodeRef
                 // and an isolated Effect (never a reactive `prop:` closure —
                 // the documented R14/R45 trap): run_update now CONSUMES the
@@ -208,10 +208,10 @@ fn simulators(app: App) -> impl IntoView {
                                 app.force_tier.set((!v.is_empty()).then_some(v));
                             }
                         >
-                            <option value="">"(all tiers: relays, then CMI itself)"</option>
-                            <option value="proxy">"relays only"</option>
+                            <option value="">"(no limit — helper sites, then CMI itself)"</option>
+                            <option value="proxy">"helper sites only"</option>
                             <option value="direct">
-                                "CMI itself only (may prompt for local network)"
+                                "CMI itself only (may raise the browser's local-network question)"
                             </option>
                         </select>
                     }
@@ -228,9 +228,9 @@ fn simulators(app: App) -> impl IntoView {
                 </button>
             </div>
             <p class="muted small">
-                "“Simulate parse failure” runs mangled pages through the full pipeline to \
-                 demonstrate that the validation gate keeps the cached snapshot \
-                 untouched."
+                "“Simulate parse failure” deliberately breaks a copy of the saved \
+                 timetable page and parses it like a real sync would, to show the \
+                 gate rejecting it — the cached snapshot is never touched."
             </p>
         </div>
     }
@@ -251,7 +251,7 @@ fn fetch_log(app: App) -> impl IntoView {
                                 <thead>
                                     <tr>
                                         <th>"time"</th>
-                                        <th>"tier"</th>
+                                        <th>"route"</th>
                                         <th>"url"</th>
                                         <th>"status"</th>
                                         <th>"ms"</th>
@@ -822,7 +822,7 @@ fn this_browser(app: App) -> impl IntoView {
                 <button
                     class="btn small"
                     title="Everything a bug report needs — versions, sync attempts, \
-                           sizes. No course data."
+                           sizes, which tweaks differ. No course data."
                     on:click=move |_| {
                         domx::copy_to_clipboard(diagnostics_text(app), |_| {});
                         app.toast("Copied.");
@@ -1519,8 +1519,8 @@ fn rows_opening(app: App, v: [Signal<bool>; 2]) -> AnyView {
             "Remember the day pickers between visits",
             "My timetable's day strip and the Halls day reopen where you left \
              them. Untick and every visit opens on today — a pick still holds \
-             until you close the tab. Each strip's Follow today button hands \
-             a single pick back at any time.",
+             until you close the tab. Each strip's Follow today button forgets \
+             its pick at any time.",
             |p| !p.day_picks_forget,
             |p, on| p.day_picks_forget = !on,
             "The day pickers are remembered between visits again.",
@@ -2444,7 +2444,7 @@ fn tweaks_page(app: App) -> impl IntoView {
                     if app.tweak_deltas().is_empty() {
                         "Nothing differs from how the app ships."
                     } else {
-                        "Everything on this page, back to how the app ships"
+                        "Everything on this page, back to how the app ships."
                     }
                 }
                 // Asks first (R89): every other danger button in the app
@@ -2639,7 +2639,7 @@ const TWEAK_HAYSTACKS: [(&str, &str, &str); 43] = [
         "Remember the day pickers between visits",
         "My timetable's day strip and the Halls day reopen where you left them. Untick \
          and every visit opens on today — a pick still holds until you close the tab. \
-         Each strip's Follow today button hands a single pick back at any time.",
+         Each strip's Follow today button forgets its pick at any time.",
     ),
     (
         "Notices and dialogs",

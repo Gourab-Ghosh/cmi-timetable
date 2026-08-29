@@ -474,29 +474,50 @@ fn apply_url_state(app: App) {
 /// Both are weighed now, and each gets its own sentence: "times and credits"
 /// is not what was lost when what was lost was the courses.
 fn replacement_notice(app: App, incoming: &[String], shared_overrides: bool) -> Option<String> {
+    // `hidden` counts too (R92 M3). A link carries the sender's deleted
+    // courses, and adopting the store wholesale takes the reader's catalog
+    // with it: courses they never deleted disappear, courses they DID delete
+    // come back. Weighing only `items` and `credits` meant a reader whose
+    // saved work was deletions got no sentence, no Undo and no sign at all —
+    // the exact silence R83 removed for the selection, left in place for the
+    // third thing a link can destroy.
     let lost_edits = shared_overrides
         && app
             .overrides
             .with_untracked(|o| !o.items.is_empty() || !o.credits.is_empty());
+    // Deletions are the third thing a link can destroy, and they were the one
+    // thing nothing weighed: a reader whose saved work was struck-out courses
+    // got no sentence, no Undo and no sign at all while the sender's catalog
+    // replaced theirs (R92 M3).
+    let lost_deletions = shared_overrides && app.overrides.with_untracked(|o| !o.hidden.is_empty());
     // Only a link that actually CHANGES the picked courses replaces them —
     // reopening the same link, or one naming what is already there, takes
     // nothing away.
     let lost_courses = app
         .selection
         .with_untracked(|s| !s.is_empty() && s.as_slice() != incoming);
-    match (lost_courses, lost_edits) {
-        (false, false) => None,
-        (false, true) => Some(
-            "This link brought its own times and credits, and they replaced yours.".to_string(),
-        ),
-        (true, false) => {
-            Some("This link replaced the courses you had picked with its own.".to_string())
-        }
-        (true, true) => Some(
-            "This link replaced the courses you had picked, and the times and \
-             credits you set, with its own."
-                .to_string(),
-        ),
+    // Named one by one, because "times and credits" is not what was lost
+    // when what was lost was the catalog. A link carries three destroyable
+    // things and each gets its own words (R92 M3).
+    let mut lost: Vec<&str> = Vec::new();
+    if lost_courses {
+        lost.push("the courses you had picked");
+    }
+    if lost_edits {
+        lost.push("the times and credits you set");
+    }
+    if lost_deletions {
+        lost.push("the courses you had deleted from your catalog");
+    }
+    match lost.as_slice() {
+        [] => None,
+        [one] => Some(format!("This link replaced {one} with its own.")),
+        [a, b] => Some(format!("This link replaced {a}, and {b}, with its own.")),
+        many => Some(format!(
+            "This link replaced {}, and {}, with its own.",
+            many[..many.len() - 1].join(", "),
+            many[many.len() - 1]
+        )),
     }
 }
 
@@ -656,24 +677,51 @@ fn install_cross_tab_sync(app: App) {
                     );
                 }
             }
-            // One preference has to cross tabs the moment it changes: whether
-            // the app may look for new versions of itself.
+            // SETTINGS cross tabs the moment they change; VIEW STATE does not.
             //
-            // Preferences are stored as one blob, so the next keystroke in
-            // ANOTHER tab's search box writes that tab's whole (older) copy
-            // back — silently turning update checks on again for someone who
-            // had switched them off. Only this one field is copied: adopting
-            // the blob would stomp this tab's filters, theme and day view,
-            // which are deliberately per-tab until a refresh. Nothing is
-            // written back from here either, or the two tabs would echo.
+            // Preferences are stored as one blob and `persist_prefs` writes
+            // this tab's whole in-memory copy from three dozen call sites —
+            // a plain section-bar click is enough. So an idle second tab
+            // holding an older copy silently undid work done in the first.
+            // The first version of this listener copied exactly ONE field
+            // across (update checks), which was the whole bug at the time;
+            // then forty-three tweaks and a helper site were added and none
+            // of them were covered, so one click in a forgotten tab wiped the
+            // lot (R92 M8).
+            //
+            // The list is INVERTED now, and that is the point: everything is
+            // adopted except the handful of fields that are deliberately
+            // per-tab, so a tweak added next year is covered by default
+            // rather than by remembering to extend a list. Nothing is written
+            // back from here, or the two tabs would echo each other.
             if ev.key().as_deref() == Some(storage::KEY_PREFS)
                 && let storage::Loaded::Value(stored) =
                     storage::load::<crate::state::Prefs>(storage::KEY_PREFS)
             {
-                let off = stored.update_checks_off;
-                if app.prefs.with_untracked(|p| p.update_checks_off) != off {
-                    app.prefs.update(|p| p.update_checks_off = off);
-                    if off {
+                let mut adopted = stored;
+                let theme_before = app.prefs.with_untracked(|p| p.theme);
+                let changed = app.prefs.try_update(|p| {
+                    // Per-tab, on purpose: what this window is LOOKING at.
+                    // Two tabs open on different days, or filtered
+                    // differently, is a feature — that is why someone opened
+                    // the second tab.
+                    adopted.filters = p.filters.clone();
+                    adopted.my_filters = p.my_filters.clone();
+                    adopted.tab = p.tab;
+                    adopted.halls_day = p.halls_day;
+                    adopted.halls_view = p.halls_view;
+                    adopted.plan_view = p.plan_view;
+                    if adopted == *p {
+                        return false;
+                    }
+                    *p = adopted;
+                    true
+                });
+                if changed == Some(true) {
+                    if app.prefs.with_untracked(|p| p.theme) != theme_before {
+                        crate::apply_theme(app);
+                    }
+                    if app.prefs.with_untracked(|p| p.update_checks_off) {
                         // They said stop, in the other tab. A banner already
                         // asking here is that same question.
                         app.update_ready.set(None);

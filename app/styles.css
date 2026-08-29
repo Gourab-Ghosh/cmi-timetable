@@ -1149,6 +1149,10 @@ table.tt td.kbd-cursor { box-shadow: inset 0 0 0 2px var(--accent); }
 @media (pointer: coarse) {
   .density-compact .chip { min-height: 40px; }
 }
+/* The corrected time is a FACT and is never hidden (R92 M4): it inherits the
+   hall span's quiet treatment, but no rule below may take it away. */
+.chip .subtime { font-size: 0.72rem; opacity: 0.85; display: block; width: 100%; }
+.density-compact .chip .subtime { font-size: 0.62rem; }
 .density-compact .chip .hall { display: none; }
 /* "Show hall names on chips" ticked off (R87): the same absence tight rows
    choose, made a choice at any density — and on paper too, deliberately: a
@@ -2216,13 +2220,27 @@ body.modal-open .toasts { top: 0.8rem; bottom: auto; }
    stays centred, which is why this is not simply `align-items: flex-start`.
    Measured beats guessed here: one toast is 40px and the local-network one is
    four lines, so any fixed reservation is wrong for most of the cases. */
+/* CLAMPED, at this read site and at the write site in `ui::Toasts` alike
+   (the clamp law) — R92 M1. Unclamped, a stack of ordinary six-second
+   notices measured 713px inside a 617px phone viewport, so the overlay
+   reserved more room than the screen has and every dialog was pushed off
+   the bottom: the "Reset all tweaks?" question went off-screen while its
+   danger button stayed pressable, and nothing could scroll to it because
+   the overlay is fixed and the body's scroll is locked. A notice may take
+   at most a third of the screen from a dialog; past that the notices
+   overlap it, which is recoverable, instead of banishing it, which is not.
+   The floor is the second half of the same promise: whatever the band says,
+   a dialog keeps enough height to show a line of text and its buttons. */
 body.modal-open.toasts-live .overlay {
   align-items: flex-start;
-  padding-top: calc(var(--toast-band, 0px) + 1.4rem);
+  padding-top: calc(min(var(--toast-band, 0px), 33dvh) + 1.4rem);
 }
 body.modal-open.toasts-live .dialog {
-  max-height: calc(100vh - var(--toast-band, 0px) - 2.8rem);
-  max-height: min(calc(100dvh - var(--toast-band, 0px) - 2.8rem), 800px);
+  max-height: calc(100vh - min(var(--toast-band, 0px), 33vh) - 2.8rem);
+  max-height: max(
+    12rem,
+    min(calc(100dvh - min(var(--toast-band, 0px), 33dvh) - 2.8rem), 800px)
+  );
 }
 .toast {
   position: relative;
@@ -3869,18 +3887,22 @@ label.field > input { width: 100%; }
     font-size: 12.5px;
     line-height: 1.15;
   }
-  .chip .hall {
-    /* `display` first, and it is not cosmetic: `.density-compact .chip .hall
-       { display: none }` (0,3,0) out-specifies this rule (0,2,0), and on the
-       Master grid that span holds the SUBLABEL — the meeting's real time when
-       it differs from the column it borrows. In Compact rows the sheet
-       therefore printed a class under a heading that gave the wrong time,
-       with nothing correcting it; and `App::device_density` returns Compact
-       for any phone-sized viewport, so a reader who never touched the toggle
-       got the lossy sheet. Same principle as the 640px rules above: a printed
-       sheet must not depend on the window it was printed from — and density is
-       part of that window. */
-    display: block !important;
+  /* A hall name hidden only because the WINDOW was narrow comes back on
+     paper — a printed sheet must not depend on the window it was printed
+     from. A hall name hidden by the tweak stays hidden, on paper as on
+     screen, because that is a choice and not an artefact; the tweak's rule
+     is last, so it wins where both apply (R92 CW-2 — the old blanket
+     `!important` here overrode the tweak too). The corrected TIME needs no
+     rescue any more: since R92 M4 it lives in its own span that nothing
+     hides. */
+  .density-compact .chip .hall { display: block; }
+  .app.no-chip-halls .chip .hall { display: none; }
+  /* `.density-compact .chip .subtime` named explicitly: the screen rule that
+     shrinks the fact in tight rows is (0,3,0) and would otherwise out-specify
+     this (0,2,0) block, printing the corrected time at the screen's size —
+     the same specificity trap the old `display: block !important` here was
+     working around. A printed sheet must not depend on the window. */
+  .chip .subtime, .chip .hall, .density-compact .chip .subtime {
     font-size: 7.8px;
     font-weight: 400;
     /* Real ink, not `opacity: 0.85` over the code's colour. The faded version

@@ -1124,9 +1124,18 @@ fn my_timetable(app: App) -> impl IntoView {
                                     // One connector, one job: the dash joins the two
                                     // routes and the tail is a plain list, so the eye
                                     // no longer reads ", and" as the end of it.
-                                    "Turn on ✎ Edit layout and drag one onto the grid — or \
-                                     press Edit this course to set its time, hall, credits \
-                                     or name."
+                                    // A finger must press and hold before it can drag
+                                    // (R92 M11), so the gesture is named for the
+                                    // pointer actually in use.
+                                    {if crate::domx::is_coarse_pointer() {
+                                        "Turn on ✎ Edit layout, then press and hold one to \
+                                         drag it onto the grid — or press Edit this course \
+                                         to set its time, hall, credits or name."
+                                    } else {
+                                        "Turn on ✎ Edit layout and drag one onto the grid — or \
+                                         press Edit this course to set its time, hall, credits \
+                                         or name."
+                                    }}
                                 </p>
                                 <div class="items">
                                     {items
@@ -1168,8 +1177,8 @@ fn my_timetable(app: App) -> impl IntoView {
                                                             "Edit this course — {label_code}",
                                                         )
                                                         title="Give it a time, or change its \
-                                                               hall and credits — all in one \
-                                                               place"
+                                                               hall, credits or name — all in \
+                                                               one place"
                                                         on:click=move |_| {
                                                             app.dialog
                                                                 .set(
@@ -1425,7 +1434,7 @@ fn my_timetable(app: App) -> impl IntoView {
                                         .map(|course| {
                                             let eff = app.effective_meetings(&course);
                                             let meets: Vec<String> = if eff.is_empty() {
-                                                vec!["no fixed slot".to_string()]
+                                                vec!["no fixed slot yet".to_string()]
                                             } else {
                                                 eff.iter()
                                                     .map(|e| {
@@ -2116,7 +2125,7 @@ fn my_courses(app: App) -> impl IntoView {
                 {
                     parts.push("⚠ marks a clash");
                 }
-                parts.join(" \u{b7} ")
+                parts.join(" · ")
             })}
         </section>
     }
@@ -2953,7 +2962,7 @@ fn master_grid(app: App) -> impl IntoView {
                 {
                     parts.push("⚠ clashes with a course you have");
                 }
-                parts.join(" \u{b7} ")
+                parts.join(" · ")
             })}
         </section>
     }
@@ -2976,8 +2985,13 @@ fn deleted_note(app: App) -> impl IntoView {
                     view! {
                         <p class="deleted-note" role="note">
                             <span>
+                                // "Deleted from this catalog", not "you
+                                // deleted": a share link brings the sender's
+                                // deletions with it, so the app cannot know
+                                // who struck a course out and must not claim
+                                // the reader did it (R92 M3).
                                 {format!(
-                                    "{n} course{} you deleted {} hidden here.",
+                                    "{n} deleted course{} {} hidden here.",
                                     if n == 1 { "" } else { "s" },
                                     if n == 1 { "is" } else { "are" },
                                 )}
@@ -3373,7 +3387,7 @@ fn catalog(app: App) -> impl IntoView {
                 {
                     parts.push("⚠ marks a clash");
                 }
-                parts.join(" \u{b7} ")
+                parts.join(" · ")
             })}
         </section>
     }
@@ -3404,7 +3418,7 @@ fn catalog_row(app: App, course: Course) -> impl IntoView {
     let meetings_text = move || {
         eff.with(|eff| {
             if eff.is_empty() {
-                "no fixed slot".to_string()
+                "no fixed slot yet".to_string()
             } else {
                 eff.iter()
                     .map(|e| {
@@ -4417,9 +4431,14 @@ fn follow_today_button(
                             } else {
                                 "btn small noprint"
                             }
-                            title="Forget this pick — the view opens on today \
-                                   again (and on the whole week when today has \
-                                   no classes). Picking a day pins it back."
+                            // Says what the code does, not more (R92 si-2):
+                            // the fallback is "today, unless today is not a
+                            // teaching day" — it does not test whether YOU
+                            // have classes today, and an empty Wednesday
+                            // still opens on Wednesday.
+                            title="Forget this pick — the view opens on today again, \
+                                   or on the whole week at the weekend and on days \
+                                   CMI does not teach. Picking a day pins it back."
                             on:click=move |_| on_click()
                         >
                             "Follow today"
@@ -4573,7 +4592,7 @@ fn halls_view(app: App) -> impl IntoView {
                     false,
                     move || {
                         app.clear_halls_view();
-                        app.toast("Halls follows today again.");
+                        app.toast("The Halls page follows today again.");
                     },
                 )}
                 <div class="grow"></div>
@@ -4631,7 +4650,12 @@ fn halls_view(app: App) -> impl IntoView {
                             // page has (R83). `hint`: the how-to tweak hides
                             // this line; the ✓ key beside it is a mark's key
                             // and follows the marks tweak instead.
-                            "✎ Edit layout lets you drag a course to another room or time."
+                            {if crate::domx::is_coarse_pointer() {
+                                "✎ Edit layout lets you press and hold a course, then drag \
+                                 it to another room or time."
+                            } else {
+                                "✎ Edit layout lets you drag a course to another room or time."
+                            }}
                         </span>
                     </p>
                 }

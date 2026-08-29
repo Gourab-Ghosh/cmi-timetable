@@ -814,7 +814,7 @@ regenerates the .ics golden.
   NOWHERE on this page while still counting toward the credit total.
 - "Your changes" groups are headed by `.cg-head` (colour rail + small caps
   + count), coloured by `OwnChange::tone()`. See §4.
-- Tests: 169 native + 157/157 e2e green (as of R90; the native count from
+- Tests: 169 native + 161/161 e2e green (as of R92; the native count from
   `deploy.sh`'s own in-container run — 49+18+3+9+25+27+28+10).
 - **The e2e suite mocks the relays, so it can never tell you a real one has
   died** — which is exactly how R84's outage reached a user. Two probes cover
@@ -6840,6 +6840,126 @@ print half stays visual-check territory). Registry 155 → **157**. Gates:
 pre-existing proc-macro-error2 future-incompat note). Visual pass at
 2560x1600@1.5x in both themes + phone: `.workagents/r90/shots/`. Committed
 locally; NOT pushed, NOT deployed.
+
+### R91 — every string read once, by five readers and a judge
+
+The ask: check ALL user-facing text, improve wherever genuinely possible, R90's
+new strings first. Five region readers (R90 surfaces, dialogs/toasts, My data +
+sync, developer mode, print + calendar + misc) swept every string literal; a
+merge judge verified each proposal against the source, killed taste-churn,
+re-grepped every e2e claim itself and owned the final wording. 21 proposals →
+19 distinct → 21 edit entries, 2 killed as duplicates.
+
+Three were mechanically FALSE strings, not taste: the Edit-layout tooltip said
+"Turn this on" while the button beside it read "✎ Done editing"; a dialog told
+a reader a dropped course "stays on your timetable" on a path where it is not
+on it; and the calendar-export toast blamed CMI for a custom course CMI never
+scheduled. Two more broke the honesty law (the My-data network bullet claimed
+shortening was "the only one that waits to be asked", which the manual
+auto-sync tweak falsifies; the export date error said "must be before" when the
+gate is `start > end` and equal dates export). The rest killed jargon that
+appears nowhere else in the app ("tier", "force", "relays" → "helper sites",
+"route"), completed a promise diagnostics had outgrown, and put the literal
+middle dots back in three `views.rs` joins. ONE e2e edit in the whole set
+(t156's Halls toast), identified by the judge's own greps.
+
+### R92 — the pre-launch bug hunt, and the fixes it forced
+
+The ask: "test as much as possible for bugs… this will be the last test before
+I make the app public on GitHub Pages", plus (mid-round) "test everything
+visually, programmatically, and functionally", and the standing requirement
+that agents survive a session limit.
+
+**The fleet.** 16 lenses — 13 driving real headless browsers on their own port
+triplets (the harness reads PORT/CMI_PORT/SW_PORT from the environment, which
+is what makes parallel probing safe), 3 reading code adversarially — then an
+adversarial refuter per finding (capped 3/lens, severity-ranked, the remainder
+reported as unverified rather than dropped), then a completeness critic and a
+triage synthesist. 66 agents, ~12M subagent tokens across three launches.
+**69 findings, 46 confirmed, 2 refuted, 25 unverified.** Everything is in
+`.workagents/r92/findings/` (hunt-*.md, verify-*.md, TRIAGE.md, CRITIC.md);
+`TRIAGE.md` is the deliverable and reads cold.
+
+**It died twice on the session limit and was restored both times** — the
+save-as-you-go rule working exactly as designed: 1311 lines of partials
+survived the first death, and every worker resumed from its own file instead of
+starting over (the relaunch adds a READ-YOUR-OWN-PARTIAL note and resumes the
+same run id, so finished agents replay from cache).
+
+**Twelve MUST-FIX defects, all fixed this round** (ids are TRIAGE.md's):
+- M1 an unbounded notice stack reserved more height than a phone screen has
+  (measured 713px in a 617px viewport), pushing every dialog off the bottom
+  with no way to scroll to it — the "Reset all tweaks?" question went
+  off-screen while its danger button stayed pressable. The band is now clamped
+  at BOTH sites (the clamp law) and the stack itself is bounded at 4.
+- M2 a notice's Undo called `undo()`, which pops the TOP of the stack, so it
+  reverted a different action than the one it named. `Toast` now carries
+  `undo_at` and the button is only offered while its own entry is on top.
+- M3 a share link silently deleted courses from the reader's catalog, restored
+  ones they had deleted, and filed the sender's deletions under "courses YOU
+  deleted". `replacement_notice` now weighs `hidden` as the third destroyable
+  thing and names each one it took; the catalog note and My data no longer
+  claim the reader authored deletions a link brought.
+- M4 the corrected-time sublabel shared one span with the hall name, so tight
+  rows (every phone by default) and the "Show hall names on chips" tweak
+  deleted a FACT — the grid stated a time the class does not meet at. Split
+  into `.subtime` (never hidden) and `.hall`; the print block's blanket
+  `!important` narrowed, which also lets the tweak win on paper.
+- M5 a drop on the cell a class was moved FROM (a stale CMI base) deleted the
+  override and scattered the class to cells nobody touched, announcing success.
+  "Back to CMI's time" now requires the base to still be published.
+- M6 `Ctrl+Z` after a sync restored the PRE-merge override store, drawing and
+  exporting a class twice; the merge now retires the stack it invalidated.
+- M7 `reload_without_query()` was a silent no-op whenever the URL had a hash
+  and no query, so "Delete all app data", "Clear this key" and both backup
+  imports never reloaded and kept showing data localStorage no longer held.
+- M8 one click in a second, idle tab wiped every tweak set in the first. The
+  cross-tab adopt list is INVERTED now — everything crosses except the handful
+  of deliberately per-tab view fields — so future tweaks are covered by default.
+- M9 a relay's own error page made the app announce that CMI had changed its
+  page and "the app needs an update"; `looks_like_cmi` no longer accepts a
+  bare hostname echo, and only a DIRECT gate failure may make that claim.
+- M10 shortening blamed the shortener for a helper site's HTTP status.
+- M11 every string said "drag" while a finger must press and hold, so the
+  phone's headline editing feature looked broken. Copy now branches on
+  `(pointer: coarse)`, not on window width.
+- M12 "Import everything" wiped a hand-typed helper site with no question,
+  under a button promising it asks: `helper_site` was the one reader-set field
+  missing from `nothing_saved_to_lose()`.
+Also fixed: si-2, my own R90 tooltip, which promised a whole-week fallback the
+code only gives at weekends and on days CMI does not teach.
+
+**Two tests were pinning the old, wrong behaviour** and were corrected rather
+than worked around: t110 enshrined M10's false attribution (and caught a real
+regression — my first fix dropped the advice tail), and t128 read the fact
+through the hall span M4 split. Four new regression tests: t158 (a notice's
+Undo reverts the action it names), t159 (a dialog is reachable however many
+notices stand), t160 (a second tab does not undo your settings), t161 (a link
+that empties your catalog says so). Registry 157 → **161**.
+
+**What the main session verified by hand, independent of the fleet** (in
+`.workagents/r92/findings/MAIN-*.md`): the publish rehearsal — the app built
+with `--public-url "/timetable/"` and served with real GitHub Pages semantics
+(8/8: boots, assets resolve, SW takes the subpath scope, hash routes deep-link
+and survive reloads, share links work, unknown deep paths recover via 404.html,
+still renders offline); the service worker's deploy path read by hand
+(network-first navigations, skipWaiting, only its own caches deleted); a true
+first run; the upgrade path (an older build's stored data meeting this build,
+8/8); a 17-shot visual sweep in both themes at 1707x1067 and phone; and the
+live network — **the built app fetched and parsed the real cmi.ac.in (79
+courses)**, but `relay_probe.py` says only ONE public relay (cors.sh) is usable
+today, which is launch intelligence for the owner rather than a code defect.
+
+Gates: **161/161 e2e, 169 native, clippy + fmt clean**, publish rehearsal
+re-run green after the fixes. NOT pushed, NOT deployed.
+
+**STILL OPEN — 20 SHOULD-FIX and the CAN-WAIT set are NOT fixed** (see
+TRIAGE.md §SHOULD FIX): the phone day strip clipping its last days, two week-grid
+tweaks dead in the phone's day list, the two-column Tweaks page reflowing under
+a stationary pointer, print keys missing for filtered sheets, the free-hall
+finder at a blank time, Escape over a confirm leaving developer mode, build-info
+rows never refreshing, "Update now" landing on the old build, a full
+localStorage saying "Saved.", and others. They are real and verified.
 
 ## 8. Open bugs — found, confirmed, NOT fixed (do not delete)
 

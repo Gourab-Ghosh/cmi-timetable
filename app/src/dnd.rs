@@ -238,7 +238,23 @@ pub fn perform_drop(
     //    the cell it already occupied deleted a room change the user had
     //    made — and said it had gone "back to CMI's time", which had never
     //    been touched.
+    //    And the base must be a meeting CMI still PUBLISHES. An override
+    //    keeps its recorded base even after a sync moves that meeting away
+    //    (state.rs's `effective_meetings` relies on it), so a drop on the
+    //    cell the class was moved FROM matched here, deleted the override,
+    //    and handed the class back to CMI's *other* times — emptying both
+    //    the cell dropped on and the cell dragged from, scattering the class
+    //    to two cells nobody touched, and announcing "Moved … back to CMI's
+    //    time" for a time CMI no longer has. Removing an override is only
+    //    honest when there is something underneath to fall back to (R92 M5).
+    let base_is_current = spec.base.as_ref().is_some_and(|base| {
+        app.snapshot.with_untracked(|s| {
+            s.course(&spec.code)
+                .is_some_and(|c| c.meetings.iter().any(|m| m == base))
+        })
+    });
     if let Some(base) = &spec.base
+        && base_is_current
         && landed_on(base)
         && (hall_axis || same_hall_opt(base.hall.as_deref(), spec.current.as_ref()))
     {

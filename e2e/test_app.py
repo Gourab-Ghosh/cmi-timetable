@@ -2984,7 +2984,7 @@ def t53_delete_a_cmi_course(app):
         message="a deleted course must leave the catalog",
     )
     note = app.css(".deleted-note")
-    assert "1 course you deleted is hidden here" in note.text, note.text
+    assert "1 deleted course is hidden here" in note.text, note.text
     # Out of the master grid and off the timetable.
     app.open_tab("Master grid")
     app.wait_css("section[aria-label='Master grid'] table.tt")
@@ -3004,7 +3004,7 @@ def t53_delete_a_cmi_course(app):
         "the deletion must survive a reload"
     app.xpath("//button[contains(.,'change')]").click()
     dialog = app.wait_css(".dialog")
-    assert "course you deleted" in dialog.text.lower(), dialog.text
+    assert "deleted course" in dialog.text.lower(), dialog.text
     dialog.find_element(
         By.XPATH, ".//li[contains(.,'TOC')]//button[normalize-space()='Restore']"
     ).click()
@@ -5797,6 +5797,13 @@ def t110_a_shortener_that_cannot_be_reached_says_so_and_invents_nothing(app):
         lambda d: d.find_elements(By.CSS_SELECTOR, ".shorten-failed") or False)
     text = failed[0].text
     assert "TinyURL" in text and "answered with an error" in text, text
+    # The status belongs to whoever produced it (R92 M10). Reached through a
+    # helper site, the sentence must name that site rather than hand its HTTP
+    # code to a service the browser never contacted — the old copy said
+    # "TinyURL answered with an error (HTTP 503)" of a host that threw
+    # "Failed to fetch", which is exactly what this test exists to forbid.
+    if "helper site" in text:
+        assert "couldn't be reached directly" in text, text
     assert "HTTP" in text, f"the status earns its place in the sentence: {text}"
     assert "copy the full link instead" in text, text
     assert not app.css_all(".shorten-short"), "a failure must not produce a link"
@@ -7676,10 +7683,29 @@ def t128_tight_rows_still_print_the_real_time(app):
         app.wait_css("section[aria-label='Master grid'] table.tt")
         assert app.css_all("section[aria-label='Master grid'] .density-compact"), \
             "this test is meaningless without the compact grid"
+        # ON SCREEN FIRST (R92 M4). The corrected time used to share one span
+        # with the hall name, so every rule that hides hall names — tight
+        # rows, which is what EVERY phone gets by default — deleted the time
+        # with them and the grid stated a time the class does not meet at.
+        # The print block papered over it; the screen kept lying. The fact
+        # now lives in its own `.subtime` span that nothing may hide.
+        on_screen = app.d.execute_script("""
+            const t = document.querySelector(
+                "section[aria-label='Master grid'] table.tt td .chip .subtime");
+            if (!t) return {found: false};
+            const cs = getComputedStyle(t);
+            return {found: true, display: cs.display, text: t.textContent.trim()};
+        """)
+        assert on_screen["found"], \
+            "the corrected time must exist on screen, in its own span"
+        assert on_screen["display"] != "none", (
+            "tight rows must not hide the corrected time — that is the grid "
+            f"stating a time the class does not meet at: {on_screen!r}")
+        assert "09:30" in on_screen["text"], on_screen
         app.d.execute_cdp_cmd("Emulation.setEmulatedMedia", {"media": "print"})
         got = app.d.execute_script("""
             const hall = document.querySelector(
-                "section[aria-label='Master grid'] table.tt td .chip .hall");
+                "section[aria-label='Master grid'] table.tt td .chip .subtime");
             const band = document.querySelector(
                 "section[aria-label='Master grid'] .covered");
             return {
@@ -9556,7 +9582,7 @@ def t156_a_pinned_day_can_be_handed_back_to_the_clock(app):
         # Hand it back: the view returns to today, the button leaves, and a
         # reload keeps following the clock rather than resurrecting Tuesday.
         follow_btns()[0].click()
-        app.wait_toast("Halls follows today again")
+        app.wait_toast("The Halls page follows today again")
         WebDriverWait(app.d, 5).until(lambda d: checked_day() == "Thu")
         assert not follow_btns()
         app.d.refresh()
@@ -9609,6 +9635,160 @@ def t157_twelve_cards_share_a_wide_screens_width(app):
         WebDriverWait(app.d, 5).until(lambda d: column_count() == "auto")
     finally:
         app.d.set_window_size(1500, 1000)
+
+
+def t158_a_notices_undo_reverts_the_action_it_names(app):
+    """R92 M2. The Undo on a notice used to call plain undo(), which pops the
+    TOP of the stack — so with two undoable actions inside one notice's life
+    (six seconds is plenty) the first notice's button reverted the SECOND
+    action and answered "Undid: add ISS" under a sentence about TOC. A notice
+    now offers Undo only while the action it names is still the top."""
+    app.boot("/", seed=True)
+    app.open_tab("Master grid")
+    app.wait_css("section[aria-label='Master grid'] table.tt")
+
+    def undo_buttons():
+        return [b for b in app.css_all(".toast button")
+                if b.text.strip() == "Undo"]
+
+    def add(code):
+        chip = app.chip(code, "section[aria-label='Master grid']")
+        app.d.execute_script("arguments[0].scrollIntoView({block:'center'});", chip)
+        chip.click()
+
+    add("TOC")
+    app.wait_toast("Added TOC")
+    WebDriverWait(app.d, 5).until(lambda d: undo_buttons())
+    add("ISS")
+    app.wait_toast("Added ISS")
+    # Two notices are on screen; only the newest may still offer Undo, because
+    # only its action is still the top of the stack.
+    WebDriverWait(app.d, 5).until(lambda d: len(undo_buttons()) == 1)
+    sel = app.d.execute_script("return localStorage.getItem('cmitt.v1.selection');")
+    assert "TOC" in sel and "ISS" in sel, sel
+    # And the one that remains reverts ITS OWN action.
+    undo_buttons()[0].click()
+    WebDriverWait(app.d, 5).until(
+        lambda d: "ISS" not in (d.execute_script(
+            "return localStorage.getItem('cmitt.v1.selection');") or ""))
+    sel = app.d.execute_script("return localStorage.getItem('cmitt.v1.selection');")
+    assert "TOC" in sel, f"the wrong action was reverted: {sel}"
+
+
+def t159_a_dialog_is_reachable_however_many_notices_stand(app):
+    """R92 M1. An unbounded notice stack reserved more height than a phone
+    screen has (713px measured in a 617px viewport), so every dialog was
+    pushed off the bottom with no way to scroll to it — the "Reset all
+    tweaks?" question went off-screen while its danger button stayed
+    pressable. The band is clamped at both sites now, and the stack itself is
+    bounded."""
+    app.d.set_window_size(430, 760)
+    try:
+        app.boot("/", seed=True, prefs={"toast_life_secs": 0})  # until dismissed
+        app.open_tab("Master grid")
+        app.wait_css("section[aria-label='Master grid'] table.tt")
+        for code in ("TOC", "ISS", "RDBM", "MFD", "CALG", "ECO"):
+            try:
+                chip = app.chip(code, "section[aria-label='Master grid']")
+                app.d.execute_script("arguments[0].scrollIntoView({block:'center'});", chip)
+                chip.click()
+                time.sleep(0.25)
+            except Exception:
+                pass
+        # However many were raised, the stack is bounded and the band it
+        # reserves can never take the screen.
+        WebDriverWait(app.d, 5).until(lambda d: d.find_elements(By.CSS_SELECTOR, ".toast"))
+        assert len(app.css_all(".toast")) <= 4, "the notice stack must stay bounded"
+        app.open_tab("My timetable")
+        app.wait_css("section[aria-label='My timetable']")
+        app.xpath("//button[normalize-space()='Export to calendar']").click()
+        dialog = app.wait_css(".dialog")
+        box = app.d.execute_script("""
+            const d = document.querySelector('.dialog');
+            const r = d.getBoundingClientRect();
+            return {top: r.top, bottom: r.bottom, h: r.height,
+                    vh: window.innerHeight};
+        """)
+        assert box["h"] > 40, f"the dialog collapsed to nothing: {box!r}"
+        assert box["top"] < box["vh"], (
+            f"the dialog starts below the fold and cannot be scrolled to: {box!r}")
+    finally:
+        app.d.set_window_size(1500, 1000)
+
+
+def t160_a_second_tab_does_not_undo_your_settings(app):
+    """R92 M8. Prefs are one blob and every tab writes its whole in-memory
+    copy back, so an idle second tab holding an older copy silently wiped
+    tweaks (and the hand-typed helper site) set in the first. Settings now
+    cross tabs; only what a window is LOOKING at stays per-tab."""
+    app.boot("/", seed=True)
+    first = app.d.current_window_handle
+    # Tab A sets a tweak.
+    _flip_tweak(app, "Highlight today's row", "Highlight today's row")
+    app.css(".tabs .tab-exit").click()
+    app.wait_css("section[aria-label='My timetable']")
+    stored = app.d.execute_script("return localStorage.getItem('cmitt.v1.prefs');")
+    assert '"today_highlight_off":true' in stored.replace(" ", ""), stored
+
+    app.d.switch_to.new_window("tab")
+    try:
+        app.d.get(f"{BASE}/")
+        app.wait_css(".header h1")
+        # One ordinary click in the second tab — it never touched the tweaks.
+        app.open_tab("Catalog")
+        app.wait_css("section[aria-label='Catalog']")
+        WebDriverWait(app.d, 5).until(
+            lambda d: '"today_highlight_off":true' in (d.execute_script(
+                "return localStorage.getItem('cmitt.v1.prefs');") or ""
+            ).replace(" ", ""),
+            message="a tab that never touched the tweaks must not undo them")
+    finally:
+        app.d.close()
+        app.d.switch_to.window(first)
+
+
+def t161_a_link_that_empties_your_catalog_says_so(app):
+    """R92 M3. A share link carries the sender's deleted courses, and the
+    reader's whole override store is replaced by it — so courses the reader
+    never deleted vanished from their catalog, their own deletions came back,
+    and nothing said a word: no toast, no banner, permanent after one reload,
+    and the catalog then called them "courses you deleted". Deletions are the
+    third thing a link can destroy (t138 pinned the other two) and they must
+    raise the same sentence and the same Undo.
+
+    The payload is a real one, produced by the app itself: selection ["TOC"]
+    plus a `d` list holding QCOM and MFD."""
+    payload = ("N4IgbiBcCMA0IGMoG0QBUDyBhEBdeA9iviACYqgIECuATgM4CmUIAilhgLIjwK2"
+               "MBDAC6NSAfWFRoAdgCsAFgAMylSoB0i+AHcB9MUwA2jBCPKQAZgINMAvrEo0Gz"
+               "SCE4AxACI9E-YaIlCUnJKqqoa2rr6jEYmolCW1ow2uDZAA")
+    # The reader: one course picked, and one course of their OWN struck out.
+    app.boot("/", selection=["TOC"],
+             overrides={"next_id": 1, "items": [], "credits": [],
+                        "hidden": [{"course": "RDBM", "was_selected": False,
+                                    "created_at": 1754000000000.0}]})
+    app.wait_css("section[aria-label='My timetable']")
+
+    # `+` is a SPACE in a query string; the app percent-encodes its own links.
+    app.d.get(f"{BASE}/?c=TOC&s={payload.replace('+', '%2B')}")
+    app.wait_css("section[aria-label='My timetable']")
+    WebDriverWait(app.d, 10).until(
+        lambda d: "deleted from your catalog" in app.toasts_text(),
+        message=f"a link that empties the catalog must say so: {app.toasts_text()!r}")
+
+    # The catalog note must not tell the reader THEY deleted these.
+    app.open_tab("Catalog")
+    app.wait_css("section[aria-label='Catalog']")
+    notes = app.css_all(".deleted-note")
+    if notes:
+        assert "you deleted" not in notes[0].text, (
+            "the app cannot know who struck these out — a link brought them: "
+            f"{notes[0].text!r}")
+
+    # And it is undoable from the notice, like every other replacement.
+    app.open_tab("My timetable")
+    app.wait_css("section[aria-label='My timetable']")
+    undo = [b for b in app.css_all(".toast button") if b.text.strip() == "Undo"]
+    assert undo, "a replacement the reader did not ask for must be undoable"
 
 
 TESTS = [
@@ -9769,6 +9949,10 @@ TESTS = [
     t155_the_forced_tier_is_spent_by_the_sync_that_uses_it,
     t156_a_pinned_day_can_be_handed_back_to_the_clock,
     t157_twelve_cards_share_a_wide_screens_width,
+    t158_a_notices_undo_reverts_the_action_it_names,
+    t159_a_dialog_is_reachable_however_many_notices_stand,
+    t160_a_second_tab_does_not_undo_your_settings,
+    t161_a_link_that_empties_your_catalog_says_so,
 ]
 
 

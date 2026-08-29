@@ -360,7 +360,7 @@ The **"Your changes"** panel (on My timetable, and the same list inside *My
 data*) shows every alteration as **official → yours**, grouped by what kind of
 change it is, with a count per group:
 
-> Courses you added · Courses you deleted · Moved to other times · Moved to
+> Courses you added · Deleted courses · Moved to other times · Moved to
 > other rooms · Moved to another time and room · Meetings you added ·
 > Meetings you removed · Credits you set
 
@@ -994,7 +994,7 @@ tested on their own.
 
 **Tested like it matters:** 169 native tests — including a synthetic CMI
 website the tests generate themselves, with other semesters, other time
-formats, renamed halls and ten different kinds of broken page — plus 157
+formats, renamed halls and ten different kinds of broken page — plus 161
 end-to-end browser tests driving the real app in a real browser: drag & drop,
 touch gestures, keyboard-only flows, storage corruption, and a stand-in CMI
 that lets the true sync path be exercised end to end.

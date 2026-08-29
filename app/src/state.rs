@@ -240,7 +240,13 @@ impl Filters {
             });
         }
         for f in &self.flags {
-            parts.push(f.clone());
+            // Storage keys, translated the way the filter chips translate
+            // them — the sheet must name the filter the reader picked,
+            // never the raw key.
+            parts.push(match f.as_str() {
+                "custom" => "has custom time".to_string(),
+                other => other.to_string(),
+            });
         }
         for c in &self.courses {
             parts.push(c.clone());
@@ -705,6 +711,18 @@ pub struct Toast {
     pub id: u64,
     pub text: String,
     pub undo: bool,
+    /// How tall the undo stack was the moment this notice was raised — the
+    /// notice's claim on history (R92 M2).
+    ///
+    /// The Undo button used to call `App::undo`, which pops whatever is on
+    /// TOP. Two undoable actions inside one notice's lifetime (adding two
+    /// courses six seconds apart is enough) and the first notice's button
+    /// silently reverted the SECOND action: the reply even read "Undid: add
+    /// ISS" under a sentence about TOC. The button is now only offered while
+    /// the entry it names is still the top of the stack; the moment another
+    /// action lands, this notice keeps its words and loses its button, which
+    /// is the honest state — it can no longer do what it says.
+    pub undo_at: Option<usize>,
 }
 
 thread_local! {
@@ -1219,7 +1237,26 @@ impl App {
     fn push_toast(&self, text: String, undo: bool) -> u64 {
         let id = self.toast_seq.get_untracked() + 1;
         self.toast_seq.set(id);
-        self.toasts.update(|t| t.push(Toast { id, text, undo }));
+        let undo_at = undo.then(|| self.undo_stack.with_untracked(|s| s.undo.len()));
+        self.toasts.update(|t| {
+            t.push(Toast {
+                id,
+                text,
+                undo,
+                undo_at,
+            });
+            // Bounded (R92 M1). With "Notices stay for → Until dismissed"
+            // there is no timer at all, and even the shipped six seconds is
+            // long enough to pile a dozen notices up on a phone; an
+            // unbounded stack reserved more height than the screen has and
+            // pushed every dialog out of reach. The oldest goes first — it
+            // has been readable the longest — and the band cap in
+            // `ui::Toasts` covers whatever is still standing.
+            const MAX_STACK: usize = 4;
+            while t.len() > MAX_STACK {
+                t.remove(0);
+            }
+        });
         // The notice-life tweak; 0 means "until dismissed" — no timer at
         // all, the ✕ and hover-hold remain the ways out. Untracked: a toast
         // takes the life the moment it is pushed and keeps it.
@@ -1794,6 +1831,12 @@ impl App {
                     && p.halls_view.is_none()
                     && p.plan_view.is_none()
                     && p.shorten_service.is_none()
+                    // The helper site is the ONLY setting a reader types by
+                    // hand, and it was the one field this gate never read —
+                    // so "Import everything" skipped its own confirm and the
+                    // file's `null` wiped the URL in silence, under a button
+                    // whose title promises it asks first (R92 M12).
+                    && p.helper_site.is_none()
                     && !p.changes_mine_only
                     // Turning update checks off is a decision about the app
                     // itself, and one nobody makes by accident — an import

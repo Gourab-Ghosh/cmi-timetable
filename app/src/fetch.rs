@@ -460,7 +460,17 @@ fn log(app: &App, tier: &str, url: &str, result: &Result<FetchOk, String>) {
 /// doesn't get misreported as "unreachable".
 fn looks_like_cmi(html: &str) -> bool {
     let lower = html.to_ascii_lowercase();
-    lower.contains("chennai mathematical institute") || lower.contains("cmi.ac.in")
+    if lower.contains("chennai mathematical institute") {
+        return true;
+    }
+    // The hostname ALONE is not a marker: a relay that fails to fetch prints
+    // its own error page and echoes the URL it was asked for, so every relay
+    // failure "looked like CMI" and the app announced that CMI had changed
+    // its page and "the app needs an update" — about a page CMI had served
+    // perfectly well and the app had never seen (R92 M9). The hostname now
+    // has to arrive with something a real page carries.
+    lower.contains("cmi.ac.in")
+        && (lower.contains("<table") || lower.contains("timetable") || lower.contains("time table"))
 }
 
 /// Parse a fetched page pair through the shared gate.
@@ -575,8 +585,24 @@ pub fn adopt(app: &App, new_snapshot: Snapshot, announce: bool, from: Adoption) 
 
     let merge = ttcore::merge::merge_overrides(&old, &new_snapshot, &selection, &overrides);
 
+    // The merge rewrites the override store OUTSIDE the undo machinery, and
+    // every entry already on the stack still carries the PRE-merge store. So
+    // any later undo — even undoing something as unrelated as a search-box
+    // edit — restored an override the merge had deliberately reconciled, and
+    // the class was then drawn twice on the grid and twice in the exported
+    // calendar, persisted, surviving a reload (R92 M6). History that can no
+    // longer be applied honestly is not history: the reconciliation is the
+    // new floor, so the stack is retired at the moment it happens. The
+    // cross-tab adopt path already does this (state.rs).
+    let reconciled = merge.overrides != app.overrides.get_untracked();
     app.overrides.set(merge.overrides);
     app.persist_overrides();
+    if reconciled {
+        app.undo_stack.update(|s| {
+            s.undo.clear();
+            s.redo.clear();
+        });
+    }
 
     app.snapshot.set(new_snapshot.clone());
     match storage::save_snapshot(&new_snapshot) {
@@ -1129,7 +1155,9 @@ pub async fn run_update(app: App, manual: bool) {
     // The probe is gated by the same tweak as the direct tier: a no-cors
     // request to cmi.ac.in can raise the very local-network prompt the
     // tweak exists to prevent, so forgetting it here would defeat the tweak.
-    let cmi_answers = if online && !gate_failed_any && !direct_answered && !direct_off {
+    // `gate_failed_direct`: a proxy-only gate failure must NOT skip the probe,
+    // or the app has nothing true left to say about it (R92 M9).
+    let cmi_answers = if online && !gate_failed_direct && !direct_answered && !direct_off {
         progress(&app, "Working out what went wrong…");
         // `uncached`, like every other request that must reflect right now
         // rather than a cache: a probe answered from a disk cache would say
@@ -1152,7 +1180,13 @@ pub async fn run_update(app: App, manual: bool) {
          happening, the app needs an update. Until then, CMI's own timetable \
          page still works in a browser: www.cmi.ac.in/practical/timetable.php"
             .to_string()
-    } else if gate_failed_any {
+    } else if gate_failed_direct {
+        // `gate_failed_direct`, never `gate_failed_any` (R92 M9): a relay's
+        // own error page failing the gate says nothing about CMI's page, and
+        // telling a student their app needs an update because a free proxy
+        // was rate-limited sends them to look for a fix that does not exist.
+        // A proxy-only gate failure falls through to the reachability
+        // diagnosis below, which is the true story.
         format!(
             "CMI's page looks different from what this app expects, so your saved timetable \
              from {saved_date} was kept. Nothing was lost. If this keeps happening, the \

@@ -229,7 +229,13 @@ async fn attempt(
                 via: via.map(str::to_string),
             })
             .map_err(Failure::Service),
-        Err(e) => Err(Failure::Transport(unreachable_msg(service, &e))),
+        // `via` matters here (R92 M10): a status that came from a HELPER
+        // SITE must not be reported as the shortener's answer. A reader whose
+        // ad blocker stops TinyURL, with a relay answering 503, was told
+        // "TinyURL answered with an error (HTTP 503)" — of a service that was
+        // never reached. Attributing the status to the route that produced it
+        // is the whole guarantee `unreachable_msg` exists to keep.
+        Err(e) => Err(Failure::Transport(unreachable_msg_via(service, via, &e))),
     }
 }
 
@@ -243,6 +249,33 @@ async fn attempt(
 /// to prevent. The raw string still goes to the console for whoever is
 /// debugging; the screen gets English.
 fn unreachable_msg(service: &Service, detail: &str) -> String {
+    unreachable_msg_via(service, None, detail)
+}
+
+/// The same reason, with the route that actually produced it named.
+///
+/// A shortener reached THROUGH a helper site can fail in two different
+/// places, and the sentence must say which: the reader can change a helper
+/// site, and cannot do anything at all about a shortener that was never
+/// contacted.
+fn unreachable_msg_via(service: &Service, via: Option<&'static str>, detail: &str) -> String {
+    if let Some(relay) = via
+        && detail.contains("HTTP")
+    {
+        leptos::logging::log!("cmitt: {} via {relay} unreachable: {detail}", service.name);
+        // The advice tail is part of the promise too: naming the right
+        // culprit must not cost the reader the way out (t110).
+        return format!(
+            "{} couldn't be reached directly, and the helper site {relay} answered \
+             with an error ({detail}). Your link still works as it is — try another \
+             service, or copy the full link instead.",
+            service.name
+        );
+    }
+    unreachable_msg_direct(service, detail)
+}
+
+fn unreachable_msg_direct(service: &Service, detail: &str) -> String {
     leptos::logging::log!("cmitt: {} unreachable: {detail}", service.name);
     // A service that ANSWERED was reached, and saying otherwise sends the
     // reader to check their wifi over a 429 or a 403 — the one thing they
