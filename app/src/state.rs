@@ -711,8 +711,8 @@ pub struct Toast {
     pub id: u64,
     pub text: String,
     pub undo: bool,
-    /// How tall the undo stack was the moment this notice was raised — the
-    /// notice's claim on history (R92 M2).
+    /// WHICH history entry this notice speaks for (R92 M2, corrected in R93
+    /// R1 — it used to be the stack's height, which is not an identity).
     ///
     /// The Undo button used to call `App::undo`, which pops whatever is on
     /// TOP. Two undoable actions inside one notice's lifetime (adding two
@@ -722,7 +722,7 @@ pub struct Toast {
     /// the entry it names is still the top of the stack; the moment another
     /// action lands, this notice keeps its words and loses its button, which
     /// is the honest state — it can no longer do what it says.
-    pub undo_at: Option<usize>,
+    pub undo_at: Option<u64>,
 }
 
 thread_local! {
@@ -986,6 +986,14 @@ pub struct MoveMode {
 
 #[derive(Clone)]
 pub struct UndoEntry {
+    /// This entry's identity, from a counter that never repeats (R93 R1).
+    ///
+    /// A notice's Undo used to be gated on the stack's HEIGHT, which is not
+    /// an identity: undo-then-act returns the stack to the same height, and
+    /// past the depth cap eviction keeps the height CONSTANT, so every old
+    /// notice stayed armed and reverted whatever happened to be on top. A
+    /// number that is only ever handed out once cannot do that.
+    pub seq: u64,
     pub label: String,
     pub selection: Vec<String>,
     pub overrides: OverridesStore,
@@ -1106,6 +1114,8 @@ pub struct App {
     pub undo_stack: RwSignal<UndoStack>,
     pub toasts: RwSignal<Vec<Toast>>,
     pub toast_seq: RwSignal<u64>,
+    /// Hands out `UndoEntry::seq`. Monotonic, never reused (R93 R1).
+    pub undo_seq: RwSignal<u64>,
     pub banner: RwSignal<Option<Banner>>,
     pub conflicts: RwSignal<Vec<Conflict>>,
     /// The conflicts banner, waved away for THIS session only. Never
@@ -1230,6 +1240,28 @@ impl App {
         self.push_toast(text.into(), false)
     }
 
+    /// One more identity for the undo history. Never reused.
+    fn next_undo_seq(&self) -> u64 {
+        let next = self.undo_seq.get_untracked().saturating_add(1);
+        self.undo_seq.set(next);
+        next
+    }
+
+    /// Undo exactly the entry a notice names — or nothing.
+    ///
+    /// The reactive gate on the button is not enough on its own: a click can
+    /// land a frame after another action pushed onto the stack, and then the
+    /// pressed button would revert that instead (R93 R1).
+    pub fn undo_entry(&self, seq: u64) {
+        if self
+            .undo_stack
+            .with_untracked(|s| s.undo.last().map(|e| e.seq))
+            == Some(seq)
+        {
+            self.undo();
+        }
+    }
+
     pub fn toast_undo(&self, text: impl Into<String>) {
         self.push_toast(text.into(), true);
     }
@@ -1237,7 +1269,12 @@ impl App {
     fn push_toast(&self, text: String, undo: bool) -> u64 {
         let id = self.toast_seq.get_untracked() + 1;
         self.toast_seq.set(id);
-        let undo_at = undo.then(|| self.undo_stack.with_untracked(|s| s.undo.len()));
+        let undo_at = undo
+            .then(|| {
+                self.undo_stack
+                    .with_untracked(|s| s.undo.last().map(|e| e.seq))
+            })
+            .flatten();
         self.toasts.update(|t| {
             t.push(Toast {
                 id,
@@ -1245,17 +1282,13 @@ impl App {
                 undo,
                 undo_at,
             });
-            // Bounded (R92 M1). With "Notices stay for → Until dismissed"
-            // there is no timer at all, and even the shipped six seconds is
-            // long enough to pile a dozen notices up on a phone; an
-            // unbounded stack reserved more height than the screen has and
-            // pushed every dialog out of reach. The oldest goes first — it
-            // has been readable the longest — and the band cap in
-            // `ui::Toasts` covers whatever is still standing.
-            const MAX_STACK: usize = 4;
-            while t.len() > MAX_STACK {
-                t.remove(0);
-            }
+            // NOTHING IS THROWN AWAY HERE (R93 R2). The R92 cap evicted the
+            // oldest at push time, and one sync can push several notices in a
+            // single pass — so the report that the app had DISCARDED one of
+            // the reader's own changes was destroyed before its first frame,
+            // on a first visit, with no other surface saying it. What bounds
+            // the rail now is how much of it is RENDERED (`ui::Toasts`) and
+            // its own max-height, neither of which loses a word.
         });
         // The notice-life tweak; 0 means "until dismissed" — no timer at
         // all, the ✕ and hover-hold remain the ways out. Untracked: a toast
@@ -1588,6 +1621,7 @@ impl App {
 
     fn push_undo(&self, label: &str) {
         let entry = UndoEntry {
+            seq: self.next_undo_seq(),
             label: label.to_string(),
             selection: self.selection.get_untracked(),
             overrides: self.overrides.get_untracked(),
@@ -1614,6 +1648,9 @@ impl App {
     /// The state captured right now, for moving between the undo/redo stacks.
     fn current_entry(&self, label: &str) -> UndoEntry {
         UndoEntry {
+            // A fresh identity: a redone action is not the entry that was
+            // undone, and a notice naming the old one must not claim it.
+            seq: self.next_undo_seq(),
             label: label.to_string(),
             selection: self.selection.get_untracked(),
             overrides: self.overrides.get_untracked(),
@@ -1720,22 +1757,26 @@ impl App {
     /// corrupt key bails the whole adoption; the next boot's recovery
     /// banner owns that story.
     ///
-    /// The persists at the end write back the exact bytes storage already
-    /// holds, so no storage event fires in the other tab and two idle tabs
-    /// cannot echo.
+    /// Nothing is persisted here, deliberately (R93 M2). The premise that
+    /// once stood in this comment — "the persists write back the exact bytes
+    /// storage already holds" — is false whenever a storage event arrives
+    /// mid-batch: this tab then reads a HALF-applied store and writing it
+    /// back destroyed the other tab's finished work. Reading only is also
+    /// self-healing, because the next key's storage event is already queued
+    /// and brings us here again with the whole batch visible.
     pub fn adopt_user_data(&self) -> bool {
         use crate::storage::Loaded;
-        let selection: Vec<String> = match storage::load(storage::KEY_SELECTION) {
+        let selection: Vec<String> = match storage::peek(storage::KEY_SELECTION) {
             Loaded::Value(v) => v,
             Loaded::Missing => Vec::new(),
             Loaded::Corrupt(_) => return false,
         };
-        let overrides: OverridesStore = match storage::load(storage::KEY_OVERRIDES) {
+        let overrides: OverridesStore = match storage::peek(storage::KEY_OVERRIDES) {
             Loaded::Value(v) => v,
             Loaded::Missing => OverridesStore::default(),
             Loaded::Corrupt(_) => return false,
         };
-        let customs: CustomStore = match storage::load(storage::KEY_CUSTOM) {
+        let customs: CustomStore = match storage::peek(storage::KEY_CUSTOM) {
             Loaded::Value(v) => v,
             Loaded::Missing => CustomStore::default(),
             Loaded::Corrupt(_) => return false,
@@ -1753,9 +1794,18 @@ impl App {
         self.selection.set(selection);
         self.overrides.set(overrides);
         self.customs.set(customs);
-        self.persist_selection();
-        self.persist_overrides();
-        self.persist_customs();
+        // NO write-back (R93 M2). An adopting tab holds nothing storage does
+        // not already hold, so persisting here can only destroy: a storage
+        // event arrives after the FIRST of a batch of keys has landed, this
+        // tab reads a half-applied store, and the three persists then wrote
+        // its stale half back over the other tab's finished work. One click
+        // was enough — "Added SVA to your timetable" with the meeting the
+        // student had just typed already gone, and "Deleted TOC — restore it
+        // from Your changes" with no such change recorded anywhere. A torn
+        // adoption heals itself instead: the next key's storage event is
+        // already queued, and this runs again with the whole batch visible.
+        // Undo's deliberate "keep mine" is unaffected — it goes through
+        // `apply_entry`, which persists on its own.
         self.sync_url();
         true
     }

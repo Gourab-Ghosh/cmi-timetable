@@ -2198,6 +2198,13 @@ details.facet .menu .menu-empty { margin: 0.2rem 0 0; }
   gap: 0.4rem;
   width: min(480px, calc(100vw - 2rem));
   pointer-events: none;
+  /* Never taller than what `--toast-band` reserves for it (R93 R6): an
+     unbounded rail overlapped the dialog it had just made room for, buried
+     its title and its answer buttons, and — being on top — swallowed the
+     clicks aimed at them. Scrolls within its own bounds instead. */
+  max-height: 33dvh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 @media (min-width: 900px) { .toasts { bottom: 1.2rem; } }
 /* While a popup is open, the stack moves to the top of the screen. Toasts

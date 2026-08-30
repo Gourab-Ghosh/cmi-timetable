@@ -814,7 +814,7 @@ regenerates the .ics golden.
   NOWHERE on this page while still counting toward the credit total.
 - "Your changes" groups are headed by `.cg-head` (colour rail + small caps
   + count), coloured by `OwnChange::tone()`. See §4.
-- Tests: 169 native + 161/161 e2e green (as of R92; the native count from
+- Tests: 171 native + 164/164 e2e green (as of R93; the native count from
   `deploy.sh`'s own in-container run — 49+18+3+9+25+27+28+10).
 - **The e2e suite mocks the relays, so it can never tell you a real one has
   died** — which is exactly how R84's outage reached a user. Two probes cover
@@ -6960,6 +6960,71 @@ a stationary pointer, print keys missing for filtered sheets, the free-hall
 finder at a blank time, Escape over a confirm leaving developer mode, build-info
 rows never refreshing, "Update now" landing on the old build, a full
 localStorage saying "Saved.", and others. They are real and verified.
+
+### R93 — the second hunt: the most dangerous code was last round's fixes
+
+The ask: "check for another round for any possible bugs… make sure there are no
+bugs after this check", plus "check it visually, functionally, and
+programmatically". Repeating R92's lenses would have re-swept the same ground,
+so R93 hunted only where nobody had looked: **the R92 patches themselves**
+(three lenses), untrusted input, core-crate property/fuzz testing, time and
+timezone, races, scale, cross-browser, error recovery as a class, visual
+regression, the whole student journey, the 25 unverified R92 leads, and whether
+the documents still tell the truth.
+
+42 agents, 3 session-limit deaths across the round, restored from partials every
+time. **69 findings → 26 confirmed, 0 refuted.** Deliverable:
+`.workagents/r93/findings/TRIAGE.md`, which answers "is this safe to publish?"
+in its own section.
+
+**The headline: four of the five launch-deciding defects were in code written
+the round before.** R1 — M2 gated a notice's Undo on the undo stack's HEIGHT,
+which is not an identity, so a stale notice re-armed and reverted a different
+course (`UndoEntry` now carries a never-reused `seq`; `App::undo_entry` pops
+only that entry). R2 — M1's cap of 4 evicted at PUSH time, and one sync can
+raise several notices, so the only report the app ever makes that it DISCARDED
+the reader's own work was destroyed before its first frame; the cap now folds
+behind an "N earlier notices above" line and the merge notices are aggregated.
+R3/R4 — M9's rebranch was both incomplete and harmful: the real defect was the
+MARKER, not the branch, so the branches are reverted and `looks_like_cmi` now
+requires something a URL echo cannot carry (the institute's name, or the
+hostname with `<pre` — never "timetable", which is IN the URL being echoed).
+
+**New defects fixed this round.** M1 — the Share dialog hands out `?c=` on an
+empty planner and that link decoded to an empty, UNDAMAGED selection, so it
+replaced the reader's whole timetable permanently; a link naming no courses now
+withholds the selection write while still applying a deletions-only payload.
+M2 — `adopt_user_data` persisted what it had just read, so a storage event
+arriving mid-batch made an idle tab write its stale half over the other tab's
+finished work ("Added SVA" with the meeting just typed already gone); it reads
+only now, and heals on the next event. M3 — a double-tap on "Delete all app
+data" wiped the browser because the confirm mounts under the finger; the
+confirm ignores answers for 350 ms, scoped to TOUCH (the first version guarded
+every input and three tests caught it — a decisive reader would have had to
+press twice for everything). M4 — a passive `storage::peek` so a second tab
+cannot quarantine and delete a corrupt blob the recovery banner is built from.
+M9 — the validation gate asked "does this time run backwards?" of the slot grid
+only, so one mistyped digit on CMI's halls page put a class ending before it
+starts into the snapshot; meetings and hall bookings are asked too. M10 (+R92
+S12) — a modal now outranks keyboard move mode in the Escape chain and ends it
+on open. M12–M14 — three sentences in the PUBLIC documents were untrue about
+privacy and about the safety gate; corrected, and `core/tests/docs_truth_tests.rs`
+now fails the build if any of them returns (this wording has been retired three
+rounds running).
+
+Tests: t162 (a notice's Undo names one action and only that one), t163 (a link
+naming no courses takes nothing away), t164 (an adopting tab never writes back
+what it read), plus two doc-guard native tests. Registry 161 → **164 e2e**,
+169 → **171 native**. fmt + clippy clean.
+
+**STILL OPEN:** R93's SHOULD/CAN-WAIT sets and R92's 20 SHOULD-FIX backlog
+(planned in `.workagents/r93/FIXQUEUE.md`). R93 §3 also carries M5 (a course
+code containing `,` or `%` is deleted by the app's own URL), M6 (a class moved
+onto a slot where it already meets is drawn and exported twice), M7 ("Only when
+I ask" overridden after "Clear timetable"), M8 (a fast device clock freezes the
+header on "Synced just now"), and M11 (a storage-full promise that reopening
+shows the older copy, when it shows the welcome screen) — all real, all still
+to do.
 
 ## 8. Open bugs — found, confirmed, NOT fixed (do not delete)
 

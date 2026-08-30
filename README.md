@@ -57,8 +57,9 @@ parallel**, and the proxy tier **races all relays at once** — the first
 valid response wins:
 
 0. **your own helper site**, if one is set in My data — asked alone first,
-   with a 2.5 s head start, so a reader who has one never hands CMI's address
-   to a public relay at all
+   with a 2.5 s head start, so an ordinary sync through it never reaches a
+   public relay; the relays are brought in behind it only if it has not
+   answered by then (the `public_relays_off` tweak makes it the only route)
 1. **proxy** — seven public CORS relays raced in parallel (see `app/src/fetch.rs`)
 2. **direct** — a cheap 4 s attempt at the CMI URLs, only if no relay answered
 3. **from CMI's page in your browser** — My data → "Load it from CMI's page",
@@ -152,8 +153,9 @@ unreachability. (A loose marker check runs only on proxy responses, only
 after a gate failure, to tell proxy error pages apart from real CMI drift.)
 
 A fetched snapshot replaces the stored one **only after the validation gate
-passes** (≥ 10 branch grids, ≥ 40 courses, ≥ 90 % legend resolution, sane
-hall grid and slots, matching semester labels). Any failure leaves the stored
+passes** (enough branch grids and courses to be a real page — the floors are
+deliberately low garbage detectors, not semester-size estimates — ≥ 90 %
+legend resolution, sane hall grid and slots, matching semester labels). Any failure leaves the stored
 snapshot untouched and is explained in plain language. **Fail closed,
 always.**
 

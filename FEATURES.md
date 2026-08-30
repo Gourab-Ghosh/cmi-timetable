@@ -22,7 +22,7 @@ server to trust, and nothing to install.
 | **Clashes are shown, never blocked** | You are told immediately and clearly; you decide |
 | **Take it with you** | Share links, `.ics` calendar export, and a printed sheet for every section |
 | **Works offline** | The app itself opens with no connection after one normal visit, and your timetable is already in the browser — only syncing with CMI needs the internet |
-| **Private by construction** | 100% client-side, no accounts, no analytics, no cookies, nothing sent anywhere |
+| **Private by construction** | 100% client-side, no accounts, no analytics, no cookies, no tracking. It reaches the network for three things only, all listed in My data: fetching CMI's two pages, asking this site whether a newer version exists, and — only when you ask for one — making a share link short |
 
 ---
 
@@ -728,8 +728,11 @@ Under **My data → Getting CMI's timetable**:
   route cannot stop working.
 - **Your own helper site** — any service that fetches a page and lets other
   sites read the answer. Put `{url}` where CMI's address should go. It is
-  asked **first and alone**, so once you have one, no public relay is asked at
-  all.
+  asked **first, and alone for the first 2.5 seconds** — long enough that an
+  ordinary sync through your own helper site never reaches a public relay. If
+  it has not answered by then the public relays are brought in behind it, so
+  a helper site that goes down cannot strand you. To make it truly the only
+  route, untick **Use public helper sites** in developer-mode tweaks.
 
 The app asks **one** helper site at a time: the leading one alone, with the
 others brought in only if it fails or goes quiet. It remembers which route
@@ -949,7 +952,7 @@ itself has been published. If there is one, it **asks**.
   read: your selection, your changes, your own courses, your preferences, and
   the timetable CMI published.
 - **My data** is a complete inventory with one-click removal for each piece —
-  nothing is hidden from you, and nothing is sent anywhere.
+  nothing is hidden from you, and it names every request the app can make.
 - Only the stored timetable is a **cache**; it can be fetched again. Your
   selection, your changes and your own courses **exist nowhere else**, and the
   app treats them accordingly: a save that fails says so, and a browser short
@@ -975,12 +978,16 @@ itself has been published. If there is one, it **asks**.
   times slower than a desktop, the Master grid went from 114 ms to 67 ms and
   Halls from 116 ms to 86 ms — under the tenth of a second that reads as
   "instant".
-- No accounts, no analytics, no cookies, no tracking. The only network
-  requests it ever makes are for CMI's two timetable pages — through a helper
-  site (yours if you set one), or straight from cmi.ac.in if none answers, or
-  from the pages you hand it yourself. A helper site learns which
-  CMI page was asked for and nothing else: your courses, your changes and your
-  own courses never leave your browser.
+- No accounts, no analytics, no cookies, no tracking. The app reaches the
+  network for exactly three things, and the *My data* dialog lists all three:
+  fetching CMI's two timetable pages; asking this site once a day whether a
+  newer version of the app has been published; and making a share link short,
+  which happens only when you press the button and is the one request that
+  carries your timetable off this device. CMI's pages are fetched through a
+  helper site (yours if you set one), or straight from cmi.ac.in if none
+  answers, or from pages you hand over yourself. A helper site learns which
+  CMI page was asked for and nothing else — your selection, your changes and
+  your own courses stay in this browser unless you make a short link.
 
 ---
 
@@ -994,7 +1001,7 @@ tested on their own.
 
 **Tested like it matters:** 169 native tests — including a synthetic CMI
 website the tests generate themselves, with other semesters, other time
-formats, renamed halls and ten different kinds of broken page — plus 161
+formats, renamed halls and ten different kinds of broken page — plus 164
 end-to-end browser tests driving the real app in a real browser: drag & drop,
 touch gestures, keyboard-only flows, storage corruption, and a stand-in CMI
 that lets the true sync path be exercised end to end.

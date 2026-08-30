@@ -44,6 +44,30 @@ pub enum Loaded<T> {
     Corrupt(String),
 }
 
+/// Read a key WITHOUT quarantining it (R93 M4).
+///
+/// `load` moves an unreadable blob to a `cmitt.corrupt.*` backup and removes
+/// the original — the right thing at boot, where a banner then tells the
+/// student what happened. It is the wrong thing for a tab that is merely
+/// LOOKING: a second tab reacting to a storage event ran `load`, deleted the
+/// corrupt key out from under the tab that owned it, and so also deleted the
+/// evidence the next boot's recovery banner is built from — "Nothing was
+/// deleted" stopped being true because a background reader had deleted it.
+/// Every passive reader uses this instead; the bad blob then waits for the
+/// boot that can explain it.
+pub fn peek<T: DeserializeOwned>(key: &str) -> Loaded<T> {
+    let Some(storage) = raw() else {
+        return Loaded::Missing;
+    };
+    let Ok(Some(text)) = storage.get_item(key) else {
+        return Loaded::Missing;
+    };
+    match serde_json::from_str::<T>(&text) {
+        Ok(value) => Loaded::Value(value),
+        Err(_) => Loaded::Corrupt(format!("(left in place under {key})")),
+    }
+}
+
 pub fn load<T: DeserializeOwned>(key: &str) -> Loaded<T> {
     let Some(storage) = raw() else {
         return Loaded::Missing;

@@ -325,6 +325,43 @@ fn run_gate(
             );
         }
     }
+    // The MEETINGS and the HALL BOOKINGS get the same question (R93 M9). The
+    // rule used to ask it of the slot GRID alone, so one mistyped digit in a
+    // heading on CMI's lecturehalls page — a booking that ends before it
+    // starts — passed the gate and went into the stored snapshot, where it
+    // became a class the app drew, counted and exported with a negative
+    // duration. The backup importer has always asked this of all three
+    // collections (`export.rs`'s `slot_ok`); the front door was the one that
+    // did not. Failing the gate is right, and matches what the twin rules do:
+    // a snapshot with a nonsense time is not a snapshot to keep.
+    let mut bad_times = 0usize;
+    let mut first_bad = String::new();
+    let mut note_bad = |what: &str, s: &crate::model::Slot| {
+        bad_times += 1;
+        if first_bad.is_empty() {
+            first_bad = format!("{what} {} runs backwards or past midnight", s.label());
+        }
+    };
+    for c in &joined.courses {
+        for m in &c.meetings {
+            if m.slot.start_min >= m.slot.end_min || m.slot.end_min > 1440 {
+                note_bad(&format!("{}'s class", c.code), &m.slot);
+            }
+        }
+    }
+    for b in &joined.hall_bookings {
+        if b.slot.start_min >= b.slot.end_min || b.slot.end_min > 1440 {
+            note_bad("a hall booking", &b.slot);
+        }
+    }
+    if bad_times > 0 {
+        slots_ok = false;
+        detail = if bad_times == 1 {
+            first_bad
+        } else {
+            format!("{first_bad} (and {} more like it)", bad_times - 1)
+        };
+    }
     if detail.is_empty() {
         detail = format!(
             "{} slot columns, all valid and increasing",

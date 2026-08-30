@@ -532,6 +532,24 @@ fn on_key_down(app: App, ev: &web_sys::KeyboardEvent) {
             ev.prevent_default();
             return;
         }
+        // A DIALOG OR A CONFIRM OUTRANKS MOVE MODE (R93 M10, and R92 S12,
+        // which is the same chain). Opening a modal used to leave keyboard
+        // move mode armed behind it, so the arrows and Enter kept moving a
+        // chip the reader could not see, and Escape cancelled that invisible
+        // move instead of closing the question in front of them — and over a
+        // confirm inside developer mode it fell all the way through to the
+        // exit, stranding the question over the planner. The thing on top is
+        // the thing Escape answers.
+        if app.confirm.with_untracked(|c| c.is_some()) {
+            app.confirm.set(None);
+            ev.prevent_default();
+            return;
+        }
+        if app.dialog.with_untracked(|d| d.is_some()) {
+            app.dismiss_dialog();
+            ev.prevent_default();
+            return;
+        }
         if app.move_mode.with_untracked(|m| m.is_some()) {
             app.move_mode.set(None);
             app.say("Move cancelled.");

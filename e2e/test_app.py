@@ -9698,7 +9698,12 @@ def t159_a_dialog_is_reachable_however_many_notices_stand(app):
         # However many were raised, the stack is bounded and the band it
         # reserves can never take the screen.
         WebDriverWait(app.d, 5).until(lambda d: d.find_elements(By.CSS_SELECTOR, ".toast"))
-        assert len(app.css_all(".toast")) <= 4, "the notice stack must stay bounded"
+        # The rail RENDERS at most four and folds the rest behind a line
+        # saying how many (R93 R2) — nothing is destroyed any more, so count
+        # the notices, not the fold marker.
+        shown = [t for t in app.css_all(".toast")
+                 if "toast-more" not in (t.get_attribute("class") or "")]
+        assert len(shown) <= 4, "the notice rail must stay bounded"
         app.open_tab("My timetable")
         app.wait_css("section[aria-label='My timetable']")
         app.xpath("//button[normalize-space()='Export to calendar']").click()
@@ -9789,6 +9794,114 @@ def t161_a_link_that_empties_your_catalog_says_so(app):
     app.wait_css("section[aria-label='My timetable']")
     undo = [b for b in app.css_all(".toast button") if b.text.strip() == "Undo"]
     assert undo, "a replacement the reader did not ask for must be undoable"
+
+
+def t162_a_notices_undo_names_one_action_and_only_that_one(app):
+    """R93 R1. R92's M2 gated the notice's Undo on the undo stack's HEIGHT,
+    which is not an identity: undo-then-act returns the stack to the same
+    height, so a stale notice re-armed itself and reverted a different course.
+    Entries carry a sequence number now, and a notice speaks for exactly one."""
+    app.boot("/", seed=True)
+    app.open_tab("Master grid")
+    app.wait_css("section[aria-label='Master grid'] table.tt")
+
+    def undo_buttons():
+        return [b for b in app.css_all(".toast button") if b.text.strip() == "Undo"]
+
+    def add(code):
+        chip = app.chip(code, "section[aria-label='Master grid']")
+        app.d.execute_script("arguments[0].scrollIntoView({block:'center'});", chip)
+        chip.click()
+
+    add("TOC")
+    app.wait_toast("Added TOC")
+    WebDriverWait(app.d, 5).until(lambda d: undo_buttons())
+    # Undo from the HEADER, which returns the stack to the height it had when
+    # the TOC notice was raised — the exact shape that used to re-arm it.
+    app.xpath("//button[contains(., 'Undo')][not(ancestor::div[contains(@class,'toast')])]").click()
+    WebDriverWait(app.d, 5).until(
+        lambda d: "TOC" not in (d.execute_script(
+            "return localStorage.getItem('cmitt.v1.selection');") or ""))
+    add("ISS")
+    app.wait_toast("Added ISS")
+    # The TOC notice may still be on screen, but it must NOT offer an Undo:
+    # the action it names is gone from history.
+    time.sleep(0.6)
+    texts = [t.text for t in app.css_all(".toast")]
+    stale = [t for t in app.css_all(".toast")
+             if "TOC" in t.text and t.find_elements(By.TAG_NAME, "button")]
+    for t in stale:
+        assert not [b for b in t.find_elements(By.TAG_NAME, "button")
+                    if b.text.strip() == "Undo"], \
+            f"a stale notice re-armed its Undo: {texts!r}"
+    sel = app.d.execute_script("return localStorage.getItem('cmitt.v1.selection');")
+    assert "ISS" in sel, sel
+
+
+def t163_a_link_that_names_no_courses_takes_nothing_away(app):
+    """R93 M1. The Share dialog hands out `?c=` on an empty planner with an
+    enabled Copy button; that link decoded to an empty, UNDAMAGED selection,
+    so every guard walked past it and it replaced the reader's whole timetable
+    permanently, under a toast claiming it had brought courses."""
+    app.boot("/", selection=["TOC", "ISS", "NLP"])
+    app.wait_css("section[aria-label='My timetable']")
+    before = app.d.execute_script("return localStorage.getItem('cmitt.v1.selection');")
+
+    for empty in ("/?c=", "/?c=%20", "/?c=,"):
+        app.d.get(f"{BASE}{empty}")
+        app.wait_css(".header h1")
+        time.sleep(0.8)
+        after = app.d.execute_script("return localStorage.getItem('cmitt.v1.selection');")
+        assert after == before, f"{empty} emptied the timetable: {before} -> {after}"
+        assert "replaced the courses" not in app.toasts_text(), \
+            f"{empty} claimed to have replaced courses: {app.toasts_text()!r}"
+
+    # And it still survives the reload that used to make it permanent.
+    app.d.refresh()
+    app.wait_css(".header h1")
+    assert app.d.execute_script(
+        "return localStorage.getItem('cmitt.v1.selection');") == before
+
+
+def t164_an_adopting_tab_never_writes_back_what_it_read(app):
+    """R93 M2. A storage event can arrive after the FIRST key of a batch has
+    landed; the adopting tab then read a half-applied store and PERSISTED its
+    stale half over the other tab's finished work — "Added SVA to your
+    timetable" with the meeting just typed already gone. An adopting tab holds
+    nothing storage does not, so it writes nothing back."""
+    app.boot("/?c=TOC", selection=["TOC"])
+    app.wait_css("section[aria-label='My timetable']")
+    first = app.d.current_window_handle
+    app.d.switch_to.new_window("tab")
+    try:
+        app.d.get(f"{BASE}/?c=TOC")
+        app.wait_css(".header h1")          # a second, idle tab
+        app.d.switch_to.window(first)
+        # One action in tab 1 that writes TWO keys: deleting a selected course
+        # writes both the selection and the overrides (the hidden entry).
+        app.open_tab("Catalog")
+        app.wait_css("section[aria-label='Catalog']")
+        chip = app.chip("TOC", "section[aria-label='Catalog']")
+        app.d.execute_script("arguments[0].scrollIntoView({block:'center'});", chip)
+        chip.click()
+        dialog = app.wait_css(".dialog")
+        dialog.find_element(
+            By.XPATH, ".//button[normalize-space()='Delete this course']").click()
+        app.wait_toast("Deleted TOC")
+        # BOTH halves of that one action must survive the other tab's adoption.
+        WebDriverWait(app.d, 6).until(
+            lambda d: "TOC" in (d.execute_script(
+                "return localStorage.getItem('cmitt.v1.overrides');") or ""),
+            message="the deletion was lost from storage by the other tab")
+        time.sleep(1.2)                      # let any adoption echo land
+        ovs = app.d.execute_script("return localStorage.getItem('cmitt.v1.overrides');")
+        assert "TOC" in ovs and "hidden" in ovs, \
+            f"an idle tab wrote its stale half back over the deletion: {ovs}"
+    finally:
+        app.d.switch_to.window(app.d.window_handles[-1])
+        if len(app.d.window_handles) > 1:
+            app.d.close()
+        app.d.switch_to.window(app.d.window_handles[0])
 
 
 TESTS = [
@@ -9953,6 +10066,9 @@ TESTS = [
     t159_a_dialog_is_reachable_however_many_notices_stand,
     t160_a_second_tab_does_not_undo_your_settings,
     t161_a_link_that_empties_your_catalog_says_so,
+    t162_a_notices_undo_names_one_action_and_only_that_one,
+    t163_a_link_that_names_no_courses_takes_nothing_away,
+    t164_an_adopting_tab_never_writes_back_what_it_read,
 ]
 
 

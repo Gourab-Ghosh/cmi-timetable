@@ -126,6 +126,7 @@ fn init_app() -> (App, bool) {
         undo_stack: RwSignal::new(Default::default()),
         toasts: RwSignal::new(Vec::new()),
         toast_seq: RwSignal::new(0),
+        undo_seq: RwSignal::new(0),
         banner: RwSignal::new(None),
         conflicts: RwSignal::new(conflicts),
         conflicts_dismissed: RwSignal::new(false),
@@ -359,8 +360,12 @@ fn apply_url_state(app: App) {
         // moved or re-credited themselves is gone. It is one undo step, but
         // nothing pointed at it — the incoming custom *courses* raise a
         // banner when they lose, while this went by in silence.
+        // The same rule as the post-sync door below (R93 M1): a link naming
+        // no codes may bring overrides and customs, but must not replace the
+        // selection with nothing.
+        let names_no_courses = selection.is_empty();
         let notice = replacement_notice(app, &selection, shared_overrides.is_some());
-        if app.selection.with_untracked(|s| *s != selection)
+        if (!names_no_courses && app.selection.with_untracked(|s| *s != selection))
             || shared_overrides.is_some()
             || !incoming_customs.is_empty()
         {
@@ -368,7 +373,9 @@ fn apply_url_state(app: App) {
                 for course in incoming_customs {
                     customs.upsert(course);
                 }
-                *sel = selection;
+                if !names_no_courses {
+                    *sel = selection;
+                }
                 if let Some(store) = shared_overrides {
                     *ovs = store;
                     purge_custom_overrides(customs, ovs);
@@ -430,8 +437,17 @@ fn apply_url_state(app: App) {
     // here — and then there is nothing to apply, not even overrides, since
     // every override in it belongs to a course that does not exist.
     let nothing_resolved = known.is_empty() && !unknown.is_empty();
+    // A link that names NO codes at all is a different thing from one whose
+    // codes we could not resolve, and it must never write an empty selection
+    // over a real timetable (R93 M1). `?c=` — which the Share dialog itself
+    // hands out with an enabled Copy button on an empty planner — decodes to
+    // Some("") and an empty, UNDAMAGED selection, so every guard walked past
+    // it and the reader's whole timetable was replaced, permanently, under a
+    // toast claiming the link had brought courses. A deletions-only payload
+    // is still applied: only the SELECTION write is withheld.
+    let names_no_courses = known.is_empty() && unknown.is_empty();
     let differs = !nothing_resolved
-        && (app.selection.with_untracked(|s| *s != known)
+        && ((!names_no_courses && app.selection.with_untracked(|s| *s != known))
             || shared_overrides.is_some()
             || !incoming_customs.is_empty());
     app.unknown_was_everything.set(nothing_resolved);
@@ -443,7 +459,9 @@ fn apply_url_state(app: App) {
             for course in incoming_customs {
                 customs.upsert(course);
             }
-            *sel = known;
+            if !names_no_courses {
+                *sel = known;
+            }
             if let Some(store) = shared_overrides {
                 *ovs = store;
                 purge_custom_overrides(customs, ovs);
@@ -493,9 +511,12 @@ fn replacement_notice(app: App, incoming: &[String], shared_overrides: bool) -> 
     // Only a link that actually CHANGES the picked courses replaces them —
     // reopening the same link, or one naming what is already there, takes
     // nothing away.
-    let lost_courses = app
-        .selection
-        .with_untracked(|s| !s.is_empty() && s.as_slice() != incoming);
+    // An EMPTY incoming selection replaces nothing — the link named no
+    // courses, and since R93 M1 the selection write is withheld for it.
+    let lost_courses = !incoming.is_empty()
+        && app
+            .selection
+            .with_untracked(|s| !s.is_empty() && s.as_slice() != incoming);
     // Named one by one, because "times and credits" is not what was lost
     // when what was lost was the catalog. A link carries three destroyable
     // things and each gets its own words (R92 M3).
@@ -696,7 +717,7 @@ fn install_cross_tab_sync(app: App) {
             // back from here, or the two tabs would echo each other.
             if ev.key().as_deref() == Some(storage::KEY_PREFS)
                 && let storage::Loaded::Value(stored) =
-                    storage::load::<crate::state::Prefs>(storage::KEY_PREFS)
+                    storage::peek::<crate::state::Prefs>(storage::KEY_PREFS)
             {
                 let mut adopted = stored;
                 let theme_before = app.prefs.with_untracked(|p| p.theme);
@@ -799,6 +820,17 @@ pub fn Root() -> impl IntoView {
     // modal-open mirrors around it — one document-level fact from a signal.
     Effect::new(move |_| {
         domx::set_wheel_step_off(app.prefs.with(|p| p.wheel_step_off));
+    });
+
+    // A modal ends keyboard move mode (R93 M10). Left armed behind a dialog,
+    // the arrow keys and Enter went on moving a chip nobody could see — the
+    // timetable changed from behind the question the reader was answering.
+    // `set_tab` has always done this for the same reason.
+    Effect::new(move |_| {
+        let modal = app.dialog.with(|d| d.is_some()) || app.confirm.with(|c| c.is_some());
+        if modal && app.move_mode.with_untracked(|m| m.is_some()) {
+            app.move_mode.set(None);
+        }
     });
 
     Effect::new(move |_| {

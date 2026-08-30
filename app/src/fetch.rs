@@ -467,10 +467,14 @@ fn looks_like_cmi(html: &str) -> bool {
     // its own error page and echoes the URL it was asked for, so every relay
     // failure "looked like CMI" and the app announced that CMI had changed
     // its page and "the app needs an update" — about a page CMI had served
-    // perfectly well and the app had never seen (R92 M9). The hostname now
-    // has to arrive with something a real page carries.
-    lower.contains("cmi.ac.in")
-        && (lower.contains("<table") || lower.contains("timetable") || lower.contains("time table"))
+    // perfectly well and the app had never seen (R92 M9).
+    //
+    // Nor is the word "timetable" (R93 R4): it is IN the URL being echoed
+    // (…/practical/timetable.php), so the first attempt at this fence let
+    // exactly the same error pages through. The companion marker has to be
+    // something a URL cannot contain — CMI serves both pages as <pre> blocks,
+    // and markup is the one thing an echo of an address never carries.
+    lower.contains("cmi.ac.in") && lower.contains("<pre")
 }
 
 /// Parse a fetched page pair through the shared gate.
@@ -648,22 +652,41 @@ pub fn adopt(app: &App, new_snapshot: Snapshot, announce: bool, from: Adoption) 
         // Recency-neutral on purpose: a lapse can surface on the FIRST sync
         // of a share link, where "CMI dropped…" would claim an edit this
         // browser never witnessed and that may be a term old.
-        for lapsed in &merge.lapsed {
-            app.toast(if lapsed.is_removal() {
-                format!(
-                    "CMI no longer runs the {} class you had removed, so there's \
-                     nothing left to remove.",
-                    lapsed.course
-                )
-            } else {
-                format!(
-                    "CMI no longer runs the {} class you had moved. The time you \
-                     picked is still on your timetable, but it's now an entry of \
-                     your own rather than CMI's. Remove it from Your changes if \
-                     you don't want it.",
-                    lapsed.course
-                )
-            });
+        // ONE notice for all of them (R93 R2). One sync can lapse several
+        // changes at once, and a notice each meant the rail carried the whole
+        // report — the only place the app admits it discarded the reader's
+        // own work — as a pile of separate messages that a cap could eat.
+        let removals: Vec<&str> = merge
+            .lapsed
+            .iter()
+            .filter(|l| l.is_removal())
+            .map(|l| l.course.as_str())
+            .collect();
+        let moves: Vec<&str> = merge
+            .lapsed
+            .iter()
+            .filter(|l| !l.is_removal())
+            .map(|l| l.course.as_str())
+            .collect();
+        if !removals.is_empty() {
+            app.toast(format!(
+                "CMI no longer runs the {} class{} you had removed, so there's \
+                 nothing left to remove.",
+                removals.join(", "),
+                if removals.len() == 1 { "" } else { "es" }
+            ));
+        }
+        if !moves.is_empty() {
+            app.toast(format!(
+                "CMI no longer runs the {} class{} you had moved. The time{} you \
+                 picked {} still on your timetable, but now as an entry of your \
+                 own rather than CMI's. Remove it from Your changes if you don't \
+                 want it.",
+                moves.join(", "),
+                if moves.len() == 1 { "" } else { "es" },
+                if moves.len() == 1 { "" } else { "s" },
+                if moves.len() == 1 { "is" } else { "are" }
+            ));
         }
     }
     // The user's own courses were never upstream — the merge can't know
@@ -1155,9 +1178,7 @@ pub async fn run_update(app: App, manual: bool) {
     // The probe is gated by the same tweak as the direct tier: a no-cors
     // request to cmi.ac.in can raise the very local-network prompt the
     // tweak exists to prevent, so forgetting it here would defeat the tweak.
-    // `gate_failed_direct`: a proxy-only gate failure must NOT skip the probe,
-    // or the app has nothing true left to say about it (R92 M9).
-    let cmi_answers = if online && !gate_failed_direct && !direct_answered && !direct_off {
+    let cmi_answers = if online && !gate_failed_any && !direct_answered && !direct_off {
         progress(&app, "Working out what went wrong…");
         // `uncached`, like every other request that must reflect right now
         // rather than a cache: a probe answered from a disk cache would say
@@ -1180,13 +1201,18 @@ pub async fn run_update(app: App, manual: bool) {
          happening, the app needs an update. Until then, CMI's own timetable \
          page still works in a browser: www.cmi.ac.in/practical/timetable.php"
             .to_string()
-    } else if gate_failed_direct {
-        // `gate_failed_direct`, never `gate_failed_any` (R92 M9): a relay's
-        // own error page failing the gate says nothing about CMI's page, and
-        // telling a student their app needs an update because a free proxy
-        // was rate-limited sends them to look for a fix that does not exist.
-        // A proxy-only gate failure falls through to the reachability
-        // diagnosis below, which is the true story.
+    } else if gate_failed_any {
+        // `gate_failed_any` is the right condition, and R92 was wrong to move
+        // these sentences off it (R93 R3/R4). A relay whose body carries no
+        // CMI marker is already downgraded to Unreachable where the tier is
+        // read, so a GateFailed that survives to here really does mean CMI's
+        // OWN bytes failed the gate, whichever route carried them. Branching
+        // on `gate_failed_direct` instead made a previously-correct sentence
+        // wrong: against cmi.ac.in as it answers today (200, no CORS header)
+        // the direct tier returns Unreachable, so that flag can never be true
+        // in the wild, and a genuine CMI page change was reported as "every
+        // helper site is unavailable" with a remedy that cannot work. The
+        // real defect was the MARKER, and it is fixed in `looks_like_cmi`.
         format!(
             "CMI's page looks different from what this app expects, so your saved timetable \
              from {saved_date} was kept. Nothing was lost. If this keeps happening, the \
@@ -1430,7 +1456,10 @@ pub fn adopt_stored(app: App) -> bool {
     // REMOVES it, and quarantining the snapshot another tab wrote a
     // millisecond ago is not this function's business. Bail instead; the
     // next boot's corrupt-data banner is where that gets explained.
-    let storage::Loaded::Value(stored) = storage::load::<Snapshot>(storage::KEY_SNAPSHOT) else {
+    // `peek` is what actually keeps that promise (R93 M4) — this line called
+    // `load` and quarantined anyway, so the comment described an intention
+    // the code did not carry out.
+    let storage::Loaded::Value(stored) = storage::peek::<Snapshot>(storage::KEY_SNAPSHOT) else {
         return false;
     };
     if !stored.has_data() {

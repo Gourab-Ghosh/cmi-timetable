@@ -1336,9 +1336,32 @@ pub fn Toasts() -> impl IntoView {
     view! {
         <div class="toasts" node_ref=stack aria-live="polite">
             {move || {
-                app.toasts
-                    .get()
-                    .into_iter()
+                // The rail shows the newest few and SAYS how many it is
+                // holding back — it never destroys one (R93 R2). A sync can
+                // raise several at once, and one of them is the only report
+                // the app ever makes that it discarded the reader's own work.
+                let all = app.toasts.get();
+                const SHOWN: usize = 4;
+                let hidden = all.len().saturating_sub(SHOWN);
+                (hidden > 0)
+                    .then(|| {
+                        view! {
+                            <div class="toast toast-more" role="status">
+                                <span>
+                                    {format!(
+                                        "{hidden} earlier notice{} above",
+                                        if hidden == 1 { "" } else { "s" },
+                                    )}
+                                </span>
+                            </div>
+                        }
+                    })
+            }}
+            {move || {
+                let all = app.toasts.get();
+                let skip = all.len().saturating_sub(4);
+                all.into_iter()
+                    .skip(skip)
                     .map(|toast| {
                         let id = toast.id;
                         view! {
@@ -1367,13 +1390,18 @@ pub fn Toasts() -> impl IntoView {
                                     move || {
                                         undo_at
                                             .is_some_and(|at| {
-                                                at == app.undo_stack.with(|s| s.undo.len())
+                                                Some(at)
+                                                    == app
+                                                        .undo_stack
+                                                        .with(|s| s.undo.last().map(|e| e.seq))
                                             })
                                             .then(|| {
                                                 view! {
                                                     <button on:click=move |_| {
                                                         app.dismiss_toast(id);
-                                                        app.undo();
+                                                        if let Some(at) = undo_at {
+                                                            app.undo_entry(at);
+                                                        }
                                                     }>"Undo"</button>
                                                 }
                                             })
@@ -3165,6 +3193,27 @@ pub fn ConfirmHost() -> impl IntoView {
                 .get()
                 .map(|ask| {
                     let danger = ask.danger;
+                    // A question that appears under a finger must not answer
+                    // that finger (R93 M3). On a phone the confirm's action
+                    // row mounts exactly where the button that raised it sat,
+                    // so the SECOND half of a double-tap on "Delete all app
+                    // data" landed on "Delete it all" and wiped every byte
+                    // the app had saved — one gesture, no reading, nothing
+                    // recoverable.
+                    //
+                    // Scoped to TOUCH, and deliberately: that is where the
+                    // hazard lives (a tap has no hover to warn you what is
+                    // under your finger), and a guard that also swallowed
+                    // mouse and keyboard answers would make a decisive
+                    // reader press twice for everything — the first version
+                    // of this fix did exactly that, and three tests caught
+                    // it. 350 ms is longer than a stray second tap and far
+                    // shorter than reading a question.
+                    let opened_at = crate::domx::now_ms();
+                    let settled = move || {
+                        !crate::domx::is_coarse_pointer()
+                            || crate::domx::now_ms() - opened_at > 350.0
+                    };
                     view! {
                         <div class="overlay confirm-layer" on:click=move |_| answer_no()>
                             <div
@@ -3213,7 +3262,11 @@ pub fn ConfirmHost() -> impl IntoView {
                                     <button
                                         class="btn"
                                         data-confirm-cancel
-                                        on:click=move |_| answer_no()
+                                        on:click=move |_| {
+                                            if settled() {
+                                                answer_no()
+                                            }
+                                        }
                                     >
                                         "Cancel"
                                     </button>
@@ -3221,7 +3274,11 @@ pub fn ConfirmHost() -> impl IntoView {
                                         class="btn"
                                         class:danger=danger
                                         class:primary=move || !danger
-                                        on:click=move |_| answer_yes()
+                                        on:click=move |_| {
+                                            if settled() {
+                                                answer_yes()
+                                            }
+                                        }
                                     >
                                         {ask.confirm_label.clone()}
                                     </button>
