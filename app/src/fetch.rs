@@ -608,6 +608,14 @@ pub fn adopt(app: &App, new_snapshot: Snapshot, announce: bool, from: Adoption) 
         });
     }
 
+    // This browser has now synced at least once — a durable fact the cadence
+    // tweak is gated on, so that "Clear the downloaded timetable" cannot put
+    // the app back into the never-synced state that is exempt from "Only when
+    // I ask" (R93 M7).
+    if !app.prefs.with_untracked(|p| p.ever_synced) {
+        app.prefs.update(|p| p.ever_synced = true);
+        app.persist_prefs();
+    }
     app.snapshot.set(new_snapshot.clone());
     match storage::save_snapshot(&new_snapshot) {
         storage::SnapshotSave::Full => {}
@@ -622,12 +630,27 @@ pub fn adopt(app: &App, new_snapshot: Snapshot, announce: bool, from: Adoption) 
             );
         }
         storage::SnapshotSave::Failed => {
+            // Which sentence is true depends on whether there IS an older
+            // copy to fall back to (R93 M11). On a FIRST visit with the
+            // browser's storage already full there is none, and promising one
+            // sends a student away expecting their timetable to be waiting.
+            let had_one = old.has_data();
             app.set_banner(
                 BannerKind::Warn,
-                "Your browser wouldn't let the app save the updated timetable. \
-                 What's on screen now is correct, but if you reopen the app you'll \
-                 see the older saved copy until a sync gets through. Your courses \
-                 and changes are safe. Freeing some browser space usually fixes it.",
+                if had_one {
+                    "Your browser wouldn't let the app save the updated timetable. \
+                     What's on screen now is correct, but if you reopen the app \
+                     you'll see the older saved copy until a sync gets through. \
+                     Your courses and changes are safe. Freeing some browser space \
+                     usually fixes it."
+                } else {
+                    "Your browser wouldn't let the app save the timetable at all — \
+                     there is no space left. What's on screen now is correct, but \
+                     reopening the app will find it empty until a sync gets \
+                     through. Your courses and changes are safe. Free some browser \
+                     space, or use Export everything in My data to keep a copy \
+                     that needs none."
+                },
             );
         }
     }
@@ -1405,12 +1428,14 @@ pub fn load_from_pages(app: App, tt_html: &str, halls_html: &str) -> Result<(), 
 /// the app has no data at all, where every load retries (a failed first sync
 /// must not lock the app empty for 12 hours).
 pub fn maybe_background_update(app: App) {
-    let has_data = app.snapshot.with_untracked(|s| s.has_data());
-    // The cadence tweak. A browser that has never synced is exempt from
-    // every mode including "manual" — a failed first sync must not lock the
-    // app empty, and an empty planner is what the tweak's own hint promises
-    // still fetches.
-    if has_data {
+    // The cadence tweak, gated on whether this browser has EVER synced —
+    // a durable fact — and not on whether it holds a timetable right now
+    // (R93 M7). The exemption is for a failed FIRST sync; reading it off
+    // present data meant "Clear the downloaded timetable" silently restored
+    // it, and a reader who had chosen "Only when I ask" had CMI fetched on
+    // every reload from then on, through public relays, while the tweak's
+    // own hint and two other sentences promised that could not happen.
+    if app.prefs.with_untracked(|p| p.ever_synced) {
         let interval = match app.prefs.with_untracked(|p| p.auto_sync.clone()).as_deref() {
             Some("manual") => return,
             Some("hourly") => 3600.0 * 1000.0,
@@ -1419,7 +1444,18 @@ pub fn maybe_background_update(app: App) {
             _ => AUTO_UPDATE_INTERVAL_MS,
         };
         let last = app.prefs.with_untracked(|p| p.last_update_attempt);
-        if domx::now_ms() - last < interval {
+        let now = domx::now_ms();
+        // A stamp from the FUTURE is a clock that has since been corrected,
+        // not a sync that has just happened (R93 M8). Comparing raw, the
+        // difference stayed negative for as long as the skew lasted, so the
+        // throttle never released: the header sat on "Synced just now" and
+        // the app stopped checking CMI entirely, while the sentence beside it
+        // promised twice a day. A day of tolerance, matching the backup
+        // importer's, absorbs an NTP nudge without flapping the pill.
+        const CLOCK_TOLERANCE_MS: f64 = 24.0 * 3600.0 * 1000.0;
+        if last > now + CLOCK_TOLERANCE_MS {
+            // Unusable stamp: treat it as never having synced today.
+        } else if now - last < interval {
             return;
         }
     }

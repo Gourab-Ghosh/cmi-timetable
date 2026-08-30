@@ -76,6 +76,16 @@ fn init_app() -> (App, bool) {
         snapshot = Snapshot::placeholder();
     }
 
+    // A browser that already holds a real timetable has plainly synced before,
+    // whatever its prefs blob says (R93 M7). The flag was introduced in R93
+    // and defaults to false, so without this line every existing reader — and
+    // every seeded test — would be treated as never-synced and exempted from
+    // their own "Only when I ask" choice until the next successful sync. Set
+    // once, then persisted like any other fact.
+    if !prefs.ever_synced && snapshot.has_data() {
+        prefs.ever_synced = true;
+    }
+
     let shorten_pick = prefs
         .shorten_service
         .as_deref()

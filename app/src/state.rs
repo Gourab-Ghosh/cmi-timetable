@@ -321,6 +321,23 @@ pub struct Prefs {
     pub my_filters: Filters,
     /// ms since epoch of the last automatic update attempt (12 h throttle).
     pub last_update_attempt: f64,
+    /// Has this browser ever completed a sync? A FACT, not a preference
+    /// (R93 M7).
+    ///
+    /// The cadence tweak used to be gated on "is there a timetable right
+    /// now", so "Clear the downloaded timetable" put the browser back into
+    /// the never-synced state that is exempt from every cadence — and a
+    /// reader who had chosen "Only when I ask" then had CMI fetched through
+    /// third-party relays on every reload, for ever, while three sentences on
+    /// the same screen said it could not happen. The exemption exists for a
+    /// failed FIRST sync, and that is what this records.
+    ///
+    /// Prefs-law note: like `last_update_attempt`, this is a fact about what
+    /// happened and not a setting, so it deliberately joins none of
+    /// `nothing_saved_to_lose`, `reset_tweaks` or `tweak_deltas`, and
+    /// "Clear the downloaded timetable" does not clear it.
+    #[serde(default)]
+    pub ever_synced: bool,
     pub tab: Tab,
     /// Legacy single-day preference. Kept so older stored prefs still load;
     /// `halls_view` is what the app reads now.
@@ -619,6 +636,7 @@ impl Default for Prefs {
             filters: Filters::default(),
             my_filters: Filters::default(),
             last_update_attempt: 0.0,
+            ever_synced: false,
             tab: Tab::default(),
             halls_day: Day::Mon,
             // Both None for the same reason as `density`: nothing has been

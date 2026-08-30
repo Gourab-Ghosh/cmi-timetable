@@ -264,6 +264,31 @@ pub fn perform_drop(
         return true;
     }
 
+    // A course may not be put where it ALREADY meets (R93 M6). Nothing
+    // refused this, so dropping a class onto another of its own meetings drew
+    // it twice in that cell, doubled its row in the Clashes panel — it
+    // "clashed with itself" — and exported two identical recurring events to
+    // the reader's calendar. The other meeting is found among the EFFECTIVE
+    // ones, so a meeting that is itself the product of an earlier move counts
+    // too; the override being edited is excluded, or a nudge within one cell
+    // would refuse itself.
+    let already_there = app
+        .snapshot
+        .with_untracked(|s| s.course(&spec.code).cloned())
+        .or_else(|| app.customs.with_untracked(|cs| cs.get(&spec.code).cloned()))
+        .is_some_and(|course| {
+            app.effective_meetings(&course).iter().any(|eff| {
+                eff.ov_id != spec.ov_id
+                    && eff.meeting.day == to.day
+                    && eff.meeting.slot == to.slot
+                    && (!hall_axis || same_hall(eff.meeting.hall.as_deref(), to.hall.as_deref()))
+            })
+        });
+    if already_there {
+        app.toast(format!("{} already meets there.", spec.code));
+        return true;
+    }
+
     app.apply_override(
         &spec.code,
         spec.ov_id,

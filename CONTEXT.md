@@ -7017,14 +7017,25 @@ naming no courses takes nothing away), t164 (an adopting tab never writes back
 what it read), plus two doc-guard native tests. Registry 161 → **164 e2e**,
 169 → **171 native**. fmt + clippy clean.
 
+**Also fixed in the second pass:** M6 — a class dropped where it already meets
+was drawn twice, doubled its own clash row and exported two identical events;
+the drop is refused with "{code} already meets there." M7 — the cadence tweak
+was gated on "is there data now", so "Clear the downloaded timetable" put the
+browser back into the never-synced state that is exempt from every cadence, and
+a reader who had chosen "Only when I ask" had CMI fetched through public relays
+on every reload while three sentences promised otherwise; it is gated on a
+durable `ever_synced` fact instead (derived at boot from a real stored
+timetable, so existing readers and seeded tests are not treated as new). M8 — a
+device clock that ran fast froze the throttle for as long as the skew lasted,
+so the header sat on "Synced just now" and the app stopped checking CMI at all;
+a day's tolerance releases it. M11 — the storage-full banner promised "you'll
+see the older saved copy" even on a FIRST visit, where there is none; it now
+says what reopening will really show and points at Export everything.
+
 **STILL OPEN:** R93's SHOULD/CAN-WAIT sets and R92's 20 SHOULD-FIX backlog
-(planned in `.workagents/r93/FIXQUEUE.md`). R93 §3 also carries M5 (a course
-code containing `,` or `%` is deleted by the app's own URL), M6 (a class moved
-onto a slot where it already meets is drawn and exported twice), M7 ("Only when
-I ask" overridden after "Clear timetable"), M8 (a fast device clock freezes the
-header on "Synced just now"), and M11 (a storage-full promise that reopening
-shows the older copy, when it shows the welcome screen) — all real, all still
-to do.
+(planned in `.workagents/r93/FIXQUEUE.md`), plus R93 M5 (a course code
+containing `,` or `%` is deleted by the app's own URL on every reload) — a
+five-part fix that wants its own sitting.
 
 ## 8. Open bugs — found, confirmed, NOT fixed (do not delete)
 
