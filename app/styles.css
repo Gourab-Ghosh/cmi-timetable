@@ -691,6 +691,12 @@ label.opt { min-height: 32px; }
    with this fix; the chip it was modelled on never got it (R83). 4.93:1 /
    5.41:1 at full strength. */
 .chip.clash .hall { opacity: 1; }
+/* And the corrected TIME, for the same reason and by the same measurement
+   (R93 R7b): `.chip .subtime` carries the same 0.85, so on a clashing chip the
+   one line saying when the class actually meets composited to 3.96:1 light /
+   4.32:1 dark on the alarm wash — the two numbers the comment above names as
+   R83's defect — while the hall line beside it passed. */
+.chip.clash .subtime { opacity: 1; }
 
 /* Override: dashed outline + pencil glyph + label in details. */
 .chip.overridden { border-style: dashed; border-width: 1.5px; }
@@ -710,6 +716,15 @@ label.opt { min-height: 32px; }
   --hue: 210;
   display: inline-flex;
   align-items: baseline;
+  /* Same fix, same reason, as `.chip { flex-wrap: wrap }` above: with
+     `nowrap` the 53px unbreakable `.until` starves `.code` to ~18px and
+     `overflow-wrap: anywhere` then breaks the CODE ITSELF ("TO"/"C" for
+     TOC under ~950px; RDBM at 1280px on Halls and Master grid). Let the
+     time drop to its own line instead. Do NOT "fix" this by dropping
+     `overflow-wrap: anywhere` from `.covered .code` — a genuinely
+     over-long code would then overflow and be clipped by
+     `table.tt td { overflow: hidden }`. */
+  flex-wrap: wrap;
   gap: 0.3rem;
   /* The whole slot is taken: say so full-width. In a clash cell the band
      wraps to its own row under the real chips. */
@@ -1001,7 +1016,12 @@ table.tt.halls-merged tr.quiet:not(.today) th.dayhead { opacity: 0.68; }
    space law as `.density-compact .chip .hall` — and paper never shows them:
    the printed key is the one place names live on a sheet. */
 .chip .chip-name { display: none; }
-.app.chip-names table.tt td .chip .chip-name {
+.app.chip-names table.tt td .chip .chip-name,
+/* …and the phone day list, which is the SAME `cell_chips` closure rendered
+   into `div.day-list > div.slotrow > div.sidebyside` instead of a `<td>` —
+   and on a phone it is the DEFAULT My-timetable view, so this tweak was
+   dead exactly where it was most likely to be turned on (R92 S9). */
+.app.chip-names .day-list .chip .chip-name {
   display: block;
   font-size: 0.62rem;
   font-weight: 400;
@@ -1037,7 +1057,10 @@ table.tt.halls-merged tr.quiet:not(.today) th.dayhead { opacity: 0.68; }
    even an unshown ghost can never meet a pointer. Tokens only — both
    themes come free. */
 .ghost { display: none; pointer-events: none; }
-.app.move-ghosts table.tt td .ghost {
+.app.move-ghosts table.tt td .ghost,
+/* Same omission, same closure, same fix (R92 S9): the day list holds the
+   ghosts `cell_chips` pushes, and had no rule to show them. */
+.app.move-ghosts .day-list .ghost {
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1075,7 +1098,15 @@ table.tt.halls-merged tr.quiet:not(.today) th.dayhead { opacity: 0.68; }
    gets ITS OWN non-alt paint back — one flat colour would repaint the
    sticky gutters and the band would survive as a gutter-stripe. The 2px
    room-boundary rule is untouched, so rooms never blur together. */
-.app.no-hall-bands table.tt.halls-merged tr.alt td:not(.extra) {
+/* `:not(:hover)`, not `!important` on the hover rule: `td.drop-ok`'s wash
+   is `!important` at (0,2,2), and two `!important` declarations are settled
+   by specificity — an `!important` hover cue at (0,4,4) would out-specify
+   it and erase the drag highlight from the very cell the pointer is on.
+   This selector is (0,7,3): it beats the base band (0,4,3) at rest and
+   simply stops matching on hover, which hands the row to the hover cue at
+   (0,4,4) — one class fewer than the band, but one element more, so it
+   wins that comparison (tweaks-interlocks-4). */
+.app.no-hall-bands table.tt.halls-merged tr.alt:not(:hover) td:not(.extra) {
   background: transparent;
 }
 .app.no-hall-bands table.tt.halls-merged tr.alt th.dayhead {
@@ -1156,7 +1187,14 @@ table.tt td.kbd-cursor { box-shadow: inset 0 0 0 2px var(--accent); }
 }
 /* The corrected time is a FACT and is never hidden (R92 M4): it inherits the
    hall span's quiet treatment, but no rule below may take it away. */
-.chip .subtime { font-size: 0.72rem; opacity: 0.85; display: block; width: 100%; }
+/* No `width: 100%` (R93 R7a). `.chip` is `inline-flex` + `flex-wrap: wrap`, so a
+   full-width item eats a whole flex line and pushed the `✎` badge onto a third
+   one: 162x74 measured for ~80px of ink, beside 71x30 neighbours, and 143x65
+   in tight rows — the phone default. It shrink-wraps like `.chip .hall`, which
+   it was modelled on, and wraps only when the cell really is too narrow.
+   `display: block` STAYS: t128 asserts it under print media, and the print
+   block sets only size/weight/colour. */
+.chip .subtime { font-size: 0.72rem; opacity: 0.85; display: block; }
 .density-compact .chip .subtime { font-size: 0.62rem; }
 .density-compact .chip .hall { display: none; }
 /* "Show hall names on chips" ticked off (R87): the same absence tight rows
@@ -1473,6 +1511,28 @@ input::placeholder, textarea::placeholder {
   color: var(--muted);
   /* Firefox dims placeholders on top of the colour; the token IS the colour. */
   opacity: 1;
+}
+/* Safari draws `input[type="search"]` as a native capsule widget, and a
+   native widget reads none of the above: the padding, the border, the
+   border-radius, the inherited font and the focus ring below are all
+   discarded, and it paints its own ring instead (WCAG 2.4.7 — nothing
+   visible marks the focused field). It matters more here than anywhere
+   because the three switches inside `.searchbox` are paid for ENTIRELY in
+   `padding-right: var(--switch-strip)` (~6.4rem) and the strip itself is
+   `position: absolute; pointer-events: none` — drop the padding and the
+   student's typing runs underneath the buttons with nothing to stop it.
+   Both spellings: the unprefixed property is Safari 15.4+, and the machines
+   this is for (an iPhone 7/6s capped at iOS 15, an un-updated Mac) are
+   exactly the ones that only know the prefix.
+   `[type="search"]` ONLY, deliberately: date, time and number inputs are
+   browser-painted ON PURPOSE here and follow `color-scheme` (CONTEXT §4,
+   "Browser-drawn widgets do not read our CSS tokens … do not re-solve it
+   per control"), and `appearance: none` would opt them out of that AND out
+   of forced-colors rendering — the trap the comment above the checkbox rule
+   already spells out. */
+input[type="search"] {
+  appearance: none;
+  -webkit-appearance: none;
 }
 input:focus-visible, select:focus-visible {
   outline: none;
@@ -1940,6 +2000,11 @@ details.facet .menu .menu-empty { margin: 0.2rem 0 0; }
   border: 1px dashed var(--line);
   border-radius: 999px;
   padding: 0.14rem 0.6rem;
+  /* One slot, both labels (R92 S1): the toggle must not change size when
+     its label flips between "+N more" and "Show fewer", or the chips after
+     it move under a pointer that has not moved. 6.5rem fits both, and the
+     widest "+999 more" too. */
+  min-width: 6.5rem;
   font-size: 0.78rem;
   color: var(--muted);
   background: transparent;
@@ -1947,6 +2012,13 @@ details.facet .menu .menu-empty { margin: 0.2rem 0 0; }
   transition: color 120ms var(--ease), border-color 120ms var(--ease);
 }
 .chipline-more:hover { color: var(--text); border-color: var(--muted); }
+
+/* The stray-press shield (`ui::reflow_shield`). A region that has just moved
+   under a pointer that never moved refuses presses for one moment, so the
+   second half of a double-press cannot act on a control nobody aimed at
+   (R92 S2, R92 S3, R93 S12). Pointer only — the keyboard is never shielded —
+   and nothing about it is visible. */
+.settling { pointer-events: none; }
 
 /* The master grid's legend: one symbol, one plain line. */
 .grid-legend {
@@ -2916,7 +2988,13 @@ body.modal-open { overflow: hidden; }
 /* A course name has no spaces to break at when CMI writes one as a single
    token, and as a flex item with min-width:auto it refused to shrink — so it
    widened the row and, on a phone, the whole app (R92 S19). */
-.row > strong { min-width: 0; overflow-wrap: anywhere; }
+.row strong {
+  display: block;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  overflow: hidden;
+  overflow: clip;
+}
 /* The one-line hint under "No longer listed" — the record itself opens as
    a popup from the code, so the list stays one line per course. */
 .diff-hint { margin: 0.3rem 0 0.1rem; }
@@ -3024,19 +3102,36 @@ body.modal-open { overflow: hidden; }
 .tweak-group .group-body { margin-top: 0.35rem; }
 .tweak-group .group-lede { margin: 0.15rem 0 0.4rem; }
 /* R90: twelve cards in one column made the page taller than anyone could
-   hold in their head. Where the screen has the room they flow into two
-   balanced columns instead — CSS columns keep reading (and Tab) order:
-   down the left, then down the right. break-inside keeps each card whole;
-   the bottom margin restates .panel's own so the rhythm inside columns is
-   deliberate, and margins meeting a column break are truncated per spec —
-   which is exactly what keeps the right column's top aligned. The columns
-   are screen-only: A4 landscape is wider than 1100px, and two PRINT
-   columns fragment across pages exactly where Chromium is flakiest —
-   break-inside stays unguarded, because keeping a card whole on paper is
-   a feature. */
+   hold in their head. Where the screen has the room they sit in two
+   columns instead — TWO EXPLICIT LISTS in the markup (dev.rs), never CSS
+   multicol.
+   Multicol was the R92 S2 defect, in one word: `column-fill` defaults to
+   `balance`, so the browser RE-SHARES the cards after any card changes
+   height. Collapsing one group migrated others sideways and upward under a
+   pointer that had not moved: 8 of the 12 headings misfired on a second
+   click, a saved preference in a DIFFERENT group ticked itself on, and the
+   pressed heading could jump 519px down and off the screen while keeping
+   focus. No guard can repair that — a card can move to the other COLUMN,
+   which is a horizontal jump on a page that scrolls vertically, so there is
+   nothing to compensate with. Two lists move only what is BELOW the pressed
+   card in its own column, which is what the single-column page already did.
+   The price is balance, not correctness: under a search the columns can end
+   uneven, and an emptied one collapses so the survivor takes the width.
+   Reading (and Tab) order is DOM order and must stay a PREFIX/SUFFIX split —
+   the left list is groups 1-5, the right list is 6-12. Never interleave.
+   Screen-only, and the wrapper stays a plain block otherwise: A4 landscape
+   is wider than 1100px, and two PRINT columns fragment across pages exactly
+   where Chromium is flakiest. break-inside stays unguarded, because keeping
+   a card whole on paper is a feature. */
 .tweak-groups .tweak-group { break-inside: avoid; margin: 0 0 0.9rem; }
+.tweak-col:empty { display: none; }
 @media screen and (min-width: 1100px) {
-  .tweak-groups { columns: 2; column-gap: 0.9rem; }
+  .tweak-groups {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.9rem;
+  }
+  .tweak-col { flex: 1 1 0; min-width: 0; }
 }
 
 .devlog {
@@ -3515,7 +3610,112 @@ label.field > input { width: 100%; }
      24px floor twice over. Said here because it looks like the same
      oversight and is not one. */
   /* Height alone leaves a one-glyph button ~24px wide. */
-  .btn.icon, .filterchip button { min-width: 44px; }
+  /* `.tab-exit` belongs here for the same reason: at ≤380px its word is
+     hidden and the arrow alone measured 15.8 x 44, under WCAG 2.5.8's
+     24px floor (mobile-touch-5). It is the DEVELOPER rail's exit and
+     never appears beside the five planner tabs, so the four categories
+     it sits with (Overview, Tweaks, Sync, Storage) leave it the room —
+     the 320px squeeze the ≤380px block was written for is the planner's,
+     not this rail's. */
+  .btn.icon, .filterchip button, .tab-exit { min-width: 44px; }
+}
+
+/* ==========================================================================
+   Safari / iOS below 16.2 has no `color-mix()`. Every use of it in this sheet
+   wraps a `var()`, and that combination is the nastiest failure CSS has: a
+   `var()` makes the declaration valid AT PARSE TIME, so it wins the cascade,
+   and the missing function is only noticed at computed-value time — at which
+   point the property takes its UNSET value, not the declaration underneath
+   it. The spec says why there is no way back: "by the time the user agent
+   realizes a property value is invalid, it's already thrown away the other
+   cascaded values." So a plain declaration written above a `color-mix()` one
+   fixes NOTHING; do not "simplify" this block into inline fallbacks. It has
+   to be a parse-time gate, and `@supports` is the only one.
+
+   Two `color-mix()` uses in this sheet are deliberately NOT restated here —
+   `button.badge.custom/.warn`'s border-color and `.banner-actions .btn.ghost`'s
+   text-decoration-color mix `currentColor`, with no `var()`, so they fail the
+   ordinary way (dropped at parse time) and degrade correctly on their own.
+
+   PLACEMENT IS LOAD-BEARING: this block sits after every screen rule it
+   restates and BEFORE `@page`/`@media print`. A media query adds no
+   specificity, so moving it below the print section would let these
+   screen-coloured declarations out-rank any print rule that is not
+   `!important` — the R76 family of specificity bugs, which fail only on
+   paper where nobody is measuring. Keep it here.
+
+   Every value is a plain token, so both themes follow from :root and the
+   dark block with nothing to keep in sync. Where a mix tinted `var(--line)`
+   toward a signal colour the fallback is `var(--line-strong)`; where it
+   tinted `transparent` the fallback is `var(--line)` and the element's own
+   background and text carry the signal; where it tinted a surface the
+   fallback is that surface. Three exceptions are called out inline.
+   ========================================================================== */
+@supports not (color: color-mix(in srgb, red 50%, blue)) {
+  /* Delete buttons: `color: var(--alarm)` above already says "danger", and
+     unset would make border-color currentColor — a full-strength red box
+     around every Delete in the app. */
+  .btn.danger { border-color: var(--line-strong); }
+  .btn.ghost-accent { border-color: var(--line-strong); }
+
+  /* THE STICKY TIME-SLOT HEADER. `background` is a SHORTHAND, so unset takes
+     every background longhand to its initial value — background-color
+     transparent — and `position: sticky; z-index: 3` then holds a see-through
+     bar that the grid's rows scroll straight through. The worst of the 21. */
+  table.tt thead th { background: var(--surface-2); }
+  /* Same shorthand, same outcome: with this transparent, "Band alternate
+     rooms" is a tweak that visibly does nothing. */
+  table.tt.halls-merged tr.alt td:not(.extra),
+  table.tt.halls-merged tr.alt th.dayhead,
+  table.tt.halls-merged tr.alt th.hallhead { background: var(--surface-2); }
+
+  /* `border` is a shorthand too: unset takes border-style to `none`, so these
+     lose their outline entirely rather than merely mis-colouring it. */
+  .ck { border: 1px solid var(--line); }
+  .ck.mine { border-color: var(--line); }
+  .cg-head { background: var(--surface-2); }
+  .cg-count {
+    background: var(--surface);
+    border: 1px solid var(--line);
+  }
+
+  /* THE FOCUS RING. `box-shadow` unset is `none`, and the same rule says
+     `outline: none` — which parses fine and survives — so a focused field
+     has NO focus indicator at all (WCAG 2.4.7). Not `var(--accent-wash)`:
+     this rule's own comment measured that at "barely over 1:1" on a surface,
+     which is the bug it was written to fix. A solid 2px accent halo beside
+     the accent border it already sets is the plain equivalent that is
+     actually visible. */
+  input:focus-visible, select:focus-visible {
+    box-shadow: 0 0 0 2px var(--accent);
+  }
+
+  .credit-summary { border: 1px solid var(--line-strong); }
+  /* The gradient is inside the `background` shorthand, so unset here means no
+     tint at all. A flat "good news" wash instead; `border-left-color:
+     var(--ok)` in the same rule is plain and survives on its own. */
+  .banner.update-banner { background: var(--ok-wash); }
+  .unknown-code { border: 1px solid var(--line); }
+  .shorten-dialog .shorten-warn,
+  .shorten-dialog .shorten-failed,
+  .shorten-dialog .shorten-stale-head { border: 1px solid var(--line); }
+  .hall-list li { border: 1px solid var(--line-strong); }
+  /* NOT `var(--line-strong)`: `.dialog .diff-filter:hover` already paints
+     exactly that, so the ticked state would become indistinguishable from
+     "the pointer is over it". The accent is the state. */
+  .dialog .diff-filter.on { border-color: var(--accent); }
+  /* `background: transparent` here, so this dashed border is the ONLY thing
+     drawing the "add your own course" card. It keeps the violet. */
+  .add-own-card { border: 2px dashed var(--accent2); }
+  .parked {
+    border: 1px solid var(--line-strong);
+    /* accent2-wash rather than --surface: it is a real token in both themes
+       and a slightly stronger reading of the same intent, so the parked block
+       still says "these are yours" without the mix. */
+    background: var(--accent2-wash);
+  }
+  .parked .parked-row { border-top: 1px solid var(--line); }
+  .shadow-note { border: 1px solid var(--line-strong); }
 }
 
 .print-only { display: none; }
@@ -3728,22 +3928,27 @@ label.field > input { width: 100%; }
        fragmented grid still arrives with its column headings. */
     break-inside: auto;
   }
-  /* `avoid` is right for exactly ONE grid — the poster, which is one page by
-     design — and it was written on plain `.grid-scroll`, then exempted for
-     halls by hand when that sheet came out as EIGHT pages with two blank. The
-     Master grid never got the exemption, so it repeated the whole defect: its
-     table could not break, so it was pushed off page 1 entirely, leaving three
-     lines of explainer and the decorative wash alone on the first sheet a
-     reader sees. Scoped to the poster now, which is the only sheet that can
-     honestly make the promise. */
-  section[aria-label="My timetable"] .grid-scroll { break-inside: avoid; }
+  /* No `avoid` for the poster either. `avoid` was written on plain
+     `.grid-scroll`, exempted for halls by hand when that sheet came out as
+     EIGHT pages with two blank, then again for the Master grid, which had been
+     pushed off page 1 entirely — leaving three lines of explainer and the
+     decorative wash alone on the first sheet a reader sees. The poster was
+     kept on the premise that it is "one page by design", and that premise is
+     false from 48 selected courses: at 48 the sheet came out as 4 pages with
+     page 1 empty except its title (page-1 ink 0.0071 of the sheet), at 75 as
+     6 — the same defect the other two grids were each fixed for. 47 is still
+     one page, and a grid that fits still prints on one page all by itself,
+     because nothing splits a box that has room. `break-inside` is a hint
+     anyway: a table taller than the paper breaks whatever this says, so the
+     declaration bought a blank first sheet and nothing else. */
   /* And a fragmented table must not draw a frame around the paper it did not
      fill: the outer border ran on to the bottom margin past the last row and
      stopped, leaving an empty ruled well at the foot of every continuation
      page. The rows carry their own rules, which is what the reader reads.
      Same reasoning, same fix, for the Master grid — which had the same well. */
   section[aria-label="Lecture halls"] table.tt,
-  section[aria-label="Master grid"] table.tt { border: none; }
+  section[aria-label="Master grid"] table.tt,
+  section[aria-label="My timetable"] table.tt { border: none; }
   /* …except a closing rule under EVERY column of the halls table. The hall
      name lives in a `rowspan=5` cell that STARTS its block, so on the final
      hall it is not in `tr:last-child` and kept the `border-bottom` that every
@@ -4410,8 +4615,15 @@ label.field > input { width: 100%; }
   .print-plain .chip:not(.clash) {
     background: #fff !important;
     color: #23272e !important;
-    border: 1px solid #6b7280 !important;
+    /* Longhands, not the `border` shorthand (R93 R7c clause B): the shorthand
+       reset `border-style` to solid and, at (0,3,0), out-specified the print
+       block's own `.chip.overridden { border-style: dashed !important }` at
+       (0,2,0) — so a COLOUR choice silently dropped the "you changed this"
+       outline from a plain-ink sheet. Style is left to whoever owns it. */
+    border-width: 1px !important;
+    border-color: #6b7280 !important;
   }
+  .print-plain .chip:not(.clash):not(.overridden) { border-style: solid !important; }
   .print-plain .chip:not(.clash) .hall { color: #464b55 !important; }
   .print-plain .chip:not(.clash) .subtime { color: #464b55 !important; }
   /* The KEY's chips too (R92 S18). "Print in colour" unticked drained the

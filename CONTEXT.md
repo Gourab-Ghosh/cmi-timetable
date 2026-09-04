@@ -156,7 +156,7 @@ and no committed mirror (fixtures exist only for tests/e2e seed).
         post_build hook writing the offline service worker into every build
         (debug builds get a self-cleaning no-cache stub);
         index.html registers ./sw.js on window load.
-/e2e    test_app.py — 116 Selenium tests, self-seeding (see §5); shoot.py —
+/e2e    test_app.py — 164 Selenium tests, self-seeding (see §5); shoot.py —
         design-review screenshots + print PDFs.
 /githooks  pre-push — builds+publishes via deploy.sh when main is pushed
         (activate per clone: `git config core.hooksPath githooks`; skip
@@ -770,7 +770,7 @@ FEATURES.md  the user-facing feature list (written R39). README is the
 ## 5. Build & test commands (exact)
 
 ```sh
-# native tests (168; the html feature comes from core's self dev-dependency)
+# native tests (175; the html feature comes from core's self dev-dependency)
 CARGO_TARGET_DIR=~/.rust-cache/timetable-e2e RUSTFLAGS="" cargo test --workspace
 # app build for e2e (never plain dist while trunk serve runs).
 # RUSTFLAGS="" on purpose: a global ~/.cargo/config.toml carrying
@@ -779,7 +779,7 @@ CARGO_TARGET_DIR=~/.rust-cache/timetable-e2e RUSTFLAGS="" cargo test --workspace
 # `__wbindgen_externref_table_alloc`. Emptying it for this build restores
 # the wasm defaults without touching anything outside the repo.
 cd app && RUSTFLAGS="" CARGO_TARGET_DIR=~/.rust-cache/timetable-e2e trunk build --release --dist dist-e2e
-# e2e (116 tests; self-generates seed via core example, needs cargo on PATH)
+# e2e (165 tests; self-generates seed via core example, needs cargo on PATH)
 cd e2e && DIST_DIR=../app/dist-e2e .venv/bin/python test_app.py
 # ...or just a few, by name fragment
 cd e2e && DIST_DIR=../app/dist-e2e .venv/bin/python test_app.py t44 t45
@@ -826,8 +826,10 @@ regenerates the .ics golden.
   NOWHERE on this page while still counting toward the credit total.
 - "Your changes" groups are headed by `.cg-head` (colour rail + small caps
   + count), coloured by `OwnChange::tone()`. See §4.
-- Tests: 171 native + 164/164 e2e green (as of R93; the native count from
-  `deploy.sh`'s own in-container run — 49+18+3+9+25+27+28+10).
+- Tests: 175 native + 165/165 e2e green (as of R95; the native
+  count from `deploy.sh`'s own in-container run —
+  51+18+2+3+9+25+27+28+12, the 2 being `docs_truth_tests.rs` and the 12
+  `url_tests.rs`, which gained R95's two `?c=` clamp pins).
 - **The e2e suite mocks the relays, so it can never tell you a real one has
   died** — which is exactly how R84's outage reached a user. Two probes cover
   that gap and take under a minute:
@@ -7130,6 +7132,117 @@ nothing. It now points at the polish note instead of quoting the dead text.
 SHOULD items, R93's SHOULD/CAN-WAIT sets and R93 M5 remain open (§8). What
 is closed is every confirmed defect that destroys or misstates a student's
 own data.
+
+### R95 — the backlog emptied: sixty-one items, and the four the fleet got right
+
+The ask, twice: "Fix all the issues which are still left to fix." Scope was
+every item still open in the four triage documents after R94 published the
+app — **61**, not the eleven the R93 entry names. The full census, with the
+per-item verdicts and patches, is `.workagents/r95/findings/a1..a12-*.md`;
+the round's own story is `.workagents/r95/MANIFEST.md`.
+
+| source | open at the start |
+|---|---|
+| R92 SHOULD | 11 (S1–S3, S9, S11–S15, S17, S20) |
+| R92 CAN WAIT | 7 (CW-1…CW-7) |
+| R93 §1 half-landed R92 fixes | 8 (R5–R12) |
+| R93 MUST | 1 (M5) |
+| R93 SHOULD | 20 |
+| R93 CAN WAIT | 7 |
+| R93 §5 dev-mode-only, confirmed | 7 |
+
+**Phase 1 — a 12-agent READ-ONLY confirm fleet** (`wf_fc94079e-786`), one
+disjoint slice each, whose job was not to fix but to decide *is this still
+present* and produce a patch precise enough to apply mechanically. Verdict:
+**53 PRESENT, 7 PARTIAL, 1 ALREADY FIXED** (CW-2, verified rather than
+assumed). 272 hunks; **263 matched the tree exactly once** under an
+apply-time uniqueness check.
+
+**Why one writer.** The triage documents name six pairs that must be fixed
+TOGETHER in one function, and the 61 items touch 30 files with heavy overlap
+(`ui.rs` alone took 39 hunks). Twelve concurrent writers would have produced
+an incoherent tree. The agents were also forbidden to edit source *while
+reading it* — R93's fix queue set that rule for itself, because a hunt
+reading a tree that shifts under it produces wrong root causes.
+
+**THE HEADLINE: the documented fix for the last MUST was wrong, and an agent
+proved it.** R93 M5's five-part plan was to read `?c=` from the raw query and
+split on literal commas first. That fails three ways: it breaks a shipped
+pinned test (`c_param_is_forgiving`), contradicts §4's "`?c=`: strict on the
+way out, generous on the way in" (a `%2C` from a mail client must still
+separate), and **does not fix the bug** — `?c=TOC%2CX` carries no literal
+comma, so the fallback still fires and yields `TOC`, putting CMI's Theory of
+Computation on a timetable nobody picked it for. The shipped fix instead
+clamps the WRITE side (`share::code_is_url_safe`, the one definition;
+`domx::url_safe_split`, the one door) and teaches the two read sites in
+`apply_url_state` that the address bar is a **projection** of the selection,
+not a copy of it. `parse_c_param` is untouched, so the documented generosity
+and every test pinning it survive. Five doors now ask the same question, the
+catalog parser treats `,` as a separator and WARNS on `%` (never drops — a
+deleted catalog code would take a real course off every user's timetable),
+and the share dialog, the import dialog and the `s=` payload door all NAME
+what they refuse.
+
+**Three more places the fleet corrected its own instructions.** R6: the
+triage's literal CSS patch is circular and would have blanked the notice
+rail. R93 S2: its `if end <= start { return None; }` was already measured to
+drop a whole column of the week. R92 S1/S2/S3 + R93 S12/S13: R93 M3's
+mounted-age guard answers the WRONG QUESTION for four of the five, because
+the element receiving the stray press is old and merely slid under the
+pointer — so the family got a second primitive, `ui::reflow_shield`, which
+makes the moved region `pointer-events: none` for `SETTLE_MS` and therefore
+never gates a handler and never shields the keyboard. R93 S8 needed no patch
+at all: S1's shared `is_sane` rejects `id: u64::MAX` outright.
+
+**What the main session had to correct in the AGENTS' work — read this before
+trusting a patch field again.** a4's hunks contained **prose where code
+belongs** (9 of them, e.g. `plus a new note above the existing one (full text
+in findings, P6)`); applied literally that lands English in a Rust file. All
+14 were reverted and M5 was written by hand from the findings. a4's
+share-dialog copy said an unshareable course is "left out of both links" —
+FALSE, the `&s=` link carries it losslessly. And a4's own regression test
+asserted a round trip that passed only because it **skipped the browser's
+decode step**, which is the entire mechanism; with `browser_decode` written
+in, the test correctly shows `%54OC` returning as `TOC`.
+
+**Six compile errors came from patches assuming a signature another patch
+changed** — `edit_state` gained an `app` parameter (5 call sites),
+`tweak_group` gained `arm_shield` (12), `FetchLogEntry` gained `run`,
+`CustomStore` needed importing, `set_aside` needed threading out of
+`init_app`, `last_toggle` needed declaring per row.
+
+**Three regressions the suite caught, all mine.** t78 — the R92 S1 patch
+rendered all 75 filter chips while still drawing "+67 more", so the collapse
+was decorative (`rest` is now empty while collapsed). t64 — a scrim click was
+refused; instrumenting showed the guard armed exactly ONCE with the dialog
+125 ms old, i.e. the six-step sequence really does run in an eighth of a
+second and the 350 ms guard was right to refuse it. **The behaviour changed
+on purpose, so the test now encodes the new contract** via `settle_s()`. In
+passing that hunt found a real second-order bug and fixed it: the dialog
+guard re-armed whenever its Effect re-ran, so a dialog that raises a confirm
+re-armed its own scrim; it is now keyed on WHICH dialog is showing
+(`DIALOG_ARMED_FOR`). t157 — **the test was asserting the bug**: it checked
+`column-count == 2`, i.e. that the Tweaks page used CSS multicol, and
+multicol rebalancing across its columns IS R92 S2. Rewritten to assert
+geometry (measured: 1500px → two columns at x=200/x=841, same top, equal
+626px widths, 5 and 7 groups; 430px → stacked at one left edge) plus the pin
+the old test never had: **collapsing a group in column 1 moves nothing in
+column 2.**
+
+**Also shipped in passing:** `App::copy_and_say` — all seven copy buttons
+threw away `copy_to_clipboard`'s `done(bool)` and said "Copied." either way,
+so the app claimed a clipboard it had never reached (R93 BC-5's honesty
+half); `app/public/manifest.webmanifest` plus the `apple-mobile-web-app-capable`
+meta, which is the documented precondition of WebKit's home-screen exemption
+from its 7-day storage eviction — **not verifiable here, there is no WebKit
+on this machine**, and the disclosure beside "Export everything" is the
+non-negotiable half; `domx::any_coarse_pointer` (`any-pointer: coarse`) for
+the drag copy on touchscreen LAPTOPS, added ALONGSIDE `is_coarse_pointer`
+and never replacing it, because the confirm's settle must stay off mouse
+users — three tests forbid it; and `replace_query` now verifies itself
+against `location.search` and retries, bounded, because every engine
+rate-limits same-document navigation differently and only WebKit throws
+(R92 M7 already learned that `replace` returning Ok proves nothing).
 
 ## 8. Open bugs — found, confirmed, NOT fixed (do not delete)
 

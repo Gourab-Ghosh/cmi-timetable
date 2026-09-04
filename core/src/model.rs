@@ -210,6 +210,27 @@ impl Slot {
         self.start_min < other.end_min && other.start_min < self.end_min
     }
 
+    /// A slot the app can honestly draw, state and export: it starts before
+    /// it ends, and it does not run past midnight.
+    ///
+    /// The one definition of the rule. It was written out by hand in six
+    /// places (`validate.rs`'s gate Rule 6 three times, `export.rs`'s backup
+    /// `slot_ok`, `MeetingJson::to_meeting`, and the course editor) and was
+    /// MISSING at the three doors that accept a stranger's bytes: a share
+    /// link, a backup's own override/custom stores, and the localStorage
+    /// blobs those two write. `start_min: 65535` from one hand-crafted `?s=`
+    /// link therefore became a `1092:15-1092:15` column on My timetable, the
+    /// Master grid and Halls, a `DTSTART;TZID=Asia/Kolkata:20260804T10921500`
+    /// in the .ics (RFC 5545 3.3.5 allows six digits), and a
+    /// `"start_min":65535` that survived every reload (R93 S1).
+    ///
+    /// **Drop-and-say, never clamp.** Clamping moves somebody's class to an
+    /// hour nobody chose and then prints it as a fact; every caller here
+    /// drops the entry and says so.
+    pub fn is_sane(&self) -> bool {
+        self.start_min < self.end_min && self.end_min <= 1440
+    }
+
     fn fmt_min(min: u16) -> String {
         format!("{:02}:{:02}", min / 60, min % 60)
     }
@@ -247,6 +268,11 @@ impl Meeting {
     /// upstream counts as a change), ignoring the TMP* decoration.
     pub fn same_place_time(&self, other: &Meeting) -> bool {
         self.day == other.day && self.slot == other.slot && self.hall == other.hall
+    }
+
+    /// A meeting whose time the app can draw — see [`Slot::is_sane`].
+    pub fn is_sane(&self) -> bool {
+        self.slot.is_sane()
     }
 
     /// "Wed 14:00–15:15 · Lecture Hall 6" (hall part omitted when unknown).
@@ -614,6 +640,22 @@ impl MeetingOverride {
     pub fn is_removal(&self) -> bool {
         self.to.is_none()
     }
+
+    /// An entry the app can hold without lying or crashing.
+    ///
+    /// Three rules, all about values no honest write path can produce:
+    /// its times are drawable ([`Slot::is_sane`]); its id has a number after
+    /// it (`id: u64::MAX` makes `OverridesStore::add`'s `next_id += 1`
+    /// overflow — wrapping to 0 in release and PANICKING in any debug build —
+    /// and forces `next_id` to collide with the live id, so `remove`'s
+    /// `retain(|o| o.id != id)` deletes BOTH entries; R93 S8); and it names
+    /// at least one class, the rule the FILE door already has
+    /// (`MyChanges::into_stores`: "an entry that says nothing at all").
+    pub fn is_sane(&self) -> bool {
+        self.id != u64::MAX
+            && (self.base.is_some() || self.to.is_some())
+            && self.base.iter().chain(self.to.iter()).all(Meeting::is_sane)
+    }
 }
 
 /// A user-set credit value for one course. The official value (stated by
@@ -624,6 +666,22 @@ pub struct CreditOverride {
     pub course: String,
     pub credits: u8,
     pub created_at: f64,
+}
+
+impl CreditOverride {
+    /// The largest number the app will ever describe as the reader's own
+    /// credit figure. It is the range the editor offers and enforces
+    /// (`ui.rs`: `min="0" max="20"`, and "Credits: enter a whole number from
+    /// 0 to 20."), so it is the range every other door must enforce too —
+    /// the editor was the ONLY door that did, and a friend's link or file
+    /// then put "459 credits in total", "1 course at 255 credits" and "You
+    /// set the credits on 2 courses yourself." on a reader's page for a
+    /// number they never typed (R93 S5).
+    pub const MAX: u8 = 20;
+
+    pub fn is_sane(&self) -> bool {
+        self.credits <= Self::MAX
+    }
 }
 
 /// A course of CMI's that the user deleted from their planner. CMI's data is
@@ -679,6 +737,49 @@ impl OverridesStore {
 
     pub fn remove(&mut self, id: u64) {
         self.items.retain(|o| o.id != id);
+    }
+
+    /// Drop every entry the app cannot state as a fact, and say how many
+    /// went. The clamp law's other half: the rules the editor enforces on
+    /// the way in have to be enforced at every OTHER way in — a share link,
+    /// a backup file, and the localStorage blob those two write (R93 S1, S5,
+    /// S8). Dropping, never clamping; every caller says so.
+    ///
+    /// `hidden` needs no rule — a deletion carries no time and no number.
+    pub fn retain_sane(&mut self) -> usize {
+        let before = self.items.len() + self.credits.len();
+        self.items.retain(MeetingOverride::is_sane);
+        self.credits.retain(CreditOverride::is_sane);
+        self.bump_next_id();
+        before - (self.items.len() + self.credits.len())
+    }
+
+    /// Nothing in here needs setting aside — the same question, asked
+    /// without changing anything.
+    pub fn is_sane(&self) -> bool {
+        self.items.iter().all(MeetingOverride::is_sane)
+            && self.credits.iter().all(CreditOverride::is_sane)
+    }
+
+    /// Move the COUNTER past every id in the store — the counter, never an
+    /// id. This is the whole of S8's repair, and it is deliberately NOT a
+    /// renumbering: `cmitt.v1.conflicts` (and a backup file's own
+    /// `pending_conflicts`) hold `merge::Conflict::override_id` pointing INTO
+    /// these items, and `merge::resolve_conflict` acts on them by id — so
+    /// renumbering would silently re-aim a deferred "Use CMI's new time" at a
+    /// different change. `checked_add`, so it is safe even before
+    /// `retain_sane` has run.
+    pub fn bump_next_id(&mut self) {
+        if let Some(after) = self
+            .items
+            .iter()
+            .map(|o| o.id)
+            .max()
+            .and_then(|m| m.checked_add(1))
+            && self.next_id < after
+        {
+            self.next_id = after;
+        }
     }
 
     pub fn for_course<'a>(&'a self, code: &'a str) -> impl Iterator<Item = &'a MeetingOverride> {
@@ -792,6 +893,26 @@ impl CustomStore {
             Some(existing) => *existing = course,
             None => self.courses.push(course),
         }
+    }
+
+    /// Drop every course carrying a class the app cannot draw, and say how
+    /// many went — the `OverridesStore::retain_sane` rule, for the courses a
+    /// share link or a backup file brings with it. A course loses its WHOLE
+    /// entry rather than the one bad class: a course quietly missing a
+    /// meeting is lying by omission (4, R83), and its code then resolves to
+    /// nothing and becomes the same dismissible "unknown code" chip a link
+    /// naming a retired course already produces.
+    pub fn retain_sane(&mut self) -> usize {
+        let before = self.courses.len();
+        self.courses
+            .retain(|c| c.meetings.iter().all(Meeting::is_sane));
+        before - self.courses.len()
+    }
+
+    pub fn is_sane(&self) -> bool {
+        self.courses
+            .iter()
+            .all(|c| c.meetings.iter().all(Meeting::is_sane))
     }
 
     pub fn remove(&mut self, code: &str) -> bool {

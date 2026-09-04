@@ -409,7 +409,9 @@ pub struct Prefs {
     pub helper_site: Option<String>,
     /// The route that last delivered a timetable, by name, so the next sync
     /// starts with it. Ordinary self-healing: whichever relay is alive today
-    /// is the one tried first tomorrow, and the routes that are down stop
+    /// is the one tried first OF THE SHIPPED RELAYS tomorrow (a helper site
+    /// of the reader's own still goes before all of them), and the routes
+    /// that are down stop
     /// costing the reader their timeout every time.
     #[serde(default)]
     pub last_good_route: Option<String>,
@@ -494,7 +496,9 @@ pub struct Prefs {
     pub landing_tab: Option<Tab>,
     /// Forget the day-strip picks between visits: every boot clears
     /// `plan_view` and `halls_view` before anything reads them, so each
-    /// visit opens on today while in-session picks still hold.
+    /// visit opens on today while a pick made in THIS document still holds.
+    /// Not "this session": a browser session survives a reload and this does
+    /// not — `init_app` runs the clear on every load (R92 CW-7).
     #[serde(default)]
     pub day_picks_forget: bool,
     /// How long a notice stays, in seconds; 0 = until dismissed by hand.
@@ -697,6 +701,76 @@ impl Default for Prefs {
     }
 }
 
+impl Prefs {
+    /// Bring every numeric and choice tweak inside the range the app can
+    /// actually do — **the clamp law's read half, applied at the door**.
+    ///
+    /// Each range here is copied from the field's own read site, and those
+    /// are the authority: `undo_depth` from `push_undo`'s `.clamp(10, 1000)`,
+    /// `stale_after_days` from the header pill's `.clamp(1.0, 14.0)`,
+    /// `proxy_timeout_s` from `fetch`'s `.clamp(4, 60)`, `head_start_ms` from
+    /// `fetch`'s `.min(10_000)`, and the three choice fields from the `_ =>`
+    /// arms that already fall through to how the app ships. Change a read
+    /// site and change this in the same edit, or the Tweaks page starts lying
+    /// again.
+    ///
+    /// This is the ONE place in the clamp-door family that clamps rather than
+    /// drops, and the reason is that nothing is being taken from anybody: the
+    /// read sites already clamp, so the app was ALREADY keeping 10 undo steps
+    /// for a stored `0` — it was only the Tweaks page, `tweak_deltas` and
+    /// Copy diagnostics that said `0`. Clamping here hides no fact; it stops
+    /// three surfaces stating one that was never true (R93 S6). Slots and
+    /// credits are the opposite case and are dropped, never clamped — see
+    /// `OverridesStore::retain_sane`.
+    ///
+    /// The three choice fields are also what keeps their `seg` radiogroups
+    /// answerable: `dev::seg_choice` gives the picked option
+    /// `aria-checked="true"` and `tabindex="0"` and every other option `-1`,
+    /// so a value none of them matches left the whole group
+    /// `aria-checked="false"` throughout **and out of the tab order** — a
+    /// control a keyboard could not reach.
+    pub fn clamp_tweaks(&mut self) {
+        self.undo_depth = self.undo_depth.map(|d| d.clamp(10, 1000));
+        self.stale_after_days = self.stale_after_days.map(|d| d.clamp(1, 14));
+        self.proxy_timeout_s = self.proxy_timeout_s.map(|t| t.clamp(4, 60));
+        self.head_start_ms = self.head_start_ms.map(|ms| ms.min(10_000));
+        // Choice fields: keep only what the page can show and the read site
+        // can act on. `None` is "how the app ships", which is exactly what
+        // every read site already does with an unrecognised value — so for
+        // `auto_sync` and `print_page` this changes no behaviour at all, only
+        // what the page and the diagnostics say about it.
+        if !matches!(self.toast_life_secs, None | Some(0) | Some(3) | Some(12)) {
+            self.toast_life_secs = None;
+        }
+        if !matches!(
+            self.auto_sync.as_deref(),
+            None | Some("hourly") | Some("manual")
+        ) {
+            self.auto_sync = None;
+        }
+        if !matches!(
+            self.print_page.as_deref(),
+            None | Some("portrait") | Some("ask")
+        ) {
+            self.print_page = None;
+        }
+        // The service picked last time. `App`'s `shorten_service` signal
+        // already falls back for an unknown key at boot ("An unknown key
+        // quietly becomes the default rather than a dead choice nothing in
+        // the list matches"), but the PREF kept the dead key — so
+        // `nothing_saved_to_lose` counted a choice the reader cannot see and
+        // an import stopped to ask about it.
+        if self
+            .shorten_service
+            .as_deref()
+            .and_then(ttcore::shorten::service)
+            .is_none()
+        {
+            self.shorten_service = None;
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Transient state
 // ---------------------------------------------------------------------------
@@ -885,7 +959,12 @@ pub enum Dialog {
 pub enum ShortenState {
     Idle,
     Working(&'static str),
-    Failed(&'static str, String),
+    /// Service key, the sentence, and every relay that was handed the link
+    /// before the attempt gave up. The relays saw the timetable whether or
+    /// not any of them answered, so the popup's account of who can read it
+    /// has to count them on this path too (R93 R10) — the success path has
+    /// always named them.
+    Failed(&'static str, String, Vec<String>),
 }
 
 impl ShortenState {
@@ -893,7 +972,7 @@ impl ShortenState {
     pub fn service(&self) -> Option<&'static str> {
         match self {
             ShortenState::Idle => None,
-            ShortenState::Working(key) | ShortenState::Failed(key, _) => Some(key),
+            ShortenState::Working(key) | ShortenState::Failed(key, ..) => Some(key),
         }
     }
 
@@ -934,6 +1013,11 @@ pub struct IncomingPlan {
     /// answer restores them — a course cannot be on the timetable and
     /// deleted at once — so this too is said before the question.
     pub restores_deleted: Vec<String>,
+    /// Codes the app cannot file at all: a comma or a % sign in the code has
+    /// no round trip through `?c=`, so such a course would be deleted from the
+    /// timetable — or substituted for another — by the app's own address bar on
+    /// the next reload (R93 M5). Named in the dialog, then left out.
+    pub unshareable: Vec<String>,
 }
 
 impl IncomingPlan {
@@ -1023,6 +1107,19 @@ pub struct UndoEntry {
     /// The user's own courses ride the history too, so deleting or editing
     /// one is as undoable as any other change.
     pub customs: CustomStore,
+    /// The conflict queue as it stood, but ONLY on an entry whose action
+    /// changed that queue — `resolve_conflicts` is the one such action
+    /// today. `None` means "this entry has no opinion about the queue",
+    /// which is what every ordinary edit must mean (R92 S14).
+    ///
+    /// It is deliberately NOT unconditional. `merge_overrides` can raise a
+    /// conflict without rewriting the override store, so `adopt`'s
+    /// `if reconciled` stack retirement does NOT fire on a conflict-only
+    /// sync and the stack survives it. An entry pushed before that sync
+    /// carrying an empty queue would then have its Ctrl+Z delete a question
+    /// the student had not even read yet — R92 M6's bug on a path M6's fix
+    /// does not reach.
+    pub conflicts: Option<Vec<Conflict>>,
 }
 
 #[derive(Clone, Default)]
@@ -1044,6 +1141,15 @@ pub const CROSS_TAB_NOTICE: &str = "Another tab of this app has changed your tim
 
 #[derive(Clone, PartialEq)]
 pub struct FetchLogEntry {
+    /// Which sync produced this line. The log is a SESSION ring buffer,
+    /// never cleared, so "the direct route answered" and "here is what it
+    /// said" have to be asked of one run's entries — asked of the whole
+    /// log, a failing sync quoted a status from an earlier one and claimed
+    /// cmi.ac.in had answered (R92 S20). An index into the log cannot
+    /// stand in for this: the buffer drains its oldest entries from the
+    /// front at 200, so a remembered LENGTH starts pointing into the run
+    /// it was meant to exclude.
+    pub run: u32,
     pub at: f64,
     pub tier: String,
     pub url: String,
@@ -1151,6 +1257,9 @@ pub struct App {
     /// R82 that reassurance sat over a timetable the link had just emptied.
     pub unknown_was_everything: RwSignal<bool>,
     pub fetch_log: RwSignal<Vec<FetchLogEntry>>,
+    /// Bumped once at the top of every `run_update`, stamped on every entry
+    /// that run logs. Read `_untracked` only — nothing renders it.
+    pub fetch_run: RwSignal<u32>,
     pub reports: RwSignal<Vec<StoredReport>>,
     pub route: RwSignal<Route>,
     pub dialog: RwSignal<Option<Dialog>>,
@@ -1188,12 +1297,38 @@ pub struct App {
     /// by a media-query listener in `app.rs`, at the stylesheet's own
     /// boundary.
     pub phone_viewport: RwSignal<bool>,
+    /// Was the last press a FINGER? The gesture copy branches on this, so the
+    /// sentence names the gesture the gate will actually judge (R93 R11): a
+    /// touchscreen laptop is `pointer: fine`, `any-pointer: coarse`, and
+    /// `dnd`'s gate is per-event, so a media query alone told a finger to
+    /// "drag" — the one thing that does nothing there. Seeded from
+    /// `domx::any_coarse_pointer()` (the safe wording: press-and-hold-then-drag
+    /// works for a mouse too), and corrected by the first press. Written from
+    /// the document `pointerdown` in `dnd::install_global_handlers`, and only
+    /// when it changes, so a press does not re-render the hints.
+    pub touch_input: RwSignal<bool>,
     /// The build id of a newer version on the server, once the daily check has
     /// found one. `Some` means the banner is up, asking — nothing installs
     /// until the reader answers it, so this is only ever cleared by them
     /// (pressing "Not now", or switching checks off) or by the reload they
     /// asked for. See `crate::update`.
     pub update_ready: RwSignal<Option<String>>,
+    /// Bumped by every write to the update marker, so anything DISPLAYING
+    /// that marker can subscribe to it (R92 S17).
+    ///
+    /// The marker lives in localStorage and is read back through
+    /// `update::schedule_for_display()`, a plain function — so developer
+    /// mode's two update rows were evaluated once at construction and then
+    /// sat there saying "never yet in this browser" while the panel's own
+    /// "Check for an update now" button, four lines below them, wrote real
+    /// timestamps to the key. `update::edit_state` is the one funnel every
+    /// write goes through, and it bumps this.
+    ///
+    /// Not a `Prefs` field, so the prefs law's three-place rule does not
+    /// reach it: this is a fact about what has happened, like
+    /// `last_update_attempt`, and there is nothing here for
+    /// `reset_tweaks()` to reset.
+    pub update_rev: RwSignal<u64>,
     pub drag: RwSignal<Option<DragState>>,
     /// The cell under the pointer, for the drop-target highlight. Derived
     /// from `drag` at the root (see `app.rs`) and deliberately NOT read off
@@ -1246,6 +1381,29 @@ impl App {
 
     pub fn toast(&self, text: impl Into<String>) {
         self.push_toast(text.into(), false);
+    }
+
+    /// Copy, then say what actually happened.
+    ///
+    /// The clipboard can be absent (a non-secure context exposes none) or
+    /// refuse (an unfocused document), and `copy_to_clipboard` has always
+    /// offered a `done(bool)` to say which — but all seven call sites threw
+    /// it away and raised "Copied." either way, so the app claimed to have
+    /// put something on a clipboard it had never reached (R93 BC-5). A
+    /// sentence the app cannot stand behind is worse here than elsewhere:
+    /// the reader walks away and pastes nothing.
+    pub fn copy_and_say(&self, text: String, ok: &'static str) {
+        let app = *self;
+        crate::domx::copy_to_clipboard(text, move |worked| {
+            if worked {
+                app.toast(ok);
+            } else {
+                app.toast(
+                    "This browser would not let the app use the clipboard, so \
+                     nothing was copied — select the text and copy it yourself.",
+                );
+            }
+        });
     }
 
     /// A toast whose id the caller keeps, so it can be taken down the moment
@@ -1336,6 +1494,29 @@ impl App {
             h.borrow_mut().remove(&id);
         });
         self.toasts.update(|t| t.retain(|x| x.id != id));
+    }
+
+    /// Every standing notice, in one gesture — what Escape does
+    /// (a11ykbd-2). Returns how many were cleared, so the caller can both
+    /// decide whether it consumed the key and say the right number.
+    ///
+    /// Clearing the rail loses no capability. A notice offers Undo only
+    /// while its `undo_at` is still the TOP of the undo stack — that gate
+    /// is in `ui::Toasts` — so at most one notice can be offering it at a
+    /// time, and it is exactly the action the header's ↶ Undo reverts.
+    /// Nor is anything unsaid destroyed: R93 R2's rule is that the rail
+    /// never throws a notice away BY ITSELF, and this is the reader
+    /// asking. `count == 0` in `ui::Toasts`'s effect already takes
+    /// `--toast-band` and `toasts-live` back off, so no cleanup is needed
+    /// here.
+    pub fn dismiss_all_toasts(&self) -> usize {
+        let n = self.toasts.with_untracked(|t| t.len());
+        if n == 0 {
+            return 0;
+        }
+        HOVERED_TOASTS.with(|h| h.borrow_mut().clear());
+        self.toasts.update(|t| t.clear());
+        n
     }
 
     pub fn set_toast_hovered(&self, id: u64, hovered: bool) {
@@ -1555,9 +1736,13 @@ impl App {
     /// a full localStorage lost the lot at the next reload without a word.
     /// It stays on screen (sticky) because it is about data the user can
     /// still rescue — the session in front of them is still correct.
-    fn persisted(&self, what: &str, result: Result<(), String>) {
-        if result.is_err() {
-            self.set_banner_sticky(
+    fn persisted(&self, what: &str, result: Result<(), storage::SaveError>) {
+        match result {
+            Ok(()) => {}
+            // The store is FULL: freeing space is real advice, and so is
+            // the downloaded timetable — the biggest thing in there and the
+            // one piece a sync can fetch again.
+            Err(storage::SaveError::Refused) => self.set_banner_sticky(
                 BannerKind::Warn,
                 format!(
                     "Your browser wouldn't let the app save your {what}. Everything is \
@@ -1565,7 +1750,22 @@ impl App {
                      the app. Freeing some browser space — or clearing the downloaded \
                      timetable under My data — usually fixes it.",
                 ),
-            );
+            ),
+            // The store is SWITCHED OFF. Nothing is short of space, and
+            // "clear the downloaded timetable" would free nothing (`remove`
+            // is a no-op with no store) while taking the timetable off the
+            // screen — the app must not send anyone there. The only thing
+            // that does work is a file, so that is what it offers (R93 S4).
+            Err(storage::SaveError::Unavailable) => self.set_banner_sticky(
+                BannerKind::Warn,
+                format!(
+                    "This browser isn't letting the app store anything, so your {what} \
+                     will be gone when you close the tab. It isn't short of space — \
+                     site data is switched off for this page, and no button in this app \
+                     can turn it back on. Everything on screen is still correct: use \
+                     Export everything in My data to keep a copy in a file.",
+                ),
+            ),
         }
     }
 
@@ -1617,21 +1817,45 @@ impl App {
         // everything" and the storage inspector all rewrite or clear this
         // key and then reload, so anything still pending would land on top
         // of them with the stale in-memory value.
-        let _ = self
-            .prefs
-            .with_untracked(|p| storage::save(storage::KEY_PREFS, p));
+        let _ = self.persist_prefs_checked();
+    }
+
+    /// The same write as `persist_prefs`, handing back the browser's answer.
+    ///
+    /// `persist_prefs` stays silent and stays the hot path — it runs on
+    /// every keystroke in a filter search box — and it stays banner-less for
+    /// the reason recorded in CONTEXT §4: preferences are re-derivable, and
+    /// a banner for them would hide a real one. What it may NOT do is let a
+    /// caller announce "Saved." over a write that was refused (R92 S11).
+    /// Callers that make a claim about persistence use this and tell the
+    /// truth in their own toast; callers that merely state an in-session
+    /// fact ("Notices now stay 3 seconds") keep using `persist_prefs`.
+    ///
+    /// Deliberately NOT routed through `persisted()`: that raises a STICKY
+    /// banner, which is the thing §4 forbids here.
+    pub fn persist_prefs_checked(&self) -> Result<(), storage::SaveError> {
+        // `with_untracked`, never `get_untracked` — see `persist_prefs`.
+        self.prefs
+            .with_untracked(|p| storage::save(storage::KEY_PREFS, p))
     }
 
     /// Keep `?c=` canonical on every selection change (replaceState). Any
     /// `s=` payload is consumed at load time and dropped here.
     pub fn sync_url(&self) {
         let selection = self.selection.get_untracked();
-        if selection.is_empty() {
+        // The codes that can travel, and the ones that cannot: a code carrying
+        // a comma or a % is left out of `?c=` (R93 M5), so "is there anything
+        // to put in the address bar?" is a question about the PROJECTION. Asked
+        // of the raw selection, a planner holding nothing but such a course
+        // wrote `?c=TOC%2CX` — and the next reload read that back as `TOC` and
+        // put CMI's Theory of Computation on a timetable nobody picked it for.
+        let (safe, _refused) = domx::url_safe_split(&selection);
+        if safe.is_empty() {
             domx::replace_query("");
         } else {
             // Plain commas between codes, each code percent-encoded — see
             // `domx::c_param`.
-            domx::replace_query(&format!("?c={}", domx::c_param(&selection)));
+            domx::replace_query(&format!("?c={}", domx::c_param(&safe)));
         }
     }
 
@@ -1646,6 +1870,9 @@ impl App {
             filters: self.prefs.with_untracked(|p| p.filters.clone()),
             my_filters: self.prefs.with_untracked(|p| p.my_filters.clone()),
             customs: self.customs.get_untracked(),
+            // Ordinary actions have no opinion about the conflict queue —
+            // see the field's comment. `resolve_conflicts` stamps its own.
+            conflicts: None,
         };
         // The depth tweak, clamped at the read site so a hand-edited blob
         // cannot make Ctrl+Z useless (too few) or eat RAM without limit.
@@ -1675,6 +1902,10 @@ impl App {
             filters: self.prefs.with_untracked(|p| p.filters.clone()),
             my_filters: self.prefs.with_untracked(|p| p.my_filters.clone()),
             customs: self.customs.get_untracked(),
+            // The callers below stamp this when — and only when — the entry
+            // they are pairing with carries a queue, so undo and redo stay
+            // symmetrical.
+            conflicts: None,
         }
     }
 
@@ -1687,6 +1918,19 @@ impl App {
             p.my_filters = entry.my_filters.clone();
         });
         self.customs.set(entry.customs.clone());
+        // Only if this entry owns the queue (R92 S14). Answering a conflict
+        // took the questions out of memory AND off disk while its own Undo
+        // put the pre-answer overrides back — so the class was drawn twice
+        // (`effective_meetings` treats the stale override as an extra
+        // meeting), `cmitt.v1.conflicts` was null, and the Review banner
+        // (which needs `n > 0`) was gone: no route back, and a reload
+        // changed nothing. `set_conflicts` is the one writer, so the signal
+        // and localStorage come back together, and its
+        // `conflicts_dismissed` reset is right here too — a restored
+        // question is a question again.
+        if let Some(conflicts) = entry.conflicts.clone() {
+            self.set_conflicts(conflicts);
+        }
         self.persist_selection();
         self.persist_overrides();
         self.persist_prefs();
@@ -1736,7 +1980,7 @@ impl App {
     pub fn undo(&self) {
         let entry = self.undo_stack.try_update(|s| s.undo.pop()).flatten();
         if let Some(entry) = entry {
-            let current = self.current_entry(&entry.label);
+            let current = self.entry_now_paired_with(&entry);
             self.undo_stack.update(|s| s.redo.push(current));
             self.apply_entry(&entry);
             self.toast(format!("Undid: {}", entry.label));
@@ -1746,11 +1990,25 @@ impl App {
     pub fn redo(&self) {
         let entry = self.undo_stack.try_update(|s| s.redo.pop()).flatten();
         if let Some(entry) = entry {
-            let current = self.current_entry(&entry.label);
+            let current = self.entry_now_paired_with(&entry);
             self.undo_stack.update(|s| s.undo.push(current));
             self.apply_entry(&entry);
             self.toast(format!("Redid: {}", entry.label));
         }
+    }
+
+    /// `current_entry`, plus the conflict queue when — and only when — the
+    /// entry we are pairing with carries one. Symmetry is the point: undo of
+    /// "resolve timetable conflicts" puts the questions back, so its redo
+    /// has to take them away again, or the answered rows would sit in the
+    /// queue for ever under a toast saying "Redid: resolve timetable
+    /// conflicts" (R92 S14).
+    fn entry_now_paired_with(&self, entry: &UndoEntry) -> UndoEntry {
+        let mut current = self.current_entry(&entry.label);
+        if entry.conflicts.is_some() {
+            current.conflicts = Some(self.conflicts.get_untracked());
+        }
+        current
     }
 
     /// Catch this tab up to the user's own data as another tab last saved
@@ -1789,16 +2047,24 @@ impl App {
             Loaded::Missing => Vec::new(),
             Loaded::Corrupt(_) => return false,
         };
-        let overrides: OverridesStore = match storage::peek(storage::KEY_OVERRIDES) {
+        let mut overrides: OverridesStore = match storage::peek(storage::KEY_OVERRIDES) {
             Loaded::Value(v) => v,
             Loaded::Missing => OverridesStore::default(),
             Loaded::Corrupt(_) => return false,
         };
-        let customs: CustomStore = match storage::peek(storage::KEY_CUSTOM) {
+        let mut customs: CustomStore = match storage::peek(storage::KEY_CUSTOM) {
             Loaded::Value(v) => v,
             Loaded::Missing => CustomStore::default(),
             Loaded::Corrupt(_) => return false,
         };
+        // The same rule as the boot door, so the two tabs cannot disagree
+        // about what is in the store (R93 S1). NOTHING is persisted or
+        // announced from here, deliberately (R93 M2): this tab is only
+        // LOOKING, the boot that owns the story already said it, and a
+        // write-back from a passive reader destroyed the other tab's
+        // finished work.
+        overrides.retain_sane();
+        customs.retain_sane();
         // Nothing new: this tab already holds what storage holds — either
         // our own write echoing back through a deferred adoption, or the
         // other tab saved while we were busy and its save matched ours.
@@ -3112,9 +3378,22 @@ impl App {
     /// the dialog to look never costs an answer.
     /// `choices[i] = (conflict, keep_mine)`.
     pub fn resolve_conflicts(&self, choices: Vec<(Conflict, bool)>, remaining: Vec<Conflict>) {
+        // Read BEFORE `act`, because `act` is what pushes the entry that has
+        // to carry it.
+        let before = self.conflicts.get_untracked();
         self.act("resolve timetable conflicts", |_, ovs| {
             for (conflict, keep_mine) in &choices {
                 ttcore::merge::resolve_conflict(ovs, conflict, *keep_mine);
+            }
+        });
+        // The entry `act` just pushed holds the pre-answer overrides; give it
+        // the pre-answer QUEUE too, so its Undo restores both halves of one
+        // action instead of half of it (R92 S14). Patching the top entry
+        // rather than adding a parameter to `act` keeps the queue out of
+        // every other caller's signature — and out of their entries.
+        self.undo_stack.update(|s| {
+            if let Some(top) = s.undo.last_mut() {
+                top.conflicts = Some(before);
             }
         });
         let left = remaining.len();
@@ -3774,9 +4053,9 @@ impl App {
     /// Flip one boolean tweak. Instant pref, not an undo step — the
     /// `set_changes_mine_only` line applies: it changes what the app shows,
     /// never what the timetable holds.
-    pub fn set_tweak(&self, set: fn(&mut Prefs, bool), on: bool) {
+    pub fn set_tweak(&self, set: fn(&mut Prefs, bool), on: bool) -> Result<(), storage::SaveError> {
         self.prefs.update(|p| set(p, on));
-        self.persist_prefs();
+        self.persist_prefs_checked()
     }
 
     /// Everything the Tweaks page owns, back to how the app ships — every

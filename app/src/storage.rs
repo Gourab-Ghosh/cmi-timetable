@@ -102,12 +102,62 @@ pub fn load<T: DeserializeOwned>(key: &str) -> Loaded<T> {
     }
 }
 
-pub fn save<T: Serialize>(key: &str, value: &T) -> Result<(), String> {
-    let storage = raw().ok_or("localStorage unavailable")?;
-    let text = serde_json::to_string(value).map_err(|e| e.to_string())?;
-    storage
-        .set_item(key, &text)
-        .map_err(|_| "the browser refused to save (storage quota?)".to_string())
+/// Why a write did not land. The two causes need DIFFERENT WORDS, and the
+/// app used to have only one sentence for both: with site data blocked it
+/// blamed browser space and sent the reader to "Clear the downloaded
+/// timetable", a control that (a) frees nothing, because `remove` is a
+/// no-op with no store, and (b) takes their timetable off the screen
+/// (R93 S4). Threaded rather than re-derived, so the classification has
+/// exactly one home — the clamp law's rule for the same reason.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SaveError {
+    /// There is no `localStorage` on this page: site data switched off
+    /// (Brave "Block all cookies", Safari's block-all), a sandboxed frame,
+    /// some webviews. Nothing in this app can turn it back on, so no
+    /// remedy inside the app may be offered for it.
+    Unavailable,
+    /// The store is there and refused the write — out of quota. Freeing
+    /// space really does fix this one.
+    Refused,
+}
+
+impl SaveError {
+    /// A whole clause naming the real reason, so every place that has to
+    /// admit a failure says the same true thing: `"… {because} so …"`.
+    /// Starts with a capital, ends with a comma.
+    pub fn because(self) -> &'static str {
+        match self {
+            SaveError::Unavailable => "This browser isn't letting the app store anything,",
+            SaveError::Refused => "Your browser is out of space,",
+        }
+    }
+}
+
+impl std::fmt::Display for SaveError {
+    /// The developer-facing text, kept byte-identical to the strings this
+    /// module returned before the error was typed, so the three
+    /// `logging::warn!("…: {e}")` call sites (`update.rs`'s `save_state`,
+    /// `state.rs`'s `set_conflicts` and `remember_short`) read exactly as
+    /// they always did and need no edit.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            SaveError::Unavailable => "localStorage unavailable",
+            SaveError::Refused => "the browser refused to save (storage quota?)",
+        })
+    }
+}
+
+pub fn save<T: Serialize>(key: &str, value: &T) -> Result<(), SaveError> {
+    let storage = raw().ok_or(SaveError::Unavailable)?;
+    let text = serde_json::to_string(value).map_err(|e| {
+        // Unreachable for the types stored here (serde_json writes
+        // non-finite floats as `null` rather than failing), but if it ever
+        // happens the console gets the true reason and the reader gets
+        // "refused", which is what they need to hear either way.
+        leptos::logging::error!("cmitt: couldn't encode {key}: {e}");
+        SaveError::Refused
+    })?;
+    storage.set_item(key, &text).map_err(|_| SaveError::Refused)
 }
 
 pub fn remove(key: &str) {
@@ -139,9 +189,14 @@ pub fn restore_raw(key: &str, old: &Option<String>) -> bool {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum SnapshotSave {
     Full,
-    /// Saved, but the raw HTML copies were dropped to fit the quota.
+    /// Saved, but the raw HTML copies were dropped to fit the quota. Only
+    /// reachable when a LATER `save` succeeded, so this state means the
+    /// store exists and is tight — never that it is missing.
     DroppedRaw,
-    Failed,
+    /// Nothing was stored, and why. The cause decides the sentence: "free
+    /// some space" is useless advice when the store is switched off
+    /// (R93 S4).
+    Failed(SaveError),
 }
 
 pub fn save_snapshot(snapshot: &Snapshot) -> SnapshotSave {
@@ -150,10 +205,9 @@ pub fn save_snapshot(snapshot: &Snapshot) -> SnapshotSave {
     }
     let mut slim = snapshot.clone();
     slim.raw_html_gz = None;
-    if save(KEY_SNAPSHOT, &slim).is_ok() {
-        SnapshotSave::DroppedRaw
-    } else {
-        SnapshotSave::Failed
+    match save(KEY_SNAPSHOT, &slim) {
+        Ok(()) => SnapshotSave::DroppedRaw,
+        Err(e) => SnapshotSave::Failed(e),
     }
 }
 

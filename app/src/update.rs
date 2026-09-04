@@ -76,7 +76,18 @@ const MIN_GAP_MS: f64 = 60.0 * 1000.0;
 const TICK_MS: u32 = 5 * 60 * 1000;
 /// A shell is a few kilobytes. If it has not arrived by now the network is
 /// not in a state to be updating anything.
-const SHELL_TIMEOUT_MS: u32 = 8_000;
+///
+/// And it must stay BELOW `NAV_TIMEOUT_MS` in `app/hooks/sw-body.js` (5 s),
+/// which is the cap after which the worker answers a NAVIGATION with the
+/// cached shell. At 8 s this constant opened a band — a 5–8 s link — that was
+/// fast enough to raise the update banner and too slow for the reload to
+/// reach the server, so "Update now" landed the reader back on the build they
+/// already had (R92 S15). Below the nav cap, a link that can raise the
+/// question can also answer it. A slower link learns nothing, silently, and
+/// retries in an hour — which is what this module already does for every
+/// other unreachable-server outcome. **If either number changes, change both,
+/// and keep this one lower.**
+const SHELL_TIMEOUT_MS: u32 = 4_000;
 
 /// What the app remembers between reloads about updating itself.
 #[derive(Clone, Default, Serialize, Deserialize)]
@@ -115,15 +126,23 @@ pub struct UpdateState {
 }
 
 /// The update check's schedule, for the Overview page (R89): when it last
-/// asked, when it plans to ask next, and whether that plan is one `due()`
-/// would ignore — a stored next-check further out than one full interval
-/// (the clock-moved guard) means "overdue: it will check on the next
-/// visit", and printing its timestamp as a promise would be a small lie.
+/// asked, when it plans to ask next, and whether `due()` would already
+/// fire on that plan — either because the time has passed or because it is
+/// further out than one whole interval (the clock-moved guard). Both mean
+/// "overdue: it will check on the next visit"; printing either timestamp as
+/// a promise would be a small lie (sdm-2).
 pub fn schedule_for_display() -> (Option<f64>, Option<f64>, bool) {
     let st = load_state();
     let last = (st.attempted_at > 0.0).then_some(st.attempted_at);
     let next = (st.next_check_at > 0.0).then_some(st.next_check_at);
-    let overdue = st.next_check_at > crate::domx::now_ms() + CHECK_EVERY_MS;
+    // sdm-2: this used to test only `> now + CHECK_EVERY_MS` — the
+    // clock-moved-FORWARD half of `due()` — so a next_check_at that had
+    // simply passed was printed verbatim as the NEXT check: a date in the
+    // past under the label "Next scheduled check". `is_some_and` keeps the
+    // never-scheduled case (`next_check_at == 0.0`, `next == None`) out of
+    // the overdue arm, so a fresh browser still reads "on the next visit"
+    // rather than "overdue".
+    let overdue = next.is_some_and(|t| is_due(crate::domx::now_ms(), t));
     (last, next, overdue)
 }
 
@@ -155,10 +174,18 @@ fn save_state(state: &UpdateState) {
 ///
 /// Reading the marker fresh at the moment of the change makes that
 /// unrepresentable, so every write here goes through this.
-fn edit_state(f: impl FnOnce(&mut UpdateState)) -> UpdateState {
+fn edit_state(app: App, f: impl FnOnce(&mut UpdateState)) -> UpdateState {
     let mut state = load_state();
     f(&mut state);
     save_state(&state);
+    // Anything on screen that displays this marker reads it back out of
+    // localStorage through `schedule_for_display`, which no signal reaches.
+    // Announcing the write HERE — in the one funnel every write already goes
+    // through — is what makes developer mode's two update rows refresh when
+    // its own "Check for an update now" is pressed (R92 S17). Take `app`
+    // rather than a bare signal so a future writer cannot add a path that
+    // skips it.
+    app.update_rev.update(|n| *n = n.wrapping_add(1));
     state
 }
 
@@ -227,7 +254,14 @@ fn shell_url(scope: Option<&str>, stamp: f64) -> Option<String> {
 }
 
 async fn registration() -> Option<web_sys::ServiceWorkerRegistration> {
-    let container = crate::domx::window().navigator().service_worker();
+    // A browser with no `navigator.serviceWorker` (a private window before
+    // Firefox 138, workers disabled, any non-secure context) must land here
+    // as "no registration" — the same answer as a first visit. Calling the
+    // getter's result would throw out of this spawned task instead, and a
+    // task that throws never polls again: the daily update loop would be
+    // dead for the life of the tab (R93 BC-5).
+    let nav = crate::domx::window().navigator();
+    let container = crate::domx::service_worker(&nav)?;
     JsFuture::from(container.get_registration())
         .await
         .ok()?
@@ -270,7 +304,7 @@ async fn check(app: App, forced: bool) {
         return;
     }
     let now = crate::domx::now_ms();
-    edit_state(|s| {
+    edit_state(app, |s| {
         s.attempted_at = now;
         // Pencilled in as a failure FIRST, so that a check which never
         // returns — a tab closed mid-flight, a hung request — cannot leave the
@@ -298,7 +332,9 @@ async fn check(app: App, forced: bool) {
     // An answer arrived, so the next scheduled question is a day away. Read
     // fresh: this is after the network, and the marker may have been written
     // while we were waiting on it.
-    let state = edit_state(|s| s.next_check_at = crate::domx::now_ms() + CHECK_EVERY_MS);
+    let state = edit_state(app, |s| {
+        s.next_check_at = crate::domx::now_ms() + CHECK_EVERY_MS
+    });
 
     if !ttcore::update::is_newer(mine.as_deref(), latest.as_deref()) {
         // The same answer that says "nothing new" also takes down a banner
@@ -352,9 +388,12 @@ async fn check(app: App, forced: bool) {
                 // button again says exactly this again. Imperative, so it is
                 // also true for a reader who has daily checks switched off —
                 // which the old "the app will try again tomorrow" was not.
-                "A newer version is on the server, but reloading didn't reach it — \
-                 something between this browser and the server is serving an old \
-                 copy. Try again tomorrow.",
+                "A newer version is on the server, but reloading didn't reach it. On a \
+                 slow connection this app's own offline copy can answer a reload before \
+                 the server does; a proxy or a CDN part-way through a purge can do the \
+                 same. On a computer, a hard refresh — Ctrl+Shift+R, or ⌘+Shift+R on a \
+                 Mac — takes the page straight from the server. Otherwise the app asks \
+                 again tomorrow.",
             );
         }
         return;
@@ -390,7 +429,7 @@ async fn check(app: App, forced: bool) {
 /// same id again, so a reader cannot be walked around this circle twice.
 fn take(app: App) {
     let now = crate::domx::now_ms();
-    edit_state(|s| {
+    edit_state(app, |s| {
         s.reload_target = app.update_ready.get_untracked();
         s.reload_target_at = now;
     });
@@ -405,7 +444,7 @@ fn decline(app: App) {
         return;
     };
     let now = crate::domx::now_ms();
-    edit_state(|s| {
+    edit_state(app, |s| {
         s.declined = Some(id);
         s.declined_at = now;
         s.next_check_at = now + CHECK_EVERY_MS;
@@ -439,14 +478,48 @@ pub fn install(app: App) {
     // pressed a button and deserves to know it worked. If it did NOT, the
     // marker stays exactly where it is: `check` reads it and does not offer
     // that id again today.
-    if let Some(target) = load_state().reload_target
-        && own_build_id().as_deref() == Some(target.as_str())
-    {
-        edit_state(|s| {
-            s.reload_target = None;
-            s.reload_target_at = 0.0;
-        });
-        app.toast("Updated to the newest version of the app.");
+    // Did the last reload get what it went for? If it did, say so — the reader
+    // pressed a button and deserves to know it worked. If it did NOT, the
+    // marker stays exactly where it is: `check` reads it and does not offer
+    // that id again today.
+    match load_state().reload_target {
+        Some(target) if own_build_id().as_deref() == Some(target.as_str()) => {
+            edit_state(app, |s| {
+                s.reload_target = None;
+                s.reload_target_at = 0.0;
+            });
+            app.toast("Updated to the newest version of the app.");
+        }
+        Some(_) => {
+            // The one state that means "the button did not do what it said",
+            // and it used to produce nothing at all: no toast, no banner, no
+            // live region (R92 S15). The reader pressed Update now, watched
+            // the page reload, and was returned to the version they already
+            // had — while `check` went quiet about that build for a day and
+            // blamed "something between this browser and the server".
+            //
+            // STICKY, not transient: this is decided at boot, and a sync
+            // starting moments later calls `clear_transient_banner`. It is
+            // also the only sentence that explains the reload, so it is not
+            // one to lose.
+            //
+            // The marker is deliberately LEFT SET. It is the loop guard, and
+            // this module's own header calls a reload loop "the worst bug in
+            // the app"; clearing it here would let the next check offer the
+            // same id and walk the reader round the circle. The banner's job
+            // is to hand the decision back to a person.
+            app.set_banner_sticky(
+                crate::state::BannerKind::Warn,
+                "The update didn't land: “Update now” reloaded the page, and this is \
+                 still the version you had. On a slow connection this app's own \
+                 offline copy can answer a reload before the server does. On a \
+                 computer, a hard refresh — Ctrl+Shift+R, or ⌘+Shift+R on a Mac — \
+                 skips that copy and takes the page straight from the server. The \
+                 app won't offer this same update again today, so it can't send \
+                 you round the same circle.",
+            );
+        }
+        None => {}
     }
 
     // The daily question. A spawned loop rather than an interval, and a
@@ -502,8 +575,15 @@ pub fn check_now(app: App) {
 /// cannot happen unless the device clock moved: a phone whose clock was briefly
 /// set to next year would otherwise park the check there for good.
 fn due() -> bool {
-    let now = crate::domx::now_ms();
-    let next = load_state().next_check_at;
+    is_due(crate::domx::now_ms(), load_state().next_check_at)
+}
+
+/// The ONE definition of "this stored next-check time has come": either it
+/// has passed, or it is further out than a whole interval (which cannot
+/// happen unless the device clock moved). `schedule_for_display` asks the
+/// same question of the same number, so the developer panel can never
+/// print as a promise a time `due()` has already fired on (sdm-2).
+fn is_due(now: f64, next: f64) -> bool {
     now >= next || next > now + CHECK_EVERY_MS
 }
 

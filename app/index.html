@@ -8,6 +8,17 @@
        app's ground instead of defaulting to white-on-dark or vice versa. -->
   <meta name="theme-color" content="#f3f4f7" media="(prefers-color-scheme: light)" />
   <meta name="theme-color" content="#0e1014" media="(prefers-color-scheme: dark)" />
+  <!-- WebKit erases a site's script-writable storage — localStorage included,
+       which is everything this app saves — after seven days of Safari use
+       without a visit (webkit.org/blog/10218/). The one documented exemption
+       is a page added to the Home Screen, which iOS only treats as a web
+       application (rather than a Safari bookmark) when the page says it is
+       one. Both tags: the manifest's `display: standalone` is what Safari
+       15.4+ and Chromium read, the apple-prefixed meta is what every older
+       iOS reads, and it needs no manifest fetch to work. -->
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <link rel="manifest" href="./manifest.webmanifest" />
   <title>CMI Timetable Planner</title>
   <!-- The tab icon is the app's own mark (see `ui::logo`): the brand gradient,
        a week frame, and one class placed on it. Simplified to a 2x2 ruling
@@ -48,6 +59,7 @@
   </script>
   <link data-trunk rel="css" href="styles.css" />
   <link data-trunk rel="copy-file" href="public/404.html" />
+  <link data-trunk rel="copy-file" href="public/manifest.webmanifest" />
   <!-- The window the Print button opens. A real page rather than
        about:blank: the popup shows its address, and a build file is also
        precached by the service worker, so printing works offline. -->

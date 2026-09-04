@@ -1,0 +1,8 @@
+{
+  "name": "CMI Timetable Planner",
+  "short_name": "Timetable",
+  "description": "Pick your courses from CMI's timetable pages, see your clashes, and take the result to your calendar or a printer.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone"
+}

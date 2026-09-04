@@ -113,7 +113,13 @@ fn build_info(app: App) -> impl IntoView {
                                 } else {
                                     format!(
                                         "{} · fetched {} · parser v{} · {}",
-                                        s.semester_label,
+                                        // The normalizer every other surface
+                                        // calls (`core::model`): CMI writes
+                                        // "August--November 2026" and the
+                                        // header, the printed masthead, My
+                                        // data and the .ics calendar name all
+                                        // show the en dash (R92 CW-6).
+                                        s.semester_label_display(),
                                         domx::fmt_local(s.fetched_at),
                                         s.parser_version,
                                         s.source.label(),
@@ -130,30 +136,54 @@ fn build_info(app: App) -> impl IntoView {
                 // epoch milliseconds nobody can read.
                 <dt>"Update check"</dt>
                 <dd>
-                    {
+                    // CLOSURES, not plain blocks (R92 S17). A `{ … }` body is
+                    // evaluated once when the view is built, so these two
+                    // rows sat on "never yet in this browser" / "on the next
+                    // visit" while the button four lines below them wrote
+                    // real timestamps — only a route change ever fixed them.
+                    // The tracked read comes FIRST and before every branch:
+                    // `schedule_for_display()` reaches localStorage, not a
+                    // signal, and a closure that returned before its first
+                    // tracked read would subscribe to nothing and be clean
+                    // for ever (the `plan_view` lesson).
+                    {move || {
+                        app.update_rev.track();
                         let (last, _, _) = crate::update::schedule_for_display();
                         match last {
                             Some(t) => format!("last asked {}", domx::fmt_local(t)),
                             None => "never yet in this browser".to_string(),
                         }
-                    }
+                    }}
                 </dd>
                 <dt>"Next scheduled check"</dt>
                 <dd>
                     {
-                        let (_, next, overdue) = crate::update::schedule_for_display();
-                        let off = app.prefs.with_untracked(|p| p.update_checks_off);
-                        if off {
-                            "checks are off — the switch is in My data".to_string()
-                        } else if overdue {
-                            // due() ignores a stored time further out than
-                            // one whole interval (the clock-moved guard) —
-                            // printing it as a promise would be a small lie.
-                            "overdue — it will check on the next visit".to_string()
-                        } else {
-                            match next {
-                                Some(t) => domx::fmt_local(t),
-                                None => "on the next visit".to_string(),
+                        // Deduped, because `prefs` is written on every filter
+                        // keystroke and on every tweak toggle, and the body
+                        // below reads localStorage: a raw `prefs.with` here
+                        // would re-parse the marker for a boolean that had
+                        // not changed. `with_untracked` was the other
+                        // extreme — the row went stale the moment the My
+                        // data switch was flipped.
+                        let checks_off = Memo::new(move |_| {
+                            app.prefs.with(|p| p.update_checks_off)
+                        });
+                        move || {
+                            app.update_rev.track();
+                            let off = checks_off.get();
+                            let (_, next, overdue) = crate::update::schedule_for_display();
+                            if off {
+                                "checks are off — the switch is in My data".to_string()
+                            } else if overdue {
+                                // due() ignores a stored time further out than
+                                // one whole interval (the clock-moved guard) —
+                                // printing it as a promise would be a small lie.
+                                "overdue — it will check on the next visit".to_string()
+                            } else {
+                                match next {
+                                    Some(t) => domx::fmt_local(t),
+                                    None => "on the next visit".to_string(),
+                                }
                             }
                         }
                     }
@@ -596,8 +626,7 @@ fn storage_inspector(app: App) -> impl IntoView {
                                     <button
                                         class="btn small"
                                         on:click=move |_| {
-                                            domx::copy_to_clipboard(copy_value.clone(), |_| {});
-                                            app.toast("Copied.");
+                                            app.copy_and_say(copy_value.clone(), "Copied.");
                                         }
                                     >
                                         "Copy"
@@ -693,6 +722,18 @@ fn raw_html_viewer(app: App) -> impl IntoView {
             {move || {
                 let snapshot = app.snapshot.get();
                 match &snapshot.raw_html_gz {
+                    // sdm-5: an empty Snapshot also has `raw_html_gz: None`,
+                    // so the quota sentence below used to be printed for a
+                    // browser that has never synced — an invented reason for
+                    // an object that does not exist. Ask `has_data()` FIRST,
+                    // and say the same thing Build info says.
+                    None if !snapshot.has_data() => view! {
+                        <p class="muted small">
+                            "No snapshot yet — nothing has been synced in this browser, so \
+                             there are no stored pages to show."
+                        </p>
+                    }
+                        .into_any(),
                     None => view! {
                         <p class="muted small">
                             "The current snapshot has no stored raw pages (they may have been \
@@ -772,11 +813,25 @@ fn raw_html_viewer(app: App) -> impl IntoView {
             <p class="muted small">
                 {move || {
                     let _ = app.banner.get();
-                    format!(
-                        "Shipped parser is v{}; the snapshot was parsed with v{}.",
-                        ttcore::PARSER_VERSION,
-                        app.snapshot.with(|s| s.parser_version),
-                    )
+                    // sdm-5: `parser_version` on an empty Snapshot is the
+                    // struct's own default, so "the snapshot was parsed with
+                    // v4" was printed for a snapshot that was never parsed.
+                    app.snapshot
+                        .with(|s| {
+                            if s.has_data() {
+                                format!(
+                                    "Shipped parser is v{}; the snapshot was parsed with v{}.",
+                                    ttcore::PARSER_VERSION,
+                                    s.parser_version,
+                                )
+                            } else {
+                                format!(
+                                    "Shipped parser is v{}. Nothing has been parsed in this \
+                                     browser yet.",
+                                    ttcore::PARSER_VERSION,
+                                )
+                            }
+                        })
                 }}
             </p>
         </div>
@@ -824,8 +879,7 @@ fn this_browser(app: App) -> impl IntoView {
                     title="Everything a bug report needs — versions, sync attempts, \
                            sizes, which tweaks differ. No course data."
                     on:click=move |_| {
-                        domx::copy_to_clipboard(diagnostics_text(app), |_| {});
-                        app.toast("Copied.");
+                        app.copy_and_say(diagnostics_text(app), "Copied.");
                     }
                 >
                     "Copy diagnostics"
@@ -844,7 +898,12 @@ fn diagnostics_text(app: App) -> String {
         if s.has_data() {
             format!(
                 "{} · fetched {} · parser v{} · {}",
-                s.semester_label,
+                // Same normalizer as the Overview line this mirrors (R92
+                // CW-6). This block is read by a person in a chat window;
+                // the machine-readable copy of the label lives in the backup
+                // payload, which carries the raw string AND the display form
+                // side by side (`export.rs`).
+                s.semester_label_display(),
                 domx::fmt_local(s.fetched_at),
                 s.parser_version,
                 s.source.label(),
@@ -959,11 +1018,26 @@ fn tweak_toggle(
                                     prop:checked=move || app.prefs.with(on_now)
                                     on:change=move |ev| {
                                         let on = event_target_checked(&ev);
-                                        app.set_tweak(set_on, on);
+                                        let saved = app.set_tweak(set_on, on);
                                         // Toast because the effect lands on tabs you
                                         // cannot currently see — the rule every
                                         // invisible flip in this app follows.
-                                        app.toast(if on { toast_on } else { toast_off });
+                                        //
+                                        // Two of these strings promise the next VISIT
+                                        // ("remembered between visits", "never contact
+                                        // cmi.ac.in from this browser now"), which a
+                                        // refused write makes false (R92 S11). The
+                                        // in-session claim stays; the promise is
+                                        // withdrawn in the reader's own terms.
+                                        let said = if on { toast_on } else { toast_off };
+                                        app.toast(match saved {
+                                            Ok(()) => said.to_string(),
+                                            Err(e) => format!(
+                                                "{said} {} so this only holds until you close \
+                                                 the tab.",
+                                                e.because(),
+                                            ),
+                                        });
                                     }
                                 />
                                 <span>{label}</span>
@@ -991,6 +1065,8 @@ fn tweak_group(
     open: RwSignal<bool>,
     title: &'static str,
     lede: Option<&'static str>,
+    // Armed on every collapse — see `reflow_shield` and R92 S2.
+    arm_shield: impl Fn() + Copy + Send + Sync + 'static,
     rows: impl Fn() -> AnyView + Clone + Send + Sync + 'static,
 ) -> impl IntoView {
     view! {
@@ -1013,6 +1089,7 @@ fn tweak_group(
                                         // the hidden state would surprise later.
                                         if !searching.get_untracked() {
                                             open.update(|o| *o = !*o);
+                                            arm_shield();
                                         }
                                     }
                                 >
@@ -1101,10 +1178,18 @@ fn tweak_number(
                                     step="1"
                                     placeholder=placeholder
                                     aria-label=label
+                                    // Clamped on the way OUT as well as in —
+                                    // this box is a READ site, and the clamp
+                                    // law asks for the same rule at every
+                                    // one. `Prefs::clamp_tweaks` heals the
+                                    // stored value at all three prefs doors;
+                                    // this makes the box honest even if a
+                                    // fourth door is ever added without it
+                                    // (R93 S6).
                                     prop:value=move || {
                                         app.prefs
                                             .with(get)
-                                            .map(|v| v.to_string())
+                                            .map(|v| v.clamp(min, max).to_string())
                                             .unwrap_or_default()
                                     }
                                     on:wheel=domx::step_on_wheel
@@ -1438,10 +1523,12 @@ fn rows_halls(app: App, v: [Signal<bool>; 3]) -> AnyView {
             v[2],
             "Start the free-hall finder on today and the current slot",
             "The finder's two dropdowns arrive already set to today and the \
-             hour happening now, so “which room is free right now” needs no \
-             clicks. They stay ordinary dropdowns — your own pick always \
-             wins, and outside teaching hours the slot simply waits for you \
-             to choose.",
+             hour happening now at CMI, so “which room is free right now” \
+             needs no clicks. CMI's timetable runs on Indian Standard Time \
+             and so does this seed — on a device in another zone the boxes \
+             still say what is happening in Chennai. They stay ordinary \
+             dropdowns — your own pick always wins, and outside CMI's \
+             teaching hours the slot simply waits for you to choose.",
             |p| p.finder_now,
             |p, on| p.finder_now = on,
             "The free-hall finder will open on today and the current slot.",
@@ -1517,10 +1604,15 @@ fn rows_opening(app: App, v: [Signal<bool>; 2]) -> AnyView {
             app,
             v[1],
             "Remember the day pickers between visits",
+            // "until you close the tab" was false: `init_app` clears both
+            // picks on EVERY load (app.rs), so a plain F5 in the same tab
+            // forgets one. The pick's real lifetime is the DOCUMENT (R92
+            // CW-7). Keep the two strings identical — the haystack below
+            // duplicates this sentence, copy only, no index change.
             "My timetable's day strip and the Halls day reopen where you left \
              them. Untick and every visit opens on today — a pick still holds \
-             until you close the tab. Each strip's Follow today button forgets \
-             its pick at any time.",
+             while the page stays open, and a reload opens on today again. \
+             Each strip's Follow today button forgets its pick at any time.",
             |p| !p.day_picks_forget,
             |p, on| p.day_picks_forget = !on,
             "The day pickers are remembered between visits again.",
@@ -1587,7 +1679,8 @@ fn rows_notices(app: App, v: [Signal<bool>; 2]) -> AnyView {
                                             app.persist_prefs();
                                             app.toast(
                                                 "Notices now stay until you close them — \
-                                                 like this one, with its ✕.",
+                                                 like this one, with its ✕. Escape clears \
+                                                 them all.",
                                             );
                                         },
                                         "Until dismissed",
@@ -1596,7 +1689,9 @@ fn rows_notices(app: App, v: [Signal<bool>; 2]) -> AnyView {
                             </div>
                             <p class="muted small">
                                 "Every notice waits while you hover, focus or hold it. \
-                                 Every one has its own ✕. 6 seconds is how the app ships."
+                                 Every one has its own ✕, and Escape clears the whole \
+                                 stack from wherever you are. 6 seconds is how the app \
+                                 ships."
                             </p>
                         </div>
                     }
@@ -1672,8 +1767,11 @@ fn rows_editing(app: App, v: [Signal<bool>; 2]) -> AnyView {
             v[1],
             "Undo history depth",
             "How many steps Ctrl+Z can walk back — 100 unless you say \
-             otherwise. Each step keeps a copy of your selection in memory, \
-             never in storage, so a very deep history costs memory.",
+             otherwise. Each step keeps a copy of your whole planner in \
+             memory, never in storage: the courses you picked, every time, \
+             room and credit you set yourself, your own courses, and both \
+             filter bars. The changes usually weigh far more than the \
+             picks, so a very deep history costs real memory.",
             10,
             1000,
             "100",
@@ -1944,7 +2042,7 @@ fn rows_printing(app: App, v: [Signal<bool>; 5]) -> AnyView {
                                         |app| {
                                             app.prefs.update(|p| p.print_page = None);
                                             app.persist_prefs();
-                                            app.toast("Sheets print wide again — how they ship.");
+                                            app.toast("Sheets ask for wide again — how they ship.");
                                         },
                                         "Wide",
                                     )}
@@ -1957,7 +2055,7 @@ fn rows_printing(app: App, v: [Signal<bool>; 5]) -> AnyView {
                                                     p.print_page = Some("portrait".to_string())
                                                 });
                                             app.persist_prefs();
-                                            app.toast("Sheets print tall now.");
+                                            app.toast("Sheets ask for tall now.");
                                         },
                                         "Tall",
                                     )}
@@ -1978,7 +2076,10 @@ fn rows_printing(app: App, v: [Signal<bool>; 5]) -> AnyView {
                                 "The sheets are designed wide, like the week is. Tall suits \
                                  binders and clipboards; “Let the browser ask” puts the \
                                  choice back in the print dialog. Only the app's own Print \
-                                 buttons obey — the browser's Ctrl+P keeps the wide design."
+                                 buttons carry this choice — the browser's Ctrl+P asks for the \
+                                 shipped wide design. Safari ignores a page-size request from \
+                                 any website, so there the print dialog decides the shape \
+                                 whatever this says."
                             </p>
                         </div>
                     }
@@ -2035,10 +2136,10 @@ fn rows_calendar(app: App, v: [Signal<bool>; 2]) -> AnyView {
             app,
             v[0],
             "Put a link back to this planner in every calendar event",
-            "Each event's notes end with a link that reopens this timetable. \
-             Untick to keep the file to class facts. The link also spells out \
-             which courses you take — worth knowing before you send the file \
-             to someone.",
+            "Each event's notes end with a link that reopens this planner with \
+             the courses in the file. Untick to keep the file to class facts. \
+             The link also spells those courses out — worth knowing before you \
+             send the file to someone.",
             |p| !p.ics_link_off,
             |p, on| p.ics_link_off = !on,
             "Calendar events carry the planner link again.",
@@ -2081,8 +2182,10 @@ fn rows_devmode(app: App, v: [Signal<bool>; 2]) -> AnyView {
             "Echo every fetch to the browser console",
             "Each sync request also prints one line in your browser's \
              DevTools — route, status, milliseconds, bytes — so a bug report \
-             can include what the console saw. The Sync page's log shows the \
-             same rows either way.",
+             can include what the console saw. The reachability probe the app \
+             runs after a failure gets its own `probe` line, with no status: \
+             it is asked in a mode that reads nothing. The Sync page's log \
+             shows the same rows either way.",
             |p| p.console_fetch_log_on,
             |p, on| p.console_fetch_log_on = on,
             "Every sync request now also prints one line in the browser \
@@ -2147,6 +2250,12 @@ fn tweaks_page(app: App) -> impl IntoView {
         Signal::derive(move || visible.with(|v| v[a..b].iter().any(|x| *x)))
     };
     let none_match = Memo::new(move |_| visible.with(|v| v.iter().all(|b| !*b)));
+    // a11ykbd-6: the spoken half of the search. A Memo, not a recount in
+    // the view: the count line re-renders on every keystroke, and a live
+    // region whose text is rewritten with the SAME string can be announced
+    // twice — the Memo means the text node is touched only when the number
+    // really changes.
+    let hits = Memo::new(move |_| visible.with(|v| v.iter().filter(|b| **b).count()));
     let has_text = Memo::new(move |_| !query.with(String::is_empty));
     let box_ref = NodeRef::<leptos::html::Input>::new();
     // Each group's disclosure, session-only (the search-switch precedent —
@@ -2155,6 +2264,15 @@ fn tweaks_page(app: App) -> impl IntoView {
     // shows the whole page; "Close all groups" is one press away for anyone
     // who wants the twelve-line overview instead.
     let open: [RwSignal<bool>; 12] = std::array::from_fn(|_| RwSignal::new(true));
+    // Two explicit column lists stop a collapse from moving its NEIGHBOURS
+    // (R92 S2), but not the second mechanism the same finding names:
+    // collapsing near the bottom shortens the document, and the browser
+    // clamps `scrollY` — so the pressed heading travels DOWN under a
+    // stationary pointer and the tweak row above it arrives where the
+    // heading was. That row writes a saved preference. The page refuses
+    // presses for a moment after any collapse instead; the keyboard is
+    // never shielded, so nothing costs a decisive reader a second press.
+    let (settling, arm_shield) = crate::ui::reflow_shield();
 
     view! {
         <div class="filterbar noprint" role="group" aria-label="Find a tweak">
@@ -2236,6 +2354,31 @@ fn tweaks_page(app: App) -> impl IntoView {
                         }
                     })
             }}
+            // a11ykbd-6 — WCAG 2.1 SC 4.1.3 (AA). The rows vanishing is a
+            // sign only a sighted reader gets; the planner's filter bar has
+            // said "N courses match" out loud since R71 and this box, which
+            // carries the same three switches, said nothing. Same shape,
+            // same wording pattern, same politeness.
+            //
+            // Silent while the pattern is broken: `role="status"` on the
+            // error line above is already announcing the explanation, and
+            // two live regions firing on one keystroke is the spoken form
+            // of the "an empty-state beside the error line is two" rule
+            // t144 pins. `bad` is read FIRST, so the early return still
+            // subscribes to the one signal that can bring the line back.
+            <span class="muted small" aria-live="polite">
+                {move || {
+                    if bad.with(Option::is_some) {
+                        return String::new();
+                    }
+                    let n = hits.get();
+                    if n == 1 {
+                        "1 tweak matches".to_string()
+                    } else {
+                        format!("{n} tweaks match")
+                    }
+                }}
+            </span>
         </div>
 
         // The two shelf handles (R89): open the whole cupboard, or shut it.
@@ -2283,10 +2426,20 @@ fn tweaks_page(app: App) -> impl IntoView {
             </button>
         </div>
 
-        // R90: the wrapper is what lets a wide screen flow the twelve
-        // cards into two balanced columns (styles.css .tweak-groups) —
-        // one column was a page nobody could see the ends of.
-        <div class="tweak-groups">
+        // R90: the wrapper is what lets a wide screen put the twelve cards
+        // in two columns (styles.css .tweak-groups) — one column was a page
+        // nobody could see the ends of. TWO EXPLICIT LISTS, never CSS
+        // multicol: multicol rebalances across columns, so collapsing one
+        // card moved the others under a stationary pointer and the second
+        // click closed a group nobody pointed at (R92 S2). The split is a
+        // PREFIX and a SUFFIX so DOM order — and therefore reading and Tab
+        // order — is still down the left, then down the right.
+        //
+        // Where it splits: by ROW COUNT, not card count. Left is 22 rows in
+        // 5 cards (3 + 9 + 5 + 3 + 2), right is 21 rows in 7 (2 + 2 + 2 + 6
+        // + 5 + 2 + 2). Adding or resizing a group means re-checking this.
+        <div class="tweak-groups" class:settling=move || settling.get()>
+        <div class="tweak-col">
         {tweak_group(
             ga(0, 3),
             has_text,
@@ -2296,6 +2449,7 @@ fn tweaks_page(app: App) -> impl IntoView {
                 "Hiding a mark hides the sign, never the fact — the Clashes \
                  panel and “Your changes” keep saying everything.",
             ),
+            arm_shield,
             move || rows_marks(app, [vis(0), vis(1), vis(2)]),
         )}
         {tweak_group(
@@ -2308,6 +2462,7 @@ fn tweaks_page(app: App) -> impl IntoView {
                  and Lecture halls. A row says so when it means only one of \
                  them.",
             ),
+            arm_shield,
             move || {
                 rows_week(
                     app,
@@ -2331,6 +2486,7 @@ fn tweaks_page(app: App) -> impl IntoView {
             open[2],
             "Colour and motion",
             None,
+            arm_shield,
             move || rows_colour(app, [vis(12), vis(13), vis(14), vis(15), vis(16)]),
         )}
         {tweak_group(
@@ -2339,6 +2495,7 @@ fn tweaks_page(app: App) -> impl IntoView {
             open[3],
             "The Halls page",
             None,
+            arm_shield,
             move || rows_halls(app, [vis(17), vis(18), vis(19)]),
         )}
         {tweak_group(
@@ -2347,14 +2504,18 @@ fn tweaks_page(app: App) -> impl IntoView {
             open[4],
             "Opening the app",
             None,
+            arm_shield,
             move || rows_opening(app, [vis(20), vis(21)]),
         )}
+        </div>
+        <div class="tweak-col">
         {tweak_group(
             ga(22, 24),
             has_text,
             open[5],
             "Notices and dialogs",
             None,
+            arm_shield,
             move || rows_notices(app, [vis(22), vis(23)]),
         )}
         {tweak_group(
@@ -2363,6 +2524,7 @@ fn tweaks_page(app: App) -> impl IntoView {
             open[6],
             "Wheel and swipe",
             None,
+            arm_shield,
             move || rows_gestures(app, [vis(24), vis(25)]),
         )}
         {tweak_group(
@@ -2371,6 +2533,7 @@ fn tweaks_page(app: App) -> impl IntoView {
             open[7],
             "Editing and undo",
             None,
+            arm_shield,
             move || rows_editing(app, [vis(26), vis(27)]),
         )}
         {tweak_group(
@@ -2382,6 +2545,7 @@ fn tweaks_page(app: App) -> impl IntoView {
                 "However you tune it, the header never stops saying how old \
                  the timetable is.",
             ),
+            arm_shield,
             move || {
                 rows_syncing(
                     app,
@@ -2398,6 +2562,7 @@ fn tweaks_page(app: App) -> impl IntoView {
                 "Paper hides signs, never facts — the clash strip and the \
                  check-against-CMI line always print.",
             ),
+            arm_shield,
             move || {
                 rows_printing(app, [vis(34), vis(35), vis(36), vis(37), vis(38)])
             },
@@ -2412,6 +2577,7 @@ fn tweaks_page(app: App) -> impl IntoView {
                  what each event carries, never whether a class is in it. A \
                  file you already saved keeps what it was given.",
             ),
+            arm_shield,
             move || rows_calendar(app, [vis(39), vis(40)]),
         )}
         {tweak_group(
@@ -2420,8 +2586,10 @@ fn tweaks_page(app: App) -> impl IntoView {
             open[11],
             "Developer mode",
             None,
+            arm_shield,
             move || rows_devmode(app, [vis(41), vis(42)]),
         )}
+        </div>
         </div>
 
         {move || {
@@ -2478,7 +2646,13 @@ fn tweaks_page(app: App) -> impl IntoView {
             // The counter answers "is this browser tweaked?" at a glance —
             // the same list Copy diagnostics reports, so the two never
             // disagree. It doubles as the reason the Reset button sleeps.
-            <span class="muted small" data-tweak-count>
+            // `tabindex="-1"` - programmatically focusable, not in the Tab
+            // order - because this line is where the keyboard goes when the
+            // reset disables the button that was pressed (R92 CW-3). It is
+            // also the honest destination: after the reset this sentence IS
+            // the answer, it sits beside the button so nothing scrolls, and a
+            // screen reader reads the result instead of silence on <body>.
+            <span class="muted small" data-tweak-count tabindex="-1">
                 {move || {
                     let n = app.tweak_deltas().len();
                     match n {
@@ -2624,9 +2798,11 @@ const TWEAK_HAYSTACKS: [(&str, &str, &str); 43] = [
         "The Halls page",
         "Start the free-hall finder on today and the current slot",
         "The finder's two dropdowns arrive already set to today and the hour happening \
-         now, so which room is free right now needs no clicks. They stay ordinary \
-         dropdowns — your own pick always wins, and outside teaching hours the slot \
-         simply waits for you to choose.",
+         now at CMI, so which room is free right now needs no clicks. CMI's timetable \
+         runs on Indian Standard Time and so does this seed — on a device in another \
+         zone the boxes still say what is happening in Chennai. They stay ordinary \
+         dropdowns — your own pick always wins, and outside CMI's teaching hours the \
+         slot simply waits for you to choose. IST time zone Chennai",
     ),
     (
         "Opening the app",
@@ -2639,14 +2815,16 @@ const TWEAK_HAYSTACKS: [(&str, &str, &str); 43] = [
         "Opening the app",
         "Remember the day pickers between visits",
         "My timetable's day strip and the Halls day reopen where you left them. Untick \
-         and every visit opens on today — a pick still holds until you close the tab. \
-         Each strip's Follow today button forgets its pick at any time.",
+         and every visit opens on today — a pick still holds while the page stays open, \
+         and a reload opens on today again. Each strip's Follow today button forgets its \
+         pick at any time.",
     ),
     (
         "Notices and dialogs",
         "Notices stay for",
         "3 6 12 seconds Until dismissed Every notice waits while you hover, focus or \
-         hold it. Every one has its own ✕. 6 seconds is how the app ships. toast",
+         hold it. Every one has its own ✕, and Escape clears the whole stack from \
+         wherever you are. 6 seconds is how the app ships. toast",
     ),
     (
         "Notices and dialogs",
@@ -2679,8 +2857,11 @@ const TWEAK_HAYSTACKS: [(&str, &str, &str); 43] = [
         "Editing and undo",
         "Undo history depth",
         "steps How many steps Ctrl+Z can walk back — 100 unless you say otherwise. Each \
-         step keeps a copy of your selection in memory, never in storage, so a very \
-         deep history costs memory.",
+         step keeps a copy of your whole planner in memory, never in storage: the \
+         courses you picked, every time, room and credit you set yourself, your own \
+         courses, and both filter bars. The changes usually weigh far more than the \
+         picks, so a very deep history costs real memory. memory ram overrides \
+         customs",
     ),
     (
         "Syncing",
@@ -2742,8 +2923,10 @@ const TWEAK_HAYSTACKS: [(&str, &str, &str); 43] = [
         "Page shape",
         "Wide Tall Let the browser ask The sheets are designed wide, like the week is. \
          Tall suits binders and clipboards; Let the browser ask puts the choice back \
-         in the print dialog. Only the app's own Print buttons obey — the browser's \
-         Ctrl+P keeps the wide design. portrait landscape",
+         in the print dialog. Only the app's own Print buttons carry this choice — the \
+         browser's Ctrl+P asks for the shipped wide design. Safari ignores a page-size \
+         request from any website, so there the print dialog decides the shape whatever \
+         this says. portrait landscape safari orientation",
     ),
     (
         "Printing",
@@ -2770,9 +2953,10 @@ const TWEAK_HAYSTACKS: [(&str, &str, &str); 43] = [
     (
         "Calendar files",
         "Put a link back to this planner in every calendar event",
-        "Each event's notes end with a link that reopens this timetable. Untick to \
-         keep the file to class facts. The link also spells out which courses you \
-         take — worth knowing before you send the file to someone. ics privacy",
+        "Each event's notes end with a link that reopens this planner with the \
+         courses in the file. Untick to keep the file to class facts. The link also \
+         spells those courses out — worth knowing before you send the file to \
+         someone. ics privacy",
     ),
     (
         "Calendar files",
@@ -2792,7 +2976,9 @@ const TWEAK_HAYSTACKS: [(&str, &str, &str); 43] = [
         "Echo every fetch to the browser console",
         "Each sync request also prints one line in your browser's DevTools — route, \
          status, milliseconds, bytes — so a bug report can include what the console \
-         saw. The Sync page's log shows the same rows either way. debug",
+         saw. The reachability probe gets its own `probe` line, with no status: it is \
+         asked in a mode that reads nothing. The Sync page's log shows the same rows \
+         either way. debug",
     ),
 ];
 

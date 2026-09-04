@@ -37,7 +37,7 @@ fn alarm_lead_is_configurable() {
         dtstamp: "20260805T120000Z".to_string(),
         calendar_name: "CMI Timetable".to_string(),
     };
-    let ics = build_ics(std::slice::from_ref(&course), &opts);
+    let (ics, _) = build_ics(std::slice::from_ref(&course), &opts);
     assert!(ics.contains("TRIGGER:-PT25M"), "{ics}");
     assert!(ics.contains("TOC starts in 25 minutes"), "{ics}");
 
@@ -45,7 +45,7 @@ fn alarm_lead_is_configurable() {
         alarm_minutes: None,
         ..opts
     };
-    let ics = build_ics(&[course], &none);
+    let (ics, _) = build_ics(&[course], &none);
     assert!(!ics.contains("VALARM"), "{ics}");
 }
 
@@ -83,7 +83,7 @@ fn golden_two_courses() {
         dtstamp: "20260805T120000Z".to_string(),
         calendar_name: "CMI Timetable August\u{2013}November 2026".to_string(),
     };
-    let ics = build_ics(&[mfd, cm1], &opts);
+    let (ics, _) = build_ics(&[mfd, cm1], &opts);
 
     let golden_path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/golden/two_courses.ics");
     if std::env::var("UPDATE_GOLDEN").is_ok() {
@@ -116,7 +116,7 @@ fn starts_note_shifts_first_occurrence() {
         dtstamp: "20260805T120000Z".to_string(),
         calendar_name: "test".to_string(),
     };
-    let ics = build_ics(&[course], &opts);
+    let (ics, _) = build_ics(&[course], &opts);
     assert!(
         ics.contains("DTSTART;TZID=Asia/Kolkata:20260813T103000"),
         "{ics}"
@@ -143,7 +143,7 @@ fn part_of_semester_clamps_range() {
         dtstamp: "20260805T120000Z".to_string(),
         calendar_name: "test".to_string(),
     };
-    let ics = build_ics(&[course], &opts);
+    let (ics, _) = build_ics(&[course], &opts);
     // First Monday on/after 1 Oct 2026 is 5 Oct.
     assert!(
         ics.contains("DTSTART;TZID=Asia/Kolkata:20261005T091000"),
@@ -173,7 +173,7 @@ fn single_month_note_clamps_both_ends() {
         dtstamp: "20260805T120000Z".to_string(),
         calendar_name: "test".to_string(),
     };
-    let ics = build_ics(&[course], &opts);
+    let (ics, _) = build_ics(&[course], &opts);
     // First Monday on/after 1 Sep 2026 is 7 Sep.
     assert!(
         ics.contains("DTSTART;TZID=Asia/Kolkata:20260907T091000"),
@@ -204,7 +204,7 @@ fn year_crossing_semester_keeps_events() {
         dtstamp: "20271201T120000Z".to_string(),
         calendar_name: "test".to_string(),
     };
-    let ics = build_ics(&[course], &opts);
+    let (ics, _) = build_ics(&[course], &opts);
     // First Monday on/after 1 Jan 2028 is 3 Jan 2028.
     assert!(
         ics.contains("DTSTART;TZID=Asia/Kolkata:20280103T091000"),
@@ -238,7 +238,7 @@ fn uids_distinguish_same_start_meetings() {
         dtstamp: "20260805T120000Z".to_string(),
         calendar_name: "test".to_string(),
     };
-    let ics = build_ics(&[course], &opts);
+    let (ics, _) = build_ics(&[course], &opts);
     let uids: Vec<&str> = ics.lines().filter(|l| l.starts_with("UID:")).collect();
     assert_eq!(uids.len(), 2, "{ics}");
     assert_ne!(uids[0], uids[1], "UIDs must be unique: {uids:?}");
@@ -268,7 +268,7 @@ fn escaping_and_structure() {
         dtstamp: "20260805T120000Z".to_string(),
         calendar_name: "test".to_string(),
     };
-    let ics = build_ics(&[course], &opts);
+    let (ics, _) = build_ics(&[course], &opts);
     assert!(ics.contains("SUMMARY:ALGO: Design & Analysis of Algorithms\\; with\\, commas"));
     assert!(ics.contains("LOCATION:Hall TBA"));
     assert!(ics.starts_with("BEGIN:VCALENDAR\r\n"));

@@ -117,7 +117,15 @@ pub struct TimeJson {
 }
 
 impl TimeJson {
+    /// The writer gains the rule its own READER has
+    /// (`MeetingJson::to_meeting` refuses `minutes >= end` or `> 1440`), so
+    /// this app can never hand out an "Export my courses" file that this app
+    /// refuses to open — which is exactly what it did for a planner holding
+    /// an override from a hand-crafted share link (R93 S1). Unreachable once
+    /// every door applies `Slot::is_sane`; kept as the belt, on the same
+    /// reasoning as `ics::fmt_time`.
     fn new(minutes: u16) -> TimeJson {
+        let minutes = minutes.min(1440);
         TimeJson {
             minutes,
             hhmm: format!("{:02}:{:02}", minutes / 60, minutes % 60),
@@ -165,12 +173,13 @@ impl MeetingJson {
                 .get(self.iso_weekday.checked_sub(1)? as usize)
                 .copied()
         })?;
-        if self.start.minutes >= self.end.minutes || self.end.minutes > 1440 {
+        let slot = Slot::new(self.start.minutes, self.end.minutes);
+        if !slot.is_sane() {
             return None;
         }
         Some(Meeting {
             day,
-            slot: Slot::new(self.start.minutes, self.end.minutes),
+            slot,
             hall: self.hall.clone(),
             temp_booking: self.temporary_booking,
         })
@@ -409,6 +418,20 @@ impl MyChanges {
         for c in &self.credit_changes {
             let course = c.course.trim();
             if course.is_empty() {
+                return None;
+            }
+            // The same range the editor enforces, at the same door as the
+            // class times two loops above (`convert(&c.from)?`). The editor
+            // was the only door that had it, so a friend's file put "459
+            // credits in total" and "1 course at 255 credits" on a reader's
+            // page under the sentence "You set the credits on 2 courses
+            // yourself." — a decision they never made (R93 S5).
+            //
+            // Refused whole, like every other unusable value in this
+            // function: `bad_changes()` says "they aren't the shape this app
+            // can read — it may be damaged, or edited by hand. Nothing was
+            // changed", and that is what a credit count of 255 is.
+            if c.credits > CreditOverride::MAX {
                 return None;
             }
             credits.push(CreditOverride {
@@ -733,7 +756,7 @@ pub fn parse_planner_backup(text: &str, now_ms: f64) -> Result<ParsedBackup, Imp
             "it doesn't list any class times".to_string(),
         ));
     }
-    let slot_ok = |s: &crate::model::Slot| s.start_min < s.end_min && s.end_min <= 1440;
+    let slot_ok = |s: &crate::model::Slot| s.is_sane();
     if !snapshot.slot_grid.iter().all(slot_ok)
         || !snapshot
             .courses

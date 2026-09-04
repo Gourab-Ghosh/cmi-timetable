@@ -2940,6 +2940,67 @@ def t51_changes_are_grouped_by_what_they_did(app):
         By.CSS_SELECTOR, "li .btn").text == "Back to CMI's room"
 
 
+COMMA_CUSTOM = {
+    "courses": [
+        {
+            "code": "CM,X",
+            "name": "Reading group",
+            "instructors": [],
+            "branches": [],
+            "credits": 4,
+            "starts": None,
+            "part_of_semester": None,
+            "optional_flag": False,
+            "status": "Scheduled",
+            "meetings": [
+                {
+                    "day": "Mon",
+                    "slot": {"start_min": 550, "end_min": 625},
+                    "hall": "Room 1002",
+                    "temp_booking": False,
+                }
+            ],
+        }
+    ]
+}
+
+
+def t165_a_comma_code_survives_the_apps_own_url(app):
+    """A course of the student's own whose code carries a comma cannot travel
+    in ?c= -- `CM%2CX` is read back as two codes, `CM` and `X` -- so it is left
+    OUT of the address bar and a reload keeps it, instead of the app deleting
+    it under a banner blaming a link nobody opened (R93 M5)."""
+    app.boot("/", selection=["TOC", "CM,X"], customs=COMMA_CUSTOM)
+    app.wait_css("button.chip")
+    # The address bar carries the code that CAN travel, and no encoded comma.
+    WebDriverWait(app.d, 5).until(
+        lambda d: "?c=TOC" in d.current_url,
+        message=f"expected ?c=TOC, got {app.d.current_url}",
+    )
+    assert "%2C" not in app.d.current_url, app.d.current_url
+    # One plain reload of exactly what the app wrote. Both courses are still
+    # picked, and storage still holds the comma code verbatim.
+    app.d.get(f"{BASE}/?c=TOC")
+    app.wait_css("button.chip")
+    stored = json.loads(
+        app.d.execute_script("return localStorage.getItem('cmitt.v1.selection');")
+    )
+    assert stored == ["TOC", "CM,X"], stored
+    # And the app does NOT invent codes and blame a sender who never existed.
+    assert not app.css_all(
+        ".banner.unknown-codes"
+    ), "the app's own address bar must not report unknown codes"
+    # The share dialog says which course a web address cannot carry, rather
+    # than handing out a link that silently drops it (honesty law).
+    app.xpath("//button[normalize-space()='Share or import']").click()
+    dialog = app.wait_css(".dialog")
+    assert "CM,X" in dialog.text, dialog.text
+    plain = dialog.find_element(
+        By.CSS_SELECTOR, "input[aria-label='Share link']"
+    ).get_attribute("value")
+    assert "%2C" not in plain, plain
+
+
 def t52_c_param_keeps_plain_commas(app):
     """The address bar separates codes with plain commas — %2C between every
     pair made it unreadable — while each CODE is still encoded. A link whose
@@ -3556,6 +3617,13 @@ def t63_editing_a_course_with_no_time_never_invents_one(app):
     assert any("2 credits" in p for p in pills), pills
 
 
+def settle_s():
+    """`ui::SETTLE_MS` (350 ms), in seconds, plus a margin. The stray-press
+    guards in app/src/ui.rs all use it; a test that means to press AFTER one
+    has lifted waits this long."""
+    return 0.45
+
+
 def t64_a_half_written_form_is_not_thrown_away_by_a_stray_key(app):
     """Escape and a click on the dark area are the two accidental ways out of
     a dialog. The course editor commits nothing until Save, so a slip there
@@ -3585,7 +3653,14 @@ def t64_a_half_written_form_is_not_thrown_away_by_a_stray_key(app):
     app.wait_gone(".dialog.confirm")
     app.css(".dialog .course-form")  # still open, still holding the edit
 
-    # A click on the dark area asks the same question.
+    # A click on the dark area asks the same question — but not within the
+    # dialog's own settle window. A dialog refuses a scrim dismissal for
+    # 350 ms after it opens, deliberately: a mouse DOUBLE-click on a button
+    # that opens one made the question flash and vanish, so the button read
+    # as dead (R93 S13). Everything above this line runs in about 125 ms, so
+    # without the wait this click lands inside that window — which no human
+    # doing these six steps ever could.
+    time.sleep(settle_s())
     app.d.execute_script(
         "document.querySelector('.overlay').click();")
     assert "Close this form?" in app.confirm_text(), app.confirm_text()
@@ -9251,6 +9326,9 @@ def t149_dialogs_and_notices_obey_their_tweaks(app):
     # Default: a click on the dark area closes the dialog.
     app.xpath("//button[normalize-space()='My data']").click()
     app.wait_css(".dialog")
+    # A scrim ignores a click for its first 350ms (R93 S13): a dialog that
+    # opens under the pointer must not close to the same pointer.
+    time.sleep(0.4)
     app.d.execute_script(
         "document.querySelector('.overlay').dispatchEvent("
         "  new MouseEvent('click', {bubbles: true}))")
@@ -9617,24 +9695,70 @@ def t156_a_pinned_day_can_be_handed_back_to_the_clock(app):
 
 def t157_twelve_cards_share_a_wide_screens_width(app):
     """One column of twelve open cards was a page nobody could see the ends
-    of (R90): where the screen has the room the tweak groups flow into two
-    balanced CSS columns — reading order kept, each card whole — and a
-    phone keeps the single column it can actually use."""
+    of (R90): where the screen has the room the tweak groups sit in two
+    columns — reading order kept, each card whole — and a phone keeps the
+    single column it can actually use.
+
+    Asserted as GEOMETRY, not as `column-count`. The two columns are two
+    explicit lists in the markup, because CSS multicol rebalances content
+    ACROSS its columns: collapsing a group pulled the next one up into the
+    first column and pushed everything below it under a pointer that had not
+    moved, so the second click of a double-click landed on a different
+    group's heading — and wrote that group's saved preference (R92 S2). The
+    last block below is the pin for exactly that.
+    """
     app.boot("/#/developer/tweaks")
     app.wait_css("section[aria-label='Developer mode']")
     app.wait_css(".tweak-groups .tweak-group")
 
-    def column_count():
+    def cols():
         return app.d.execute_script(
-            "return getComputedStyle("
-            "document.querySelector('.tweak-groups')).columnCount;")
+            "return [...document.querySelectorAll('.tweak-col')].map(c => {"
+            "  const r = c.getBoundingClientRect();"
+            "  return {x: Math.round(r.left), y: Math.round(r.top),"
+            "          w: Math.round(r.width),"
+            "          n: c.querySelectorAll('.tweak-group').length};});")
 
-    assert column_count() == "2", column_count()  # the window is 1500px wide
+    # Wide (1500px): two columns, side by side, both carrying groups.
+    wide = cols()
+    assert len(wide) == 2, wide
+    assert all(c["n"] > 0 for c in wide), wide
+    assert wide[0]["y"] == wide[1]["y"], f"not side by side: {wide}"
+    assert wide[1]["x"] > wide[0]["x"] + wide[0]["w"] - 2, f"overlapping: {wide}"
+    assert abs(wide[0]["w"] - wide[1]["w"]) <= 2, f"unequal widths: {wide}"
+    total = sum(c["n"] for c in wide)
+    assert total >= 11, f"only {total} groups rendered: {wide}"
+
     try:
+        # Phone: one column — the second list starts below the first, at the
+        # same left edge, instead of beside it.
         app.d.set_window_size(430, 900)
-        WebDriverWait(app.d, 5).until(lambda d: column_count() == "auto")
+        WebDriverWait(app.d, 5).until(
+            lambda d: (c := cols()) and c[0]["x"] == c[1]["x"])
+        narrow = cols()
+        assert narrow[1]["y"] > narrow[0]["y"], narrow
     finally:
         app.d.set_window_size(1500, 1000)
+        WebDriverWait(app.d, 5).until(
+            lambda d: (c := cols()) and c[0]["y"] == c[1]["y"])
+
+    # THE S2 PIN: collapsing a group in the FIRST column moves nothing in the
+    # SECOND. Under multicol this was false — the groups reflowed across the
+    # boundary and a heading the reader was pointing at slid away.
+    def group_tops():
+        return app.d.execute_script(
+            "return [...document.querySelectorAll('.tweak-col:nth-child(2)"
+            " .tweak-group')].map(g => Math.round("
+            "  g.getBoundingClientRect().top));")
+
+    before = group_tops()
+    first_heading = app.d.find_element(
+        By.CSS_SELECTOR, ".tweak-col:nth-child(1) .tweak-group .group-toggle")
+    first_heading.click()
+    time.sleep(0.4)
+    after = group_tops()
+    assert before == after, (
+        f"collapsing a group in column 1 moved column 2: {before} -> {after}")
 
 
 def t158_a_notices_undo_reverts_the_action_it_names(app):
@@ -10069,6 +10193,7 @@ TESTS = [
     t162_a_notices_undo_names_one_action_and_only_that_one,
     t163_a_link_that_names_no_courses_takes_nothing_away,
     t164_an_adopting_tab_never_writes_back_what_it_read,
+    t165_a_comma_code_survives_the_apps_own_url,
 ]
 
 

@@ -513,6 +513,49 @@ pub fn branch_chip_full(app: App, code: &str) -> impl IntoView + use<> {
 
 /// The edit-mode toggle shown in grid toolbars: drag & drop (pointer and
 /// keyboard move mode) only works while this is on.
+/// How long a control that has just mounted, or a region that has just
+/// reflowed, refuses a press (R93 M3, R92 S1/S2/S3, R93 S12, R93 S13).
+/// Longer than a stray second tap, far shorter than reading a question.
+pub const SETTLE_MS: f64 = 350.0;
+
+/// The stray-press shield.
+///
+/// A control that changes the page's layout leaves a DIFFERENT control
+/// under a pointer that never moved, so the second half of a double-press
+/// acts on something nobody aimed at. Where the geometry cannot be made
+/// stationary (R92 S3, R93 S12), the region that moved goes inert for
+/// `SETTLE_MS` instead: hang `class:settling` on the container and call the
+/// returned closure from the handler that does the reflowing.
+///
+/// `pointer-events: none` and NOT a gate inside the handler, deliberately:
+/// it stops mouse and touch presses and leaves the KEYBOARD alone, so a
+/// decisive reader never presses twice for anything — the first version of
+/// R93 M3's guard swallowed keyboard answers and broke three tests.
+///
+/// Call it during a view's setup. It creates signals and reads none
+/// tracked, so it is safe inside the tab dispatcher's reactive closure and
+/// needs no `untrack` (§4's `my_timetable` rule is about tracked READS).
+pub fn reflow_shield() -> (RwSignal<bool>, impl Fn() + Copy + Send + Sync + 'static) {
+    let on = RwSignal::new(false);
+    // A generation counter, so a second arm inside the window cannot have
+    // the FIRST timer lift the shield early.
+    let generation = RwSignal::new(0u32);
+    let arm = move || {
+        let mine = generation.get_untracked().wrapping_add(1);
+        generation.set(mine);
+        on.set(true);
+        gloo_timers::callback::Timeout::new(SETTLE_MS as u32, move || {
+            // try_*: the view can unmount inside the window (a tab switch),
+            // and a disposed signal must not be written.
+            if generation.try_get_untracked() == Some(mine) {
+                let _ = on.try_set(false);
+            }
+        })
+        .forget();
+    };
+    (on, arm)
+}
+
 pub fn edit_toggle(app: App) -> impl IntoView {
     // The Halls tab has no keyboard move (see `dnd::enter_move_mode`), so it
     // does not get told about one.
@@ -560,7 +603,10 @@ pub fn edit_toggle(app: App) -> impl IntoView {
                     // moving before the long-press timer is simply cancelled,
                     // silently — so telling a phone reader to "drag" sent them
                     // to do the one thing that does nothing (R92 M11).
-                    let touch = crate::domx::is_coarse_pointer();
+                    // The pointer actually in use, not the primary one the
+                    // media query knows about (R93 R11) — `dnd`'s gate is
+                    // per-event, and on a touchscreen laptop the two disagree.
+                    let touch = app.touch_input.get_untracked();
                     app.toast(match (touch, keyboard_move()) {
                         (true, true) => {
                             "Edit layout is on. Press and hold a course, then drag it to \
@@ -831,7 +877,22 @@ pub fn Header() -> impl IntoView {
                 disabled=move || !app.can_undo()
                 aria-label="Undo"
                 title="Undo (Ctrl+Z)"
-                on:click=move |_| app.undo()
+                // The last step undone disables this button under the finger,
+                // and the browser drops focus to <body> the moment a focused
+                // control is disabled (the mechanism this file names at
+                // CONFIRM_PREV). Hand the keyboard to Redo - which the undo
+                // just woke - before that happens (R92 CW-3, WCAG 2.4.3).
+                // Only when it really is the last one: focus must never move
+                // while the button is still usable.
+                on:click=move |_| {
+                    app.undo();
+                    if !app.can_undo() {
+                        domx::focus_soon(&[
+                            "button[aria-label='Redo']:not(:disabled)",
+                            "[data-mydata]",
+                        ]);
+                    }
+                }
             >
                 // On phones the word hides and the arrow stands alone —
                 // the aria-label and tooltip keep saying it in full.
@@ -843,7 +904,18 @@ pub fn Header() -> impl IntoView {
                 disabled=move || !app.can_redo()
                 aria-label="Redo"
                 title="Redo (Ctrl+Y)"
-                on:click=move |_| app.redo()
+                // Same as Undo above (R92 CW-3): the last redo disables this
+                // button, so the keyboard goes to Undo - which the redo just
+                // woke - rather than to <body>.
+                on:click=move |_| {
+                    app.redo();
+                    if !app.can_redo() {
+                        domx::focus_soon(&[
+                            "button[aria-label='Undo']:not(:disabled)",
+                            "[data-mydata]",
+                        ]);
+                    }
+                }
             >
                 "↷"
                 <span class="btn-word">"Redo"</span>
@@ -1124,8 +1196,14 @@ fn dev_rail(app: App, swiped: RwSignal<bool>) -> impl IntoView {
             }
         >
             // The word hides on the narrowest phones (the header's own
-            // `.btn-word` trick): five planner tabs already need every pixel
-            // of a 320px bar, and the aria-label keeps the button's name.
+            // `.btn-word` trick), and the aria-label keeps the button's
+            // name. The reason is the bar's own crowding, NOT the planner's:
+            // this button only ever sits in the DEVELOPER rail, beside four
+            // categories, so the "five tabs want 362px at 320px" squeeze the
+            // ≤380px block was written for was never this button's problem.
+            // With the word gone the arrow alone was 15.8px wide, under
+            // WCAG 2.5.8's 24px floor, so the coarse-pointer block now
+            // gives `.tab-exit` a 44px min-width (mobile-touch-5).
             "← "
             <span class="tab-exit-word">"Back"</span>
         </button>
@@ -1311,8 +1389,31 @@ pub fn Toasts() -> impl IntoView {
     // `toasts-live` marker, so a dialog with no toasts over it stays centred
     // and untouched.
     let stack = NodeRef::<leptos::html::Div>::new();
+    // A rotate re-wraps every notice, so the height measured in the old
+    // geometry is wrong in whichever direction the edge moved — and the
+    // effect below tracks only the toast COUNT, so nothing re-ran it
+    // (R93 R6). A signal bumped on `resize` is the tracked read that does;
+    // it is installed once, and the effect it wakes does nothing at all
+    // unless the rail is holding something.
+    let resized = RwSignal::new(0u32);
+    Effect::new(move |prev: Option<()>| {
+        if prev.is_some() {
+            return;
+        }
+        let closure = Closure::<dyn FnMut()>::new(move || {
+            resized.update(|n| *n = n.wrapping_add(1));
+        });
+        let _ = domx::window()
+            .add_event_listener_with_callback("resize", closure.as_ref().unchecked_ref());
+        let _ = domx::window().add_event_listener_with_callback(
+            "orientationchange",
+            closure.as_ref().unchecked_ref(),
+        );
+        closure.forget();
+    });
     Effect::new(move |_| {
         let count = app.toasts.with(|t| t.len());
+        resized.track();
         let node = stack.get();
         leptos::task::spawn_local(async move {
             // Measured after the paint that added or removed the toast: read in
@@ -1344,6 +1445,15 @@ pub fn Toasts() -> impl IntoView {
                 .map(|h| (h / 3.0) as i32)
                 .unwrap_or(i32::MAX);
             let height = height.min(cap.max(0));
+            // Once the 33dvh clamp bites, the notice clipped away is the
+            // LAST one — the newest, the one carrying Undo and the only
+            // report the app makes that it discarded the reader's own work
+            // (`push_toast`). Keep the rail scrolled to it. The fold marker
+            // above says how many earlier ones are waiting, and they arrive
+            // as the ones in front of them clear.
+            if let Some(n) = stack.get_untracked() {
+                n.set_scroll_top(n.scroll_height());
+            }
             let _ = root
                 .style()
                 .set_property("--toast-band", &format!("{height}px"));
@@ -1367,12 +1477,14 @@ pub fn Toasts() -> impl IntoView {
                         view! {
                             <div class="toast toast-more" role="status">
                                 <span>
-                                    // "Waiting", not "above": the rail cannot
-                                    // be scrolled (it lets clicks through to
-                                    // the app), and these are not lost — the
-                                    // render window is the NEWEST four, so
-                                    // each one appears as the notices in
-                                    // front of it clear.
+                                    // "Waiting", not "above": these are not
+                                    // above the rail, they are behind it in
+                                    // time — the render window is the NEWEST
+                                    // four, so each one appears as the
+                                    // notices in front of it clear. (The rail
+                                    // itself does scroll within its 33dvh
+                                    // clamp, and is held at its newest
+                                    // notice; it is not where these live.)
                                     {format!(
                                         "{hidden} earlier notice{} waiting",
                                         if hidden == 1 { "" } else { "s" },
@@ -1432,7 +1544,24 @@ pub fn Toasts() -> impl IntoView {
                                             })
                                     }
                                 }
-                                <button aria-label="Dismiss" on:click=move |_| app.dismiss_toast(id)>
+                                <button
+                                    aria-label="Dismiss"
+                                    on:click=move |_| {
+                                        app.dismiss_toast(id);
+                                        // The pressed button lives inside the
+                                        // closure that re-renders the rail, so
+                                        // it unmounts under the finger. Walk
+                                        // down the remaining notices the way
+                                        // `keep_place_after_row_removal` walks
+                                        // the "Your changes" rows, then leave
+                                        // the rail for the page (R92 CW-3).
+                                        domx::focus_soon(&[
+                                            "div.toasts button[aria-label='Dismiss']",
+                                            "nav.tabs button.tab[tabindex='0']",
+                                            "[data-mydata]",
+                                        ]);
+                                    }
+                                >
                                     "✕"
                                 </button>
                             </div>
@@ -2760,38 +2889,57 @@ pub fn filter_bar(app: App, scope: FilterScope, result_count: Signal<usize>) -> 
                     COLLAPSED_MAX
                 };
                 let hidden = total - shown;
-                let rendered: Vec<AnyView> = chips
-                    .into_iter()
-                    .take(shown)
+                // The toggle keeps ONE slot in the line, in both states, and
+                // the chips it reveals arrive AFTER it (R92 S1). Rendered
+                // last, it handed its own box to chip 9 — remove ✕ and all —
+                // so a second click at an unmoved point took one of the
+                // student's filters off, wrote it to `cmitt.v1.prefs` and
+                // said nothing; the toggle itself vanished at the same time.
+                // Now the second click lands on the toggle it just pressed
+                // and collapses the line again: an oscillation, never a
+                // change to anybody's filters. `.chipline-more` carries a
+                // `min-width` so "+N more" and "Show fewer" fill the same
+                // box and the slot is stationary to the pixel.
+                //
+                // Reading and Tab order stay left-to-right: eight chips, the
+                // toggle, then the rest.
+                let mut chips = chips.into_iter();
+                let first: Vec<AnyView> = chips
+                    .by_ref()
+                    .take(shown.min(COLLAPSED_MAX))
                     .map(|(label, remove)| filter_chip(app, scope, label, remove))
                     .collect();
+                // Only what the toggle has actually revealed. Built from the
+                // same iterator, but EMPTY while collapsed — rendering the
+                // remainder unconditionally put all seventy-five chips on the
+                // line and made the collapse decorative (caught by t78).
+                let rest: Vec<AnyView> = if expanded {
+                    chips
+                        .map(|(label, remove)| filter_chip(app, scope, label, remove))
+                        .collect()
+                } else {
+                    Vec::new()
+                };
                 view! {
                     <div class="chipline noprint">
-                        {rendered}
-                        {(hidden > 0)
+                        {first}
+                        {(total > COLLAPSED_MAX)
                             .then(|| {
                                 view! {
                                     <button
                                         class="chipline-more"
-                                        aria-expanded="false"
-                                        on:click=move |_| chips_expanded.set(true)
+                                        aria-expanded=if expanded { "true" } else { "false" }
+                                        on:click=move |_| chips_expanded.update(|e| *e = !*e)
                                     >
-                                        {format!("+{hidden} more")}
+                                        {if expanded {
+                                            "Show fewer".to_string()
+                                        } else {
+                                            format!("+{hidden} more")
+                                        }}
                                     </button>
                                 }
                             })}
-                        {(expanded && total > COLLAPSED_MAX)
-                            .then(|| {
-                                view! {
-                                    <button
-                                        class="chipline-more"
-                                        aria-expanded="true"
-                                        on:click=move |_| chips_expanded.set(false)
-                                    >
-                                        "Show fewer"
-                                    </button>
-                                }
-                            })}
+                        {rest}
                     </div>
                 }
             })
@@ -2940,6 +3088,33 @@ thread_local! {
     /// dialogs-focus-1).
     static CONFIRM_PREV: std::cell::RefCell<Option<web_sys::HtmlElement>> =
         const { std::cell::RefCell::new(None) };
+    /// When the dialog scrim last arrived (R93 S13). A dialog that opens
+    /// under the pointer must not close to the same pointer: `.overlay` is
+    /// `inset: 0`, so the second half of a double-click on "Export to
+    /// calendar", "Share or import", "My data" or a chip landed on the
+    /// scrim and dismissed the dialog the first click had just opened —
+    /// `elementFromPoint` at the unmoved cursor returned `DIV.overlay`, the
+    /// button looked dead, and a reader who double-clicks could never open
+    /// any of them.
+    ///
+    /// Set from the open Effect and NOT in the render closure: DialogHost's
+    /// closure rebuilds whenever a stateless dialog body's own signals
+    /// change (§4), and a timestamp taken there would silently re-arm the
+    /// guard in the middle of an open dialog. The Effect re-runs on every
+    /// write to `app.dialog`, so a dialog that opens ANOTHER dialog (My
+    /// data -> Share) re-arms too, which is the same defect.
+    static DIALOG_OPENED_AT: std::cell::Cell<f64> = const { std::cell::Cell::new(0.0) };
+    /// Which dialog that timer was armed FOR.
+    ///
+    /// The Effect re-runs on every write to `app.dialog`, and it is not the
+    /// only thing that makes it run — answering a confirm raised BY an open
+    /// dialog re-ran it while the SAME dialog stayed open, so the scrim went
+    /// inert again at the exact moment a reader who had just chosen "keep
+    /// editing" reached for the dark area. t64 caught it. The guard must arm
+    /// on a genuine open or swap, which is a question about WHICH dialog is
+    /// on screen, not about how many times the Effect has run.
+    static DIALOG_ARMED_FOR: std::cell::RefCell<Option<std::mem::Discriminant<Dialog>>> =
+        const { std::cell::RefCell::new(None) };
 }
 
 #[component]
@@ -2980,6 +3155,23 @@ pub fn DialogHost() -> impl IntoView {
         let open = app.dialog.with(|d| d.is_some());
         let was_open = prev.unwrap_or(false);
         if open {
+            // R93 S13 — see DIALOG_OPENED_AT. Armed for a genuine open or
+            // SWAP (a dialog that replaces itself is a new scrim under the
+            // same pointer), and for nothing else: keyed on which dialog is
+            // showing, never on the Effect having run.
+            let showing = app.dialog.with(|d| d.as_ref().map(std::mem::discriminant));
+            let is_new = DIALOG_ARMED_FOR.with(|armed| {
+                let mut armed = armed.borrow_mut();
+                if *armed == showing {
+                    false
+                } else {
+                    *armed = showing;
+                    true
+                }
+            });
+            if is_new {
+                DIALOG_OPENED_AT.set(domx::now_ms());
+            }
             if !was_open {
                 PREV_FOCUS.with(|p| {
                     // Body means "focus was dropped", not "return here":
@@ -3021,6 +3213,9 @@ pub fn DialogHost() -> impl IntoView {
             })
             .forget();
         } else if was_open {
+            // Nothing is showing, so the next open is a new scrim however
+            // soon it comes.
+            DIALOG_ARMED_FOR.with(|armed| *armed.borrow_mut() = None);
             PREV_FOCUS.with(|p| {
                 if let Some(el) = p.borrow_mut().take() {
                     // preventScroll, because Chrome scrolls to the element's
@@ -3069,6 +3264,24 @@ pub fn DialogHost() -> impl IntoView {
                         <div
                             class="overlay"
                             on:click=move |_| {
+                                // A dialog that opens under the pointer must
+                                // not close to the same pointer (R93 S13,
+                                // and the unshipped half of R93 M3).
+                                //
+                                // NOT scoped to a coarse pointer, unlike the
+                                // confirm's ANSWER buttons: this was measured
+                                // with a mouse, and nothing is lost by
+                                // refusing a scrim dismissal for a third of a
+                                // second — nobody deliberately dismisses a
+                                // dialog they have just opened, while Close,
+                                // Escape and every control inside the dialog
+                                // keep working throughout. That is the line
+                                // that keeps M3's regression away: guard the
+                                // press that nobody aims, never the answer
+                                // somebody means.
+                                if domx::now_ms() - DIALOG_OPENED_AT.get() < SETTLE_MS {
+                                    return;
+                                }
                                 // The scrim-close tweak: with it off, only
                                 // Close, Escape or the browser leave a
                                 // dialog. The confirm layer's scrim keeps
@@ -3194,6 +3407,14 @@ pub fn ConfirmHost() -> impl IntoView {
                 app.reset_tweaks();
                 crate::apply_theme(app);
                 app.toast("All tweaks are back to how the app ships.");
+                // This is the one confirmed action that disables its own
+                // opener: with nothing differing any more, "Reset all tweaks"
+                // sleeps, and CONFIRM_PREV's restore is a silent no-op on a
+                // disabled button - focus stays on <body> (R92 CW-3). Fixed
+                // here rather than inside the restore, so the generic path
+                // keeps handing focus back to the exact element that asked
+                // and never races DialogHost's own restore.
+                domx::focus_soon(&["[data-tweak-count]", "[data-mydata]"]);
             }
             ConfirmAction::ClearStorageKey(key) => {
                 storage::remove(&key);
@@ -3237,16 +3458,44 @@ pub fn ConfirmHost() -> impl IntoView {
                     let opened_at = crate::domx::now_ms();
                     let settled = move || {
                         !crate::domx::is_coarse_pointer()
-                            || crate::domx::now_ms() - opened_at > 350.0
+                            || crate::domx::now_ms() - opened_at > SETTLE_MS
                     };
+                    // The SCRIM is a different question from the two answer
+                    // buttons above, and gets a different answer (R93 S13).
+                    // Nobody presses a scrim on purpose a third of a second
+                    // after the question appeared, so this one is not scoped
+                    // to touch: on a desktop, a mouse double-click on
+                    // "Delete all app data" made the question flash and
+                    // vanish, and the button read as dead.
+                    let scrim_settled =
+                        move || crate::domx::now_ms() - opened_at > SETTLE_MS;
                     view! {
-                        <div class="overlay confirm-layer" on:click=move |_| answer_no()>
+                        <div
+                            class="overlay confirm-layer"
+                            on:click=move |_| {
+                                if scrim_settled() {
+                                    answer_no()
+                                }
+                            }
+                        >
                             <div
                                 class="dialog confirm"
                                 class:confirm-danger=danger
                                 role="alertdialog"
                                 aria-modal="true"
                                 aria-labelledby="confirm-title"
+                                // Focusable, not tabbable — the same reason
+                                // `DialogHost`'s container carries it (R92
+                                // S12). Every word of the question is
+                                // unfocusable text, so ONE click on it used
+                                // to drop focus to BODY: the Tab trap below
+                                // is an `on:keydown` on THIS element and a
+                                // keydown on body never bubbles into it, so
+                                // Tab walked the buttons hidden behind the
+                                // overlay and a reader stood outside the
+                                // alertdialog. `.dialog:focus{outline:none}`
+                                // already covers the ring.
+                                tabindex="-1"
                                 on:click=|ev| ev.stop_propagation()
                                 on:keydown=move |ev| {
                                     trap_tab(&ev);
@@ -3899,7 +4148,17 @@ fn details_dialog(app: App, code: String) -> impl IntoView {
     for (other, day, slot) in clashes {
         let when = format!("{} · {}", day.full(), slot.label());
         match clash_groups.iter_mut().find(|(c, _)| *c == other) {
-            Some((_, whens)) => whens.push(when),
+            // Every time once. Two meetings of one course in a single slot
+            // are two ClashPairs with identical day and hours, and the same
+            // "Tuesday - 09:10-10:25" listed twice claims a collision that
+            // happens once. The `would_clash_with` arm above is already
+            // `dedup`-ed (state.rs), so only the selected arm reaches this
+            // (R92 CW-1).
+            Some((_, whens)) => {
+                if !whens.contains(&when) {
+                    whens.push(when);
+                }
+            }
             None => clash_groups.push((other, vec![when])),
         }
     }
@@ -4792,6 +5051,17 @@ fn import_courses_dialog(app: App, plan: crate::state::IncomingPlan) -> impl Int
             plural(plan.takes_changes_here.len(), "a course", "courses"),
         ));
     }
+    if !plan.unshareable.is_empty() {
+        let one = plan.unshareable.len() == 1;
+        notes.push(format!(
+            "Left out: {} — {} a comma or a % sign in the code, and a web \
+             address can't carry {}, so the app can't file {}.",
+            plan.unshareable.join(", "),
+            if one { "it has" } else { "they have" },
+            if one { "it" } else { "them" },
+            if one { "it" } else { "them" },
+        ));
+    }
     if !plan.restores_deleted.is_empty() {
         notes.push(format!(
             "You deleted {}. The file brings {} back, along with any times \
@@ -5284,7 +5554,20 @@ fn my_data_dialog(app: App) -> impl IntoView {
                         .map(|r| {
                             view! {
                                 <p class="muted small">
-                                    {format!("Last worked: {r}. The app tries it first.")}
+                                    // The FACT only. "The app tries it first"
+                                    // was a hard-coded ordering claim this
+                                    // closure never computed, and it is false
+                                    // in three reachable states (R92 CW-4): a
+                                    // helper site of your own is tried before
+                                    // every shipped relay
+                                    // (`fetch::relay_routes`), "no public
+                                    // helper sites" means a remembered relay
+                                    // is not asked at all, and the direct
+                                    // route is tier 2 - it runs only once
+                                    // every relay has failed. The ordering
+                                    // that IS true is stated once, under the
+                                    // helper-site field below.
+                                    {format!("Last worked: {r}.")}
                                 </p>
                             }
                         })
@@ -5317,14 +5600,37 @@ fn my_data_dialog(app: App) -> impl IntoView {
                                 .update(|p| {
                                     p.helper_site = (!trimmed.is_empty()).then_some(trimmed);
                                 });
-                            app.persist_prefs();
-                            app.toast(
-                                if app.prefs.with_untracked(|p| p.helper_site.is_some()) {
-                                    "Saved. The app will try your helper site first."
-                                } else {
-                                    "Cleared. The app will use its own helper sites."
-                                },
-                            );
+                            // "Saved." has to be true. A helper site is the
+                            // one preference here that is NOT re-derivable —
+                            // a URL only the reader knows — so a refused
+                            // write claimed as a save loses it silently
+                            // (R92 S11), and the cause decides the words,
+                            // because "free some space" is useless when site
+                            // data is switched off (R93 S4). The failed
+                            // CLEAR is the sharper of the two: the box is
+                            // empty on screen and the old address is still
+                            // in storage, so it comes back on reload.
+                            let saved = app.persist_prefs_checked();
+                            let set = app.prefs.with_untracked(|p| p.helper_site.is_some());
+                            app.toast(match (saved, set) {
+                                (Ok(()), true) => {
+                                    "Saved. The app will try your helper site first.".to_string()
+                                }
+                                (Ok(()), false) => {
+                                    "Cleared. The app will use its own helper sites.".to_string()
+                                }
+                                (Err(e), true) => format!(
+                                    "The app will try your helper site for the rest of this \
+                                     visit. {} so it won't be there next time you open the app.",
+                                    e.because(),
+                                ),
+                                (Err(e), false) => format!(
+                                    "The app will use its own helper sites for the rest of this \
+                                     visit. {} so the one you had will be back next time you \
+                                     open the app.",
+                                    e.because(),
+                                ),
+                            });
                         }
                         on:keydown=domx::blur_on_enter
                     />
@@ -5416,9 +5722,18 @@ fn my_data_dialog(app: App) -> impl IntoView {
                                     p.theme = d.theme;
                                     p.density = d.density;
                                 });
-                            app.persist_prefs();
+                            let saved = app.persist_prefs_checked();
                             crate::apply_theme(app);
-                            app.toast("Theme and row height reset.");
+                            // True in this session either way; the reset only
+                            // outlives the tab if the write landed (R92 S11).
+                            app.toast(match saved {
+                                Ok(()) => "Theme and row height reset.".to_string(),
+                                Err(e) => format!(
+                                    "Theme and row height reset for this visit. {} so they'll \
+                                     be back to what they were next time you open the app.",
+                                    e.because(),
+                                ),
+                            });
                         }
                     >
                         "Reset"
@@ -6104,12 +6419,8 @@ fn course_editor_dialog(app: App, code: Option<String>, prefill: Option<String>)
             // one code from the next and % starts an escape — a code
             // carrying either would come back split or altered on reload
             // and silently drop off the timetable.
-            if code_v.contains(',') || code_v.contains('%') {
-                error.set(
-                    "A code can't contain a comma or a % sign — they'd break \
-                     the links that share your timetable."
-                        .to_string(),
-                );
+            if !ttcore::share::code_is_url_safe(&code_v) {
+                error.set(ttcore::share::CODE_NOT_URL_SAFE.to_string());
                 return;
             }
             let renaming_from = own_editing.as_deref();
@@ -7069,7 +7380,12 @@ fn export_dialog(app: App, scope: Option<String>) -> impl IntoView {
             );
             return;
         }
-        let c_param = domx::c_param(&app.selection.get_untracked());
+        // The CHOSEN scope, not the whole planner. A file exported for one
+        // course used to carry, in every event's notes, a link that opens
+        // every course the sender takes — three courses on the recipient's
+        // timetable, from a file about one (R93 S9). The link a file offers
+        // must open what the file is about.
+        let c_param = domx::c_param(&codes);
         let opts = ttcore::ics::IcsOptions {
             range_start: start,
             range_end: end,
@@ -7092,35 +7408,83 @@ fn export_dialog(app: App, scope: Option<String>) -> impl IntoView {
             dtstamp: domx::dtstamp_utc_now(),
             calendar_name: format!("CMI Timetable {}", snapshot.semester_label_display()),
         };
-        let ics = ttcore::ics::build_ics(&courses, &opts);
+        // `written` is what the file really holds, course by course — the
+        // only honest source for the refusal and the sentence below, because
+        // a meeting whose first occurrence falls past the last date writes
+        // nothing at all (R93 S3).
+        let (ics, written) = ttcore::ics::build_ics(&courses, &opts);
+        let count_for = |code: &str| {
+            written
+                .iter()
+                .find(|(c, _)| c == code)
+                .map_or(0, |(_, n)| *n)
+        };
+        // Nothing lands in the range at all: two dates on the same Sunday
+        // used to download a file with zero events under "Calendar file
+        // downloaded." — true about the download and false about everything
+        // the reader cares about. Refuse and say why, before writing
+        // anything (§4: drop-and-say, never silently clamp).
+        if courses.iter().all(|c| count_for(c.code.as_str()) == 0) {
+            error.set(
+                "Nothing falls between those dates — no class in this file would \
+                 happen. Widen the range and try again."
+                    .to_string(),
+            );
+            return;
+        }
         domx::download_text(
             &ttcore::ics::ics_filename(&snapshot.semester_label),
             "text/calendar",
             &ics,
         );
-        // A course with no weekly meeting puts nothing in the file. The
-        // refusal above only fires when EVERY chosen course is empty, so
-        // "All selected (5)" quietly wrote a file holding three of them and
-        // said "Calendar file downloaded." — a feature skipping a selected
-        // course silently is lying by omission (§4's rule, R83). Naming them
-        // costs a clause and turns a wrong impression into a fact.
-        let empty: Vec<&str> = courses
-            .iter()
-            .filter(|c| c.meetings.is_empty())
-            .map(|c| c.code.as_str())
-            .collect();
-        app.toast(match empty.as_slice() {
-            [] => "Calendar file downloaded.".to_string(),
-            [one] => format!(
-                "Calendar file downloaded. {one} isn't in it — it has no weekly \
-                 time yet."
+        // A chosen course can be missing from the file for two different
+        // reasons, and they need different words. The refusals above only
+        // fire when EVERY chosen course is missing, so "All selected (5)"
+        // quietly wrote a file holding three of them and said "Calendar file
+        // downloaded." — a feature skipping a selected course silently is
+        // lying by omission (§4's rule, R83). Both lists are read off
+        // `written`, so the sentence can only describe the file that was
+        // really written — and "it has no weekly time yet" is FALSE for a
+        // course the dates dropped, which is why there are two clauses and
+        // not one (R93 S3).
+        let mut no_time: Vec<&str> = Vec::new();
+        let mut out_of_range: Vec<&str> = Vec::new();
+        for c in &courses {
+            if count_for(c.code.as_str()) == 0 {
+                if c.meetings.is_empty() {
+                    no_time.push(c.code.as_str());
+                } else {
+                    out_of_range.push(c.code.as_str());
+                }
+            }
+        }
+        let clause = |list: &[&str], one: &str, more: &str| -> Option<String> {
+            match list {
+                [] => None,
+                [x] => Some(format!("{x} isn't in it — {one}")),
+                xs => Some(format!("{} aren't in it — {more}", xs.join(", "))),
+            }
+        };
+        let mut msg = "Calendar file downloaded.".to_string();
+        for extra in [
+            clause(
+                &no_time[..],
+                "it has no weekly time yet.",
+                "they have no weekly times yet.",
             ),
-            many => format!(
-                "Calendar file downloaded. {} aren't in it — they have no weekly \
-                 times yet.",
-                many.join(", ")
+            clause(
+                &out_of_range[..],
+                "none of its classes fall between those dates.",
+                "none of their classes fall between those dates.",
             ),
-        });
+        ]
+        .into_iter()
+        .flatten()
+        {
+            msg.push(' ');
+            msg.push_str(&extra);
+        }
+        app.toast(msg);
         app.dialog.set(None);
     });
 
@@ -7244,7 +7608,8 @@ fn export_dialog(app: App, scope: Option<String>) -> impl IntoView {
             }}
             <p class="muted small">
                 "If a course says “starts …” or “runs … only”, the file uses those \
-                 dates for it instead of the ones above."
+                 dates for it instead of the ones above. A course with no class \
+                 between the dates you pick is left out, and the app says which."
             </p>
             <p class="muted small">
                 "The file repeats each class weekly between the dates above, holidays \
@@ -7312,6 +7677,10 @@ fn shorten_dialog(app: App) -> impl IntoView {
     let long_for_result = long.clone();
     let long_for_chips = long.clone();
     let long_for_button = long.clone();
+    // Two more copies for the two places that must say "too long for that
+    // service": the primary button's label and the full-link details.
+    let long_for_ceiling = long.clone();
+    let long_for_details = long.clone();
 
     let chosen =
         move || service(app.shorten_service.get()).unwrap_or(ttcore::shorten::default_service());
@@ -7359,8 +7728,8 @@ fn shorten_dialog(app: App) -> impl IntoView {
                     // like losing the link you already had.
                     let working = state.is_working(s.key);
                     let failure = match &state {
-                        crate::state::ShortenState::Failed(key, why) if *key == s.key => {
-                            Some(why.clone())
+                        crate::state::ShortenState::Failed(key, why, saw) if *key == s.key => {
+                            Some((why.clone(), saw.clone()))
                         }
                         _ => None,
                     };
@@ -7372,12 +7741,34 @@ fn shorten_dialog(app: App) -> impl IntoView {
                         !working && failure.is_none() && made.is_none() && earlier.is_none();
                     let head = view! {
                         {failure
-                            .map(|why| {
+                            .map(|(why, saw)| {
                                 view! {
                                     <p class="shorten-failed">
                                         <span class="badge warn">"!"</span>
                                         <span>{why}</span>
                                     </p>
+                                    // Who saw the link, on the failure path as
+                                    // well as the happy one (R93 R10). Nothing
+                                    // came back, and the relays still read the
+                                    // student's whole timetable link.
+                                    {(!saw.is_empty())
+                                        .then(|| {
+                                            let (site, were, they) = if saw.len() == 1 {
+                                                ("site", "was", "it")
+                                            } else {
+                                                ("sites", "were", "they")
+                                            };
+                                            view! {
+                                                <p class="muted small shorten-failed-saw">
+                                                    {format!(
+                                                        "The helper {site} {} {were} handed the \
+                                                         link while the app tried, so {they} saw \
+                                                         it even though nothing came back.",
+                                                        saw.join(" and "),
+                                                    )}
+                                                </p>
+                                            }
+                                        })}
                                 }
                             })}
                         {working
@@ -7410,8 +7801,7 @@ fn shorten_dialog(app: App) -> impl IntoView {
                                     <button
                                         class="btn primary"
                                         on:click=move |_| {
-                                            domx::copy_to_clipboard(to_copy.clone(), |_| {});
-                                            app.toast("Short link copied.");
+                                            app.copy_and_say(to_copy.clone(), "Short link copied.");
                                         }
                                     >
                                         "Copy"
@@ -7485,8 +7875,7 @@ fn shorten_dialog(app: App) -> impl IntoView {
                                     <button
                                         class="btn"
                                         on:click=move |_| {
-                                            domx::copy_to_clipboard(to_copy.clone(), |_| {});
-                                            app.toast("Earlier short link copied.");
+                                            app.copy_and_say(to_copy.clone(), "Earlier short link copied.");
                                         }
                                     >
                                         "Copy"
@@ -7518,6 +7907,11 @@ fn shorten_dialog(app: App) -> impl IntoView {
                     .iter()
                     .map(|s| {
                         let key = s.key;
+                        // Measured once per render, not inside a closure:
+                        // `long` cannot change while this view lives (it is
+                        // built from tracked reads at the top, so a change
+                        // re-runs the whole dialog).
+                        let too_long = ttcore::shorten::too_long_for(s, &long_for_chips);
                         let long_here = long_for_chips.clone();
                         view! {
                             <label class="opt shorten-opt">
@@ -7561,9 +7955,29 @@ fn shorten_dialog(app: App) -> impl IntoView {
                                                     }
                                                 })
                                         }}
+                                        {too_long
+                                            .map(|_| {
+                                                view! {
+                                                    <span class="badge warn shorten-toolong">
+                                                        "too long"
+                                                    </span>
+                                                }
+                                            })}
                                     </span>
                                     <span class="muted small shorten-opt-note">
                                         {s.note} " Goes to " {s.host} "."
+                                        // The option stays, and says why it
+                                        // cannot take this link: a sign, not
+                                        // a removed fact. Two services from
+                                        // now the same timetable may fit.
+                                        {too_long
+                                            .map(|(asking, max)| {
+                                                format!(
+                                                    " This link is too long for it — asking \
+                                                     takes about {asking} characters, and about \
+                                                     {max} is as much as it will take."
+                                                )
+                                            })}
                                     </span>
                                 </span>
                             </label>
@@ -7603,8 +8017,14 @@ fn shorten_dialog(app: App) -> impl IntoView {
             <details
                 class="shorten-long"
                 open=move || {
+                    // Open on a failure, and open when the chosen service
+                    // cannot take this link at all — both are moments when
+                    // the only thing that works is the full link, and a
+                    // sentence naming a control 280px below the fold names
+                    // nothing.
                     app.shorten
-                        .with(|st| matches!(st, crate::state::ShortenState::Failed(_, _)))
+                        .with(|st| matches!(st, crate::state::ShortenState::Failed(..)))
+                        || ttcore::shorten::too_long_for(chosen(), &long_for_details).is_some()
                 }
             >
                 <summary class="muted small">"The full link, as it is now"</summary>
@@ -7618,8 +8038,7 @@ fn shorten_dialog(app: App) -> impl IntoView {
                     <button
                         class="btn"
                         on:click=move |_| {
-                            domx::copy_to_clipboard(long_copy.clone(), |_| {});
-                            app.toast("Link copied.");
+                            app.copy_and_say(long_copy.clone(), "Link copied.");
                         }
                     >
                         "Copy"
@@ -7676,6 +8095,16 @@ fn shorten_dialog(app: App) -> impl IntoView {
                         let s = chosen();
                         if app.shorten.with(|st| st.is_working(s.key)) {
                             "Asking…".to_string()
+                        } else if ttcore::shorten::too_long_for(s, &long_for_ceiling).is_some() {
+                            // Says the obstacle rather than asking for
+                            // something this service provably refuses. Still
+                            // PRESSABLE on purpose: `shorten::call` refuses
+                            // before a route is built, so pressing it sends
+                            // nothing and puts the whole measured reason in
+                            // the live region above — a ceiling that drifts
+                            // can then never lock a reader out of a call that
+                            // would have worked (R93 sp-4).
+                            format!("Too long for {}", s.name)
                         } else if app.short_for(s.key, &long_for_button).is_some() {
                             // The link is already in hand and the Copy
                             // button beside it is the likelier next move, so
@@ -7711,7 +8140,13 @@ fn share_dialog(app: App) -> impl IntoView {
             .collect()
     });
     let custom_codes: Vec<String> = shared_customs.iter().map(|c| c.code.clone()).collect();
-    let c_param = domx::c_param(&selection);
+    // The codes the links can carry, and the ones only the second link can.
+    // A code with a comma or a % is left out of `?c=` — it has no round trip
+    // through that parameter (R93 M5) — so this dialog must SAY which course
+    // is missing from the "Courses only" link rather than hand out a link
+    // that silently drops it. A tweak may hide a sign, never a fact.
+    let (safe_codes, unshareable_codes) = domx::url_safe_split(&selection);
+    let c_param = domx::c_param(&safe_codes);
     let plain = domx::share_url(&format!("?c={c_param}"));
     let with_times = domx::share_url(&format!(
         "?c={c_param}&s={}",
@@ -7755,6 +8190,28 @@ fn share_dialog(app: App) -> impl IntoView {
                     "Opening the link puts your courses in place of whatever that \
                      browser had — the quickest way to pass your timetable on."
                 </p>
+                {(!unshareable_codes.is_empty())
+                    .then(|| {
+                        let one = unshareable_codes.len() == 1;
+                        view! {
+                            <p class="muted small">
+                                {format!(
+                                    "{} {} a comma or a % sign in {} code, which a web \
+                                     address can't carry — so “Courses only” \
+                                     leaves {} out. “Courses and your changes” still \
+                                     carries {}. Rename {} under My courses and {} \
+                                     travel in either link.",
+                                    unshareable_codes.join(", "),
+                                    if one { "has" } else { "have" },
+                                    if one { "its" } else { "their" },
+                                    if one { "it" } else { "them" },
+                                    if one { "it" } else { "them" },
+                                    if one { "it" } else { "them" },
+                                    if one { "it will" } else { "they will" },
+                                )}
+                            </p>
+                        }
+                    })}
                 {(!custom_codes.is_empty())
                     .then(|| {
                         view! {
@@ -7799,8 +8256,7 @@ fn share_dialog(app: App) -> impl IntoView {
                         title="The course codes alone — the shortest link, and enough \
                                to open the same courses in any browser"
                         on:click=move |_| {
-                            domx::copy_to_clipboard(plain2.clone(), |_| {});
-                            app.toast("Link copied.");
+                            app.copy_and_say(plain2.clone(), "Link copied.");
                         }
                     >
                         "Copy link"
@@ -7818,16 +8274,20 @@ fn share_dialog(app: App) -> impl IntoView {
                         class="btn"
                         disabled=!has_extras
                         aria-label="Copy link with courses and your changes"
+                        // All FOUR things the payload carries (R93 R12).
+                        // `share::encode_share` sends `d: overrides.hidden`, and
+                        // the recipient is told when a link empties their
+                        // catalog (t161) — the sender was the one person not
+                        // told their deletions travel.
                         title=if has_extras {
                             "Includes the classes you moved or added, your credit \
-                             changes and your own courses."
+                             changes, the courses you deleted and your own courses."
                         } else {
                             "You haven't changed anything yet."
                         }
                         on:click=move |_| {
                             let url = with2.clone();
-                            domx::copy_to_clipboard(url, |_| {});
-                            app.toast("Link with your changes copied.");
+                            app.copy_and_say(url, "Link with your changes copied.");
                         }
                     >
                         "Copy link"
@@ -7976,7 +8436,11 @@ fn share_dialog(app: App) -> impl IntoView {
                     "A copy of everything this browser has saved — your courses, your \
                      changes, CMI's downloaded timetable and your settings — for a new \
                      device, or to keep somewhere safe. There is no merging: it \
-                     replaces everything in the browser that opens it."
+                     replaces everything in the browser that opens it. Worth keeping if \
+                     you use an iPhone, an iPad or Safari: those browsers erase a site's \
+                     saved data after seven days of using them without opening this \
+                     page, and adding this page to your Home Screen is what keeps it out \
+                     of that count."
                 </p>
             </section>
 
@@ -8277,7 +8741,7 @@ fn removed_course_dialog(app: App, record: ttcore::model::Course) -> impl IntoVi
     // A comma or a % survives into `?c=`, where the share link turns it back
     // into a separator before decoding — the course would split in two and
     // fall off any timetable someone opened from the link.
-    let unshareable = record.code.contains(',') || record.code.contains('%');
+    let unshareable = !ttcore::share::code_is_url_safe(&record.code);
     let can_keep = !already_yours && !back_on_cmi && !unshareable;
     let keep_record = record.clone();
     let meetings = record.meetings.clone();

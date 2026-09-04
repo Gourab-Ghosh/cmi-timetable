@@ -1820,7 +1820,7 @@ fn the_exported_calendar_follows_the_term() {
             IcsCourse::from_course(c, c.meetings.clone())
         })
         .collect();
-    let ics = build_ics(
+    let (ics, _) = build_ics(
         &courses,
         &IcsOptions {
             range_start: start,

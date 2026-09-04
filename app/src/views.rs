@@ -587,6 +587,11 @@ fn my_timetable(app: App) -> impl IntoView {
     // preference the reader had never made.
     let move_day = Memo::new(move |_| app.move_mode.with(|m| m.as_ref().map(|m| m.cursor.0)));
 
+    // See the toolbar below (R92 S3). Creating signals here is safe inside
+    // the tab dispatcher's reactive closure — §4's `my_timetable` rule is
+    // about tracked READS, and `reflow_shield` makes none.
+    let (settling, arm_shield) = crate::ui::reflow_shield();
+
     let day_mode = Memo::new(move |_| {
         let chosen = match app.plan_view() {
             DayView::All => None,
@@ -797,7 +802,19 @@ fn my_timetable(app: App) -> impl IntoView {
                     )
                 },
             )}
-            <div class="toolbar noprint">
+            // R92 S3. "Follow today" unmounts itself the instant it is
+            // pressed, and at phone width the toolbar re-wraps so that
+            // `edit_toggle` lands on the vanished button's box — measured at
+            // 412px, the new "Edit layout" rect CONTAINS 100% of the old hit
+            // area — so the second half of a double-tap armed editing and
+            // stacked two toasts. The button is 94x28, under the 44px touch
+            // floor, which makes a corrective second tap a reflex.
+            //
+            // The toolbar goes inert for a moment rather than the button
+            // reserving a 94px hole it does not need: `pointer-events: none`
+            // stops mouse and touch and leaves the KEYBOARD alone, so a
+            // decisive reader never presses twice for anything.
+            <div class="toolbar noprint" class:settling=move || settling.get()>
                 <h2 style="margin:0">"My timetable"</h2>
                 <div class="grow"></div>
                 // One choice of six, not six toggles: a radio group with a
@@ -847,6 +864,7 @@ fn my_timetable(app: App) -> impl IntoView {
                     move || {
                         app.clear_plan_view();
                         app.toast("The day strip follows today again.");
+                        arm_shield();
                     },
                 )}
                 {custom_changes_pill(app)}
@@ -1127,7 +1145,7 @@ fn my_timetable(app: App) -> impl IntoView {
                                     // A finger must press and hold before it can drag
                                     // (R92 M11), so the gesture is named for the
                                     // pointer actually in use.
-                                    {if crate::domx::is_coarse_pointer() {
+                                    {if app.touch_input.get() {
                                         "Turn on ✎ Edit layout, then press and hold one to \
                                          drag it onto the grid — or press Edit this course \
                                          to set its time, hall, credits or name."
@@ -1350,7 +1368,19 @@ fn my_timetable(app: App) -> impl IntoView {
                                             let when = format!("{} · {times}", c.day.full());
                                             let key = (c.a.clone(), c.b.clone());
                                             match groups.iter_mut().find(|(k, _)| *k == key) {
-                                                Some((_, whens)) => whens.push(when),
+                                                // ...and every time ONCE. A course of your
+                                                // own that meets twice in one slot makes two
+                                                // ClashPairs with the same day and the same
+                                                // hours, and "Tuesday - 09:10-10:25" printed
+                                                // twice reads as two collisions. The print
+                                                // strip forty lines above has guarded this
+                                                // since R84; the screen must count the same
+                                                // way (R92 CW-1).
+                                                Some((_, whens)) => {
+                                                    if !whens.contains(&when) {
+                                                        whens.push(when);
+                                                    }
+                                                }
                                                 None => groups.push((key, vec![when])),
                                             }
                                         }
@@ -2507,6 +2537,13 @@ fn master_grid(app: App) -> impl IntoView {
     // Dropping those from the count without a word would be its own small
     // lie — they match what was asked for, they are simply somewhere else.
     let unplaced = Signal::derive(move || matched.with(Vec::len) - filtered.with(Vec::len));
+    // Whether this grid has anything to draw, as a DEDUPED boolean (R92
+    // CW-5). The empty state has to swap the whole table out, and a view
+    // closure reading `filtered` directly would tear the table down and
+    // rebuild it on every keystroke that changes the match set - the exact
+    // cost R57/R58 measured out of this page. A Memo's PartialEq dedupe means
+    // the closure below re-runs only when the answer actually flips (SS4).
+    let nothing_to_draw = Memo::new(move |_| filtered.with(Vec::is_empty));
 
     // The columns, worked out once for the whole table rather than in the
     // header, in every row, and again in the note underneath.
@@ -2853,9 +2890,69 @@ fn master_grid(app: App) -> impl IntoView {
                     })
             }}
             {deleted_note(app)}
+            // A blank ruled week with not one word in it is the one thing
+            // every sibling surface refuses to do: My timetable, My courses,
+            // the Catalog and the tweak search all say what happened and
+            // offer the fix that applies (R92 CW-5). Wording follows the
+            // Catalog's, because this grid shares the Catalog's filter set
+            // and the button below clears exactly that set.
+            {move || {
+                nothing_to_draw
+                    .get()
+                    .then(|| {
+                        // Honesty first: with matches CMI has given no time,
+                        // courses DO match - the note above names them - and
+                        // "No courses match." would be false.
+                        let waiting = unplaced.get() > 0;
+                        view! {
+                            <div class="empty panel">
+                                <p class="big">
+                                    {if waiting {
+                                        "Nothing to put on the grid yet."
+                                    } else {
+                                        "No courses match."
+                                    }}
+                                </p>
+                                // `noprint`, like My timetable's: both of
+                                // these name a control on screen, and the
+                                // headline above still prints so the sheet
+                                // says what it is.
+                                <p class="noprint">
+                                    {if waiting {
+                                        "Every course matching these filters is still \
+                                         waiting for a time from CMI, so this grid has no \
+                                         slot to put one in."
+                                    } else {
+                                        "To see more, take a filter off above - or clear \
+                                         them all below, search box included."
+                                    }}
+                                </p>
+                                <div class="row noprint" style="justify-content:center">
+                                    <button
+                                        class="btn primary"
+                                        on:click=move |_| {
+                                            // The set the Catalog and the
+                                            // Master grid share - My courses'
+                                            // own filters stay put.
+                                            app.act_filters_in(
+                                                false,
+                                                "clear all filters",
+                                                false,
+                                                |f| *f = crate::state::Filters::default(),
+                                            );
+                                        }
+                                    >
+                                        "Clear all filters"
+                                    </button>
+                                </div>
+                            </div>
+                        }
+                    })
+            }}
             <div
                 class="grid-scroll"
                 class:density-compact=move || app.density() == Density::Compact
+                class:hidden-when-empty=move || nothing_to_draw.get()
             >
                 <table class="tt">
                     <thead>
@@ -2914,7 +3011,10 @@ fn master_grid(app: App) -> impl IntoView {
             // in a tooltip a phone never shows.
             {move || {
                 let extras = columns.get().iter().filter(|(_, extra)| *extra).count();
-                (extras > 0)
+                // ...and only while the grid it explains is on screen (R92
+                // CW-5, t140's rule): with the empty panel in the table's
+                // place there is no tinted column to point at.
+                (extras > 0 && !nothing_to_draw.get())
                     .then(|| {
                         view! {
                             <p class="muted small">
@@ -3034,6 +3134,18 @@ fn catalog(app: App) -> impl IntoView {
             .collect::<Vec<_>>()
     });
     let count = Signal::derive(move || filtered.get().len());
+    // R93 S12. Deleting a row takes it out of `filtered`, so the NEXT row
+    // slides up and its own Delete lands under a pointer that has not
+    // moved: a double-click deleted a course nobody pointed at
+    // (`overrides.hidden` null -> [GRAL, GTP1] — GTP1 was never aimed at).
+    //
+    // A mounted-age guard cannot see this: the rows live in a KEYED <For>,
+    // so the row that receives the second press is the same DOM node it
+    // was a moment ago, merely relocated. The LIST goes inert for a moment
+    // instead. `pointer-events: none` leaves the keyboard alone — and the
+    // keyboard was already immune, because activation follows focus and
+    // the deleted button takes its focus with it.
+    let (settling, arm_shield) = crate::ui::reflow_shield();
 
     view! {
         <section aria-label="Catalog" class="sheet-list">
@@ -3099,7 +3211,7 @@ fn catalog(app: App) -> impl IntoView {
             //
             // `print-cols` wraps it for the printed sheet's two columns — see
             // My courses, where the same wrapper carries the same note.
-            <div class="print-cols">
+            <div class="print-cols" class:settling=move || settling.get()>
             <For
                 each=move || filtered.get()
                 // A fingerprint, not a printout: the key must change when
@@ -3111,7 +3223,7 @@ fn catalog(app: App) -> impl IntoView {
                     course.hash(&mut h);
                     h.finish()
                 }
-                children=move |course| catalog_row(app, course)
+                children=move |course| catalog_row(app, course, arm_shield)
             />
             </div>
             {move || {
@@ -3403,7 +3515,13 @@ fn catalog(app: App) -> impl IntoView {
     }
 }
 
-fn catalog_row(app: App, course: Course) -> impl IntoView {
+fn catalog_row(
+    app: App,
+    course: Course,
+    // Armed by Delete, which removes this row from the list — see
+    // `fn catalog` and R93 S12.
+    arm_shield: impl Fn() + Copy + Send + Sync + 'static,
+) -> impl IntoView {
     let code = course.code.clone();
     let toggle_code = code.clone();
     let danger_code = code.clone();
@@ -3411,6 +3529,10 @@ fn catalog_row(app: App, course: Course) -> impl IntoView {
     let click_code = code.clone();
     let del_code = code.clone();
     let del_show = code.clone();
+    // The moment this row's Add/Remove was last pressed. A per-ROW signal, not
+    // a shared one: two different courses tapped in quick succession are two
+    // decisions, and a shared clock would swallow the second (R93 S12).
+    let last_toggle = RwSignal::new(0.0_f64);
     // See course_card: built out here so the markup borrows nothing.
     let branch_chips: Vec<_> = course
         .branches
@@ -3568,7 +3690,25 @@ fn catalog_row(app: App, course: Course) -> impl IntoView {
                             "Puts this course on your timetable."
                         }
                     }
-                    on:click=move |_| app.toggle_select(&click_code)
+                    // A second TAP inside a third of a second is a stray
+                    // finger, not a decision: a double-tap here added the
+                    // course and took it straight back off, and a triple
+                    // left it added, so the outcome flipped with the tap
+                    // count (R93 S12). Scoped to a coarse pointer, and
+                    // deliberately: a mouse's second click on a toggle is
+                    // how every toggle on the web behaves, and swallowing
+                    // it would make a decisive reader click twice for
+                    // everything — the mistake R93 M3's first version made.
+                    on:click=move |_| {
+                        if crate::domx::is_coarse_pointer()
+                            && crate::domx::now_ms() - last_toggle.get_untracked()
+                                < crate::ui::SETTLE_MS
+                        {
+                            return;
+                        }
+                        last_toggle.set(crate::domx::now_ms());
+                        app.toggle_select(&click_code)
+                    }
                 >
                     // `code` itself: the view macro builds children before
                     // attributes, so this is its last use either way.
@@ -3597,7 +3737,10 @@ fn catalog_row(app: App, course: Course) -> impl IntoView {
                                     title="Takes this course off your timetable and out of \
                                            the catalog and the master grid. You can restore \
                                            it from Your changes."
-                                    on:click=move |_| app.delete_course(&del_code)
+                                    on:click=move |_| {
+                                        app.delete_course(&del_code);
+                                        arm_shield();
+                                    }
                                 >
                                     "Delete"
                                 </button>
@@ -4449,7 +4592,23 @@ fn follow_today_button(
                             title="Forget this pick — the view opens on today again, \
                                    or on the whole week at the weekend and on days \
                                    CMI does not teach. Picking a day pins it back."
-                            on:click=move |_| on_click()
+                            on:click=move |_| {
+                                on_click();
+                                // The button exists only while a pick is
+                                // stored, so clearing the pick unmounts it
+                                // under the finger. S3 reserves its box; a
+                                // reserved box is still unfocusable, so the
+                                // keyboard needs a named destination either
+                                // way (R92 CW-3 / S3, WCAG 2.4.3). The day
+                                // strip is where the change happened, and the
+                                // verifier measured that exact destination as
+                                // one Shift+Tab away today.
+                                crate::domx::focus_soon(&[
+                                    "div.seg[role='radiogroup'] button[role='radio'][tabindex='0']",
+                                    "nav.tabs button.tab[tabindex='0']",
+                                    "[data-mydata]",
+                                ]);
+                            }
                         >
                             "Follow today"
                         </button>
@@ -4462,6 +4621,8 @@ fn follow_today_button(
 fn halls_view(app: App) -> impl IntoView {
     let finder_day = RwSignal::new(None::<usize>); // day index
     let finder_start = RwSignal::new(None::<u16>); // slot start_min
+    // See the toolbar below (R92 S3).
+    let (settling, arm_shield) = crate::ui::reflow_shield();
 
     // "Start the free-hall finder on today and the current slot" (R89): a
     // mount-time seed, wrapped WHOLE in `untrack` — this body runs inside
@@ -4478,11 +4639,17 @@ fn halls_view(app: App) -> impl IntoView {
     // as it ships. Never reseeded while mounted; the reader's pick wins.
     untrack(|| {
         if app.prefs.with_untracked(|p| p.finder_now) {
-            let today = crate::domx::today_local().weekday();
+            // CMI's clock, not the device's — BOTH halves of it. The slot
+            // grid is an IST grid, so a device in another zone must be asked
+            // "what time is it at CMI?" or the finder seeds an hour that is
+            // not now anywhere and announces it through the aria-live panel
+            // below (R93 TL-3/S18). One reading for both, so the day and the
+            // slot cannot come from opposite sides of midnight.
+            let (cmi_today, now_min) = crate::domx::now_cmi();
+            let today = cmi_today.weekday();
             if app.hall_days().contains(&today) {
                 finder_day.set(Some(today.index()));
             }
-            let now_min = crate::domx::now_local_minutes();
             if let Some((slot, _)) = app
                 .hall_slot_grid()
                 .into_iter()
@@ -4502,6 +4669,43 @@ fn halls_view(app: App) -> impl IntoView {
     let view_mode = Memo::new(move |_| app.halls_view());
     let hall_cols = Memo::new(move |_| app.hall_slot_grid());
     let own_halls = Memo::new(move |_| app.user_halls());
+
+    // A pick is only a pick while the grid still OFFERS it (R92 S13).
+    // `finder_day`/`finder_start` are plain signals written by the seed
+    // above and the two `on:change` handlers, and nothing re-validated
+    // them: delete the course that minted an 18:30 column and
+    // `finder_start` still held 18:30, so the answer read "14 halls free"
+    // at a BLANK time — `hall_cell_busy` bails to NOT BUSY for a start
+    // that owns no column, so the filter kept every hall, and the panel's
+    // `aria-live` re-announced it for each new day. `halls_view()` already
+    // applies exactly this rule to the STORED day ("a stored day CMI no
+    // longer publishes would title a table the day strip has no button
+    // for"); the finder's two picks get the same rule.
+    //
+    // ONE definition, read by everything: the result closure below and
+    // both `<select>`s' `selected` attributes go through these, so the box
+    // reading "Pick a slot…" and the panel under it cannot disagree.
+    // Deduped Memos, because this is the hot path the day strip taught us
+    // about. Nothing is WRITTEN here: an effect that cleared the signals
+    // would be a second write site to keep in step, and the pickers only
+    // ever need to render the validated value.
+    //
+    // The tracked reads come FIRST, before the `?`: a memo that returns
+    // before its first tracked read subscribes to nothing (`plan_view`'s
+    // hard-won comment), and one that bailed on `finder_day` alone would
+    // never hear the grid change under it.
+    let picked_day = Memo::new(move |_| {
+        let days = day_list.get();
+        let idx = finder_day.get()?;
+        days.into_iter().find(|d| d.index() == idx)
+    });
+    let picked_slot = Memo::new(move |_| {
+        let cols = hall_cols.get();
+        let start = finder_start.get()?;
+        cols.into_iter()
+            .find(|(s, _)| s.start_min == start)
+            .map(|(s, _)| s)
+    });
 
     view! {
         <section aria-label="Lecture halls">
@@ -4531,7 +4735,10 @@ fn halls_view(app: App) -> impl IntoView {
                     )
                 },
             )}
-            <div class="toolbar">
+            // The same shield as My timetable's toolbar (R92 S3): Halls has
+            // the `.grow` spacer and fails identically, so the spacer was
+            // never the cause — the unmount is.
+            <div class="toolbar" class:settling=move || settling.get()>
                 <h2 style="margin:0">"Halls"</h2>
                 <div
                     class="seg"
@@ -4603,6 +4810,7 @@ fn halls_view(app: App) -> impl IntoView {
                     move || {
                         app.clear_halls_view();
                         app.toast("The Halls page follows today again.");
+                        arm_shield();
                     },
                 )}
                 <div class="grow"></div>
@@ -4660,7 +4868,7 @@ fn halls_view(app: App) -> impl IntoView {
                             // page has (R83). `hint`: the how-to tweak hides
                             // this line; the ✓ key beside it is a mark's key
                             // and follows the marks tweak instead.
-                            {if crate::domx::is_coarse_pointer() {
+                            {if app.touch_input.get() {
                                 "✎ Edit layout lets you press and hold a course, then drag \
                                  it to another room or time."
                             } else {
@@ -4721,7 +4929,7 @@ fn halls_view(app: App) -> impl IntoView {
                             finder_day.set(event_target_value(&ev).parse::<usize>().ok());
                         }
                     >
-                        <option value="" selected=move || finder_day.get().is_none()>
+                        <option value="" selected=move || picked_day.get().is_none()>
                             "Pick a day…"
                         </option>
                         {move || {
@@ -4732,7 +4940,7 @@ fn halls_view(app: App) -> impl IntoView {
                                     view! {
                                         <option
                                             value=d.index().to_string()
-                                            selected=move || finder_day.get() == Some(d.index())
+                                            selected=move || picked_day.get() == Some(d)
                                         >
                                             {d.full()}
                                         </option>
@@ -4749,7 +4957,7 @@ fn halls_view(app: App) -> impl IntoView {
                             finder_start.set(event_target_value(&ev).parse::<u16>().ok());
                         }
                     >
-                        <option value="" selected=move || finder_start.get().is_none()>
+                        <option value="" selected=move || picked_slot.get().is_none()>
                             "Pick a slot…"
                         </option>
                         {move || {
@@ -4762,7 +4970,7 @@ fn halls_view(app: App) -> impl IntoView {
                                     view! {
                                         <option
                                             value=s.start_min.to_string()
-                                            selected=move || finder_start.get() == Some(s.start_min)
+                                            selected=move || picked_slot.get().map(|p| p.start_min) == Some(s.start_min)
                                         >
                                             {s.label()}
                                         </option>
@@ -4773,16 +4981,19 @@ fn halls_view(app: App) -> impl IntoView {
                     </select>
                 </div>
                 {move || {
-                    let (day_idx, start) = (finder_day.get()?, finder_start.get()?);
-                    let day = *Day::ALL.get(day_idx)?;
+                    // Both picks validated against the LIVE grid. A slot the
+                    // grid no longer offers renders NOTHING — the blank
+                    // waiting state the finder ships in — rather than an
+                    // answer about a time that no longer exists. The label
+                    // now comes FROM the validated column, so there is no
+                    // longer an `unwrap_or_default()` that could print
+                    // "Monday · " and call it a fact.
+                    let (day, slot) = (picked_day.get()?, picked_slot.get()?);
+                    let start = slot.start_min;
+                    let slot_label = slot.label();
                     let snapshot = app.snapshot.get();
                     let columns = hall_cols.get();
                     let cols: Vec<Slot> = columns.iter().map(|(s, _)| *s).collect();
-                    let slot_label = cols
-                        .iter()
-                        .find(|s| s.start_min == start)
-                        .map(|s| s.label())
-                        .unwrap_or_default();
                     let placed = user_placements(app, &snapshot, &cols, &[day])
                         .remove(&day)
                         .unwrap_or_default();

@@ -5,19 +5,126 @@ use cmi_timetable_core::model::{
     CreditOverride, Day, HiddenCourse, Meeting, MeetingOverride, OverridesStore, Slot,
 };
 use cmi_timetable_core::share::{
-    decode_share, encode_share, parse_c_param, resolve_url_state, selection_to_c_param,
+    code_is_url_safe, decode_share, encode_share, parse_c_param, resolve_url_state,
 };
 
 fn codes(v: &[&str]) -> Vec<String> {
     v.iter().map(|s| s.to_string()).collect()
 }
 
+/// What `domx::c_param` does, in plain Rust: percent-encode each CODE, join
+/// with literal commas. `encodeURIComponent`'s unreserved set, exactly.
+///
+/// The old test round-tripped `selection_to_c_param` — a bare `join(",")` with
+/// no encoding that the app never called — so the suite proved a codec the
+/// shipped app does not use, and never saw R93 M5.
+fn c_param(selection: &[String]) -> String {
+    fn enc(code: &str) -> String {
+        let mut out = String::new();
+        for b in code.as_bytes() {
+            match b {
+                b'A'..=b'Z'
+                | b'a'..=b'z'
+                | b'0'..=b'9'
+                | b'-'
+                | b'_'
+                | b'.'
+                | b'!'
+                | b'~'
+                | b'*'
+                | b'\''
+                | b'('
+                | b')' => out.push(*b as char),
+                _ => out.push_str(&format!("%{b:02X}")),
+            }
+        }
+        out
+    }
+    selection
+        .iter()
+        .map(|c| enc(c))
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+/// What the BROWSER does to a query value before the app ever sees it:
+/// `UrlSearchParams::get` percent-decodes once, and reads a literal `+` as a
+/// space (form-urlencoded). Modelling this is the whole point — `parse_c_param`
+/// decodes a SECOND time, and it is the two together that lose a code. A test
+/// that calls `parse_c_param` straight on `c_param`'s output decodes only once
+/// and reports a healthy round trip for a value the app corrupts.
+fn browser_decode(raw: &str) -> String {
+    let bytes = raw.as_bytes();
+    let mut out: Vec<u8> = Vec::new();
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'%' if i + 2 < bytes.len() => match u8::from_str_radix(&raw[i + 1..i + 3], 16) {
+                Ok(b) => {
+                    out.push(b);
+                    i += 3;
+                }
+                Err(_) => {
+                    out.push(bytes[i]);
+                    i += 1;
+                }
+            },
+            b'+' => {
+                out.push(b' ');
+                i += 1;
+            }
+            b => {
+                out.push(b);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// The app's whole `?c=` round trip: write, let the browser decode, read.
+fn round_trip(selection: &[String]) -> Vec<String> {
+    parse_c_param(&browser_decode(&c_param(selection)))
+}
+
 #[test]
 fn c_param_round_trip() {
     let selection = codes(&["TOC", "QCOM", "MFD"]);
-    let c = selection_to_c_param(&selection);
+    let c = c_param(&selection);
     assert_eq!(c, "TOC,QCOM,MFD");
     assert_eq!(parse_c_param(&c), selection);
+    assert_eq!(round_trip(&selection), selection);
+}
+
+/// Every code the clamp PERMITS survives the writer and the reader unchanged —
+/// including the characters a query string reads as syntax, and multi-byte
+/// scripts. This is the contract `code_is_url_safe` is the guard for.
+#[test]
+fn url_safe_codes_round_trip_exactly() {
+    let selection = codes(&["TOC", "A+B", "C&D", "E#F", "MY COURSE", "MY.CODE", "தமி"]);
+    assert!(selection.iter().all(|c| code_is_url_safe(c)));
+    assert_eq!(round_trip(&selection), selection);
+}
+
+/// And the two the clamp REFUSES do not — which is why the clamp exists, at
+/// every write door and at `domx::url_safe_split` before anything is written.
+/// `CM,X` comes back as two codes, and `X` may name a real CMI course the
+/// student never picked (R93 M5). If either assertion here ever fails, the
+/// codec changed and the clamp may be relaxable — do not relax it silently.
+#[test]
+fn comma_and_percent_cannot_round_trip() {
+    assert!(!code_is_url_safe("CM,X"));
+    assert!(!code_is_url_safe("PCTA%41"));
+    // `CM,X` comes back as two codes...
+    assert_eq!(
+        round_trip(&codes(&["TOC", "CM,X"])),
+        codes(&["TOC", "CM", "X"])
+    );
+    // ...and `%54OC` comes back as CMI's Theory of Computation, a course the
+    // student never picked. `%54` is an encoded `T`: the writer escapes the
+    // percent to `%2554OC`, the browser gives back `%54OC`, and
+    // `parse_c_param` decodes that once more.
+    assert_eq!(round_trip(&codes(&["%54OC"])), codes(&["TOC"]));
 }
 
 #[test]

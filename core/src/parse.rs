@@ -345,6 +345,12 @@ pub fn parse_timetable_page(blocks: &[PreBlock]) -> TimetablePage {
                                 "branch {code}: unexpected TMP* marker in a branch grid cell"
                             ));
                         }
+                        for bad in &tokens.percent {
+                            page.warnings.push(format!(
+                                "branch {code}: course code {bad:?} contains a % sign, so it \
+                                 cannot travel in a share link and is left out of the address bar"
+                            ));
+                        }
                         for (course, plus) in tokens.codes {
                             occurrences.push(Occurrence {
                                 day,
@@ -570,6 +576,12 @@ pub fn parse_halls_page(blocks: &[PreBlock]) -> HallsPage {
                     }
                     for (cell, slot) in row.cells.iter().zip(grid.slots.iter()) {
                         let tokens = parse_cell(cell);
+                        for bad in &tokens.percent {
+                            page.warnings.push(format!(
+                                "hall grid: course code {bad:?} contains a % sign, so it cannot \
+                                 travel in a share link and is left out of the address bar"
+                            ));
+                        }
                         if tokens.codes.is_empty() && !tokens.temp {
                             continue;
                         }

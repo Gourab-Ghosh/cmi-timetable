@@ -51,6 +51,24 @@ pub struct Service {
     pub note: &'static str,
     /// The host the link is handed to, shown so the choice is informed.
     pub host: &'static str,
+    /// The longest request this service was measured to take, in characters
+    /// of [`request_url`] — not of the share link. What a server's buffer
+    /// sees is the request line, and [`encode`] expands a base64url payload
+    /// by about 3%, so measuring the link would measure the wrong string.
+    ///
+    /// Measured live from the deployed origin, which is the only place a
+    /// third-party URL can be judged at all (`CONTEXT.md` §4), and recorded
+    /// in `.workagents/r93/findings/verify-sp-4.md`: clck.ru answers **400
+    /// "Request Line is too large (… > 4094)"** somewhere between 4 043 and
+    /// 4 243 — its nginx `large_client_header_buffers` — so 4 000 leaves a
+    /// margin. TinyURL answered 200 at 16 059 and a Cloudflare 520 at
+    /// 24 059, so 20 000 sits between the two. da.gd answered 200 at 24 059,
+    /// the largest tried, and refused nothing. The biggest link this app can
+    /// build — all 75 CMI courses plus 50 of the reader's own, every class
+    /// moved — is 15 594 characters of share link, about 16 100 of request,
+    /// so **only clck.ru's ceiling is reachable in practice**; the other two
+    /// are here so a fourth service cannot be added without measuring one.
+    pub max_url: usize,
     pub reply: Reply,
 }
 
@@ -66,6 +84,7 @@ pub const SERVICES: &[Service] = &[
         name: "TinyURL",
         note: "The best known, and the least likely to be stripped out of an email.",
         host: "tinyurl.com",
+        max_url: 20_000,
         reply: Reply::PlainText,
     },
     Service {
@@ -73,6 +92,7 @@ pub const SERVICES: &[Service] = &[
         name: "da.gd",
         note: "The shortest links of the three — good when every character counts.",
         host: "da.gd",
+        max_url: 24_000,
         reply: Reply::PlainText,
     },
     Service {
@@ -80,6 +100,7 @@ pub const SERVICES: &[Service] = &[
         name: "clck.ru",
         note: "A good second try when another service is busy.",
         host: "clck.ru",
+        max_url: 4_000,
         reply: Reply::PlainText,
     },
 ];
@@ -124,6 +145,21 @@ pub fn request_url(s: &Service, long: &str) -> String {
         // should fail loudly in tests rather than silently ask nobody.
         _ => String::new(),
     }
+}
+
+/// Why this link cannot be sent to `s`, if it cannot: how long the request
+/// would be, and the most this service takes.
+///
+/// Asked at BOTH doors, per the clamp law — the popup annotates the option
+/// with it before anything is pressed, and `crate::shorten::call` (the app
+/// half) refuses with it before a single route is built. A guard at only one
+/// of the two is the bug this closes: pressing the button handed the whole
+/// timetable to clck.ru **and all seven public relays** on the way to a 400
+/// no relay can rescue, because every relay fetches the same over-long URL
+/// (R93 sp-4, measured live — see `Service::max_url`).
+pub fn too_long_for(s: &Service, long: &str) -> Option<(usize, usize)> {
+    let asking = request_url(s, long).len();
+    (asking > s.max_url).then_some((asking, s.max_url))
 }
 
 /// What a service said, turned into a link or a reason.
@@ -290,6 +326,35 @@ mod tests {
     }
 
     #[test]
+    fn every_service_has_a_measured_ceiling() {
+        // A service added without one would be offered for links it refuses,
+        // and the app would spend the student's timetable finding out.
+        for s in SERVICES {
+            assert!(s.max_url >= 1_000, "{} has no measured max_url", s.key);
+        }
+    }
+
+    #[test]
+    fn a_link_over_the_ceiling_is_refused_before_anything_is_sent() {
+        // clck.ru's measured ceiling is the only one this app can reach.
+        let clck = svc("clck");
+        let short = format!("https://example.com/?c=A&s={}", "x".repeat(100));
+        assert!(
+            too_long_for(clck, &short).is_none(),
+            "an ordinary link must pass"
+        );
+        let huge = format!("https://example.com/?c=A&s={}", "x".repeat(8_000));
+        let (asking, max) = too_long_for(clck, &huge).expect("8 000 chars must be refused");
+        assert!(asking > max && max == clck.max_url, "{asking} vs {max}");
+        // And the two roomy services must NOT refuse the biggest link this
+        // app can build (~15 600 chars of share link) — "try another service"
+        // is real advice only while that stays true.
+        let biggest = format!("https://example.com/?c=A&s={}", "x".repeat(15_600));
+        assert!(too_long_for(svc("tinyurl"), &biggest).is_none());
+        assert!(too_long_for(svc("dagd"), &biggest).is_none());
+    }
+
+    #[test]
     fn service_keys_are_unique() {
         // Keys are the id of every remembered link. Two services sharing one
         // would hand a student the other's link.
@@ -335,6 +400,7 @@ mod tests {
             name: "example",
             note: "",
             host: "x",
+            max_url: 4_000,
             reply: Reply::IsGdJson,
         };
         assert_eq!(

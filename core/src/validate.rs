@@ -344,13 +344,13 @@ fn run_gate(
     };
     for c in &joined.courses {
         for m in &c.meetings {
-            if m.slot.start_min >= m.slot.end_min || m.slot.end_min > 1440 {
+            if !m.slot.is_sane() {
                 note_bad(&format!("{}'s class", c.code), &m.slot);
             }
         }
     }
     for b in &joined.hall_bookings {
-        if b.slot.start_min >= b.slot.end_min || b.slot.end_min > 1440 {
+        if !b.slot.is_sane() {
             note_bad("a hall booking", &b.slot);
         }
     }

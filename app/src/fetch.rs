@@ -291,18 +291,19 @@ fn relay_routes(app: &App) -> Vec<RelayRoute> {
 /// nothing did, and that is the entire question here. Used only to choose
 /// which sentence to show after every route has already failed — never to
 /// accept or reject content.
-async fn answers_at_all(url: &str, timeout_ms: u32) -> bool {
+async fn answers_at_all(app: &App, url: &str, timeout_ms: u32) -> bool {
     // Abortable, like `fetch_text`: a probe whose timeout wins would
     // otherwise be left running against a host that is already known not to
     // be answering in time.
     let controller = web_sys::AbortController::new().ok();
     let signal = controller.as_ref().map(|c| c.signal());
+    let started = domx::now_ms();
     let request = gloo_net::http::Request::get(url)
         .mode(web_sys::RequestMode::NoCors)
         .abort_signal(signal.as_ref())
         .send();
     let timeout = gloo_timers::future::TimeoutFuture::new(timeout_ms);
-    match select(Box::pin(request), Box::pin(timeout)).await {
+    let answered = match select(Box::pin(request), Box::pin(timeout)).await {
         Either::Left((result, _)) => result.is_ok(),
         Either::Right(_) => {
             if let Some(c) = &controller {
@@ -310,7 +311,13 @@ async fn answers_at_all(url: &str, timeout_ms: u32) -> bool {
             }
             false
         }
-    }
+    };
+    // sync-tiers-5: this is a REAL request to cmi.ac.in, and it used to
+    // reach neither the Fetch log nor the console echo — while the tweak
+    // beside it says "every fetch" and FEATURES promises the same. The
+    // Fetch log is a record of what left this browser.
+    log_probe(app, url, answered, domx::now_ms() - started);
+    answered
 }
 
 /// The CMI URL a relay is asked to fetch, with a cache-buster on it.
@@ -407,6 +414,47 @@ async fn fetch_text_with(
     })
 }
 
+/// The reachability probe's row, in the same two sinks `log` writes.
+///
+/// `log` cannot take this one: a `no-cors` response is opaque, so there is
+/// no status, no byte count and nothing readable, and squeezing it into a
+/// `FetchOk` would put "HTTP 0" in the console echo — a status the browser
+/// never gave us. What IS true is the only thing the probe asked: did
+/// anything answer, and how long did it take. Both sinks are written here
+/// in one place, so the console echo and the Fetch log can never disagree
+/// with each other (sync-tiers-5).
+fn log_probe(app: &App, url: &str, answered: bool, duration_ms: f64) {
+    let outcome = if answered {
+        "answered (opaque — a no-cors probe reads nothing)"
+    } else {
+        "nothing answered"
+    };
+    if app.prefs.with_untracked(|p| p.console_fetch_log_on) {
+        web_sys::console::log_1(
+            &format!("[sync] probe {url} → {outcome} in {duration_ms:.0} ms").into(),
+        );
+    }
+    app.fetch_log.update(|l| {
+        l.push(FetchLogEntry {
+            // The run this probe belongs to, so a failing sync's story quotes
+            // only its OWN attempts (R92 S20). A probe is made inside a run,
+            // so the current id is always this entry's.
+            run: app.fetch_run.get_untracked(),
+            at: domx::now_ms(),
+            tier: "probe".to_string(),
+            url: url.to_string(),
+            status: None,
+            duration_ms,
+            bytes: 0,
+            error: (!answered).then(|| "nothing answered".to_string()),
+        });
+        let excess = l.len().saturating_sub(200);
+        if excess > 0 {
+            l.drain(..excess);
+        }
+    });
+}
+
 fn log(app: &App, tier: &str, url: &str, result: &Result<FetchOk, String>) {
     // The console-echo tweak: one line per request, mirroring exactly what
     // the Sync page's log records — so a bug report can carry the browser
@@ -422,8 +470,12 @@ fn log(app: &App, tier: &str, url: &str, result: &Result<FetchOk, String>) {
         };
         web_sys::console::log_1(&line.into());
     }
+    // Every `log` call comes from `fetch_pages_tier`, which only
+    // `run_update` calls, so the current run id is always this entry's.
+    let run = app.fetch_run.get_untracked();
     let entry = match result {
         Ok(ok) => FetchLogEntry {
+            run,
             at: domx::now_ms(),
             tier: tier.to_string(),
             url: url.to_string(),
@@ -433,6 +485,7 @@ fn log(app: &App, tier: &str, url: &str, result: &Result<FetchOk, String>) {
             error: None,
         },
         Err(e) => FetchLogEntry {
+            run,
             at: domx::now_ms(),
             tier: tier.to_string(),
             url: url.to_string(),
@@ -573,8 +626,16 @@ pub fn adopt(app: &App, new_snapshot: Snapshot, announce: bool, from: Adoption) 
     // is case-sensitive while the override store matches case-insensitively,
     // so a code cased differently from the catalog would sail past the merge
     // (no old, no new course found) and never converge, lapse or conflict.
+    // NOT `if first_data` any more (R93 S7). The share-link door used to adopt
+    // the sender's casing verbatim, so browsers in the field hold overrides
+    // filed under a spelling the merge's case-SENSITIVE `Snapshot::course`
+    // lookup cannot find — and this block, gated on the first sync, was the
+    // only thing that would ever have repaired them. Running it on every
+    // adopt costs one `course_ci` per entry and heals them at the next sync;
+    // it also keeps the store filed under CMI's spelling if CMI ever re-cases
+    // a code, which is the same direction `canonical_hall` moves.
     let mut overrides = overrides;
-    if first_data {
+    {
         for ov in &mut overrides.items {
             if let Some(course) = new_snapshot.course_ci(&ov.course) {
                 ov.course = course.code.clone();
@@ -601,6 +662,14 @@ pub fn adopt(app: &App, new_snapshot: Snapshot, announce: bool, from: Adoption) 
     let reconciled = merge.overrides != app.overrides.get_untracked();
     app.overrides.set(merge.overrides);
     app.persist_overrides();
+    // Asked BEFORE the clear, and asked about the stacks rather than about
+    // `reconciled`: the history is empty on the first sync and on the
+    // startup re-parse, and telling a reader their earlier steps are gone
+    // when they have taken none is a sentence about nothing (R93 R8).
+    let history_lost = reconciled
+        && app
+            .undo_stack
+            .with_untracked(|s| !s.undo.is_empty() || !s.redo.is_empty());
     if reconciled {
         app.undo_stack.update(|s| {
             s.undo.clear();
@@ -629,7 +698,23 @@ pub fn adopt(app: &App, new_snapshot: Snapshot, announce: bool, from: Adoption) 
                  for it.",
             );
         }
-        storage::SnapshotSave::Failed => {
+        // The store is SWITCHED OFF, not full. Neither space sentence is
+        // true, "your courses and changes are safe" is not true either
+        // (`persist_overrides` above failed for the same reason and has
+        // raised its own banner), and the `had_one` question below is moot:
+        // with no store there is no older SAVED copy to come back to, only
+        // whatever this session already has in memory (R93 S4).
+        storage::SnapshotSave::Failed(storage::SaveError::Unavailable) => {
+            app.set_banner(
+                BannerKind::Warn,
+                "This browser isn't letting the app store anything, so the timetable \
+                 it just downloaded will be gone when you close the tab. It isn't \
+                 short of space — site data is switched off for this page. What's on \
+                 screen now is correct, and Export everything in My data keeps a copy \
+                 in a file that needs no storage.",
+            );
+        }
+        storage::SnapshotSave::Failed(storage::SaveError::Refused) => {
             // Which sentence is true depends on whether there IS an older
             // copy to fall back to (R93 M11). On a FIRST visit with the
             // browser's storage already full there is none, and promising one
@@ -756,6 +841,14 @@ pub fn adopt(app: &App, new_snapshot: Snapshot, announce: bool, from: Adoption) 
     if has_conflicts && app.dialog.with_untracked(|d| d.is_none()) {
         app.dialog.set(Some(crate::state::Dialog::Conflicts));
     }
+    // Retiring the undo history was completely silent (R93 R8): Undo and Redo
+    // simply greyed out, on a sync that fires by itself up to twice a day,
+    // while FEATURES promised "100 steps deep, with redo". Said on the notice
+    // the sync already raises, so a rail already holding the merge's reports
+    // does not have to hold one more (R93 R2).
+    const HISTORY_RETIRED: &str = "Your changes were re-checked against CMI's new pages, \
+                                   so the steps you took before this sync can no longer \
+                                   be undone.";
     if announce {
         // Name the route it actually came through. `announce` is only set
         // for a live fetch, so this is always one of the two real ones —
@@ -763,9 +856,19 @@ pub fn adopt(app: &App, new_snapshot: Snapshot, announce: bool, from: Adoption) 
         // and a student who wants to know where their timetable came from
         // can read it without opening My data.
         app.toast(format!(
-            "Timetable updated ({}).",
-            new_snapshot.source.label()
+            "Timetable updated ({}).{}",
+            new_snapshot.source.label(),
+            if history_lost {
+                format!(" {HISTORY_RETIRED}")
+            } else {
+                String::new()
+            }
         ));
+    } else if history_lost {
+        // A silent adoption that still threw the history away (a manual
+        // re-parse is announced; a quiet one is not) says the one thing that
+        // is not visible anywhere else.
+        app.toast(HISTORY_RETIRED);
     }
 }
 
@@ -865,6 +968,13 @@ pub async fn run_update(app: App, manual: bool) {
     app.clear_transient_banner();
     app.prefs.update(|p| p.last_update_attempt = domx::now_ms());
     app.persist_prefs();
+    // Open a new run. Everything the failure story below asks of the fetch
+    // log is asked of THIS run only: the log is a session ring buffer that
+    // nothing ever clears, so reading all of it made a failing sync quote
+    // an earlier sync's HTTP status, claim cmi.ac.in had answered, skip the
+    // reachability probe and withhold "Load it from CMI's page" (R92 S20).
+    let run = app.fetch_run.get_untracked().wrapping_add(1);
+    app.fetch_run.set(run);
 
     let force = app.force_tier.get_untracked();
     // Consumed by THIS sync (R89): the control says "on next sync", and
@@ -890,9 +1000,10 @@ pub async fn run_update(app: App, manual: bool) {
     // take it down rather than repeat it underneath.
     let mut asking_note: Option<u64> = None;
 
-    // Tier 1 — public CORS relays, raced in parallel (each response
-    // sanity-checked and gate-validated); the first valid one wins and the
-    // rest are dropped.
+    // Tier 1 — public CORS relays. The leading route is asked ALONE; the
+    // rest are brought in behind it only if it fails or goes silent (see the
+    // head-start comment below). Every response is sanity-checked and
+    // gate-validated; the first valid one wins and the rest are dropped.
     //
     // First, because every one of these is a public host: this route cannot
     // raise the browser's local-network prompt no matter whose network the
@@ -1178,7 +1289,7 @@ pub async fn run_update(app: App, manual: bool) {
     // response the page could read is one the cross-origin rule allowed.
     let direct_entries: Vec<(Option<u16>, Option<String>)> = app.fetch_log.with_untracked(|l| {
         l.iter()
-            .filter(|e| e.tier == "direct")
+            .filter(|e| e.run == run && e.tier == "direct")
             .map(|e| (e.status, e.error.clone()))
             .collect()
     });
@@ -1206,7 +1317,7 @@ pub async fn run_update(app: App, manual: bool) {
         // `uncached`, like every other request that must reflect right now
         // rather than a cache: a probe answered from a disk cache would say
         // CMI is up on the strength of a copy taken hours ago.
-        answers_at_all(&uncached(CMI_TIMETABLE_URL), DIRECT_TIMEOUT_MS).await
+        answers_at_all(&app, &uncached(CMI_TIMETABLE_URL), DIRECT_TIMEOUT_MS).await
     } else {
         false
     };

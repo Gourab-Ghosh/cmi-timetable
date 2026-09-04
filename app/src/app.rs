@@ -35,11 +35,17 @@ fn load_or<T: serde::de::DeserializeOwned>(
     }
 }
 
-fn init_app() -> (App, bool) {
+/// Returns the app, whether any stored blob was unreadable, and how many saved
+/// changes had to be set aside because the app cannot state them (R93 S1/S5/S8).
+fn init_app() -> (App, bool, usize) {
     let mut corrupt = false;
 
     let mut prefs: crate::state::Prefs =
         load_or(storage::KEY_PREFS, &mut corrupt, Default::default);
+    // Before anything reads a field: the two boot-acting tweaks below, the
+    // Tweaks page, `tweak_deltas` and Copy diagnostics all take these
+    // numbers at face value (R93 S6).
+    prefs.clamp_tweaks();
     // Two tweaks act at boot, before anything reads the fields they rewrite:
     // a chosen landing section replaces the remembered one, and "forget the
     // day pickers" clears both picks before `plan_view`/`halls_view` are
@@ -53,12 +59,25 @@ fn init_app() -> (App, bool) {
         prefs.halls_view = None;
     }
     let selection: Vec<String> = load_or(storage::KEY_SELECTION, &mut corrupt, Vec::new);
-    let overrides: OverridesStore = load_or(
+    let mut overrides: OverridesStore = load_or(
         storage::KEY_OVERRIDES,
         &mut corrupt,
         OverridesStore::default,
     );
-    let customs: CustomStore = load_or(storage::KEY_CUSTOM, &mut corrupt, CustomStore::default);
+    let mut customs: CustomStore = load_or(storage::KEY_CUSTOM, &mut corrupt, CustomStore::default);
+    // The LAST door, and the one that decides whether the other two ever
+    // heal. Every blob written before this build came through a share link or
+    // a backup file with no rule applied, so it can hold a class time the app
+    // cannot draw, a credit figure outside the editor's range, or an override
+    // id `add` cannot count past — and plain serde read it back happily on
+    // every reload for ever (R93 S1, S5, S8).
+    //
+    // Set aside, never clamped, and never quarantined: `load`'s corrupt path
+    // is for a blob that will not parse AT ALL, and throwing a whole store of
+    // somebody's moved classes away because one entry is impossible would
+    // destroy the work this is meant to protect. The rest of the store is
+    // still theirs.
+    let set_aside = overrides.retain_sane() + customs.retain_sane();
     // Questions the user deferred with "Decide later": they survive reloads
     // until answered — a refresh must not answer them silently.
     let conflicts: Vec<ttcore::merge::Conflict> =
@@ -144,6 +163,7 @@ fn init_app() -> (App, bool) {
         unknown_codes: RwSignal::new(Vec::new()),
         unknown_was_everything: RwSignal::new(false),
         fetch_log: RwSignal::new(Vec::new()),
+        fetch_run: RwSignal::new(0),
         reports: RwSignal::new(Vec::new()),
         route: RwSignal::new(Route::Planner),
         dialog: RwSignal::new(None),
@@ -159,7 +179,9 @@ fn init_app() -> (App, bool) {
         shorten_seq: RwSignal::new(0),
         shortlinks: RwSignal::new(shortlinks),
         phone_viewport: RwSignal::new(domx::is_phone_viewport()),
+        touch_input: RwSignal::new(domx::any_coarse_pointer()),
         update_ready: RwSignal::new(None),
+        update_rev: RwSignal::new(0),
         drag,
         // Derived here, at the root, for the same reason as CourseIndex
         // below: it outlives every cell that reads it. `drag` fires on every
@@ -222,7 +244,7 @@ fn init_app() -> (App, bool) {
             )
         })
     })));
-    (app, corrupt)
+    (app, corrupt, set_aside)
 }
 
 /// What a chip needs to name and colour itself: the course's name, its hue,
@@ -242,7 +264,18 @@ pub struct CourseIndex(pub Memo<Arc<HashMap<String, ChipIdentity>>>);
 fn offline_note(app: App) {
     let Some(win) = web_sys::window() else { return };
     let nav = win.navigator();
-    if nav.service_worker().controller().is_none() {
+    // "a browser without workers" is the case this function is FIRST to meet
+    // and the one that used to crash it: `navigator.serviceWorker` is absent
+    // in a Firefox private window before 138, with workers disabled, or in
+    // any non-secure context, and `.controller` on an absent container is a
+    // TypeError thrown out of `Root` — which blanks the whole app, since a JS
+    // exception is not a Rust panic and the panic hook never sees it (R93
+    // BC-5). No worker means no offline copy answered, which is exactly the
+    // early return.
+    let Some(workers) = domx::service_worker(&nav) else {
+        return;
+    };
+    if workers.controller().is_none() {
         return; // first visit, dev loop, or a browser without workers
     }
     leptos::task::spawn_local(async move {
@@ -315,11 +348,48 @@ fn apply_url_state(app: App) {
         }
     }
 
+    // Part of a READABLE link was set aside because the app cannot state it
+    // (an impossible class time, a credit figure outside the editor's range,
+    // an override id with no successor). Never silent: the reader's own
+    // planner is about to be replaced by this link, and a link that arrives
+    // smaller than it was sent is a fact about what they are now looking at.
+    // Sticky for the same reason the damaged-link notice is — the background
+    // sync that starts on this same load clears transient banners.
+    if state.set_aside > 0 {
+        app.set_banner_sticky(
+            crate::state::BannerKind::Warn,
+            if state.set_aside == 1 {
+                "One change in this link named a class time, a credit count or \
+                 an entry this app can't use, so it was left out. Everything \
+                 else in the link opened normally."
+                    .to_string()
+            } else {
+                format!(
+                    "{} changes in this link named class times, credit counts \
+                     or entries this app can't use, so they were left out. \
+                     Everything else in the link opened normally.",
+                    state.set_aside,
+                )
+            },
+        );
+    }
+
     // If the URL merely mirrors the stored selection (the app writes ?c= on
     // every change), keep the stored state as-is — a selected course that
     // vanished upstream must stay visible with its badge, not get stripped
     // as an "unknown code".
-    if state.overrides.is_none() && app.selection.with_untracked(|sel| *sel == state.selection) {
+    // Compared against the PROJECTION of the stored selection, not the
+    // selection itself: a code carrying `,` or `%` is deliberately left out of
+    // `?c=` (R93 M5, `domx::url_safe_split`), so a planner holding one wrote an
+    // address bar that could never equal its own storage — every reload looked
+    // like an incoming link that had dropped a course, the link path then wrote
+    // the shorter list over storage, and one F5 made it permanent under a toast
+    // blaming a sender who did not exist.
+    if state.overrides.is_none()
+        && app
+            .selection
+            .with_untracked(|sel| domx::url_safe_split(sel).0 == state.selection)
+    {
         app.sync_url();
         return;
     }
@@ -330,9 +400,21 @@ fn apply_url_state(app: App) {
     // silently, though: a differing definition that loses out is announced,
     // with the way to adopt it instead.
     let mut kept_yours: Vec<String> = Vec::new();
+    let mut refused_codes: Vec<String> = Vec::new();
     let incoming_customs: Vec<ttcore::model::Course> = state
         .customs
         .into_iter()
+        .filter(|c| {
+            // A code with `,` or `%` cannot survive this app's own `?c=`
+            // (R93 M5): adopting it would put a course on the timetable that
+            // the next reload deletes — or replaces with another. Refused at
+            // the door, and said out loud below.
+            if !ttcore::share::code_is_url_safe(&c.code) {
+                refused_codes.push(c.code.clone());
+                return false;
+            }
+            true
+        })
         .filter(
             |c| match app.customs.with_untracked(|cs| cs.get(&c.code).cloned()) {
                 None => true,
@@ -359,6 +441,28 @@ fn apply_url_state(app: App) {
         );
     }
 
+    if !refused_codes.is_empty() {
+        app.set_banner_sticky(
+            crate::state::BannerKind::Warn,
+            format!(
+                "This link brings {}, whose code has a comma or a % sign in it. \
+                 A web address can't carry those, so the app left {} out — ask \
+                 whoever sent it to rename {} and send a new link.",
+                refused_codes.join(", "),
+                if refused_codes.len() == 1 {
+                    "it"
+                } else {
+                    "them"
+                },
+                if refused_codes.len() == 1 {
+                    "it"
+                } else {
+                    "them"
+                },
+            ),
+        );
+    }
+
     // Before the first sync there is no catalog to resolve against: keep the
     // shared codes verbatim and let the first gate-passed sync canonicalize
     // them (fetch::adopt) — a share link opened on a fresh browser must
@@ -374,8 +478,15 @@ fn apply_url_state(app: App) {
         // no codes may bring overrides and customs, but must not replace the
         // selection with nothing.
         let names_no_courses = selection.is_empty();
-        let notice = replacement_notice(app, &selection, shared_overrides.is_some());
-        if (!names_no_courses && app.selection.with_untracked(|s| *s != selection))
+        let notice = replacement_notice(app, &selection, shared_overrides.as_ref());
+        // The PROJECTION, for the same reason as the mirror check above: a code
+        // carrying `,` or `%` is left out of `?c=` (R93 M5), so a pre-sync
+        // planner holding one would differ from its own address bar on every
+        // load and this arm would write the shorter list over storage.
+        if (!names_no_courses
+            && app
+                .selection
+                .with_untracked(|s| domx::url_safe_split(s).0 != selection))
             || shared_overrides.is_some()
             || !incoming_customs.is_empty()
         {
@@ -405,22 +516,28 @@ fn apply_url_state(app: App) {
     // Read through the signal, never a copy of it: this runs at boot, and a
     // clone here copied every course, every hall booking and the gzipped
     // pages to answer a handful of code lookups.
-    let mut known: Vec<String> = Vec::new();
-    let mut unknown: Vec<String> = Vec::new();
-    for code in state.selection {
-        let resolved = app
-            .customs
-            .with_untracked(|cs| cs.get(&code).map(|c| c.code.clone()))
+    // One resolver, because two things need it now: the selection, and the
+    // OVERRIDE course codes below it. Same order of preference either way —
+    // the reader's own courses, then the ones riding in this link, then CMI's
+    // catalog with its own casing.
+    let resolve_code = |code: &str| -> Option<String> {
+        app.customs
+            .with_untracked(|cs| cs.get(code).map(|c| c.code.clone()))
             .or_else(|| {
                 incoming_customs
                     .iter()
-                    .find(|c| c.code.eq_ignore_ascii_case(&code))
+                    .find(|c| c.code.eq_ignore_ascii_case(code))
                     .map(|c| c.code.clone())
             })
             .or_else(|| {
                 app.snapshot
-                    .with_untracked(|s| s.course_ci(&code).map(|c| c.code.clone()))
-            });
+                    .with_untracked(|s| s.course_ci(code).map(|c| c.code.clone()))
+            })
+    };
+    let mut known: Vec<String> = Vec::new();
+    let mut unknown: Vec<String> = Vec::new();
+    for code in state.selection {
+        let resolved = resolve_code(&code);
         match resolved {
             Some(canonical) => {
                 if !known.contains(&canonical) {
@@ -431,8 +548,44 @@ fn apply_url_state(app: App) {
         }
     }
 
-    let shared_overrides = state.overrides;
-    let notice = replacement_notice(app, &known, shared_overrides.is_some());
+    // The sender's CASING is not adopted (R93 S7). This was the one of three
+    // doors that took it verbatim: `fetch::adopt` canonicalises (with a
+    // comment naming this exact hazard) but only `if first_data`, so no later
+    // sync repairs it, and `export::import_courses_text` canonicalises for a
+    // file. An override filed under `toc` against a catalog spelling `TOC`
+    // still RENDERS — the store compares codes with `eq_ignore_ascii_case` —
+    // while `merge::merge_overrides` looks the course up through
+    // `Snapshot::course`, which is case-SENSITIVE: no old course and no new
+    // course, so the entry can never converge, lapse, conflict or drop, and
+    // the class it points at can end up drawn and exported twice. Same rule,
+    // same reason, as `App::canonical_hall` for hall text (4).
+    //
+    // Codes that resolve to nothing are left exactly as they are: a link may
+    // carry deletions for courses this browser has never heard of, and that
+    // payload is deliberately still applied (R93 M1).
+    let mut shared_overrides = state.overrides;
+    if let Some(store) = shared_overrides.as_mut() {
+        for o in &mut store.items {
+            if let Some(code) = resolve_code(&o.course) {
+                o.course = code;
+            }
+        }
+        for c in &mut store.credits {
+            if let Some(code) = resolve_code(&c.course) {
+                c.course = code;
+            }
+        }
+        // Deletions too: `is_hidden` is loose, but "Your changes" prints the
+        // code it stores and Restore hands it to `add_course`, which pushes
+        // that spelling into the selection.
+        for h in &mut store.hidden {
+            if let Some(code) = resolve_code(&h.course) {
+                h.course = code;
+            }
+        }
+    }
+    let shared_overrides = shared_overrides;
+    let notice = replacement_notice(app, &known, shared_overrides.as_ref());
     // A link that names courses and resolves NONE of them cannot replace a
     // timetable. It used to: `*sel = known` with an empty `known` wrote an
     // empty selection over the reader's stored one, permanently — an old
@@ -501,7 +654,11 @@ fn apply_url_state(app: App) {
 ///
 /// Both are weighed now, and each gets its own sentence: "times and credits"
 /// is not what was lost when what was lost was the courses.
-fn replacement_notice(app: App, incoming: &[String], shared_overrides: bool) -> Option<String> {
+fn replacement_notice(
+    app: App,
+    incoming: &[String],
+    shared: Option<&ttcore::model::OverridesStore>,
+) -> Option<String> {
     // `hidden` counts too (R92 M3). A link carries the sender's deleted
     // courses, and adopting the store wholesale takes the reader's catalog
     // with it: courses they never deleted disappear, courses they DID delete
@@ -509,15 +666,37 @@ fn replacement_notice(app: App, incoming: &[String], shared_overrides: bool) -> 
     // saved work was deletions got no sentence, no Undo and no sign at all —
     // the exact silence R83 removed for the selection, left in place for the
     // third thing a link can destroy.
-    let lost_edits = shared_overrides
-        && app
-            .overrides
-            .with_untracked(|o| !o.items.is_empty() || !o.credits.is_empty());
+    // A LOSS, not merely a write (R93 R9). `shared_overrides.is_some()` alone
+    // meant opening a bookmark of your OWN link announced that it had replaced
+    // the times and credits you set — with bytes identical to the ones already
+    // stored. Named only when something of theirs is absent from what the link
+    // brings, which is the same guard `lost_courses` below has always had.
+    let lost_edits = shared.is_some_and(|store| {
+        app.overrides.with_untracked(|mine| {
+            (!mine.items.is_empty() || !mine.credits.is_empty())
+                && (!mine.items.iter().all(|i| store.items.contains(i))
+                    || !mine.credits.iter().all(|c| store.credits.contains(c)))
+        })
+    });
     // Deletions are the third thing a link can destroy, and they were the one
     // thing nothing weighed: a reader whose saved work was struck-out courses
     // got no sentence, no Undo and no sign at all while the sender's catalog
     // replaced theirs (R92 M3).
-    let lost_deletions = shared_overrides && app.overrides.with_untracked(|o| !o.hidden.is_empty());
+    // Compared by COURSE, not by struct: two browsers that deleted the same
+    // course did so at different `created_at`s, and the reader has lost
+    // nothing when the link deletes it too.
+    let lost_deletions = shared.is_some_and(|store| {
+        app.overrides.with_untracked(|mine| {
+            mine.hidden
+                .iter()
+                .any(|h| !store.hidden.iter().any(|s| s.course == h.course))
+        })
+    });
+    // "…with its own" has to be true of the deletions as well. A link that
+    // carries none does not replace them, it LIFTS them — the courses come
+    // back into the catalog — so that fact gets its own sentence instead of
+    // riding a clause that would be false (R93 R9, honesty law).
+    let brought_deletions = shared.is_some_and(|store| !store.hidden.is_empty());
     // Only a link that actually CHANGES the picked courses replaces them —
     // reopening the same link, or one naming what is already there, takes
     // nothing away.
@@ -537,10 +716,10 @@ fn replacement_notice(app: App, incoming: &[String], shared_overrides: bool) -> 
     if lost_edits {
         lost.push("the times and credits you set");
     }
-    if lost_deletions {
+    if lost_deletions && brought_deletions {
         lost.push("the courses you had deleted from your catalog");
     }
-    match lost.as_slice() {
+    let replaced = match lost.as_slice() {
         [] => None,
         [one] => Some(format!("This link replaced {one} with its own.")),
         [a, b] => Some(format!("This link replaced {a}, and {b}, with its own.")),
@@ -549,6 +728,16 @@ fn replacement_notice(app: App, incoming: &[String], shared_overrides: bool) -> 
             many[..many.len() - 1].join(", "),
             many[many.len() - 1]
         )),
+    };
+    let lifted = (lost_deletions && !brought_deletions).then_some(
+        "This link carries no deleted courses, so the ones you had deleted are back \
+         in your catalog.",
+    );
+    match (replaced, lifted) {
+        (Some(r), Some(l)) => Some(format!("{r} {l}")),
+        (Some(r), None) => Some(r),
+        (None, Some(l)) => Some(l.to_string()),
+        (None, None) => None,
     }
 }
 
@@ -730,6 +919,10 @@ fn install_cross_tab_sync(app: App) {
                     storage::peek::<crate::state::Prefs>(storage::KEY_PREFS)
             {
                 let mut adopted = stored;
+                // The other tab may be an older build, or may have imported a
+                // file (R93 S6). Same rule here as at boot, so two tabs can
+                // never disagree about what a setting is.
+                adopted.clamp_tweaks();
                 let theme_before = app.prefs.with_untracked(|p| p.theme);
                 let changed = app.prefs.try_update(|p| {
                     // Per-tab, on purpose: what this window is LOOKING at.
@@ -806,7 +999,7 @@ fn install_cross_tab_sync(app: App) {
 
 #[component]
 pub fn Root() -> impl IntoView {
-    let (app, corrupt) = init_app();
+    let (app, corrupt, set_aside) = init_app();
 
     install_routing(app);
     install_theme_listener(app);
@@ -856,6 +1049,23 @@ pub fn Root() -> impl IntoView {
 
     if corrupt {
         dev::corrupt_data_banner(app);
+    }
+    // Saved data the app could read but cannot state (R93 S1/S5/S8). Said
+    // once, at the boot that healed it, and written back so it is said once
+    // only — the same shape as the corrupt-data notice beside it.
+    if set_aside > 0 {
+        app.set_banner_sticky(
+            crate::state::BannerKind::Warn,
+            format!(
+                "{} of the changes saved in this browser named a class time or \
+                 a credit count this app can't use — probably from a share \
+                 link or a file made by hand — so they were set aside. \
+                 Everything else was kept.",
+                set_aside,
+            ),
+        );
+        app.persist_overrides();
+        app.persist_customs();
     }
 
     fetch::reparse_stored_if_newer(app);

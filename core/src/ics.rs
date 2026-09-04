@@ -87,7 +87,15 @@ fn push(out: &mut String, line: &str) {
     fold_line(line, out);
 }
 
+/// `HHMMSS`, and never anything else. RFC 5545 3.3.5 gives the time part of
+/// a DATE-TIME exactly six digits, so a minute value past a day cannot be
+/// written at all: `65535` produced `10921500` and a `DTEND` before its
+/// `DTSTART` in a file real calendars then refuse (R93 S1). Every door now
+/// sets such a meeting aside before it can reach here (`Slot::is_sane`), so
+/// this is the belt — it keeps the writer inside the format even if a
+/// seventh door is ever added without the rule.
 fn fmt_time(min: u16) -> String {
+    let min = min.min(1440);
     format!("{:02}{:02}00", min / 60, min % 60)
 }
 
@@ -163,7 +171,16 @@ fn course_range(
     }
 }
 
-pub fn build_ics(courses: &[IcsCourse], opts: &IcsOptions) -> String {
+/// The file, and how many events each course actually contributed to it.
+///
+/// The second half is the point. A meeting whose first occurrence falls past
+/// `range_end` writes nothing (the `continue` below), so "5 courses chosen"
+/// and "5 courses in the file" are different facts and only the writer knows
+/// which. The export dialog drives BOTH its refusal and its "isn't in it"
+/// clause from this list, so the file and the sentence about it cannot
+/// disagree (R93 S3). Every course passed in gets an entry, including a zero;
+/// the order is the order the events are written in, by code.
+pub fn build_ics(courses: &[IcsCourse], opts: &IcsOptions) -> (String, Vec<(String, usize)>) {
     let mut out = String::new();
     push(&mut out, "BEGIN:VCALENDAR");
     push(&mut out, "VERSION:2.0");
@@ -190,6 +207,10 @@ pub fn build_ics(courses: &[IcsCourse], opts: &IcsOptions) -> String {
 
     let mut sorted: Vec<&IcsCourse> = courses.iter().collect();
     sorted.sort_by(|a, b| a.code.cmp(&b.code));
+    // What actually got written, per course. Counted at the one place an
+    // event becomes part of the file, so no second reading of the range rule
+    // can drift from this one (R93 S3).
+    let mut written: Vec<(String, usize)> = Vec::with_capacity(sorted.len());
 
     // UIDs must be unique across the file; a course CAN meet twice at the
     // same day+start (different halls, or user-added meetings), so the UID
@@ -198,6 +219,7 @@ pub fn build_ics(courses: &[IcsCourse], opts: &IcsOptions) -> String {
 
     for course in sorted {
         let (start, end) = course_range(course, opts.range_start, opts.range_end);
+        let mut wrote = 0usize;
         let mut meetings: Vec<&Meeting> = course.meetings.iter().collect();
         meetings.sort_by_key(|m| (m.day.index(), m.slot.start_min, m.slot.end_min));
 
@@ -311,11 +333,13 @@ pub fn build_ics(courses: &[IcsCourse], opts: &IcsOptions) -> String {
                 push(&mut out, "END:VALARM");
             }
             push(&mut out, "END:VEVENT");
+            wrote += 1;
         }
+        written.push((course.code.clone(), wrote));
     }
 
     push(&mut out, "END:VCALENDAR");
-    out
+    (out, written)
 }
 
 /// "August--November 2026" → "cmi-timetable-aug-nov-2026.ics".

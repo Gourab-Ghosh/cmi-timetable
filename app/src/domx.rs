@@ -80,6 +80,27 @@ pub fn is_coarse_pointer() -> bool {
         .unwrap_or(false)
 }
 
+/// Does this device HAVE a finger, whether or not it is the primary pointer?
+///
+/// `(pointer: coarse)` above asks only about the primary one, so a Windows or
+/// ChromeOS touchscreen laptop — `pointer: fine`, `any-pointer: coarse` —
+/// answers "no" while a finger on its screen is judged by
+/// `dnd::chip_pointer_down`'s PER-EVENT `pointer_type() == "touch"` and made
+/// to press and hold for `dnd::LONGPRESS_MS` (R93 R11). Used only as the
+/// gesture copy's opening guess, before any pointer has been seen; the
+/// pointer actually in use overrides it (`App::touch_input`).
+///
+/// Deliberately NOT used by the confirm's double-tap settle in `ui.rs`:
+/// arming that for a mouse is the regression three tests already forbid.
+pub fn any_coarse_pointer() -> bool {
+    window()
+        .match_media("(any-pointer: coarse)")
+        .ok()
+        .flatten()
+        .map(|m| m.matches())
+        .unwrap_or(false)
+}
+
 /// One step up or down, done by the browser. `stepUp()` / `stepDown()` are
 /// not bound in this web-sys version, so the DOM methods are called by name.
 /// Doing the arithmetic here instead would mean teaching this file what one
@@ -788,10 +809,45 @@ pub fn download_text(filename: &str, mime: &str, content: &str) {
     let _ = web_sys::Url::revoke_object_url(&url);
 }
 
+/// Is `navigator.<name>` actually there?
+///
+/// web-sys binds `navigator.serviceWorker` and `navigator.clipboard` through
+/// NON-fallible getters (no `catch` in `gen_Navigator.rs`), so where the
+/// browser does not expose the property the getter hands back a typed handle
+/// that is really `undefined` — and the first call on it is a TypeError
+/// thrown out of a wasm frame with nothing to catch it. That kills a spawned
+/// task for the life of the tab (`update::check`) or, from `Root`, the mount
+/// itself. `index.html` has guarded the JS side since the offline copy
+/// shipped — `if ("serviceWorker" in navigator)` — and `Reflect::has` IS
+/// that `in`, which is what makes it exact: Firefox declares `serviceWorker`
+/// with `[Func="ServiceWorkersEnabled"]`, so the property is ABSENT (not
+/// undefined) when the pref is off, and `clipboard` is `[SecureContext]`, so
+/// the same holds over plain http:// to a LAN address.
+///
+/// Absent in practice: Firefox before 138 in a private window (Bugzilla
+/// 1320796), any profile with `dom.serviceWorkers.enabled = false`, and any
+/// non-secure context.
+fn navigator_has(nav: &web_sys::Navigator, name: &str) -> bool {
+    let this: &wasm_bindgen::JsValue = nav.as_ref();
+    js_sys::Reflect::has(this, &wasm_bindgen::JsValue::from_str(name)).unwrap_or(false)
+}
+
+/// `navigator.serviceWorker`, or `None` in a browser that has none. Never
+/// call the getter directly — see `navigator_has`.
+pub fn service_worker(nav: &web_sys::Navigator) -> Option<web_sys::ServiceWorkerContainer> {
+    navigator_has(nav, "serviceWorker").then(|| nav.service_worker())
+}
+
 /// Copy text via the async clipboard API; runs `done` with success/failure.
 pub fn copy_to_clipboard(text: String, done: impl Fn(bool) + 'static) {
-    let clipboard = window().navigator().clipboard();
-    let promise = clipboard.write_text(&text);
+    let nav = window().navigator();
+    // No clipboard to reach is a FAILURE the caller can report, not a throw:
+    // a non-secure context does not expose one at all.
+    if !navigator_has(&nav, "clipboard") {
+        done(false);
+        return;
+    }
+    let promise = nav.clipboard().write_text(&text);
     wasm_bindgen_futures::spawn_local(async move {
         let ok = wasm_bindgen_futures::JsFuture::from(promise).await.is_ok();
         done(ok);
@@ -806,8 +862,30 @@ pub fn copy_to_clipboard(text: String, done: impl Fn(bool) + 'static) {
 /// value and is ours to use as a separator; it is the codes themselves that
 /// can carry `+`, `&` or `#` — a course of the user's own can be called
 /// anything — and those would come back mangled or truncated.
-pub fn c_param(selection: &[String]) -> String {
+/// Split a selection into the codes a `?c=` can carry and the codes it cannot.
+///
+/// A code carrying `,` or `%` has no round trip through this parameter (see
+/// `share::code_is_url_safe`), so it is LEFT OUT rather than written as a
+/// `%2C`/`%25` the reader would unescape a second time — which deleted it on
+/// the next reload, and could substitute a CMI course the student never picked
+/// (R93 M5). Left out is not left silent: every caller that hands a link to a
+/// person names the refused codes, and the `&s=` link carries the course
+/// itself, so nothing is lost that the app cannot still share.
+///
+/// Both halves come from ONE call so a caller cannot build the parameter from
+/// one rule and its explanation from another (the clamp law: the same test at
+/// the write site and at the read site — `app::apply_url_state` compares the
+/// address bar against `.0` of this split, never against the raw selection).
+pub fn url_safe_split(selection: &[String]) -> (Vec<String>, Vec<String>) {
     selection
+        .iter()
+        .cloned()
+        .partition(|code| ttcore::share::code_is_url_safe(code))
+}
+
+pub fn c_param(selection: &[String]) -> String {
+    url_safe_split(selection)
+        .0
         .iter()
         .map(|code| String::from(js_sys::encode_uri_component(code)))
         .collect::<Vec<_>>()
@@ -826,13 +904,83 @@ pub fn query_params() -> (Option<String>, Option<String>) {
 /// Replace the query string via history.replaceState, preserving the path
 /// and the hash (the query stays *before* the hash: `?c=…#/`).
 pub fn replace_query(query: &str) {
+    WANTED_QUERY.with(|w| *w.borrow_mut() = Some(query.to_string()));
+    QUERY_RETRIES_LEFT.with(|c| c.set(QUERY_RETRY_TRIES));
+    write_wanted_query();
+}
+
+thread_local! {
+    /// The query the app last asked the address bar to show. A signal, not a
+    /// queue: a newer selection simply overwrites it, so a retry always
+    /// carries the CURRENT timetable rather than replaying a stale one.
+    static WANTED_QUERY: std::cell::RefCell<Option<String>> =
+        const { std::cell::RefCell::new(None) };
+    /// A retry is already scheduled — one timer, however many writes arrive.
+    static QUERY_RETRY_PENDING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// Attempts left before the app stops asking. Reset by every new intent.
+    static QUERY_RETRIES_LEFT: std::cell::Cell<u8> = const { std::cell::Cell::new(0) };
+}
+
+/// How long to wait before asking the address bar again, and how many times.
+///
+/// Chromium's window is measured in seconds, so the retry has to outlast it
+/// without spinning: 15 tries a second apart covers it and then gives up
+/// rather than retrying for the life of the tab.
+const QUERY_RETRY_MS: u32 = 1_000;
+const QUERY_RETRY_TRIES: u8 = 15;
+
+/// Write whatever `WANTED_QUERY` holds, then read the address bar back and ask
+/// again if it did not land.
+///
+/// Every engine rate-limits same-document navigation and each does it
+/// differently — Chromium logs "Throttling navigation to prevent the browser
+/// from hanging" and DROPS the call, Firefox warns and drops it, WebKit throws
+/// — so the RETURN VALUE is not the test on the browser this was found on. A
+/// tight burst of edits lost exactly one write and the address bar then named
+/// seven courses while the timetable held eight, for the rest of the visit,
+/// and copying it shared the wrong timetable (R93 sp-3).
+///
+/// `location.search` is the only answer that cannot lie, and this file already
+/// learned that lesson once: see `reload_without_query` below — "`replace`
+/// still returns Ok, so the error fallback below never ran" (R92 M7). Do NOT
+/// gate the retry on `replace_state_with_url(..).is_err()`; on Chromium and
+/// Firefox that branch is dead.
+///
+/// Deliberately NOT rate-limited. The burst is not reachable at human speeds,
+/// so delaying every ordinary click to make a synthetic burst tidy would cost
+/// every reader something to fix nobody's problem.
+fn write_wanted_query() {
+    let Some(wanted) = WANTED_QUERY.with(|w| w.borrow().clone()) else {
+        return;
+    };
     let location = window().location();
+    // Re-read on every attempt: a retry can land after the reader has opened
+    // developer mode, and the hash it left behind must be preserved, not the
+    // one that was there when the write was first asked for.
     let path = location.pathname().unwrap_or_else(|_| "/".to_string());
     let hash = location.hash().unwrap_or_default();
-    let url = format!("{path}{query}{hash}");
+    let url = format!("{path}{wanted}{hash}");
     if let Ok(history) = window().history() {
         let _ = history.replace_state_with_url(&wasm_bindgen::JsValue::NULL, "", Some(&url));
     }
+    // Did the address bar take it? `replaceState` updates the document URL
+    // synchronously, so this is the answer, now — an empty query reads back
+    // as an empty string.
+    if location.search().unwrap_or_default() == wanted {
+        QUERY_RETRIES_LEFT.with(|c| c.set(0));
+        return;
+    }
+    let left = QUERY_RETRIES_LEFT.with(|c| c.get());
+    if left == 0 || QUERY_RETRY_PENDING.with(|c| c.get()) {
+        return;
+    }
+    QUERY_RETRIES_LEFT.with(|c| c.set(left - 1));
+    QUERY_RETRY_PENDING.with(|c| c.set(true));
+    leptos::task::spawn_local(async move {
+        gloo_timers::future::TimeoutFuture::new(QUERY_RETRY_MS).await;
+        QUERY_RETRY_PENDING.with(|c| c.set(false));
+        write_wanted_query();
+    });
 }
 
 /// Reload with the query string dropped, and without leaving the old address
@@ -904,15 +1052,37 @@ pub fn dtstamp_utc_now() -> String {
     )
 }
 
-/// Today's date in the browser's local time zone.
-/// Minutes since local midnight, through the ordinary `Date` constructor —
-/// the same clock `today_local` reads, so the e2e harness's clock pin
-/// reaches this too.
-pub fn now_local_minutes() -> u16 {
+/// CMI's clock — the only clock the timetable means. Every slot on CMI's
+/// pages is an IST slot, and `core/src/ics.rs` writes a whole `VTIMEZONE`
+/// for `Asia/Kolkata` — "fixed +05:30, no DST", its own words. So "the slot
+/// happening now" has ONE answer, and it is not the device's: at one instant
+/// a phone in New York reads 09:30 while CMI reads 19:00, and matching 09:30
+/// against CMI's grid seeds — and through an `aria-live` panel ANNOUNCES — a
+/// class hour at which nobody is teaching (R93 TL-3/S18). India has never
+/// observed daylight saving, so the offset is a constant and no `Intl` is
+/// needed (this app uses none, anywhere). Returns (CMI's date, minutes since
+/// CMI's midnight) from ONE reading, so a caller wanting both cannot straddle
+/// midnight between two calls. Through the ordinary `Date` constructor, so
+/// the e2e clock pin reaches this — and through the UTC getters, so a test's
+/// `Emulation.setTimezoneOverride` changes nothing here, which is exactly the
+/// property this exists to hold.
+pub fn now_cmi() -> (ttcore::date::CivilDate, u16) {
+    /// +05:30, unchanged since 1945 and with no DST to shift it.
+    const IST_OFFSET_MIN: i32 = 330;
     let d = js_sys::Date::new_0();
-    (d.get_hours() * 60 + d.get_minutes()) as u16
+    let utc_date = ttcore::date::CivilDate::new(
+        d.get_utc_full_year() as i32,
+        (d.get_utc_month() + 1) as u8,
+        d.get_utc_date() as u8,
+    );
+    let total = d.get_utc_hours() as i32 * 60 + d.get_utc_minutes() as i32 + IST_OFFSET_MIN;
+    (
+        utc_date.add_days(total.div_euclid(1440) as i64),
+        total.rem_euclid(1440) as u16,
+    )
 }
 
+/// Today's date in the browser's local time zone.
 pub fn today_local() -> ttcore::date::CivilDate {
     let d = js_sys::Date::new_0();
     ttcore::date::CivilDate::new(
@@ -1121,8 +1291,9 @@ pub fn keep_number_with_word(name: &str) -> String {
 /// `page` is the page-shape tweak's value at click time (None = the shipped
 /// wide sheet; "portrait"; "ask" = leave it to the print dialog). Only the
 /// app's own Print buttons come through here, which is why the tweak's hint
-/// owns that Ctrl+P keeps the wide design — an undocumented mismatch is how
-/// a tweak starts lying.
+/// owns both facts: that Ctrl+P asks for the shipped wide design, and that
+/// Safari ignores a page-size request at all — an undocumented mismatch is
+/// how a tweak starts lying.
 pub fn print_sheet(page: Option<String>, on_done: impl Fn() + Clone + 'static) {
     if try_print_in_own_window(page, on_done.clone()).is_none() {
         let _ = window().print();

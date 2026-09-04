@@ -45,6 +45,10 @@ pub fn parse_slot(cell: &str) -> Option<Slot> {
     if h1 > 23 || h2 > 23 || m1 > 59 || m2 > 59 {
         return None;
     }
+    // Whether the bare-afternoon rule actually MOVED the start. `hour_24`
+    // shadows `h1` below and destroys the evidence, so ask before it runs
+    // (R93 S2 / CF-2).
+    let start_was_shifted = mer(3).is_none() && (1..=6).contains(&h1);
     let h1 = hour_24(h1, mer(3));
     let h2 = hour_24(h2, mer(6));
     let start = h1 * 60 + m1;
@@ -52,7 +56,22 @@ pub fn parse_slot(cell: &str) -> Option<Slot> {
     // "6:30-7:45": the bare-afternoon rule shifts the start past an
     // unshifted end. A range never runs backwards — when no explicit
     // marker pins the end, it belongs to the same half-day as the start.
-    if end <= start && mer(6).is_none() && h2 < 12 {
+    //
+    // Only legitimate when the start really was shifted. "11:50-11:50" was
+    // never moved, so adding 12 h there does not repair a half-day guess —
+    // it launders a degenerate range into 11:50–23:50, which the gate's
+    // slot-sanity rule then passes and the app states as a fact.
+    //
+    // Do NOT replace this with `if end <= start { return None; }`. Measured:
+    // that silently drops a whole column of the week (147 → 114 classes)
+    // behind a "column ignored" warning that only developer mode ever shows
+    // (the two `warnings.push(... column ignored ...)` sites in this file,
+    // rendered at `app/src/dev.rs`'s `{format!("{} warnings", ...)}` panel).
+    // Letting the non-positive slot through hands it to gate rule 6
+    // ("slot sanity", `core/src/validate.rs`), which refuses the page and
+    // keeps the stored snapshot — the designed answer, and drop-and-say
+    // rather than silently clamp.
+    if end <= start && start_was_shifted && mer(6).is_none() && h2 < 12 {
         end += 720;
     }
     Some(Slot::new(start, end))
@@ -437,15 +456,28 @@ pub struct CellTokens {
     pub codes: Vec<(String, bool)>,
     /// A `TMP*` marker was present.
     pub temp: bool,
+    /// Codes carrying a `%`. Kept in `codes` — deleting a catalog code over an
+    /// upstream typo would take a real course off every user's timetable — but
+    /// reported, because such a code cannot travel in a `?c=` link (R93 M5) and
+    /// the app leaves it out of every address bar it writes.
+    pub percent: Vec<String>,
 }
 
 /// Split cell text into course codes. Codes are separated by whitespace,
-/// `/` or a stray `|` (ragged rows can leave one inside a sliced cell); a
+/// `/`, `,` or a stray `|` (ragged rows can leave one inside a sliced cell); a
 /// trailing `+` flags an optional course; a standalone `TMP*` token marks a
 /// temporary hall booking.
+///
+/// The comma is a separator like `/`, and it has to be: `ALG1,ENV` is an
+/// ordinary human way to write two codes sharing one slot, and read as ONE
+/// code it minted a catalog entry the app's own `?c=` cannot round-trip — so
+/// the course fell off every timetable that held it on the next reload, and
+/// could put a course nobody picked in its place (R93 M5). No CMI code has
+/// ever contained one (checked against both fixture pages, every `<pre>`
+/// block), and this reaches the pasted-page door as well as Sync.
 pub fn parse_cell(cell: &str) -> CellTokens {
     let mut out = CellTokens::default();
-    for token in cell.split(|c: char| c.is_whitespace() || c == '/' || c == '|') {
+    for token in cell.split(|c: char| c.is_whitespace() || c == '/' || c == ',' || c == '|') {
         let token = token.trim();
         if token.is_empty() {
             continue;
@@ -460,6 +492,9 @@ pub fn parse_cell(cell: &str) -> CellTokens {
         };
         if code.is_empty() {
             continue;
+        }
+        if code.contains('%') {
+            out.percent.push(code.to_string());
         }
         out.codes.push((code.to_string(), plus));
     }
@@ -484,6 +519,21 @@ mod tests {
             t.codes,
             vec![("A".to_string(), false), ("B".to_string(), false)]
         );
+        // A comma between two codes in one cell is TWO codes. Read as one, it
+        // minted a catalog code the app's own `?c=` cannot round-trip, so the
+        // course fell off every timetable holding it on the next reload
+        // (R93 M5). No CMI code has ever contained a comma.
+        let t = parse_cell("ALG1,ENV");
+        assert_eq!(
+            t.codes,
+            vec![("ALG1".to_string(), false), ("ENV".to_string(), false)]
+        );
+        // A `%` is KEPT — deleting a catalog code over an upstream typo would
+        // take a real course off every user's timetable — and reported, so the
+        // page's own warnings name it.
+        let t = parse_cell("50%OFF");
+        assert_eq!(t.codes, vec![("50%OFF".to_string(), false)]);
+        assert_eq!(t.percent, vec!["50%OFF".to_string()]);
     }
 
     #[test]

@@ -303,7 +303,7 @@ fn import_planner_backup_inner(app: App, text: &str, already_asked: bool) {
         app.toast(refused("selected courses"));
         return;
     };
-    let Ok(overrides) =
+    let Ok(mut overrides) =
         serde_json::from_value::<ttcore::model::OverridesStore>(backup.overrides.take())
     else {
         app.toast(refused("changes"));
@@ -315,10 +315,42 @@ fn import_planner_backup_inner(app: App, text: &str, already_asked: bool) {
         app.toast(refused("courses you added"));
         return;
     };
-    let Ok(prefs) = serde_json::from_value::<crate::state::Prefs>(backup.prefs.take()) else {
+    // The clamp law at the file door. Core has validated the SNAPSHOT's class
+    // times (`export.rs`'s `slot_ok`) and only those, so until now the two
+    // stores that belong to the READER — their moved classes and their own
+    // courses — arrived through plain serde and went straight into
+    // localStorage: an impossible time, a credit figure outside the editor's
+    // 0..=20, an id `add` cannot count past (R93 S1, S5, S8).
+    //
+    // Refused whole, not repaired, because that is already this door's law
+    // ("a file that half-parses is a damaged file, and a damaged file changes
+    // nothing" — the four `refused(...)` arms above, and core's own
+    // `bad_changes()`). A backup is meant to be a photograph of a working
+    // planner; one that isn't is a file to say no to, not to edit.
+    if !overrides.is_sane() {
+        app.toast(refused("changes"));
+        return;
+    }
+    if !customs.is_sane() {
+        app.toast(refused("courses you added"));
+        return;
+    }
+    // The counter can still be behind its own items without anything being
+    // wrong with them; move it, never an id — `pending_conflicts` in this
+    // same file holds `Conflict::override_id` back-references into this store.
+    overrides.bump_next_id();
+    let Ok(mut prefs) = serde_json::from_value::<crate::state::Prefs>(backup.prefs.take()) else {
         app.toast(refused("settings"));
         return;
     };
+    // Everything in this section is `#[serde(default)]` on the struct, so a
+    // file naming one field parses whole and no "damaged file" arm ever
+    // fires — which is right, and is why the numbers have to be brought
+    // inside the app's ranges HERE instead (R93 S6). Clamped, not refused:
+    // the read sites already clamp, so a file asking for 0 undo steps was
+    // always getting 10 — the file was never the problem, the Tweaks page
+    // agreeing with it was.
+    prefs.clamp_tweaks();
     // Absent in older files → no postponed conflicts; anything present must
     // parse whole.
     let conflicts: Vec<ttcore::merge::Conflict> = if backup.pending_conflicts.is_null() {
@@ -432,9 +464,10 @@ fn import_planner_backup_inner(app: App, text: &str, already_asked: bool) {
         .collect();
     // The snapshot goes first: it is by far the largest piece, so if space
     // is the problem it usually fails before anything else is touched.
-    let wrote = crate::storage::save_snapshot(&backup.snapshot)
-        != crate::storage::SnapshotSave::Failed
-        && crate::storage::save(KEY_SELECTION, &selection).is_ok()
+    let wrote = !matches!(
+        crate::storage::save_snapshot(&backup.snapshot),
+        crate::storage::SnapshotSave::Failed(_)
+    ) && crate::storage::save(KEY_SELECTION, &selection).is_ok()
         && crate::storage::save(KEY_OVERRIDES, &overrides).is_ok()
         && crate::storage::save(KEY_CUSTOM, &customs).is_ok()
         && crate::storage::save(KEY_PREFS, &prefs).is_ok()
@@ -520,7 +553,16 @@ pub fn import_courses_text(app: App, text: &str) {
     let mut customs: Vec<Course> = Vec::new();
     let mut kept_yours: Vec<String> = Vec::new();
     let mut shadowed: Vec<String> = Vec::new();
+    let mut unshareable: Vec<String> = Vec::new();
     for course in plan.customs {
+        // A code carrying `,` or `%` cannot survive `?c=` (R93 M5). Refused at
+        // the door and named in the dialog below, never filed and lost later.
+        if !ttcore::share::code_is_url_safe(&course.code) {
+            if !unshareable.contains(&course.code) {
+                unshareable.push(course.code.clone());
+            }
+            continue;
+        }
         match app
             .customs
             .with_untracked(|cs| cs.get(&course.code).cloned())
@@ -551,6 +593,12 @@ pub fn import_courses_text(app: App, text: &str) {
     let mut known: Vec<String> = Vec::new();
     let mut unknown: Vec<String> = Vec::new();
     for code in plan.codes {
+        if !ttcore::share::code_is_url_safe(&code) {
+            if !unshareable.iter().any(|c| c.eq_ignore_ascii_case(&code)) {
+                unshareable.push(code);
+            }
+            continue;
+        }
         let resolved = app
             .customs
             .with_untracked(|cs| cs.get(&code).map(|c| c.code.clone()))
@@ -572,6 +620,13 @@ pub fn import_courses_text(app: App, text: &str) {
             }
             None => unknown.push(code),
         }
+    }
+    // A file whose only courses were refused for their CODE must not be told
+    // the catalog is the problem — that sends the reader looking in the wrong
+    // place for a fault the app can name exactly.
+    if known.is_empty() && !unshareable.is_empty() {
+        app.toast(ttcore::share::CODE_NOT_URL_SAFE);
+        return;
     }
     if known.is_empty() {
         app.toast(
@@ -665,6 +720,7 @@ pub fn import_courses_text(app: App, text: &str) {
         dropped_for_own_course,
         takes_changes_here,
         restores_deleted,
+        unshareable,
     };
     // A browser with nothing of its own to lose would be answering a
     // question that has one answer: joining an empty week and replacing it

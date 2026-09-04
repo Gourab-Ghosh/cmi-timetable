@@ -389,10 +389,18 @@ control.)
 - **100 steps deep**, with redo — and a developer-mode tweak (**Undo
   history depth**) can take that anywhere from 10 to 1000 for readers who
   plan a whole semester in one sitting.
+- **A sync can end the history, and says so.** When CMI's new pages change one
+  of the classes you had changed yourself, the app re-checks your changes
+  against them — and once it has, the steps you took before that sync can no
+  longer be undone, because they no longer describe the timetable you are
+  looking at. The sync's own notice says it. Nothing you *saved* is affected:
+  your courses, your changes and your settings are all still there. It is the
+  history that starts over, not your week.
 - **Ctrl+Z** / **Ctrl+Y** / **Ctrl+Shift+Z** (⌘ on a Mac).
 - Filters ride the same history — one step per change, and one per burst of
   typing rather than one per keystroke.
-- Notifications carry their own **Undo**, and pause their auto-dismiss while
+- Notifications carry their own **Undo** — for as long as the action they name
+  is the newest one — and pause their auto-dismiss while
   you hover, focus or tap them, so there is always time to read one.
 
 ### Two quiet safety nets
@@ -412,7 +420,7 @@ control.)
 | Link | Carries |
 |---|---|
 | **Copy link** (Courses only) | Your selection (`?c=TOC,QCOM,MFD`) — readable, with plain commas |
-| **Copy link** (Courses and your changes) | The selection *plus* your moved meetings, your credits and your own courses, compressed into the URL. Offered only when you have such changes; a line under the row says so when you don't |
+| **Copy link** (Courses and your changes) | The selection *plus* your moved meetings, your credits, the courses you deleted and your own courses, compressed into the URL. Offered only when you have such changes — a deletion counts as one; a line under the row says so when you don't |
 
 Codes are matched case-insensitively, so a hand-typed `?c=toc` works, and a
 link that got re-encoded on its way through a chat app still opens correctly.
@@ -455,6 +463,14 @@ trades it for a short one through a free shortening service.
   three now finish within a few milliseconds of each other.
 - If a service cannot be reached, the app says which one and why, and leaves
   no half-made link behind.
+- **A link too long for a service is measured, not sent.** Each service has a
+  ceiling this project measured against the live service, and a very large
+  timetable can pass one of them: clck.ru refuses a request past about 4 000
+  characters, which a planner of two dozen courses with every class moved can
+  reach. Rather than hand your timetable to that service — and to the helper
+  sites behind it — on the way to a certain refusal, the popup says so on the
+  option itself and on the button, and nothing leaves the browser. TinyURL and
+  da.gd take everything this app can build, so switching is a real answer.
 - **Two ways out, and they say which is which.** *Back* returns to the share
   dialog you came from; *Close* leaves altogether. Both sit at the left of the
   bottom bar, and the button that actually sends your timetable keeps the right
@@ -477,11 +493,20 @@ says this rather than showing a button that cannot work.
   dates.
 - It says plainly that CMI's holidays are **not** excluded, rather than
   pretending otherwise.
-- Two developer-mode tweaks trim what each event's notes carry: **Put a link
-  back to this planner in every calendar event** (untick before sending the
-  file on — the link spells out which courses you take) and **Describe the
-  course inside each calendar event** (untick to keep events to title, room
-  and time — some calendar apps read the notes aloud with every reminder).
+- **A course it cannot export is named, not dropped.** Narrow the dates and a
+  course whose classes all fall outside them has nothing to put in the file —
+  so the app says so by name ("GERMAN isn't in it — none of its classes fall
+  between those dates") instead of writing a file that quietly holds fewer
+  courses than you chose. If nothing at all falls between the dates, it
+  refuses and asks you to widen the range rather than handing you an empty
+  calendar.
+- Two developer-mode tweaks trim what each event's notes carry, and they are
+  independent: **Put a link back to this planner in every calendar event**
+  (untick before sending the file on — the link spells out which courses are
+  in the file) and **Describe the course inside each calendar event** (untick
+  to drop the instructor and branch lines — some calendar apps read the notes
+  aloud with every reminder). Untick both and the events carry nothing but
+  title, room and time.
 
 ### JSON, for your own tools
 
@@ -576,8 +601,10 @@ rather than five screenshots of an app.
 Three developer-mode tweaks tune the paper itself: **Print in colour**
 (untick for plain-ink sheets — white bands, grey-bordered chips, black rules,
 with clash red kept: a warning, not decoration), **Page shape** (wide as
-designed, tall for binders, or left to the print dialog — the app's own Print
-buttons obey; Ctrl+P keeps the wide design, and the tweak's hint says so), and
+designed, tall for binders, or left to the print dialog — only the app's own
+Print buttons carry the choice; Ctrl+P asks for the shipped wide design, and
+Safari ignores a page-size request from any website, so there the print
+dialog decides — the tweak's hint says all of this), and
 **Sign each sheet** (untick to drop the "made with…" credit while the sheet's
 facts stay).
 
@@ -696,7 +723,8 @@ worth much. Each successful sync says where it came from as it happens —
 Every route ends at **cmi.ac.in** itself:
 
 1. **your own helper site**, if you set one — asked alone first
-2. **relays** — seven public CORS relays, raced at once, first valid answer wins
+2. **relays** — seven public CORS relays, asked one at a time: the leading one
+   alone, the others only if it fails or goes quiet
 3. **direct** — a short attempt at CMI's own URLs, only if no relay answered
 4. **from CMI's page in your browser** — the one route nobody can take away
 
@@ -806,7 +834,9 @@ timetable.
   for this sitting (hiding a question is not answering it — it returns with
   the next sync or reload). And if CMI's change and yours turn out to say the
   same thing (same day, time and room), there is nothing to ask: your change
-  is retired with a note, and CMI's own listing takes over.
+  is retired with a note, and CMI's own listing takes over. Any sync that
+  re-checks your changes like this also ends the undo history — see **Undo,
+  for everything** — and says so on its notice.
 - **Opening a share link in a fresh browser never invents a conflict.** A
   browser that has never synced has no history to compare, so the first sync
   asks nothing — the link's changes simply apply.
@@ -890,7 +920,8 @@ itself has been published. If there is one, it **asks**.
   out of date.
 - **Nothing installs itself.** A banner says a newer version is ready and waits
   for one of two answers:
-  - **Update now** — the page reloads and you are on the new version.
+  - **Update now** — the page reloads and you are on the new version. If a slow
+    connection means it isn't, the app says so and tells you how to get it.
   - **Not now** — the banner goes. The new version is still one ordinary
     refresh away whenever you feel like it, and the app asks again tomorrow.
 - **Never a reload you didn't ask for.** Not on an idle tab, not after a
@@ -900,6 +931,8 @@ itself has been published. If there is one, it **asks**.
 - **Nothing you have saved is lost by updating.** Your timetable, your changes
   and your preferences live in this browser, not in the page. The one thing a
   reload does start over is the undo history — the app says so on the banner.
+  (A sync that re-checks your changes against new CMI pages ends it too, and
+  says so on its own notice.)
 - **You can switch the asking off** — in the banner (**Stop checking**) or in
   My data → **App updates**. Off means the app never looks; you still get the
   newest version whenever you refresh. The same switch turns it back on, and
@@ -951,6 +984,17 @@ itself has been published. If there is one, it **asks**.
 - **Everything lives in your browser** (`localStorage`), under keys you can
   read: your selection, your changes, your own courses, your preferences, and
   the timetable CMI published.
+- **Safari and iPhones sweep it after seven days away.** Every browser on iOS
+  and iPadOS is Safari underneath, and Safari — on a phone or a Mac — erases a
+  site's saved data after seven days of using the browser without opening that
+  site. It is a WebKit policy
+  ([webkit.org/blog/10218](https://webkit.org/blog/10218/)), not a setting this
+  app can turn off, and Chrome, Edge and Firefox on a desktop do not do it. Two
+  things keep your work: **add the page to your Home Screen** — a page added
+  there gets its own count of days, so it is not swept — and keep a **full
+  backup file** (Share or import → As a full backup). CMI's timetable can
+  always be fetched again; your selection, your changes and your own courses
+  cannot.
 - **My data** is a complete inventory with one-click removal for each piece —
   nothing is hidden from you, and it names every request the app can make.
 - Only the stored timetable is a **cache**; it can be fetched again. Your
@@ -999,7 +1043,7 @@ GitHub Pages. The parsing, validation, merging, calendar generation and URL
 codecs live in a separate crate with no browser dependencies, so they can be
 tested on their own.
 
-**Tested like it matters:** 169 native tests — including a synthetic CMI
+**Tested like it matters:** 175 native tests — including a synthetic CMI
 website the tests generate themselves, with other semesters, other time
 formats, renamed halls and ten different kinds of broken page — plus 164
 end-to-end browser tests driving the real app in a real browser: drag & drop,
@@ -1045,15 +1089,18 @@ mode's own categories, each with its address:
     colours (plain still wins when both are set), stronger hairlines and
     small print, animations.
   - **The Halls page** — the empty-day shrink, the alternate-room band, and
-    a free-hall finder that can open pre-set to today and the current slot
-    (a visible seed, never a silent assumption).
+    a free-hall finder that can open pre-set to today and the slot happening
+    now **at CMI** — the timetable's clock is Indian Standard Time, so a
+    device in another zone still gets Chennai's hour (a visible seed, never a
+    silent assumption).
   - **Opening the app** — a fixed landing section (or "the section I left",
     how the app ships), and whether the day pickers are remembered between
     visits — each strip's **Follow today** button hands a single pick back
     either way.
   - **Notices and dialogs** — how long notices stay (3 s / 6 s / 12 s /
-    until dismissed by their ✕), and whether a click on the dark area closes
-    a dialog.
+    until dismissed by their ✕ — or by **Escape**, from anywhere on the page,
+    which matters most on that last setting), and whether a click on the dark
+    area closes a dialog.
   - **Wheel and swipe** — wheel-steps-values on or off, and the section
     bar's wheel/swipe walking on or off (taps and arrow keys always work).
   - **Editing and undo** — drags without the ✎ Edit layout toggle (mouse and
@@ -1070,7 +1117,7 @@ mode's own categories, each with its address:
   - **Calendar files** — the planner link and the course description inside
     exported events.
   - **Developer mode** — a header Developer button, and a per-request
-    console echo of every fetch.
+    console echo of every fetch, the reachability probe included.
 
   One **Reset all tweaks** puts the whole page back to how the app ships.
 - **Sync** (`#/developer/sync`) — the simulators (force a tier, run a sync,
@@ -1133,6 +1180,6 @@ you will find. If you spot a difference, the app is right and this is a bug.*
   A durable "separate
   timetable per tab" doesn't exist in the web platform — the only per-tab
   storage a browser offers is wiped when the tab closes, which would break
-  the promise that your data stays until you delete it. To compare two
+  which would wipe your work every time you closed the tab. To compare two
   plans side by side, use a second browser profile, a private window, or
   export a snapshot and a share link.

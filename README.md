@@ -53,14 +53,16 @@ GitHub Pages origin cannot fetch the pages directly. Sync walks a tiered
 source chain, each tier labeled for provenance in the sync pill's tooltip and
 the developer-mode fetch log (the pill's own text names the route only when
 it is actionable — "old copy", "imported"). For speed, each tier fetches both pages **in
-parallel**, and the proxy tier **races all relays at once** — the first
-valid response wins:
+parallel**, and the proxy tier asks **one relay at a time** — the leading
+route alone, the rest only if it fails or goes silent (see below):
 
 0. **your own helper site**, if one is set in My data — asked alone first,
    with a 2.5 s head start, so an ordinary sync through it never reaches a
    public relay; the relays are brought in behind it only if it has not
    answered by then (the `public_relays_off` tweak makes it the only route)
-1. **proxy** — seven public CORS relays raced in parallel (see `app/src/fetch.rs`)
+1. **proxy** — seven public CORS relays, asked one at a time: the leading
+   relay alone, the others only if it fails or goes silent for 2.5 s (see
+   `app/src/fetch.rs`)
 2. **direct** — a cheap 4 s attempt at the CMI URLs, only if no relay answered
 3. **from CMI's page in your browser** — My data → "Load it from CMI's page",
    where you open CMI yourself and hand the app the two pages; same parser,
@@ -259,11 +261,18 @@ with custom changes"). When both are present, `s` wins. The query stays
   course details, and unselected courses that would clash with your current
   timetable carry a **⚠** marker; adding a clashing course warns immediately
   (never blocks). Notifications pause their auto-dismiss while hovered or
-  focused, so there's always time to read (and hit Undo).
+  focused, so there's always time to read one. A notice's **Undo** is offered
+  only while the action it names is still the newest one — take another and
+  the notice keeps its words and loses its button, because it can no longer
+  do what it says (R92 M2 / R93 R1).
 - Credits: CMI states credits only exceptionally; unstated courses count as
-  **4 credits** (marked "assumed") — unless the course is annotated with a
-  shorter month span, in which case the assumption is **one credit per
-  month** ("(Oct-Nov)" ⇒ 2 credits, "(Sep)" ⇒ 1; the tooltip explains).
+  **4 credits** (marked "assumed") — except that a course whose name says
+  **seminar** is assumed **0** (seminars are attended, not credited), and a
+  course annotated with a shorter month span is assumed **one credit per
+  month** ("(Oct-Nov)" ⇒ 2 credits, "(Sep)" ⇒ 1; the tooltip explains why in
+  each case). The seminar rule is checked first —
+  `Course::credit_assumption` in `core/src/model.rs`, pinned by
+  `parser_tests::t08b2_seminar_assumed_zero_credits`.
   Stated credits are never second-guessed. My courses shows the total plus
   a per-value breakdown ("1 × 4 cr · 2 × 2 cr"). The editor lets you
   **overwrite credits** per course (totals, filters and the catalog follow
@@ -413,11 +422,14 @@ re-triggers serving without rebuilding.
   (branch list, course names, the unscheduled set, …). The fixtures feed
   only the parser tests and the e2e seed — the shipped app carries no data.
 
-## Manual acceptance checklist
+## Before a semester rollover
 
-The full 15-point checklist from the build spec (fresh-browser share links,
-offline first load, fail-closed updates, touch drag, conflict dialog,
-keyboard-only operation, all five sections printing to landscape A4 with no
-blank pages, Lighthouse a11y ≥ 95,
-cross-browser) lives in the spec and should be run against a deployed build
-before each semester rollover.
+Run the two suites (`cargo test --workspace`, `e2e/test_app.py`) and
+`./deploy.sh --build-only`, then walk the manual rows of
+`.workagents/regression-checklist.md` — the ones no test pins. The relay
+probes in `.workagents/cors-r84/probes/` are worth a minute too: the e2e suite
+mocks the relays, so it can never tell you a real one has died.
+
+There is no separate build spec in this repository. Two README sections
+(`### A note on routing`) mention one because they record deviations from it;
+the document itself was never committed here.

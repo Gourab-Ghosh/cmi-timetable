@@ -113,7 +113,12 @@ pub fn generate(app: App, service: &'static Service, long: String) {
             }
             Err(why) => {
                 if current {
-                    app.shorten.set(ShortenState::Failed(service.key, why));
+                    // `asked` on this path too (R93 R10). It was consumed only
+                    // by the `Ok` arm above, so a failed shorten named nobody —
+                    // in the same dialog that promises "The service you pick can
+                    // read it". A relay that lost still read the link.
+                    app.shorten
+                        .set(ShortenState::Failed(service.key, why, asked));
                 }
             }
         }
@@ -128,6 +133,22 @@ async fn call(
     let direct = shorten::request_url(service, long);
     if direct.is_empty() {
         return Err("The app doesn't know how to ask that service.".into());
+    }
+    // Measured BEFORE anything leaves the browser. clck.ru's own buffer
+    // refuses a request line past ~4 094 octets, and no relay can rescue it:
+    // every relay fetches the SAME over-long URL, so the old code spent eight
+    // requests to eight different companies — each carrying the student's
+    // whole timetable — on the way to a certain 400 (R93 sp-4). The one
+    // action in this app that hands a timetable to a stranger must not spend
+    // it on a call that cannot work.
+    if let Some((asking, max)) = shorten::too_long_for(service, long) {
+        return Err(format!(
+            "This link is too long for {name} — asking for it takes about \
+             {asking} characters, and about {max} is as much as {name} will \
+             take. Your link still works as it is — try another service, or \
+             copy the full link instead.",
+            name = service.name
+        ));
     }
     // The straight call first and alone; the relays behind it, in the order
     // `fetch` already ranks them for reaching CMI.
@@ -228,7 +249,21 @@ async fn attempt(
                 link,
                 via: via.map(str::to_string),
             })
-            .map_err(Failure::Service),
+            .map_err(|why| match via {
+                // The shortener's OWN words — the only thing `Failure::Service`
+                // is for, and the whole reason `race` prefers it over a
+                // transport error. It gains the way-out tail every transport
+                // sentence already has (t110).
+                None => Failure::Service(with_way_out(&why)),
+                // Through a relay the body is the RELAY's, and `via` never
+                // reached this arm (R93 R10): a relay's own 429 page came out
+                // as "TinyURL answered with something that isn't a link: …429
+                // Too Many Requests…" of a service the browser never
+                // contacted — and being a `Service` failure, `race` PREFERRED
+                // that sentence over the truthful transport one beside it.
+                // Classed as transport now, which is what it is.
+                Some(relay) => Failure::Transport(relay_reply_msg(service, relay, &why)),
+            }),
         // `via` matters here (R92 M10): a status that came from a HELPER
         // SITE must not be reported as the shortener's answer. A reader whose
         // ad blocker stops TinyURL, with a relay answering 503, was told
@@ -259,20 +294,66 @@ fn unreachable_msg(service: &Service, detail: &str) -> String {
 /// site, and cannot do anything at all about a shortener that was never
 /// contacted.
 fn unreachable_msg_via(service: &Service, via: Option<&'static str>, detail: &str) -> String {
-    if let Some(relay) = via
-        && detail.contains("HTTP")
-    {
+    if let Some(relay) = via {
         leptos::logging::log!("cmitt: {} via {relay} unreachable: {detail}", service.name);
+        // Not only a status (R93 R10). The `detail.contains("HTTP")` gate meant
+        // a relay TIMEOUT and a blocked relay request fell straight through to
+        // the direct sentence, so "da.gd didn't answer in time" was said of a
+        // service that was never asked on this route. Which half failed is
+        // read off the detail; WHO failed is `via`, and that is not a guess.
+        let what = if detail.contains("HTTP") {
+            // "Answered with an error" fits every status a relay can send.
+            format!("answered with an error ({detail})")
+        } else if detail.contains("timed out") {
+            "didn't answer in time".to_string()
+        } else {
+            "couldn't be reached (the connection didn't get through)".to_string()
+        };
         // The advice tail is part of the promise too: naming the right
         // culprit must not cost the reader the way out (t110).
         return format!(
-            "{} couldn't be reached directly, and the helper site {relay} answered \
-             with an error ({detail}). Your link still works as it is — try another \
-             service, or copy the full link instead.",
+            "{} couldn't be reached directly, and the helper site {relay} {what}. \
+             Your link still works as it is — try another service, or copy the full \
+             link instead.",
             service.name
         );
     }
     unreachable_msg_direct(service, detail)
+}
+
+/// A relay answered, and not with a link.
+///
+/// The body is the relay's, and `parse_reply` has already dressed it in the
+/// SHORTENER's name ("TinyURL answered with something that isn't a link: …"),
+/// so that string cannot be quoted on screen without re-committing the
+/// misattribution it came from. Console for whoever is debugging, English for
+/// the screen — the same split `unreachable_msg_direct` makes.
+fn relay_reply_msg(service: &Service, relay: &'static str, why: &str) -> String {
+    leptos::logging::log!("cmitt: {} via {relay} bad reply: {why}", service.name);
+    format!(
+        "{} couldn't be reached directly, and the helper site {relay} didn't send a \
+         short link back. Your link still works as it is — try another service, or \
+         copy the full link instead.",
+        service.name
+    )
+}
+
+/// The way out, appended once.
+///
+/// `t110` pins it on the transport sentences; `parse_reply`'s refusals never
+/// had it, so the one failure that names a real cause was also the one that
+/// left the reader nowhere to go (R93 R10). Naming the right culprit must not
+/// cost the reader the way out.
+fn with_way_out(msg: &str) -> String {
+    let msg = msg.trim_end();
+    if msg.contains("copy the full link instead") {
+        return msg.to_string();
+    }
+    format!(
+        "{}. Your link still works as it is — try another service, or copy the \
+         full link instead.",
+        msg.trim_end_matches('.')
+    )
 }
 
 fn unreachable_msg_direct(service: &Service, detail: &str) -> String {

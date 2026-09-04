@@ -250,7 +250,15 @@ pub fn perform_drop(
     let base_is_current = spec.base.as_ref().is_some_and(|base| {
         app.snapshot.with_untracked(|s| {
             s.course(&spec.code)
-                .is_some_and(|c| c.meetings.iter().any(|m| m == base))
+                // `same_place_time`, never `==`: the derived `PartialEq`
+                // includes `temp_booking`, so once CMI marked this booking
+                // TMP* the base could never be found again, the reset branch
+                // became unreachable, and a drop back onto CMI's own cell
+                // wrote an override with `base == to` while toasting a move
+                // that never happened. It is also the predicate
+                // `effective_meetings` uses to pair a base with the meeting
+                // it stands for, so this asks exactly the right question.
+                .is_some_and(|c| c.meetings.iter().any(|m| m.same_place_time(base)))
         })
     });
     if let Some(base) = &spec.base
@@ -550,7 +558,9 @@ fn escape_has_native_meaning(target: &Option<web_sys::EventTarget>) -> bool {
 fn on_key_down(app: App, ev: &web_sys::KeyboardEvent) {
     let key = ev.key();
 
-    // Esc: cancel drag → move mode → open facet menu → dialog, in that order.
+    // Esc: cancel drag → confirm → dialog → move mode → open facet menu →
+    // leave developer mode, in that order (R93 M10 / R92 S12: the thing on
+    // top is the thing Escape answers).
     if key == "Escape" {
         if app.drag.with_untracked(|d| d.is_some()) {
             cancel_drag(app);
@@ -586,11 +596,35 @@ fn on_key_down(app: App, ev: &web_sys::KeyboardEvent) {
             ev.prevent_default();
             return;
         }
-        if app.dialog.with_untracked(|d| d.is_some()) {
-            app.dismiss_dialog();
+        // A standing notice is the thing physically on top of the page —
+        // the rail is `position: fixed`, `z-index: 90` — and until now the
+        // only keyboard route to clear one was to Tab to its ✕, which on
+        // the Master grid is 316 presses away, because `<ui::Toasts />` is
+        // mounted after `</main>` in `app.rs`. With "Notices stay for →
+        // Until dismissed" there is no timer either, so those presses were
+        // the only way out at all: an accessibility dead end (a11ykbd-2,
+        // WCAG 2.1 SC 2.4.3).
+        //
+        // POSITION IN THIS CHAIN IS THE WHOLE DESIGN. Below the drag, the
+        // confirm, the dialog, move mode and the facet menus, because a
+        // notice is NOT modal and must never answer Escape in front of a
+        // question (R93 M10's rule: the thing on top is the thing Escape
+        // answers, and a dialog outranks the rail even though the rail is
+        // painted over it). Above the developer-mode exit, because leaving
+        // the mode is navigation, and the reader clearing what is in front
+        // of them comes first. Spoken, because what changed is off the
+        // reader's own path.
+        let cleared = app.dismiss_all_toasts();
+        if cleared > 0 {
+            app.say(if cleared == 1 {
+                "Notice cleared.".to_string()
+            } else {
+                format!("{cleared} notices cleared.")
+            });
             ev.prevent_default();
             return;
         }
+
         // Last, and — unlike everything above — GUARDED, but only where
         // Escape has a native job: leaving developer mode is navigation, not
         // cancellation. Escape in the tweaks search box must clear the field
@@ -810,9 +844,29 @@ pub fn install_global_handlers(app: App) {
             }
         });
 
+    // Which kind of pointer is in the reader's hand, for the copy that teaches
+    // the drag (R93 R11). The GATE below is per-event, so the sentence has to
+    // be too — a media query cannot see a finger on a `pointer: fine` laptop.
+    // Written only on a change: a press must not re-render every hint on the
+    // page. A keyboard-synthesised event has an empty `pointer_type` and is
+    // ignored, leaving the last real pointer's answer standing.
+    let pointer_kind =
+        Closure::<dyn FnMut(web_sys::PointerEvent)>::new(move |ev: web_sys::PointerEvent| {
+            let kind = ev.pointer_type();
+            if kind.is_empty() {
+                return;
+            }
+            let touch = kind == "touch";
+            if app.touch_input.get_untracked() != touch {
+                app.touch_input.set(touch);
+            }
+        });
+
     let opts = web_sys::AddEventListenerOptions::new();
     opts.set_passive(false);
 
+    let _ =
+        doc.add_event_listener_with_callback("pointerdown", pointer_kind.as_ref().unchecked_ref());
     let _ =
         doc.add_event_listener_with_callback("pointerdown", facet_close.as_ref().unchecked_ref());
     let _ = doc.add_event_listener_with_callback("pointermove", mv.as_ref().unchecked_ref());
@@ -833,4 +887,5 @@ pub fn install_global_handlers(app: App) {
     ctxmenu.forget();
     touchmove.forget();
     facet_close.forget();
+    pointer_kind.forget();
 }
