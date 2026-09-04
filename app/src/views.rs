@@ -2954,10 +2954,20 @@ fn master_grid(app: App) -> impl IntoView {
                 // `clashes()` is empty, while every overlapping course on the
                 // page wears a ⚠ — nine of them, with no key anywhere on the
                 // paper (R82's views audit). Same rule, same predicate.
+                // BOTH kinds of ⚠ on this sheet earn the key (R92 S6). The
+                // predicate asked only about UNSELECTED courses that would
+                // collide, so a reader who filtered the grid down to their
+                // own clashing courses printed red boxes and warning glyphs
+                // with nothing on the paper explaining them — the honesty law
+                // (t140) failing in the direction it was written to prevent.
                 if app.marks.get().0
                     && app.selection.with(|s| !s.is_empty())
                     && filtered.get().iter().any(|c| {
-                        !app.is_selected(&c.code) && !app.would_clash_with(c).is_empty()
+                        if app.is_selected(&c.code) {
+                            app.course_has_clash(&c.code)
+                        } else {
+                            !app.would_clash_with(c).is_empty()
+                        }
                     })
                 {
                     parts.push("⚠ clashes with a course you have");
@@ -4867,7 +4877,24 @@ fn halls_view(app: App) -> impl IntoView {
             // by the key line above the table, which already prints only when
             // there is a selection to mark. Saying it twice on one page would
             // be worse than saying it once in the wrong place.
-            {print_footnote(String::new)}
+            // The Halls sheet earns its key like every other sheet (R92 S7):
+            // it prints ✓ on the reader's own courses and ✎ on anything they
+            // moved, and hard-coding an empty footnote left both unexplained
+            // on paper. Same marks, same predicates, same tweak gates.
+            {print_footnote(move || {
+                let mut parts: Vec<&str> = Vec::new();
+                let (clash_on, edits_on, ticks_on) = app.marks.get();
+                if ticks_on && app.selection.with(|s| !s.is_empty()) {
+                    parts.push("✓ on your timetable");
+                }
+                if edits_on && app.overrides.with(|o| !o.items.is_empty()) {
+                    parts.push("✎ a time or room you set");
+                }
+                if clash_on && !app.clashes().is_empty() {
+                    parts.push("⚠ clashes with a course you have");
+                }
+                parts.join(" · ")
+            })}
         </section>
     }
 }

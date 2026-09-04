@@ -506,6 +506,11 @@ button {
 }
 
 @media (max-width: 899px) {
+  /* The bottom tab rail is sticky on phones, so a keyboard focus scrolled
+     into view could land UNDER it — the ring was there, just covered, and a
+     keyboard-only reader had no way to know where they were (R92 S5). The
+     top already reserved room for the header; this is the other end. */
+  html { scroll-padding-bottom: 84px; }
   /* The header wraps into several rows on phones — tighten it so the rows
      read as one block instead of drifting apart. */
   .header { gap: 0.4rem; padding: 0.5rem 0.75rem; row-gap: 0.35rem; position: static; }
@@ -2249,6 +2254,13 @@ body.modal-open.toasts-live .dialog {
     min(calc(100dvh - min(var(--toast-band, 0px), 33dvh) - 2.8rem), 800px)
   );
 }
+/* The fold marker (R93 R2): quieter than a notice, because it is a count and
+   not a message — it must never be mistaken for the thing it is counting. */
+.toast.toast-more {
+  font-size: 0.78rem;
+  opacity: 0.75;
+  padding: 0.2rem 0.6rem;
+}
 .toast {
   position: relative;
   background: var(--text);
@@ -2901,6 +2913,10 @@ body.modal-open { overflow: hidden; }
 }
 .diff-item + .diff-item { border-top: 1px dashed var(--line); }
 .diff-item .name { font-weight: 550; }
+/* A course name has no spaces to break at when CMI writes one as a single
+   token, and as a flex item with min-width:auto it refused to shrink — so it
+   widened the row and, on a phone, the whole app (R92 S19). */
+.row > strong { min-width: 0; overflow-wrap: anywhere; }
 /* The one-line hint under "No longer listed" — the record itself opens as
    a popup from the code, so the list stays one line per course. */
 .diff-hint { margin: 0.3rem 0 0.1rem; }
@@ -3137,7 +3153,15 @@ pre.devpre {
   display: inline-flex;
   border: 1px solid var(--line);
   border-radius: var(--r-sm);
-  overflow: hidden;
+  /* NOT `overflow: hidden` (R92 S8): on a narrow phone the day strip is
+     wider than the screen, and hiding the overflow simply CUT the last days
+     off — below about 322px a day became unreachable, and a day that was
+     selected but invisible made the control lie about what it was showing.
+     Scrolling shows them all; the rounded corners survive because the
+     buttons inside carry no background of their own past the border. */
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
   background: var(--surface);
   box-shadow: var(--shadow-sm);
 }
@@ -4035,7 +4059,15 @@ label.field > input { width: 100%; }
   }
   .pc-item:first-child { border-top: 0; }
   .pc-body { min-width: 0; }
-  .pc-top { font-size: 9.6px; line-height: 1.35; color: #10131b; }
+  /* An unbroken 60-character course name has nowhere to break, so it ran
+     straight across the neighbouring column of the printed key (R92 S19).
+     `anywhere` lets it break mid-word rather than overprint. */
+  .pc-top {
+    font-size: 9.6px;
+    line-height: 1.35;
+    color: #10131b;
+    overflow-wrap: anywhere;
+  }
   .pc-name { font-weight: 700; }
   .pc-inst { color: #5a6170; }
   .pc-cr { color: #5a6170; white-space: nowrap; font-size: 8.8px; }
@@ -4381,6 +4413,16 @@ label.field > input { width: 100%; }
     border: 1px solid #6b7280 !important;
   }
   .print-plain .chip:not(.clash) .hall { color: #464b55 !important; }
+  .print-plain .chip:not(.clash) .subtime { color: #464b55 !important; }
+  /* The KEY's chips too (R92 S18). "Print in colour" unticked drained the
+     grid but left one colour-filled pill per course in the sheet's key —
+     the single loudest block of colour on a sheet the reader asked to be
+     plain, and the one a photocopier smears worst. */
+  .print-plain .print-legend .code-chip {
+    background: #fff !important;
+    color: #23272e !important;
+    border: 1px solid #6b7280 !important;
+  }
   /* A clash chip keeps its red border and glyph; only the tint drains, so
      the warning is the one colour left on the sheet. */
   .print-plain .chip.clash {

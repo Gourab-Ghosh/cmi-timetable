@@ -275,6 +275,9 @@ pub fn chip(app: App, p: ChipProps) -> impl IntoView {
     let aria = {
         let code = p.code.clone();
         let warn_wont_fit = p.warn_wont_fit;
+        // Cloned OUT of `p` before the closure takes ownership: the sentence
+        // must name only the partners of THIS meeting (R92 S4).
+        let this_meeting = p.eff.as_ref().map(|e| e.meeting.clone());
         Memo::new(move |_| {
             // One read of the pair, copied straight out: (bool, bool) is
             // Copy, so no signal is read inside another signal's `with`.
@@ -295,8 +298,24 @@ pub fn chip(app: App, p: ChipProps) -> impl IntoView {
             if clash {
                 // Distinct partners: two shared meetings = two ClashPairs,
                 // but "clashes with ISS, ISS" helps nobody.
+                //
+                // And only partners of THIS meeting (R92 S4). The chip is
+                // painted per meeting — `meeting_has_clash` above asks about
+                // this cell — but the sentence walked every clash the COURSE
+                // has anywhere in the week, so a Tuesday chip told a screen
+                // reader it clashed with a course that has no Tuesday class
+                // at all. A wrong timetable fact, spoken on the plainest
+                // path there is, inside a sentence whose own preamble names
+                // the cell.
                 let mut clash_with: Vec<String> = Vec::new();
                 for c in app.clashes() {
+                    if let Some(m) = &this_meeting
+                        && (c.day != m.day
+                            || (c.a == code && c.a_slot != m.slot)
+                            || (c.b == code && c.b_slot != m.slot))
+                    {
+                        continue;
+                    }
                     let other = if c.a == code {
                         c.b
                     } else if c.b == code {
@@ -1348,8 +1367,14 @@ pub fn Toasts() -> impl IntoView {
                         view! {
                             <div class="toast toast-more" role="status">
                                 <span>
+                                    // "Waiting", not "above": the rail cannot
+                                    // be scrolled (it lets clicks through to
+                                    // the app), and these are not lost — the
+                                    // render window is the NEWEST four, so
+                                    // each one appears as the notices in
+                                    // front of it clear.
                                     {format!(
-                                        "{hidden} earlier notice{} above",
+                                        "{hidden} earlier notice{} waiting",
                                         if hidden == 1 { "" } else { "s" },
                                     )}
                                 </span>
@@ -7024,8 +7049,11 @@ fn export_dialog(app: App, scope: Option<String>) -> impl IntoView {
             })
             .collect();
         // The calendar-notes tweak: core already skips empty description
-        // parts, so emptying the lists here keeps events to title, room and
-        // time with zero core change.
+        // parts, so emptying the lists here drops the instructor and branch
+        // lines with zero core change. It does NOT empty the DESCRIPTION
+        // field — the planner link is the third part and belongs to the tweak
+        // one row above (R92 S10; the copy used to promise "title, room and
+        // time", which was untrue whenever that link was on).
         let mut courses = courses;
         if app.prefs.with_untracked(|p| p.ics_desc_off) {
             for c in &mut courses {

@@ -889,7 +889,10 @@ pub fn Root() -> impl IntoView {
         // must not reserve its sidebar column.
         <div
             class="app"
-            class:no-data=move || !app.has_data()
+            // Developer mode has its own rail and is not the empty planner
+            // (R92 S16): gating on data alone made a first visit render the
+            // dev rail full-width above the content.
+            class:no-data=move || !app.has_data() && !app.route.get().is_developer()
             // The CSS-only tweaks (R87). Each class states the DEPARTURE
             // from how the app ships, so the stylesheet's base rules stay
             // exactly what they were and a class only ever appears when a

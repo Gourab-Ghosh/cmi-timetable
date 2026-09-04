@@ -7032,8 +7032,42 @@ a day's tolerance releases it. M11 — the storage-full banner promised "you'll
 see the older saved copy" even on a FIRST visit, where there is none; it now
 says what reopening will really show and points at Export everything.
 
-**STILL OPEN:** R93's SHOULD/CAN-WAIT sets and R92's 20 SHOULD-FIX backlog
-(planned in `.workagents/r93/FIXQUEUE.md`), plus R93 M5 (a course code
+**Third pass — R92's SHOULD backlog, nine of twenty closed.** S4: the chip
+PAINTS per meeting but SPOKE per course, so a Tuesday chip told a screen reader
+it clashed with a course that has no Tuesday class — the partner walk is now
+filtered by the chip's own day and slot. S5: `scroll-padding-bottom` so a phone
+focus ring cannot land under the sticky rail. S6: the Master grid's printed key
+now covers a SELECTED chip's ⚠, not only an unselected one's. S7: the Halls
+sheet had `print_footnote(String::new)` hard-coded, so its ✓/✎/⚠ printed with
+nothing explaining them; it earns the same key as every other sheet. S8: `.seg`
+no longer hides its overflow, so the phone day strip cannot clip the days off
+its end. S10: the calendar-notes copy claimed events would keep "to title, room
+and time", which is untrue while the planner link (a separate tweak) rides in
+the same DESCRIPTION field — copy, haystack and the stale comment behind it all
+corrected. S16: developer mode is no longer treated as an empty planner on a
+first visit. S18: plain-ink printing now drains the KEY's chips too — they were
+the loudest colour left on a sheet the reader asked to be plain. S19:
+`overflow-wrap` at the two sites where an unbroken course name overprinted the
+next column and widened the app.
+
+Also polished: the notice fold marker says "N earlier notices **waiting**" —
+"above" promised a scroll the rail does not offer, and these are not lost (the
+render window is the newest four, so each appears as those in front clear).
+
+**MAIN-SESSION ACCEPTANCE JOURNEY (12/12).** The subagent that was to walk it
+died on the weekly limit, so the main session walked it instead
+(`scratchpad/journey.py`): arrive empty → the app syncs itself → search and
+filter the catalog → add four courses, two clashing → read the clash panel →
+undo and redo → the three views agree → print (the key is there) → export a
+well-formed 9-event .ics → return the next day and sync again → phone width
+with no sideways scroll → no severe console errors anywhere. Screenshot
+`shots-MAIN-journey-02-clashes.png` shows R1 and R2 working together: four
+notices standing, only the NEWEST offering Undo, and the fold line counting
+the one behind them.
+
+**STILL OPEN:** eleven of R92's SHOULD items (S1/S2/S3 — the reflow-under-a-
+stationary-pointer family — plus S11, S12 (partly closed with M10), S13, S14,
+S15, S17, S20), R93's SHOULD/CAN-WAIT sets, and R93 M5 (a course code
 containing `,` or `%` is deleted by the app's own URL on every reload) — a
 five-part fix that wants its own sitting.
 

@@ -2049,12 +2049,13 @@ fn rows_calendar(app: App, v: [Signal<bool>; 2]) -> AnyView {
             v[1],
             "Describe the course inside each calendar event",
             "The instructor and branch lines in every event's notes. Untick \
-             to keep events to title, room and time — some calendar apps read \
-             the notes aloud on every reminder.",
+             to drop them — some calendar apps read the notes aloud on every \
+             reminder. The planner link has its own row above and stays \
+             either way.",
             |p| !p.ics_desc_off,
             |p, on| p.ics_desc_off = !on,
             "Instructor and branch lines are back in calendar events.",
-            "Calendar events keep to title, room and time now.",
+            "Calendar events drop the instructor and branch lines now.",
         )}
     }
     .into_any()
@@ -2776,9 +2777,9 @@ const TWEAK_HAYSTACKS: [(&str, &str, &str); 43] = [
     (
         "Calendar files",
         "Describe the course inside each calendar event",
-        "The instructor and branch lines in every event's notes. Untick to keep events \
-         to title, room and time — some calendar apps read the notes aloud on every \
-         reminder. ics",
+        "The instructor and branch lines in every event's notes. Untick to drop them — \
+         some calendar apps read the notes aloud on every reminder. The planner link has \
+         its own row above and stays either way. ics",
     ),
     (
         "Developer mode",
