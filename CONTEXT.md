@@ -806,6 +806,18 @@ regenerates the .ics golden.
 
 ## 6. Current state
 
+- **THE APP IS LIVE AND PUBLIC.** <https://gourab-ghosh.github.io/cmi-timetable/>
+  serves commit `656b6c5`, wasm `cmi-timetable-app-ee5769ca9b2d3b8c_bg.wasm`,
+  published R94 (2026-09-04). Repo is public; Pages serves the `gh-pages`
+  branch, which carries ONE orphan commit and no history. `origin/main` ==
+  local `main`. Read §7's R94 entry before deploying again.
+- Publishing is `./deploy.sh --push` from this machine — no GitHub Actions
+  exist, so no CI job can fail a release. `--build-only` rehearses it
+  (tests + real release build, publishes nothing); `--republish` re-triggers
+  serving without a rebuild. The `githooks/pre-push` hook also deploys on
+  any push of main, so a bare `git push` publishes too — skip it once with
+  `CMITT_SKIP_DEPLOY=1 git push`.
+
 - My-timetable column order (R33, extended R83): grid → **"No fixed slot yet"
   tray** → **"Not on CMI's timetable"** → clashes → Your changes → print-only
   legend. The tray used to be last; a selected course with no time is part of
@@ -6984,7 +6996,9 @@ course (`UndoEntry` now carries a never-reused `seq`; `App::undo_entry` pops
 only that entry). R2 — M1's cap of 4 evicted at PUSH time, and one sync can
 raise several notices, so the only report the app ever makes that it DISCARDED
 the reader's own work was destroyed before its first frame; the cap now folds
-behind an "N earlier notices above" line and the merge notices are aggregated.
+behind a fold line and the merge notices are aggregated. (That line first read
+"N earlier notices above", which promised a scroll the rail does not offer; the
+shipped wording is "waiting" — see the polish note further down this entry.)
 R3/R4 — M9's rebranch was both incomplete and harmful: the real defect was the
 MARKER, not the branch, so the branches are reverted and `looks_like_cmi` now
 requires something a URL echo cannot carry (the institute's name, or the
@@ -7070,6 +7084,52 @@ stationary-pointer family — plus S11, S12 (partly closed with M10), S13, S14,
 S15, S17, S20), R93's SHOULD/CAN-WAIT sets, and R93 M5 (a course code
 containing `,` or `%` is deleted by the app's own URL on every reload) — a
 five-part fix that wants its own sitting.
+
+### R94 — the day it went public
+
+The ask, in full: "Push and deploy." The first time that instruction has been
+given, after the standing rule that it must never be asked for or offered.
+
+**What shipped.** `./deploy.sh --push` — but rehearsed first with
+`--build-only`, because a `--push` run pushes main BEFORE it builds, so a
+release-only build failure would have left main public and the site stale.
+The rehearsal ran the suite in-container (**171 native, all green**) and
+produced `…ee5769ca9b2d3b8c_bg.wasm`, a fingerprint different from the one
+the site was then serving — proof the deploy was not a no-op. The live run
+pushed 14 commits (`origin/main` had been stranded at Aug 28 while the site
+served a build from `de0c130`), published the orphan `gh-pages` commit, and
+polled the public URL until it served that exact wasm.
+
+**Then verified against the real internet** (`scratchpad/live_probe.py`, a
+driver with NO `--host-resolver-rules`, so cmi.ac.in and the relays are the
+real ones — the e2e suite mocks them and structurally cannot catch a dead
+relay): **10/10.** The app mounts at the subpath; the served wasm is this
+build; a first visit **syncs cmi.ac.in through a real public relay and
+stores 79 real courses**; a pick survives a reload on the production origin;
+`#/developer/tweaks` deep-links (hash routing is the load-bearing Pages
+requirement); a bare deep path bounces through 404.html into the app; the
+service worker registers and precaches as `cmitt-sw-6bb742fd3d135734`; no
+severe console errors; and no sideways scroll at 390px. Screenshots
+`scratchpad/live-01-published.png` / `-02-phone.png`.
+
+**Two probe defects, not app defects, are worth remembering.** The first
+draft drove the five sections via `location.hash` (`#/grid`, `#/halls`) and
+"passed" check 6 by reading back the hash it had just set. **There are only
+two hash routes — `Planner` and `Developer(DevTab)`; the five sections are
+in-app TABS held in prefs, not routes.** A probe that sets a meaningless
+hash and asserts the hash is a probe that tests nothing, and it was one
+trivially-green check away from being believed. Any future live check must
+click `.tabs .tab` by its text and wait for that section's own table.
+
+**Docs corrected in the same round:** R93's entry quoted the notice fold as
+"N earlier notices above", a string that no longer exists in the code (the
+shipped wording is "waiting"); an LLM grepping for it would have found
+nothing. It now points at the polish note instead of quoting the dead text.
+
+**What is live is not bug-free, and the record says so.** Eleven of R92's
+SHOULD items, R93's SHOULD/CAN-WAIT sets and R93 M5 remain open (§8). What
+is closed is every confirmed defect that destroys or misstates a student's
+own data.
 
 ## 8. Open bugs — found, confirmed, NOT fixed (do not delete)
 
