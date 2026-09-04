@@ -807,10 +807,11 @@ regenerates the .ics golden.
 ## 6. Current state
 
 - **THE APP IS LIVE AND PUBLIC.** <https://gourab-ghosh.github.io/cmi-timetable/>
-  serves commit `656b6c5`, wasm `cmi-timetable-app-ee5769ca9b2d3b8c_bg.wasm`,
-  published R94 (2026-09-04). Repo is public; Pages serves the `gh-pages`
-  branch, which carries ONE orphan commit and no history. `origin/main` ==
-  local `main`. Read §7's R94 entry before deploying again.
+  serves commit `fc79bd7`, wasm `cmi-timetable-app-d1f50c929595ba94_bg.wasm`,
+  published R95 (2026-09-04; first published R94, same day). Repo is public;
+  Pages serves the `gh-pages` branch, which carries ONE orphan commit and no
+  history. `origin/main` == local `main`. Read §7's R94 and R95 entries
+  before deploying again.
 - Publishing is `./deploy.sh --push` from this machine — no GitHub Actions
   exist, so no CI job can fail a release. `--build-only` rehearses it
   (tests + real release build, publishes nothing); `--republish` re-triggers
@@ -7243,6 +7244,27 @@ users — three tests forbid it; and `replace_query` now verifies itself
 against `location.search` and retries, bounded, because every engine
 rate-limits same-document navigation differently and only WebKit throws
 (R92 M7 already learned that `replace` returning Ok proves nothing).
+
+**DEPLOYED, and checked against the real internet.** `./deploy.sh --push`
+after a `--build-only` rehearsal (175 native in-container). Live probe
+`.workagents/r94/findings/live_probe.py`, repointed at this build: **10/10**
+— mounts at the subpath, serves `…d1f50c929595ba94`, a first visit syncs
+**79 real courses from cmi.ac.in through a public relay**, a pick survives a
+reload on the production origin, `#/developer/tweaks` deep-links, a bare deep
+path bounces through 404.html, the service worker precaches as
+`cmitt-sw-a8bd9cd70adc9f42`, no severe console errors, no sideways scroll at
+390px. `manifest.webmanifest` serves 200 as `application/manifest+json`, and
+both halves of the WebKit exemption are in the live HTML (the minifier
+unquotes the attributes, so grep for `rel=manifest`, not `rel="manifest"`).
+
+**A PROCESS LESSON, recorded because it cost two runs.** `pkill -f
+test_app.py` kills the Python driver and ORPHANS its `chromedriver` and
+Chromium children — 12 processes and 1.1 GB survived 29 minutes, and they
+hold ports 8977–8979, which is what makes the next run die with `Address
+already in use`. The harness always calls `d.quit()` in a `finally`; a
+manual kill must clean up after itself
+(`pkill -f org.chromium.Chromium.scoped_dir`). Never launch a second e2e run
+while the first is alive.
 
 ## 8. Open bugs — found, confirmed, NOT fixed (do not delete)
 
