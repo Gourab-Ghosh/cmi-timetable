@@ -7438,6 +7438,22 @@ value must come from what `deploy.sh` just printed (`WANT_WASM=<hash>`).
 That is why this round's deploy produced `1084f4f8463927ac` from a commit
 whose Rust was byte-identical to `4b5ba04`'s.
 
+**A fourth trap was found by deploying and then probing, and it is the one
+most likely to be "fixed" wrongly.** Check 8 (no SEVERE console errors) went
+red on the fresh deployment with four CORS failures from `api.cors.lol`, then
+passed on a clean re-run: the app races **seven relays in parallel**
+(`app/src/fetch.rs`), and a loser makes the BROWSER log a SEVERE that no JS
+can suppress. `cors.lol` is documented in that very file as "1 complete sync
+in 7 rounds", kept deliberately as the one route a Cloudflare edge incident
+would not take with it. So a console-cleanliness check against the LIVE site
+must exclude the seven relay hosts and cmi.ac.in and assert only on errors
+from OUR OWN code — check 3 already proves the sync succeeded. The probe now
+does that and REPORTS what it skipped ("1 relay/CMI fetch failure ignored —
+the race absorbed them") rather than silently widening. Confirmed stable at
+10/10 over three consecutive live runs. Do not "tighten" this back to zero:
+it will be red at random, and the natural next step — trimming the flaky
+relay — is the exact thing `fetch.rs` says not to do.
+
 All three are in the file's docstring alongside R94's older and worse trap
 (driving the five in-app TABS via `location.hash`, which passes against a
 dead app). The probe is also stricter than the one it replaces: check 4 now
