@@ -206,6 +206,15 @@ impl Slot {
         Slot { start_min, end_min }
     }
 
+    /// How many minutes of `other` fall inside this slot. Half-open, exactly
+    /// like [`Slot::overlaps`], so a class ending at 14:00 shares nothing with
+    /// a column starting at 14:00.
+    pub fn overlap_minutes(&self, other: &Slot) -> u16 {
+        let start = self.start_min.max(other.start_min);
+        let end = self.end_min.min(other.end_min);
+        end.saturating_sub(start)
+    }
+
     pub fn overlaps(&self, other: &Slot) -> bool {
         self.start_min < other.end_min && other.start_min < self.end_min
     }
@@ -633,6 +642,75 @@ pub struct MeetingOverride {
     /// deserialize unchanged.
     pub to: Option<Meeting>,
     pub created_at: f64,
+}
+
+/// Where a meeting is DRAWN on a week grid, and which other columns it only
+/// reaches into. One rule, in one place, because the two answers have to agree:
+/// a column is either the chip's home or a band, never both and never neither.
+///
+/// # The rule
+/// **The class is drawn where most of it happens.** A class of 16:40–18:00 has
+/// five minutes in the 15:30–16:45 column and a full hour in 17:00–18:15, so it
+/// belongs to the later one and merely reaches back into the earlier — which is
+/// how a reader looking for it would describe it. Before R97 the home column was
+/// wherever the class STARTED, so those five minutes decided it: the chip sat in
+/// a column it had almost left, and the column holding the actual class showed a
+/// continuation band as if the class were somewhere else.
+///
+/// An exact start match still wins outright, ahead of the count. Every meeting
+/// CMI publishes starts on a column boundary, so this keeps the whole official
+/// timetable exactly where it has always been drawn and confines the new rule to
+/// the free-form times a reader types or drags — which is where the problem was.
+///
+/// Ties go to the earlier column: a class split evenly across two reads as
+/// starting in the first.
+///
+/// If nothing overlaps at all — a class in a gap between columns, or one typed
+/// outside teaching hours before the grid grew a column for it — the nearest
+/// column by start time answers, and `covered` is then empty: a band is only
+/// ever drawn where the class genuinely runs.
+pub fn place_meeting(slot_grid: &[Slot], meeting: &Slot) -> Placement {
+    let home = home_column(slot_grid, meeting);
+    let covered = slot_grid
+        .iter()
+        .filter(|s| s.overlaps(meeting))
+        .map(|s| s.start_min)
+        .filter(|c| Some(*c) != home)
+        .collect();
+    Placement { home, covered }
+}
+
+/// Which column a meeting is drawn in — see [`place_meeting`].
+pub fn home_column(slot_grid: &[Slot], meeting: &Slot) -> Option<u16> {
+    if let Some(s) = slot_grid.iter().find(|s| s.start_min == meeting.start_min) {
+        return Some(s.start_min);
+    }
+    let best = slot_grid
+        .iter()
+        .map(|s| (s.overlap_minutes(meeting), s.start_min))
+        .filter(|(overlap, _)| *overlap > 0)
+        // Most minutes wins; a tie goes to the EARLIER column, which is what
+        // `Reverse` on the start is doing inside a `max_by_key`.
+        .max_by_key(|(overlap, start)| (*overlap, std::cmp::Reverse(*start)));
+    if let Some((_, start)) = best {
+        return Some(start);
+    }
+    slot_grid
+        .iter()
+        .min_by_key(|s| s.start_min.abs_diff(meeting.start_min))
+        .map(|s| s.start_min)
+}
+
+/// Where one meeting sits on a grid: the column it is drawn in, and every other
+/// column it genuinely runs through.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Placement {
+    /// The column the chip is drawn in. `None` only for an empty grid.
+    pub home: Option<u16>,
+    /// Columns that show a band instead — unsorted, and never containing
+    /// `home`. A column BEFORE `home` is possible and correct: it means the
+    /// class begins there and finishes elsewhere.
+    pub covered: Vec<u16>,
 }
 
 impl MeetingOverride {

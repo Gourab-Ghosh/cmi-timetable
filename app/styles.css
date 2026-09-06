@@ -174,6 +174,10 @@ h3 { font-size: 0.9rem; font-weight: 650; margin: 0 0 0.4rem; letter-spacing: 0.
 .mono { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
 .muted { color: var(--muted); }
 .small { font-size: 0.82rem; }
+/* The per-tab scope note in My data's Course selection panel (R96). It sits
+   inside a `.small.muted` line and must read as the same aside, only softer
+   still — a fact about where the data lives, not a warning. */
+.tab-scope { opacity: 0.85; }
 
 a { color: var(--accent); }
 
@@ -685,7 +689,7 @@ label.opt { min-height: 32px; }
 }
 .chip.clash::before { content: "⚠"; font-size: 0.75rem; }
 /* Full strength where the words ARE the warning — the same fix, and the same
-   two measured numbers, as `.covered.clash .until` further down: dimmed to
+   two measured numbers, as `.covered.clash .span` further down: dimmed to
    .85 the hall line composited to 3.96:1 (light) / 4.32:1 (dark) on the alarm
    wash, under the 4.5:1 small-text floor. The continuation band was written
    with this fix; the chip it was modelled on never got it (R83). 4.93:1 /
@@ -717,7 +721,7 @@ label.opt { min-height: 32px; }
   display: inline-flex;
   align-items: baseline;
   /* Same fix, same reason, as `.chip { flex-wrap: wrap }` above: with
-     `nowrap` the 53px unbreakable `.until` starves `.code` to ~18px and
+     `nowrap` the 53px unbreakable `.span` starves `.code` to ~18px and
      `overflow-wrap: anywhere` then breaks the CODE ITSELF ("TO"/"C" for
      TOC under ~950px; RDBM at 1280px on Halls and Master grid). Let the
      time drop to its own line instead. Do NOT "fix" this by dropping
@@ -743,7 +747,7 @@ label.opt { min-height: 32px; }
   min-width: 0;
   overflow-wrap: anywhere; /* wraps to the next line; never "…" (R37) */
 }
-.covered .until { font-weight: 500; opacity: 0.85; white-space: nowrap; }
+.covered .span { font-weight: 500; opacity: 0.85; white-space: nowrap; }
 /* Courses with no branch drain saturation, exactly like their chips. */
 .covered.neutral { --chip-sat: 10%; }
 /* A band in a cell it actually FIGHTS over wears the same red the chips do
@@ -759,7 +763,7 @@ label.opt { min-height: 32px; }
    composited to 3.96:1 (light) / 4.32:1 (dark) on the alarm wash — under
    the 4.5:1 small-text floor the code beside it clears (final sweep,
    found by two workers independently). Quiet bands keep the dim. */
-.covered.clash .until { opacity: 1; }
+.covered.clash .span { opacity: 1; }
 .covered.clash .code::before { content: "⚠ "; }
 .chip.draggable { cursor: grab; }
 .chip.draggable:hover { transform: translateY(-1px); }
@@ -4307,7 +4311,7 @@ label.field > input { width: 100%; }
   .cs-pill,
   .filtered-note,
   .hall-load,
-  .covered .until,
+  .covered .span,
   .pc-inst,
   .pc-cr,
   .print-footnote { font-weight: 400; }

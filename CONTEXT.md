@@ -7266,6 +7266,98 @@ manual kill must clean up after itself
 (`pkill -f org.chromium.Chromium.scoped_dir`). Never launch a second e2e run
 while the first is alive.
 
+### R96 — which courses you picked belongs to the TAB
+
+The ask, in the reader's own words: *"whenever I add a course or remove a
+course from one tab, this is updated in another tab as well… What courses I
+add or remove is directly dependent on the URL itself. So this should not
+update across tabs. Rest everything should update across tabs."*
+
+That framing is the design. `?c=…` is written on every pick
+(`state::sync_url`), so **two tabs were already two timetables** — the picks
+just were not stored that way, and `adopt_user_data` copied the other tab's
+selection over yours. A student comparing two plans lost the one they were
+not looking at.
+
+**How.** `sessionStorage` is the per-tab copy of `cmitt.v1.selection`
+(`storage::session_peek` / `session_save` / `session_clear`). `localStorage`
+still holds the latest picks, so a BRAND-NEW tab opens on them. Boot prefers
+the per-tab copy; `adopt_user_data` no longer reads or sets the selection at
+all; the storage listener no longer wakes for `KEY_SELECTION`; and
+`adopt_user_data` no longer calls `sync_url` (no pick changed, so rewriting
+the address bar would spend one of `replace_query`'s rate-limited
+navigations to say what it already said).
+
+**Why a per-tab STORE and not simply "stop adopting".** Without one, a RELOAD
+reads the other tab's picks out of `localStorage`, finds them different from
+this tab's own `?c=`, and asks the reader which timetable to keep — about
+their own F5. `sessionStorage` is per-tab AND survives reload, which is
+exactly the lifetime a `?c=` has.
+
+**THE TRAP THIS SET, and it is the interesting half.** `sessionStorage`
+survives a `localStorage` wipe BY DESIGN — that is the whole point of it — so
+everything that clears storage has to learn about it:
+* the app's **"Delete all app data"** now calls `storage::session_clear()`.
+  Without it the tab kept its picks, the reload read them back, and the button
+  that promised an empty page delivered a timetable.
+* the **test harness's `boot()`**, which reuses ONE browser tab for all its
+  tests, so one test's courses leaked into the next test's "fresh" browser.
+  That is how a first-visit test (`t73`) came to see no relay attempts and
+  failed looking like a sync bug.
+
+**Copy that would otherwise have become false:** the cross-tab toast and
+`CROSS_TAB_NOTICE` both said "changed your timetable" when only the shared
+half crosses now; both name a course, a time or a room instead. **My data**
+states the rule beside the thing it governs ("this tab's own — open a second
+tab to plan two timetables side by side"), because that is the panel a reader
+opens to ask what is stored and where.
+
+**`t139` had to be rebuilt, not repaired.** Its whole mechanism was adopting
+the other tab's SELECTION. Its PURPOSE — an idle tab catches up, a busy one is
+warned and catches up later, and the adoption is one undoable step — is
+unchanged and still valuable, so it now drives on a DELETION. (Seeded `hidden`
+entries are keyed `course`, not `code`.) `t166` pins the new rule end to end,
+including that a reload keeps this tab's course and asks nothing.
+
+### R97 — a class is drawn where most of it happens
+
+The ask: *"if I add a course from maybe 4:45 to 6 pm… wherever the greater
+portion of this course is, the course should be shown in that slot only and
+the rest of the slot should show only the extension."*
+
+`column_for` used to answer "the tightest column containing its START", so a
+class of 16:40–18:00 was handed to the 15:30–16:45 column on the strength of
+**five minutes**, while the column holding the actual hour showed only a
+band. The reader had to read the band to find the class.
+
+**The rule now lives in core** — `ttcore::model::place_meeting`, returning a
+`Placement { home, covered }` — deliberately, because it is pure, edge-case
+dense, and the reader asked for the edge cases to be tested.
+`core/tests/placement_tests.rs` is **16 tests**, two of them sweeps over every
+start and length on CMI's real grid pinning the two invariants that make the
+pair safe to use together: **home is never also a band**, and **every band
+genuinely overlaps the class**.
+
+**An exact start match still wins outright, ahead of the count.** Every
+meeting CMI publishes starts on a column boundary, so the whole official
+timetable stays exactly where it has always been drawn and the new rule only
+ever moves a free-form time somebody typed or dragged — which is where the
+problem was. Ties go to the earlier column. A class in the 15-minute gap
+overlaps nothing, so the nearest column answers and NO band is drawn.
+
+**Allowing a band BEFORE its chip re-opened a defect R83 had closed**, and
+this is the part to remember: the band read "RFLR until 22:45" in a column the
+class had barely entered, claiming an hour that is free. R83's answer was a
+blanket floor forbidding earlier bands — which is exactly what R97 needs to
+allow. Two things replace the floor: `place_meeting` only ever names a column
+the meeting genuinely OVERLAPS (the floor existed because the old nearest
+fallback could pick a column the meeting never touches), and `ui::covered_band`
+now reads the class's start against the column's, so a band the class BEGINS in
+says **"from 16:40"** where one it merely continues into says "until 18:00".
+The span's CSS class is renamed `.until` → **`.span`** for the same reason: a
+name that states one of two cases lies half the time. `t122` selected the old
+name and was updated with it.
+
 ## 8. Open bugs — found, confirmed, NOT fixed (do not delete)
 
 Rules for this section: entries stay until the bug is actually fixed and a

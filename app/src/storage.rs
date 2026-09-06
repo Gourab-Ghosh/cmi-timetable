@@ -36,6 +36,55 @@ fn raw() -> Option<web_sys::Storage> {
     web_sys::window()?.local_storage().ok().flatten()
 }
 
+/// The per-TAB store. Same API as `localStorage`, but every browser tab has
+/// its own copy and it survives a reload — which is exactly the shape of a
+/// course selection.
+///
+/// **Which courses you have picked belongs to the TAB, not to the browser**
+/// (R96). The address bar already says so: `?c=…` is written on every pick,
+/// so two tabs are two timetables and always were — but the picks were
+/// stored in `localStorage` and adopted across tabs, so adding a course in
+/// one tab silently rewrote the other, and a student comparing two plans
+/// watched the plan they were not looking at change under them.
+///
+/// `localStorage` still holds the latest picks, and a BRAND-NEW tab starts
+/// from them; this store is what makes an existing tab keep its own. Without
+/// it a reload would read the other tab's picks out of `localStorage`, find
+/// them different from this tab's own `?c=`, and ask the reader which
+/// timetable to keep — about their own F5.
+fn session_raw() -> Option<web_sys::Storage> {
+    web_sys::window()?.session_storage().ok().flatten()
+}
+
+/// This tab's own copy of `key`, if it has one. No quarantine path: the
+/// value is a mirror of something `localStorage` also holds, so an
+/// unreadable one is simply ignored and the shared copy answers instead.
+pub fn session_peek<T: DeserializeOwned>(key: &str) -> Option<T> {
+    let raw = session_raw()?.get_item(key).ok().flatten()?;
+    serde_json::from_str(&raw).ok()
+}
+
+/// Remember `value` for THIS TAB only. Best-effort and deliberately silent:
+/// the same datum has just been written to `localStorage` by the caller,
+/// which is where the banners and the "Saved." reporting live, and a second
+/// alarm about the same fact would only be noise.
+pub fn session_save<T: Serialize>(key: &str, value: &T) {
+    if let (Some(s), Ok(json)) = (session_raw(), serde_json::to_string(value)) {
+        let _ = s.set_item(key, &json);
+    }
+}
+
+/// Forget everything this TAB remembers on its own.
+///
+/// "Delete all app data" empties `localStorage`, and it has to empty this
+/// too — otherwise the tab keeps its picks, the reload reads them back, and
+/// the button that promised an empty page delivers a timetable.
+pub fn session_clear() {
+    if let Some(s) = session_raw() {
+        let _ = s.clear();
+    }
+}
+
 pub enum Loaded<T> {
     Value(T),
     Missing,

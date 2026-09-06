@@ -109,6 +109,7 @@ pub fn covered_band(
     app: App,
     code: String,
     slot: ttcore::model::Slot,
+    column: ttcore::model::Slot,
     clash: bool,
 ) -> impl IntoView {
     let index =
@@ -134,8 +135,25 @@ pub fn covered_band(
     // grid labels those with `BARE_BOOKING_LABEL` rather than a code — for
     // which "booked continues here" is not a sentence (R83). The visible
     // words read correctly either way ("booked · until 14:00").
+    // Which HALF of the class this band is: one it runs INTO from an earlier
+    // column, or one it BEGINS in before its main body (R97 made the second
+    // possible — a 16:40-18:00 class is drawn in the 17:00 column and reaches
+    // back into 15:30). Saying "until 18:00" in that earlier column would
+    // claim an hour that is free there, which is exactly the complaint R83
+    // raised against bands sitting left of their chip.
+    let begins_here = slot.start_min > column.start_min;
+    let span = if begins_here {
+        format!("from {}", slot.start_label())
+    } else {
+        format!("until {}", slot.end_label())
+    };
     let title = if code == BARE_BOOKING_LABEL {
         format!("This room stays booked here ({})", slot.label())
+    } else if begins_here {
+        format!(
+            "{code} starts here ({}) — it is drawn in the slot that holds most of it",
+            slot.label()
+        )
     } else {
         format!("{code} continues here ({})", slot.label())
     };
@@ -148,7 +166,10 @@ pub fn covered_band(
             title=title
         >
             <span class="code">{code}</span>
-            <span class="until">{format!("until {}", slot.end_label())}</span>
+            // `.span`, not `.until`: since R97 this reads "from 16:40" as
+            // often as "until 18:00", and a class name that states one of
+            // the two is a name that lies half the time.
+            <span class="span">{span}</span>
         </span>
     }
 }
@@ -5201,6 +5222,10 @@ fn delete_everything_saved() {
     for (key, _) in storage::all_entries() {
         storage::remove(&key);
     }
+    // And what this TAB remembers on its own — the picks (R96). Without it
+    // the reload below reads them straight back out of the per-tab store and
+    // the button that promised an empty page delivers a timetable.
+    storage::session_clear();
     // "The page reloads empty" — which it does not if the address bar still
     // says `?c=TOC,RDBM`: the boot path would read that and put the
     // selection straight back, saved again.
@@ -5395,6 +5420,15 @@ fn my_data_dialog(app: App) -> impl IntoView {
                     view! {
                         <p class="small muted">
                             {format!("{n} course{}", if n == 1 { "" } else { "s" })}
+                            " — "
+                            // Said HERE because this is the panel a reader
+                            // opens to ask what is stored and where (R96).
+                            <span class="tab-scope">
+                                "this tab's own. Open a second tab to plan two \
+                                 timetables side by side: the courses you pick \
+                                 there stay there, while a time or room you \
+                                 change reaches both."
+                            </span>
                         </p>
                         <div class="chipline">
                             {codes

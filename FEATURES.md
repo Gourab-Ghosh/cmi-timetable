@@ -36,6 +36,14 @@ Your week as a grid — days down the left, CMI's time slots across the top.
   class in the lunch gap is never squeezed into the nearest official slot and
   never mislabelled. The grid grows a clearly marked column carrying the real
   time.
+- **A class is drawn where most of it happens.** Give a class a time that
+  straddles two slots — 16:40 to 18:00, say — and it appears in the slot
+  holding the bulk of it (17:00–18:15), while the slot it only reaches into
+  shows a slim band reading *"from 16:40"*. A class that runs on past its own
+  slot bands the ones after it the same way, reading *"until 18:00"*, so a
+  long class visibly occupies every hour it takes instead of leaving them
+  looking free. Classes CMI schedules start on a slot boundary and are always
+  drawn in their own slot.
 - **"No fixed slot yet"** holds the courses you have picked that have no time
   yet — CMI hasn't scheduled them, or they are yours and waiting for you.
   Drag one onto the grid, or open it and set a time.
@@ -500,6 +508,15 @@ says this rather than showing a button that cannot work.
   courses than you chose. If nothing at all falls between the dates, it
   refuses and asks you to widen the range rather than handing you an empty
   calendar.
+- **Two tabs are two timetables.** The address bar carries the courses you
+  have picked (`?c=…`), so a second tab is a second plan — pick courses in one
+  and the other keeps its own. Everything that says what a course *is* still
+  reaches both: a class you moved, a room you typed, a course you added or
+  deleted, your settings, and the timetable downloaded from CMI. So the two
+  tabs can never disagree about the courses themselves, only about which ones
+  you have chosen. A brand-new tab opens on the courses you picked most
+  recently.
+
 - Two developer-mode tweaks trim what each event's notes carry, and they are
   independent: **Put a link back to this planner in every calendar event**
   (untick before sending the file on — the link spells out which courses are

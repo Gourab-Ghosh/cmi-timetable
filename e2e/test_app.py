@@ -101,6 +101,23 @@ TOC_OVR = {
     "credits": [{"course": "TOC", "credits": 3, "created_at": 1754000000000.0}],
 }
 
+# A class whose MAJORITY sits in a later column than the one it starts in:
+# TOC's Tue 09:10 class moved to Wed 16:40–18:00. Five minutes of it fall in
+# the 15:30–16:45 column, a full hour in 17:00–18:15 — so the chip belongs to
+# the later one and only a band is owed to the earlier (R97).
+MAJORITY_OVR = {
+    "next_id": 1,
+    "items": [{
+        "id": 0, "course": "TOC",
+        "base": {"day": "Tue", "slot": {"start_min": 550, "end_min": 625},
+                 "hall": "Lecture Hall 803", "temp_booking": False},
+        "to": {"day": "Wed", "slot": {"start_min": 1000, "end_min": 1080},
+               "hall": "Lecture Hall 803", "temp_booking": False},
+        "created_at": 1754000000000.0}],
+    "credits": [],
+}
+
+
 # A LONG meeting: TOC's Tue class stretched to 09:10–14:00. The start sits ON
 # an official slot, so no synthetic column is minted (t36 pins that rule) and
 # the covered columns are exactly 630 and 710 — 840 is NOT covered, because
@@ -509,7 +526,13 @@ class App:
             """)
             if seed:
                 script = (
-                    "localStorage.clear();"
+                    # sessionStorage too: the per-tab copy of the selection
+                    # (R96) survives a localStorage wipe by design, and the
+                    # driver reuses ONE tab for every test — so without this
+                    # one test's courses leak into the next one's "fresh"
+                    # browser. Found by t73, which booted a first visit that
+                    # was not first.
+                    "localStorage.clear(); sessionStorage.clear();"
                     "localStorage.setItem('cmitt.v1.prefs', arguments[0]);"
                     "localStorage.setItem('cmitt.v1.snapshot', arguments[1]);"
                 )
@@ -533,7 +556,8 @@ class App:
                     args.append(json.dumps(customs))
                 self.d.execute_script(script, *args)
             else:
-                self.d.execute_script("localStorage.clear();")
+                self.d.execute_script(
+                    "localStorage.clear(); sessionStorage.clear();")
                 if prefs:
                     self.d.execute_script(
                         "localStorage.setItem('cmitt.v1.prefs', arguments[0]);",
@@ -7218,9 +7242,11 @@ def t122_a_clash_inside_the_covered_span_is_red_where_it_happens(app):
     # under the 4.5:1 floor on the alarm wash (the final sweep measured
     # 3.96:1 light / 4.32:1 dark, twice, independently) — a clash band shows
     # its time at full strength. Quiet bands keep the dim.
-    until = band_630.find_element(By.CSS_SELECTOR, ".until")
+    # `.span`, renamed from `.until` in R97: the element holds "from 16:40"
+    # as often as "until 14:00" now that a band can sit BEFORE its chip.
+    span = band_630.find_element(By.CSS_SELECTOR, ".span")
     assert app.d.execute_script(
-        "return getComputedStyle(arguments[0]).opacity;", until) == "1", \
+        "return getComputedStyle(arguments[0]).opacity;", span) == "1", \
         "the clash band's time must not be dimmed below the contrast floor"
 
 
@@ -8411,14 +8437,21 @@ def t139_a_second_tabs_change_is_adopted_when_safe(app):
     stack can never silently re-clobber the other tab. A tab that is BUSY
     (any open dialog — a clean editor's Save commits its whole store) gets
     the sticky notice instead and catches up the moment the dialog closes,
-    at which point the notice retires by itself."""
+    at which point the notice retires by itself.
+
+    Driven by a DELETION, not by a pick: which courses you have picked is
+    this tab's own and deliberately does not cross (R96, `t166`). What
+    crosses is everything that says what a course IS — a deletion, a moved
+    class, a room you typed, a course you made — so the two tabs can never
+    disagree about the courses themselves."""
     app.boot("/", selection=["TOC"])
     first = app.d.current_window_handle
     assert not app.css_all(".banner.warn"), "no warning before anything happens"
 
-    def storage_selection(d):
+    def hidden_codes(d):
         return d.execute_script(
-            "return localStorage.getItem('cmitt.v1.selection') || ''")
+            "return (JSON.parse(localStorage.getItem('cmitt.v1.overrides')"
+            " || '{}').hidden || []).map(h => h.course);")
 
     # --- another tab makes a real change -----------------------------------
     app.d.switch_to.new_window("tab")
@@ -8428,21 +8461,23 @@ def t139_a_second_tabs_change_is_adopted_when_safe(app):
     app.open_tab("Catalog")
     app.wait_css("section[aria-label='Catalog'] .card")
 
-    def add_in_second(code):
+    def delete_in_second(code):
         row = app.xpath("//section[@aria-label='Catalog']//div[contains(@class,'card')]"
                         f"[.//button[starts-with(@aria-label, '{code},')]]")
         app.d.execute_script("arguments[0].scrollIntoView({block: 'center'});", row)
-        row.find_element(By.XPATH, ".//button[normalize-space()='Add']").click()
+        row.find_element(By.XPATH, ".//button[normalize-space()='Delete']").click()
         WebDriverWait(app.d, 5).until(
-            lambda d: code in storage_selection(d),
-            message=f"the second tab did not save {code}")
+            lambda d: code in hidden_codes(d),
+            message=f"the second tab did not save the deletion of {code}")
 
-    add_in_second("RDBM")
+    delete_in_second("RDBM")
 
     # --- the idle tab adopts, with no banner and no reload -----------------
     app.d.switch_to.window(first)
+    app.open_tab("Catalog")
+    app.wait_css("section[aria-label='Catalog'] .card")
     WebDriverWait(app.d, 10).until(
-        lambda d: app.chips("RDBM"),
+        lambda d: not app.chips("RDBM", "section[aria-label='Catalog']"),
         message="the idle first tab did not adopt the other tab's change")
     assert not app.css_all(".banner.warn"), \
         "an idle tab that adopted must not also warn"
@@ -8453,7 +8488,7 @@ def t139_a_second_tabs_change_is_adopted_when_safe(app):
     # keyboard shortcut.
     app.xpath("//button[@aria-label='Undo']").click()
     WebDriverWait(app.d, 10).until(
-        lambda d: "RDBM" not in storage_selection(d),
+        lambda d: "RDBM" not in hidden_codes(d),
         message="undoing the adoption must persist this tab's own version")
     # toasts_text() returns ONE joined string, not a list — an `any(...)`
     # over it iterates characters and can never match (found the hard way).
@@ -8462,7 +8497,7 @@ def t139_a_second_tabs_change_is_adopted_when_safe(app):
         message="the undo toast must say what was undone")
     app.xpath("//button[@aria-label='Redo']").click()
     WebDriverWait(app.d, 10).until(
-        lambda d: "RDBM" in storage_selection(d),
+        lambda d: "RDBM" in hidden_codes(d),
         message="redo must converge back to the other tab's version")
 
     # --- a busy tab is warned instead, and catches up when it is done ------
@@ -8470,22 +8505,23 @@ def t139_a_second_tabs_change_is_adopted_when_safe(app):
     app.wait_css(".dialog")
 
     app.d.switch_to.window(second)
-    add_in_second("SVA")
+    delete_in_second("SVA")
 
     app.d.switch_to.window(first)
     banner = WebDriverWait(app.d, 10).until(
         lambda d: next(iter(app.css_all(".banner.warn")), None),
         message="a busy tab must still be told")
-    assert "Another tab of this app has changed your timetable" in banner.text, banner.text
+    assert "Another tab of this app has changed a course" in banner.text, banner.text
     assert "catch up on its own" in banner.text, banner.text
-    # Not adopted yet: the My data dialog lists the selection reactively,
-    # and SVA must not be in it while the dialog is open.
+    # Not adopted yet: My data lists the deletions reactively under "Your
+    # changes", and SVA must not appear there while the dialog is open.
     assert "SVA" not in app.css(".dialog").text, \
         "a tab with an open dialog must not adopt under it"
 
     app.css(".dialog").send_keys(Keys.ESCAPE)
     WebDriverWait(app.d, 10).until(
-        lambda d: app.chips("SVA"),
+        lambda d: "SVA" in hidden_codes(d) and not app.chips(
+            "SVA", "section[aria-label='Catalog']"),
         message="closing the dialog must let the deferred adoption land")
     WebDriverWait(app.d, 10).until(
         lambda d: not app.css_all(".banner.warn"),
@@ -9845,6 +9881,128 @@ def t159_a_dialog_is_reachable_however_many_notices_stand(app):
         app.d.set_window_size(1500, 1000)
 
 
+def t166_picking_a_course_stays_in_its_own_tab(app):
+    """R96. Which courses you have picked belongs to the TAB, because `?c=`
+    in the address bar already says so — two tabs are two timetables. Adding
+    a course in one used to rewrite the other, so a student comparing two
+    plans lost the plan they were not looking at. Everything else about a
+    course — a moved class, a room typed by hand, a course you made — still
+    reaches both tabs, so they never disagree about what a course IS."""
+    app.boot("/", seed=True, selection=["TOC"])
+    app.open_tab("Master grid")
+    app.wait_css("section[aria-label='Master grid'] table.tt")
+    first = app.d.current_window_handle
+
+    def picked():
+        return app.d.execute_script(
+            "return JSON.parse(localStorage.getItem('cmitt.v1.selection')"
+            " || '[]');")
+
+    def on_screen():
+        return sorted({
+            (c.get_attribute("aria-label") or "").split(",")[0]
+            for c in app.css_all(
+                "section[aria-label='My courses'] .card, "
+                "section[aria-label='Master grid'] button.chip.on")})
+
+    app.d.switch_to.new_window("tab")
+    try:
+        app.d.get(f"{BASE}/")
+        app.wait_css(".header h1")
+        app.open_tab("Master grid")
+        app.wait_css("section[aria-label='Master grid'] table.tt")
+        # Tab B picks a SECOND course. Storage sees it (a new tab should open
+        # on the reader's latest), and tab B shows it.
+        chip = app.chip("NLP", "section[aria-label='Master grid']")
+        app.d.execute_script("arguments[0].scrollIntoView({block:'center'});", chip)
+        chip.click()
+        WebDriverWait(app.d, 5).until(lambda d: "NLP" in picked())
+        assert "TOC" in picked() and "NLP" in picked(), picked()
+
+        # Tab B ALSO changes something shared: it deletes a course from the
+        # catalog. That must cross.
+        app.open_tab("Catalog")
+        app.wait_css("section[aria-label='Catalog']")
+    finally:
+        second = app.d.current_window_handle
+        app.d.switch_to.window(first)
+
+    # Back in tab A: its own pick list is untouched. The address bar still
+    # names one course, and so does the page.
+    time.sleep(settle_s())
+    assert "?c=TOC" in app.d.current_url, app.d.current_url
+    assert "NLP" not in app.d.current_url, app.d.current_url
+    app.open_tab("My courses")
+    app.wait_css("section[aria-label='My courses']")
+    cards = app.css_all("section[aria-label='My courses'] .card")
+    assert len(cards) == 1, [c.text.split("\n")[0] for c in cards]
+    assert "TOC" in cards[0].text, cards[0].text
+
+    # And a reload keeps THIS tab's pick, even though localStorage now holds
+    # the other tab's two — the per-tab copy is what a refresh reads back.
+    app.d.get(f"{BASE}/?c=TOC")
+    app.wait_css(".header h1")
+    app.open_tab("My courses")
+    app.wait_css("section[aria-label='My courses']")
+    assert len(app.css_all("section[aria-label='My courses'] .card")) == 1, \
+        "a reload must keep this tab's own courses, not the other tab's"
+    # No question was asked about it: this is the reader's own F5, not a link.
+    assert not app.css_all(".dialog.confirm"), "a reload must ask nothing"
+
+    app.d.switch_to.window(second)
+    app.d.close()
+    app.d.switch_to.window(first)
+
+
+def t167_a_class_is_drawn_where_most_of_it_happens(app):
+    """R97. A class of 16:40-18:00 has five minutes in the 15:30 column and a
+    full hour in the 17:00 one. It used to be drawn wherever it STARTED, so
+    those five minutes won: the chip sat in a column the class had nearly
+    left, while the column holding the actual hour showed only a band — the
+    reader had to read the band to find the class. It is now drawn where most
+    of it happens, and the earlier column carries the band instead. Because
+    that band sits BEFORE its chip, it says what it really is: "from 16:40",
+    never "until 18:00", which in that column would claim an hour that is
+    free."""
+    app.boot("/", selection=["TOC"], overrides=MAJORITY_OVR)
+    app.wait_css("section[aria-label='My timetable'] table.tt")
+
+    def cell(day, start):
+        return app.d.find_elements(
+            By.CSS_SELECTOR, f"td[data-day='{day}'][data-slot='{start}']")
+
+    # Wed = day 2. The CHIP is in the 17:00 column...
+    home = cell(2, 1020)
+    assert home, "no 17:00 column on the grid"
+    assert home[0].find_elements(By.CSS_SELECTOR, "button.chip[aria-label^='TOC,']"), \
+        f"the chip must be where most of the class is: {home[0].text!r}"
+    # ...and the 15:30 column carries a band, not the chip.
+    early = cell(2, 930)
+    assert early, "no 15:30 column on the grid"
+    assert not early[0].find_elements(By.CSS_SELECTOR, "button.chip[aria-label^='TOC,']"), \
+        "the five-minute column must not hold the chip"
+    band = early[0].find_elements(By.CSS_SELECTOR, ".covered")
+    assert band, f"the earlier column must show the band: {early[0].text!r}"
+    # The band names the part of the class that runs HERE.
+    assert "from 16:40" in band[0].text, band[0].text
+    assert "until" not in band[0].text, \
+        f"a band before its chip must not claim time it does not run: {band[0].text!r}"
+    assert "TOC" in band[0].text, band[0].text
+
+    # And an ordinary CMI class — one that starts exactly on a column — is
+    # untouched by the rule, bands and all.
+    app.boot("/", selection=["TOC"], overrides=LONG_OVR)
+    app.wait_css("section[aria-label='My timetable'] table.tt")
+    start = cell(1, 550)  # Tue 09:10-14:00
+    assert start[0].find_elements(By.CSS_SELECTOR, "button.chip[aria-label^='TOC,']"), \
+        "an exact start must still win outright"
+    for covered in (630, 710):
+        c = cell(1, covered)
+        assert c[0].find_elements(By.CSS_SELECTOR, ".covered"), \
+            f"the {covered} column must still band"
+        assert "until 14:00" in c[0].text, c[0].text
+
+
 def t160_a_second_tab_does_not_undo_your_settings(app):
     """R92 M8. Prefs are one blob and every tab writes its whole in-memory
     copy back, so an idle second tab holding an older copy silently wiped
@@ -10194,6 +10352,8 @@ TESTS = [
     t163_a_link_that_names_no_courses_takes_nothing_away,
     t164_an_adopting_tab_never_writes_back_what_it_read,
     t165_a_comma_code_survives_the_apps_own_url,
+    t166_picking_a_course_stays_in_its_own_tab,
+    t167_a_class_is_drawn_where_most_of_it_happens,
 ]
 
 

@@ -58,7 +58,14 @@ fn init_app() -> (App, bool, usize) {
         prefs.plan_view = None;
         prefs.halls_view = None;
     }
-    let selection: Vec<String> = load_or(storage::KEY_SELECTION, &mut corrupt, Vec::new);
+    // THIS TAB's picks first, the browser's latest second (R96). A tab that
+    // has picked anything remembers its own across a reload; a brand-new tab
+    // has nothing of its own and opens on the timetable the reader last had.
+    // Both go through `load_or` for the corrupt path, which only the shared
+    // copy can take — the per-tab mirror is ignored if it will not read.
+    let shared_selection: Vec<String> = load_or(storage::KEY_SELECTION, &mut corrupt, Vec::new);
+    let selection: Vec<String> =
+        storage::session_peek(storage::KEY_SELECTION).unwrap_or(shared_selection);
     let mut overrides: OverridesStore = load_or(
         storage::KEY_OVERRIDES,
         &mut corrupt,
@@ -880,9 +887,14 @@ fn install_cross_tab_sync(app: App) {
             // because deleting the last custom course arrives as one
             // (`persist_customs` removes the key for an empty store), and
             // skipping it would quietly un-delete that course here.
+            // KEY_SELECTION is deliberately ABSENT (R96): which courses are
+            // picked belongs to the tab, so another tab picking one is not
+            // news here — and waking for it would raise the "another tab
+            // changed your timetable" banner for a change this tab is never
+            // going to make.
             if matches!(
                 ev.key().as_deref(),
-                Some(storage::KEY_SELECTION | storage::KEY_OVERRIDES | storage::KEY_CUSTOM)
+                Some(storage::KEY_OVERRIDES | storage::KEY_CUSTOM)
             ) && ev.new_value() != ev.old_value()
             {
                 user_pending.set(true);
@@ -986,7 +998,10 @@ fn install_cross_tab_sync(app: App) {
         }
         leptos::task::spawn_local(async move {
             if app.adopt_user_data() {
-                app.toast("Another tab updated your timetable — showing the latest.");
+                app.toast(
+                    "Another tab changed a course — this tab has the change now. \
+                     Which courses you pick stays with each tab.",
+                );
             }
             // Retired even when nothing changed: this tab's own Save while
             // busy makes storage match memory, and "it will catch up" has

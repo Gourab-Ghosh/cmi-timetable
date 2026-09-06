@@ -436,26 +436,16 @@ fn what_changed_panel(app: App) -> impl IntoView {
     }
 }
 
-/// Which column a meeting renders in: exact start match, else the tightest
-/// column containing its start (for free-form override times), else the
-/// nearest. With `display_slot_grid` the personal grid always has an exact
-/// or containing column; the nearest-fallback remains for other callers.
+/// Which column a meeting renders in — **the column holding most of it**, with
+/// an exact start match winning outright. The rule, its reasoning and its
+/// edge cases live in `ttcore::model::place_meeting`, with the sweeps that
+/// pin them in `core/tests/placement_tests.rs`; this is the view's door to it.
+///
+/// It used to be "the tightest column containing its START", which handed a
+/// 16:40–18:00 class to the 15:30 column on the strength of five minutes while
+/// the column holding the actual hour showed only a band (R97).
 pub fn column_for(slot_grid: &[Slot], meeting: &Meeting) -> Option<u16> {
-    let start = meeting.slot.start_min;
-    if let Some(s) = slot_grid.iter().find(|s| s.start_min == start) {
-        return Some(s.start_min);
-    }
-    if let Some(s) = slot_grid
-        .iter()
-        .filter(|s| start >= s.start_min && start < s.end_min)
-        .max_by_key(|s| s.start_min)
-    {
-        return Some(s.start_min);
-    }
-    slot_grid
-        .iter()
-        .min_by_key(|s| s.start_min.abs_diff(start))
-        .map(|s| s.start_min)
+    ttcore::model::home_column(slot_grid, &meeting.slot)
 }
 
 /// `column_for` minus its nearest-column fallback, for the move ghosts:
@@ -501,38 +491,25 @@ fn clash_times(c: &crate::state::ClashPair) -> String {
     }
 }
 
-/// The columns a meeting COVERS beyond the one it renders in: every LATER
-/// column whose slot overlaps the meeting's own time. This is what makes a
-/// 09:10–14:00 class visibly occupy 10:30 and 11:50 instead of leaving them
-/// looking free (R77).
+/// The columns a meeting reaches into but is not DRAWN in: every column whose
+/// slot genuinely overlaps the meeting's own time, minus its home. This is what
+/// makes a 09:10–14:00 class visibly occupy 10:30 and 11:50 instead of leaving
+/// them looking free (R77).
 ///
-/// Judged against the MEETING's slot with `Slot::overlaps` — the clash
-/// panel's exact predicate, half-open, so a meeting ending at 14:00 covers
-/// nothing of a 14:00 column — and never against the home column's slot: a
-/// synthetic column can be WIDER than the meeting that minted it
-/// (push_extra_column's same-start merge), and the home must be whatever
-/// `column_for` chose, whose nearest fallback can pick a column that does
-/// not even contain the meeting.
-///
-/// LATER is the whole point and it has to be enforced here, because
-/// `Slot::overlaps` is symmetric. Personal grids mint extra columns for
-/// override times (`push_extra_column` merges only identical starts), so a
-/// 21:30–22:45 class and a 20:30–21:45 one leave two columns that overlap
-/// each other; without this floor the 21:30 class cast a band into the
-/// 20:30 column reading "RFLR until 22:45" — claiming an hour that is free,
-/// under a tooltip saying the class "continues here" in a column it has not
-/// reached (R83). The floor is the later of the meeting's start and its home
-/// column's, so a band can never appear left of the chip it echoes even when
-/// `column_for` fell back to the nearest column.
+/// **A band may now sit BEFORE the chip** (R97) — that is the point of the
+/// majority rule: a 16:40–18:00 class is drawn in the 17:00 column and reaches
+/// back into the 15:30 one. R83 forbade that, with cause: the band read
+/// "RFLR until 22:45" in a column the class had not reached, claiming an hour
+/// that was free. Two things answer that now instead of a blanket floor —
+/// `place_meeting` only ever names a column the meeting genuinely OVERLAPS
+/// (the old floor existed because `column_for`'s nearest fallback could pick a
+/// column the meeting never touches, and such a column is now excluded by the
+/// overlap test itself), and `ui::covered_band` reads the class's own start
+/// against the column's, so a band that the class BEGINS in says "from 16:40"
+/// where one it merely continues into says "until 18:00". Neither can claim
+/// time the class does not run.
 pub fn covered_columns(slot_grid: &[Slot], meeting: &Meeting) -> Vec<u16> {
-    let home = column_for(slot_grid, meeting);
-    let floor = home.map_or(meeting.slot.start_min, |h| h.max(meeting.slot.start_min));
-    slot_grid
-        .iter()
-        .filter(|s| s.overlaps(&meeting.slot))
-        .map(|s| s.start_min)
-        .filter(|c| *c > floor)
-        .collect()
+    ttcore::model::place_meeting(slot_grid, &meeting.slot).covered
 }
 
 fn grid_cell(
@@ -744,7 +721,9 @@ fn my_timetable(app: App) -> impl IntoView {
                     // span staying red beside a chip that went quiet would
                     // be half a tweak.
                     let clash = clash && app.marks.get().0;
-                    out.push(crate::ui::covered_band(app, code.clone(), *mslot, clash).into_any());
+                    out.push(
+                        crate::ui::covered_band(app, code.clone(), *mslot, slot, clash).into_any(),
+                    );
                 }
             }
         });
@@ -2681,7 +2660,8 @@ fn master_grid(app: App) -> impl IntoView {
                             // language is the ⚠ won't-fit mark on chips, and
                             // its covered memo deliberately reads no
                             // selection (t90's identity pin).
-                            crate::ui::covered_band(app, code.clone(), *mslot, false).into_any()
+                            crate::ui::covered_band(app, code.clone(), *mslot, slot, false)
+                                .into_any()
                         })
                         .collect()
                 })
@@ -4390,6 +4370,7 @@ fn hall_row(
                                             app,
                                             label.clone(),
                                             *mslot,
+                                            slot,
                                             false,
                                         )
                                             .into_any()

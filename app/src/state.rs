@@ -1134,10 +1134,11 @@ const UNDO_MAX: usize = 100;
 /// `install_cross_tab_sync` and the retire after the deferred adoption
 /// lands — `retire_sticky_line` matches it line-exactly, so this string
 /// must exist in exactly one place.
-pub const CROSS_TAB_NOTICE: &str = "Another tab of this app has changed your timetable. \
-     This tab is still showing the version from before — it will catch up on its own \
-     the moment you finish what you're doing here. Saving here first keeps this tab's \
-     version instead.";
+pub const CROSS_TAB_NOTICE: &str = "Another tab of this app has changed a course — a \
+     time, a room, or a course it added or deleted. This tab is still showing the version \
+     from before, and will catch up on its own the moment you finish what you're doing \
+     here. Saving here first keeps this tab's version instead. (Which courses you have \
+     picked is this tab's own either way.)";
 
 #[derive(Clone, PartialEq)]
 pub struct FetchLogEntry {
@@ -1770,7 +1771,13 @@ impl App {
     }
 
     pub fn persist_selection(&self) {
-        let r = storage::save(storage::KEY_SELECTION, &self.selection.get_untracked());
+        let selection = self.selection.get_untracked();
+        // Two writes, on purpose. `localStorage` is what a NEW tab (and a
+        // backup file) reads, so the latest picks are always there; the
+        // per-tab copy is what keeps THIS tab's picks its own across a
+        // reload, when another tab has since written different ones (R96).
+        storage::session_save(storage::KEY_SELECTION, &selection);
+        let r = storage::save(storage::KEY_SELECTION, &selection);
         // "course selection" is what a backup file calls this datum
         // (core/src/export.rs), and the sibling banner next door says "your
         // own courses" — two alarming banners a word apart on data the
@@ -2042,11 +2049,15 @@ impl App {
     /// and brings us here again with the whole batch visible.
     pub fn adopt_user_data(&self) -> bool {
         use crate::storage::Loaded;
-        let selection: Vec<String> = match storage::peek(storage::KEY_SELECTION) {
-            Loaded::Value(v) => v,
-            Loaded::Missing => Vec::new(),
-            Loaded::Corrupt(_) => return false,
-        };
+        // THE SELECTION IS NOT READ HERE, and that is the whole point (R96).
+        // Which courses are picked belongs to the TAB: `?c=` in the address
+        // bar is written on every pick, so two tabs are two timetables, and
+        // adopting the other tab's picks made the plan you were not looking
+        // at change under you — a student comparing two plans lost one of
+        // them to a click in the other. Everything else here is shared data
+        // about the SAME courses (a moved class, a room you typed, a course
+        // you made) and still crosses, so the two tabs never disagree about
+        // what a course IS — only about which ones you have chosen.
         let mut overrides: OverridesStore = match storage::peek(storage::KEY_OVERRIDES) {
             Loaded::Value(v) => v,
             Loaded::Missing => OverridesStore::default(),
@@ -2068,14 +2079,12 @@ impl App {
         // Nothing new: this tab already holds what storage holds — either
         // our own write echoing back through a deferred adoption, or the
         // other tab saved while we were busy and its save matched ours.
-        let same = self.selection.with_untracked(|s| *s == selection)
-            && self.overrides.with_untracked(|o| *o == overrides)
+        let same = self.overrides.with_untracked(|o| *o == overrides)
             && self.customs.with_untracked(|c| *c == customs);
         if same {
             return false;
         }
         self.push_undo("changes from another tab");
-        self.selection.set(selection);
         self.overrides.set(overrides);
         self.customs.set(customs);
         // NO write-back (R93 M2). An adopting tab holds nothing storage does
@@ -2090,7 +2099,11 @@ impl App {
         // already queued, and this runs again with the whole batch visible.
         // Undo's deliberate "keep mine" is unaffected — it goes through
         // `apply_entry`, which persists on its own.
-        self.sync_url();
+        //
+        // The address bar is NOT rewritten either: it is a picture of the
+        // picks, and no pick changed here (R96). Writing it anyway would
+        // spend one of `replace_query`'s rate-limited navigations to say
+        // exactly what it already said.
         true
     }
 
