@@ -7396,6 +7396,57 @@ parsing, a `globals()`-scanning auto-registration list, and harness aliases
 (`By = T.By`). Anything written with `self` is an `App` method and belongs in
 the class.
 
+### R98 — the verification round, and the probe that stopped being disposable
+
+The ask: *"If anything is left implementing then continue to work on it or
+else you can push and deploy the web page."*
+
+**Nothing was left implementing, and this entry exists to show the checking
+rather than assert it.** The tree at `4b5ba04` was already `origin/main` and
+already what `gh-pages` (`fccd7a5`) served. Re-run rather than trusted:
+**202 native, 221/221 e2e, clippy clean, fmt clean.** §8's four remaining
+entries are all deliberate non-fixes — 8.24/8.25 are the offline-first
+trade-off recorded with its measurement, 8.21 and 8.6 are non-bugs that say
+so. There is no actionable open defect in the four triage documents.
+
+**Two housekeeping items were found by doing this, not by reading.** An
+orphaned `chromedriver` from an earlier e2e run had been holding port 42823
+for 3h11m with a defunct chromium child — the same class of leak the R93
+entry records, and a reason to check `pgrep -af chromedriver` at the END of a
+round, not only after a `pkill`. And the e2e suite needs `e2e/.venv/bin/python`:
+system python has no selenium, and the failure (`ModuleNotFoundError`) looks
+nothing like a test failure.
+
+**`live_probe.py` is now IN THE REPO** (`e2e/live_probe.py`), which is the
+one real change this round made. It had been written to scratchpad twice,
+lost with the session twice, and rewritten from scratch twice — and both
+rewrites cost the same three false FAILs, because the live DOM does not
+match the obvious guesses:
+
+  * chips that ADD are on the **Master grid**; the default tab has none and
+    Catalog's open DETAILS instead, so `.chip` on whatever tab loaded first
+    finds nothing;
+  * **Catalog renders no `<table>`** — 79 `.card`/`.row` pairs — so an
+    "every section renders" check looking for a table calls it blank;
+  * check 6 deliberately fetches a path Pages answers **404** to, because
+    that 404 IS the bounce; the SEVERE console line it leaves is the feature
+    working, and the console check must reload clean and filter it.
+
+A fourth fact belongs with them: **`app/build.rs:64` embeds `APP_BUILD_TIME`**, so the wasm hash fingerprints the BUILD, not the
+source — two builds of the same commit differ, and check 2's expected
+value must come from what `deploy.sh` just printed (`WANT_WASM=<hash>`).
+That is why this round's deploy produced `1084f4f8463927ac` from a commit
+whose Rust was byte-identical to `4b5ba04`'s.
+
+All three are in the file's docstring alongside R94's older and worse trap
+(driving the five in-app TABS via `location.hash`, which passes against a
+dead app). The probe is also stricter than the one it replaces: check 4 now
+proves R96's per-tab storage on the PRODUCTION origin — a pick reaches the
+URL and `sessionStorage`, and survives a reload — and check 10 clicks all
+five tabs and asserts each renders real content rather than merely existing.
+Live result: **10/10**, `79 real courses from cmi.ac.in via a live relay`,
+worker `cmitt-sw-efc84638ee1f90bc`.
+
 ## 8. Open bugs — found, confirmed, NOT fixed (do not delete)
 
 Rules for this section: entries stay until the bug is actually fixed and a

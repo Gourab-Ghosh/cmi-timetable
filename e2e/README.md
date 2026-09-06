@@ -5,6 +5,15 @@ Chromium — real pointer events, real localStorage, real drag & drop.
 `shoot.py` (same setup) captures design-review screenshots of every view
 plus the print PDFs into `shots/` (gitignored).
 
+`live_probe.py` is the third tool and answers a question the other two
+cannot: **is the PUBLISHED site working, over the real internet?** The suite
+below blackholes every non-localhost hostname and stands in for cmi.ac.in on
+localhost — deterministic and offline, and therefore structurally blind to a
+dead public relay, a stale wasm on Pages, or hash routing broken by the
+subpath. `live_probe.py` drives the real URL with no host-resolver rules and
+must print 10/10 after every deploy; its docstring carries the four selector
+traps that have each produced a false FAIL, so read it before editing.
+
 ```sh
 # one-time setup
 python3 -m venv .venv && .venv/bin/pip install selenium   # driver auto-managed
