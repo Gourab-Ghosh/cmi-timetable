@@ -601,6 +601,64 @@ class App:
              """ % offset_days},
         )["identifier"]
 
+    def block_site_data(self):
+        """Take `localStorage` away before the wasm boots — the browser a reader
+        gets from Brave's "Block all cookies", Safari's block-all setting, a
+        sandboxed frame, or some in-app webviews.
+
+        `storage::raw()` is `window()?.local_storage().ok().flatten()`, so a
+        getter that throws lands on `None`: `SaveError::Unavailable`, the "there
+        is no store at all" cause, as distinct from "the store is full". Telling
+        those two apart is the whole subject of t211.
+
+        `sessionStorage` is deliberately left working: it is a different store
+        with a different switch, and the app's per-tab copy of the selection has
+        to keep going while `localStorage` is gone.
+
+        Call `restore_site_data()` in a `finally` — an injected script outlives
+        the test that added it, and every later test would boot without storage.
+        """
+        return self.d.execute_cdp_cmd(
+            "Page.addScriptToEvaluateOnNewDocument",
+            {"source": """
+                Object.defineProperty(window, 'localStorage', {
+                  configurable: true,
+                  get() { throw new DOMException('blocked', 'SecurityError'); },
+                });
+             """},
+        )["identifier"]
+
+    def refuse_site_data(self):
+        """Leave the store in place and refuse every write to it — the FULL
+        browser, i.e. `SaveError::Refused`.
+
+        Reads keep working, exactly as they do on a real full disk: whatever the
+        reader saved before is still there, and only new writes fail. Scoped to
+        this app's own keys so nothing the harness stores is affected. The
+        prototype is patched, so `sessionStorage` refuses too — which is also
+        what a full disk really does.
+
+        Call `restore_site_data()` in a `finally`.
+        """
+        return self.d.execute_cdp_cmd(
+            "Page.addScriptToEvaluateOnNewDocument",
+            {"source": """
+                const real = Storage.prototype.setItem;
+                Storage.prototype.setItem = function (k, v) {
+                  if (String(k).startsWith('cmitt.')) {
+                    throw new DOMException('full', 'QuotaExceededError');
+                  }
+                  return real.call(this, k, v);
+                };
+             """},
+        )["identifier"]
+
+    def restore_site_data(self, identifier):
+        """Undo `block_site_data` / `refuse_site_data`. The same CDP call as
+        `unpin_weekday`, and the same warning: it MUST be in a `finally`."""
+        self.d.execute_cdp_cmd("Page.removeScriptToEvaluateOnNewDocument",
+                               {"identifier": identifier})
+
     def unpin_weekday(self, identifier):
         """Undo `pin_weekday`. MUST be called in a `finally`: an injected
         script outlives the test that added it and would silently shift the
@@ -10186,6 +10244,4755 @@ def t164_an_adopting_tab_never_writes_back_what_it_read(app):
         app.d.switch_to.window(app.d.window_handles[0])
 
 
+
+# =====================================================================
+# R96 — the regression tests R95 owed.
+#
+# R95 shipped 61 fixes and wrote 5 tests. These pin the rest. Written by a
+# nine-agent fleet, one slice each; every agent had to BREAK its fix and
+# watch the test go red before shipping it, because R95 found two tests that
+# passed without exercising anything (t157 asserted the very CSS mechanism
+# that CAUSED the bug it was meant to guard). Where a fix could not be
+# un-shipped from a read-only build, the agent said so and substituted a
+# vacuity control or a native break-it in core; each docstring says which.
+# Provenance per slice: .workagents/r96/findings/*.md
+# =====================================================================
+
+# --- from t1-clamp-doors.py ---------------------------------------
+LINK_IMPOSSIBLE_TIME_AND_CREDITS = (
+    "N4IgbiBcCMA0IGMoG0QBUDyBhE8ByAMgAogC68A9iqAJYAmUADPAhQK4BOAzgKZTrZcIAEYB"
+    "DXlFB1RAT35o2feFwA2FAC6SQXdaI7qA+gFsaAOygBWC8xA9TdY2agA2AEwWAvvAAWolSv4C"
+    "HgR1Th4AAgAJPxVwgA5GAGYhdR4jAAcDYQoKAGszAHMoADM-Xi8QdSpIKVl+AHUeBmU1TRrt"
+    "XX1Hc0hnK0SLeDsHEx6+iwGK339A4NCOCOj-eKSUtMzsvMKSsp4KhAXRVIcjqGgAdgsAFkZb"
+    "u7uAOkYvWgYYFnZuPkgQQhJ4MQSdrSOQ-NDeNhCVQaLQ6PSGUZQOI3Ib2bpQACc0E8PhisxC"
+    "YSiMRW0DWGSyOXypiKkFKKnK8CqWhB-AAYhwaFDWrDOginDBGK4bMN0QKMTiQNMAj8ggSFkT"
+    "lglSYz1hSttSdvS9ixDscDKcYJcbvd7k8POQQLlqIhPkCBDgdU0aOouFB3INELqmvq2hdrib"
+    "Tc9YKBWJw7X8hAcnS6oIlHUdvQa-caA4wzaQPEA"
+)
+
+
+# --- from t1-clamp-doors.py ---------------------------------------
+LINK_ID_WITH_NO_SUCCESSOR = (
+    "N4IgbiBcCMA0IGMoG0QBUDyBhEBdeA9iqAJYAmU0AHACw0BsA7HQAyMDMjLAnAKy-R60XvAQ"
+    "EArgCcAzgFMo6bCHgAjAIZyooMmoCeCtOPnxpAGwIAXLSGkW1kiwH0AtiQB2Ufi3iy3ZF+5Q"
+    "9ABMvAC+8AAWaqamCgAysggWUrIABAASMaZpVCzsyiAWss4ADo4qBAQA1u4A5lAAZjFyEUVE"
+    "kNp6CgDqshQm5ladNnYOAR4wLMHeIL7+rpPQPOFR2QlJKZLpWbG5+YXFZRVVtW4NkM2mraLb"
+    "asX+95SMvDQs7x8fAHQsYbhhQA"
+)
+
+
+# --- from t1-clamp-doors.py ---------------------------------------
+LINK_LOWER_CASE_CODES = (
+    "N4IgbiBcCMA0IGMoG0QBcD2SC68MtAEsATKABngQwFcAnAZwFMp0sR4AjAQyalGK4BPFgBVq"
+    "zePQA2GNHxD00XWmgD6AW0IA7KAFZdFEIy3EN2qADYATLoC+8ABZcpUlgBlGCNHUYACABLOU"
+    "r4AHGQAzOzojOoADqocGBgA1toA5lAAZs5M9qzyAsKQIADqjKSSMnKQoIrKapo6MGRWhsamj"
+    "VDQZACcdo5B7p7etH6BLqERUWgx8Ykp6Vk5jHkIo1wzphtdAOy6ACxkR8fHAHRktrggyQSIN"
+    "AzMxZhIlKPEhGj0UOGvjBvlqm2MD2hxOJ3Ol3gpEgyFAVDovGKWiksSiaz+m0B1WgILB4MMA"
+    "HceKomFJhuUllJcthbEA"
+)
+
+
+# --- from t1-clamp-doors.py ---------------------------------------
+def _share_url(payload):
+    """A link as it arrives in somebody's chat window: only `s=`.
+
+    Deliberately no `c=` beside it. With one, a payload that stopped decoding
+    would fall back to the plain code list and the courses would still open —
+    so every assertion below would keep passing while the share door had
+    stopped reading anything at all."""
+    return f"{BASE}/?s=" + payload.replace("+", "%2B")
+
+
+# --- from t1-clamp-doors.py ---------------------------------------
+def _stored(app, key):
+    return app.d.execute_script(
+        "return JSON.parse(localStorage.getItem(arguments[0]) || 'null');",
+        f"cmitt.v1.{key}")
+
+
+# --- from t1-clamp-doors.py ---------------------------------------
+def t200_a_link_cannot_state_a_class_time_that_does_not_exist(app):
+    """A share link is a stranger's bytes, and one made by hand can name a
+    class starting at minute 65535 of the day, or a course worth 255
+    credits. The app used to copy both straight onto the reader's timetable:
+    "1092:15–1092:15" columns on three grids, "459 credits in total", and a
+    saved planner that every later reload drew again. Now the parts it
+    cannot state are left out, the rest of the link opens as sent, and the
+    reader is told how much was set aside — never silently, because the link
+    has just replaced their planner."""
+    app.boot("/")                      # a browser with CMI's catalog, nothing picked
+    app.d.get(_share_url(LINK_IMPOSSIBLE_TIME_AND_CREDITS))
+    app.wait_css(".header h1")
+
+    banner = app.wait_css(".banner.warn")
+    assert "2 changes in this link" in banner.text, banner.text
+    assert "left out" in banner.text, banner.text
+
+    # Everything the link COULD say arrived: NLP's Thursday 14:00 class is on
+    # Friday 17:00 where the sender put it.
+    app.wait_css("td[data-day='4'][data-slot='1020'] button.chip[aria-label^='NLP,']")
+    # ...and the two parts it could not are simply not there. TOC still sits
+    # on CMI's own Tuesday and Thursday: the impossible move was dropped, not
+    # clamped onto some hour nobody chose.
+    assert app.chips("TOC", "td[data-day='1'][data-slot='550']"), \
+        "the class the link could not move stays where CMI has it"
+    assert app.chips("TOC", "td[data-day='3'][data-slot='550']")
+    body = app.css("body").text
+    assert "1092:15" not in body, "65535 minutes must never be printed as a time"
+    assert not app.css_all("section[aria-label='My timetable'] th.extra"), \
+        "no column may be minted for a time the app cannot state"
+
+    stored = _stored(app, "overrides")
+    assert [i["course"] for i in stored["items"]] == ["NLP"], stored["items"]
+    assert stored["credits"] == [
+        {"course": "NLP", "credits": 3, "created_at": 1754000000000.0}
+    ], stored["credits"]
+
+    app.open_tab("My courses")
+    app.wait_css("section[aria-label='My courses']")
+    assert "255" not in app.css("section[aria-label='My courses']").text, \
+        "a credit figure outside the editor's own 0-20 is never stated as the reader's"
+
+
+# --- from t1-clamp-doors.py ---------------------------------------
+def t201_saved_changes_the_app_cannot_state_are_set_aside_once(app):
+    """The three doors write to the same place, so a link or a file that got
+    in before the rules did leaves an impossible class time sitting in this
+    browser's storage — where plain serde read it back happily on every
+    reload, for ever. Reading it is now the last door: what the app cannot
+    state is dropped, the rest of the saved work is kept, storage is
+    rewritten so the notice is given once, and a class that is merely LATE
+    still gets its own column."""
+    seed = {
+        "next_id": 2,
+        "items": [
+            {"id": 0, "course": "TOC",
+             "base": {"day": "Tue", "slot": {"start_min": 550, "end_min": 625},
+                      "hall": "Lecture Hall 803", "temp_booking": False},
+             "to": {"day": "Wed", "slot": {"start_min": 65535, "end_min": 65535},
+                    "hall": "Lecture Hall 803", "temp_booking": False},
+             "created_at": 1754000000000.0},
+            {"id": 1, "course": "NLP",
+             "base": {"day": "Thu", "slot": {"start_min": 840, "end_min": 915},
+                      "hall": "Lecture Hall 801", "temp_booking": False},
+             "to": {"day": "Fri", "slot": {"start_min": 1020, "end_min": 1095},
+                    "hall": "Lecture Hall 801", "temp_booking": False},
+             "created_at": 1754000000000.0},
+        ],
+        "credits": [
+            {"course": "TOC", "credits": 255, "created_at": 1754000000000.0},
+            {"course": "NLP", "credits": 3, "created_at": 1754000000000.0},
+        ],
+    }
+    app.boot("/", selection=["TOC", "NLP"], overrides=seed)
+
+    banner = app.wait_css(".banner.warn")
+    assert "2 of the changes saved in this browser" in banner.text, banner.text
+    assert "set aside" in banner.text, banner.text
+
+    # The rest of the store is still theirs — a whole planner is never thrown
+    # away because one entry in it is impossible.
+    app.wait_css("td[data-day='4'][data-slot='1020'] button.chip[aria-label^='NLP,']")
+    assert app.chips("TOC", "td[data-day='1'][data-slot='550']")
+    assert "1092:15" not in app.css("body").text
+    assert not app.css_all("section[aria-label='My timetable'] th.extra")
+
+    # Healed in storage, not just on screen: the notice is owed once, and the
+    # blob a reload reads must already be clean.
+    stored = _stored(app, "overrides")
+    assert [i["course"] for i in stored["items"]] == ["NLP"], stored["items"]
+    assert [c["course"] for c in stored["credits"]] == ["NLP"], stored["credits"]
+    app.boot("/", fresh=False)
+    app.wait_css(".week-grid button.chip")
+    time.sleep(0.5)
+    assert not app.css_all(".banner.warn"), \
+        "a browser with nothing left to set aside says nothing"
+    assert [i["course"] for i in _stored(app, "overrides")["items"]] == ["NLP"]
+
+    # The control that makes the two assertions above mean something: the same
+    # seed with a time the app CAN state (19:30, hours after CMI's last slot)
+    # still mints its own column and draws its chip there. "No extra column"
+    # is a fact about this class time, not about the app.
+    seed["items"][0]["to"]["slot"] = {"start_min": 1170, "end_min": 1230}
+    app.boot("/", selection=["TOC", "NLP"], overrides=seed)
+    header = app.wait_css("section[aria-label='My timetable'] th.extra")
+    assert "19:30" in header.text, header.text
+    assert app.chips("TOC", "td[data-day='2'][data-slot='1170']"), \
+        "a late class still gets drawn — only an impossible one is dropped"
+
+
+# --- from t1-clamp-doors.py ---------------------------------------
+def _import_file(app, label, path):
+    """Share or import → one of the two file buttons → hand it a file."""
+    app.xpath("//button[normalize-space()='Share or import']").click()
+    app.wait_css(".dialog").find_element(
+        By.XPATH, f".//button[normalize-space()='{label}']").click()
+    WebDriverWait(app.d, 10).until(
+        lambda d: d.find_element(By.CSS_SELECTOR, "#cmitt-import-input")
+    ).send_keys(path)
+
+
+# --- from t1-clamp-doors.py ---------------------------------------
+def t202_a_backup_holding_an_impossible_class_time_is_refused_whole(app):
+    """A backup file is a photograph of a working planner, and this one has
+    been edited by hand: one of its saved moves puts a class at minute 65535
+    of the day. Core checked the CATALOG's times in such a file and nothing
+    else, so the reader's own changes went straight from the file into
+    storage. The file is refused now — whole, the way this door refuses every
+    other half-readable file — and it is refused BEFORE the app asks
+    permission to replace anything, because there is nothing to ask about."""
+    app.boot("/", selection=["TOC", "NLP"], overrides={
+        "next_id": 1,
+        "items": [{"id": 0, "course": "TOC",
+                   "base": {"day": "Tue", "slot": {"start_min": 550, "end_min": 625},
+                            "hall": "Lecture Hall 803", "temp_booking": False},
+                   "to": {"day": "Wed", "slot": {"start_min": 1020, "end_min": 1095},
+                          "hall": "Lecture Hall 803", "temp_booking": False},
+                   "created_at": 1754000000000.0}],
+        "credits": [],
+    })
+    app.xpath("//button[normalize-space()='Share or import']").click()
+    dialog = app.wait_css(".dialog")
+    everything = dialog.find_element(
+        By.XPATH, ".//button[normalize-space()='Export everything']")
+    app.d.execute_script("arguments[0].scrollIntoView({block: 'center'});", everything)
+    everything.click()
+    time.sleep(1.2)
+    good_file = os.path.join(DOWNLOADS, "clamp-backup-good.json")
+    os.rename(newest_download("cmi-planner-"), good_file)
+    with open(good_file, encoding="utf-8") as f:
+        envelope = json.load(f)
+    assert envelope["overrides"]["items"], "sanity: the file carries the move"
+    envelope["overrides"]["items"][0]["to"]["slot"] = {"start_min": 65535,
+                                                      "end_min": 65535}
+    bad_file = os.path.join(DOWNLOADS, "clamp-backup-handmade.json")
+    with open(bad_file, "w", encoding="utf-8") as f:
+        json.dump(envelope, f)
+
+    # A different browser, with a planner of its own to lose.
+    app.boot("/", selection=["ISS"])
+    app.wait_css("td[data-day='1'][data-slot='550'] button.chip[aria-label^='ISS,']")
+    _import_file(app, "Import everything…", bad_file)
+    app.wait_toast("That backup couldn't be used")
+    assert "changes inside it" in app.toasts_text(), app.toasts_text()
+    assert not app.css_all(".dialog.confirm"), \
+        "a file this damaged is refused before it asks to replace anything"
+    assert app.d.execute_script(
+        "return JSON.parse(localStorage.getItem('cmitt.v1.selection'));") == ["ISS"], \
+        "nothing was changed"
+
+    # The control: the SAME file, one number back to a time of day, is
+    # accepted and replaces the planner. The refusal above is caused by that
+    # number and by nothing else about the file.
+    app.d.find_element(By.CSS_SELECTOR, "body").send_keys(Keys.ESCAPE)
+    app.wait_gone(".dialog")
+    app.dismiss_toasts()
+    _import_file(app, "Import everything…", good_file)
+    app.answer_confirm(True)
+    WebDriverWait(app.d, 20).until(
+        lambda d: "imported" in app.css(".sync-pill").text,
+        message="the unedited backup must import")
+    app.wait_css("td[data-day='2'][data-slot='1020'] button.chip[aria-label^='TOC,']")
+
+
+# --- from t1-clamp-doors.py ---------------------------------------
+def t203_a_courses_file_cannot_hand_you_credits_you_never_chose(app):
+    """The credits editor takes a whole number from 0 to 20, and for a long
+    time it was the only door that did. A "my courses" file made by hand
+    could say 255, and the app then told the reader "You set the credits on
+    2 courses yourself", showed "1 course at 255 credits" and totted it into
+    a 459-credit term. A figure outside the editor's own range is not a
+    figure this app can state, so the file is refused whole and the reader's
+    own credits stand."""
+    plan = {
+        "format": "cmi-timetable-export", "format_version": "1.1.0",
+        "courses": [{"code": "NLP"}],
+        "my_changes": {
+            "meeting_changes": [],
+            "credit_changes": [{"course": "NLP", "credits": 255,
+                                "made_at": "2025-07-31T22:13:20Z",
+                                "made_at_ms": 1754000000000.0}],
+            "my_own_courses": [],
+        },
+    }
+    bad_file = os.path.join(DOWNLOADS, "clamp-courses-255.json")
+    with open(bad_file, "w", encoding="utf-8") as f:
+        json.dump(plan, f)
+    plan["my_changes"]["credit_changes"][0]["credits"] = 3
+    good_file = os.path.join(DOWNLOADS, "clamp-courses-3.json")
+    with open(good_file, "w", encoding="utf-8") as f:
+        json.dump(plan, f)
+
+    app.boot("/", selection=["TOC"])
+    _import_file(app, "Import my courses…", bad_file)
+    app.wait_toast("they aren't the shape this app can read")
+    assert not app.css_all(".dialog.confirm"), "nothing to ask about"
+    # The dialog is still open behind the notice — a refused file leaves the
+    # reader where they were, so close it the way they would.
+    app.d.find_element(By.CSS_SELECTOR, "body").send_keys(Keys.ESCAPE)
+    app.wait_gone(".dialog")
+    app.dismiss_toasts()
+    assert app.d.execute_script(
+        "return JSON.parse(localStorage.getItem('cmitt.v1.selection'));") == ["TOC"]
+    app.open_tab("My courses")
+    section = app.wait_css("section[aria-label='My courses']")
+    assert "255" not in section.text, section.text
+
+    # The control: the same file asking for 3 credits is read and applied, so
+    # the refusal is about the number, not about the file's shape.
+    app.boot("/", selection=["TOC"])
+    _import_file(app, "Import my courses…", good_file)
+    ask = WebDriverWait(app.d, 10).until(
+        lambda d: app.css(".dialog") if "A timetable from a file"
+        in app.css(".dialog").text else None)
+    ask.find_element(
+        By.XPATH, ".//button[contains(.,'Add it to my timetable')]").click()
+    WebDriverWait(app.d, 10).until(
+        lambda d: (d.execute_script(
+            "return (JSON.parse(localStorage.getItem('cmitt.v1.overrides'))"
+            " || {credits: []}).credits;") or []) != [],
+        message="a credit figure inside the range must be accepted")
+    assert app.d.execute_script(
+        "return JSON.parse(localStorage.getItem('cmitt.v1.overrides'))"
+        ".credits[0].credits;") == 3
+
+
+# --- from t1-clamp-doors.py ---------------------------------------
+def t204_settings_that_arrive_out_of_range_are_stated_as_what_the_app_does(app):
+    """Settings arrive from files and from other tabs, and nothing checked
+    them. The read sites have always clamped, so a stored "0 undo steps" was
+    already keeping 10 — but the Tweaks page printed 0, the tweak counter
+    counted three settings the reader had never chosen, and a stored notice
+    life of 7 seconds matched none of the four buttons in its row, so the
+    whole radiogroup read aria-checked=false and dropped out of the tab
+    order: a control a keyboard could not reach."""
+    app.boot("/#/developer/tweaks", prefs={
+        "chips_vivid": True,       # a real choice, made in the app
+        "undo_depth": 0,           # below the 10 the app actually keeps
+        "toast_life_secs": 7,      # matches none of the four buttons
+        "auto_sync": "weekly",     # a mode this app does not have
+        "print_page": "A3",        # a page shape this app does not have
+    })
+    app.wait_css("section[aria-label='Developer mode']")
+
+    count = app.css("[data-tweak-count]").text
+    assert count == "2 tweaks differ from how the app ships.", count
+
+    group = "//div[@role='radiogroup' and @aria-label='Notices stay for']"
+    _reveal_tweak(app, "Notices stay for")
+    options = app.d.find_elements(By.XPATH, group + "//button")
+    picked = [b for b in options if b.get_attribute("aria-checked") == "true"]
+    assert len(picked) == 1, \
+        f"one option answers for the row: {[b.text for b in options]}"
+    stops = [b for b in options if b.get_attribute("tabindex") == "0"]
+    assert len(stops) == 1, "a radiogroup with no tab stop cannot be reached"
+
+    # Weakest of the three on purpose, and last: the number box clamps on the
+    # way out as well, so this line alone would still pass with the door's
+    # clamp gone. It is here because it is what the reader sees — the two
+    # assertions above it are what pin the door.
+    _reveal_tweak(app, "Undo history depth")
+    box = app.css("input[aria-label='Undo history depth']")
+    assert box.get_attribute("value") == "10", box.get_attribute("value")
+
+
+# --- from t1-clamp-doors.py ---------------------------------------
+def t205_a_link_files_its_changes_under_this_browsers_spelling(app):
+    """People type course codes into links in whatever case they like, and a
+    link carries the sender's spelling of every code it mentions. Adopted
+    verbatim, a change filed under "toc" still DREW — the override store
+    matches codes loosely — while everything that looks a course up
+    strictly stopped finding it: Your changes listed a bare "toc" with no
+    course name, said the reader's own change was "not on your timetable",
+    could not say what the credits would go back to ("? → 3"), and the sync
+    merge could never make the change converge, lapse or conflict. Incoming
+    codes are resolved to this browser's spelling now — the reader's own
+    courses first, then the link's own, then CMI's catalog."""
+    app.boot("/")
+    app.d.get(_share_url(LINK_LOWER_CASE_CODES))
+    app.wait_css(".header h1")
+    app.wait_css("td[data-day='2'][data-slot='1020'] button.chip[aria-label^='TOC,']")
+
+    stored = _stored(app, "overrides")
+    assert [i["course"] for i in stored["items"]] == ["TOC"], stored["items"]
+    assert [c["course"] for c in stored["credits"]] == ["TOC"], stored["credits"]
+    assert [h["course"] for h in stored["hidden"]] == ["NLP"], stored["hidden"]
+    assert _stored(app, "selection") == ["TOC"]
+
+    # What that costs the reader when it is not done. textContent, not .text:
+    # the code is painted through the same small-caps treatment everywhere.
+    panel = app.wait_css("[data-testid='your-changes']")
+    text = panel.get_attribute("textContent")
+    assert "Theory of Computation" in text, text
+    assert "not on your timetable" not in text, \
+        "a change on a course that IS on the timetable must not be labelled otherwise"
+    assert "4 (the app's guess) \u2192 3" in text, text
+    labels = [b.text for b in panel.find_elements(By.CSS_SELECTOR, "li .btn")]
+    assert "Back to the app's 4" in labels, labels
+    assert "Remove this change" not in labels, \
+        "the app must know what the credit change would go back to"
+
+
+# --- from t1-clamp-doors.py ---------------------------------------
+def t206_an_id_no_counter_can_follow_is_set_aside_and_the_counter_moved_on(app):
+    """Every change the reader makes is numbered, and the store keeps the
+    next number to hand out. A hand-made link or file can hand it a change
+    numbered 18446744073709551615 — which has no successor at all — or a
+    counter that has fallen behind its own changes. Either way the next
+    change made in the app is given a number some existing change already
+    has, and then undoing one of them silently takes the other with it."""
+    # A number the counter cannot follow: the change is set aside, and the
+    # rest of the link opens.
+    app.boot("/")
+    app.d.get(_share_url(LINK_ID_WITH_NO_SUCCESSOR))
+    app.wait_css(".header h1")
+    banner = app.wait_css(".banner.warn")
+    assert "One change in this link" in banner.text, banner.text
+    app.wait_css("td[data-day='1'][data-slot='550'] button.chip[aria-label^='TOC,']")
+    assert _stored(app, "overrides")["items"] == [], \
+        "a change the app cannot number is not kept"
+
+    # A counter that has fallen behind: the app moves the COUNTER, never an
+    # id (a postponed sync question points INTO these by id), so the next
+    # change gets a number of its own.
+    app.boot("/", selection=["TOC", "NLP"], overrides={
+        "next_id": 0,
+        "items": [{"id": 0, "course": "TOC",
+                   "base": {"day": "Tue", "slot": {"start_min": 550, "end_min": 625},
+                            "hall": "Lecture Hall 803", "temp_booking": False},
+                   "to": {"day": "Wed", "slot": {"start_min": 1020, "end_min": 1095},
+                          "hall": "Lecture Hall 803", "temp_booking": False},
+                   "created_at": 1754000000000.0}],
+        "credits": [],
+    })
+    app.wait_css("td[data-day='2'][data-slot='1020'] button.chip[aria-label^='TOC,']")
+    app.xpath("//button[contains(.,'Edit layout')]").click()
+    app.drag(app.chip("NLP", "td[data-day='3'][data-slot='840']"), app.cell(4, 930))
+    app.wait_toast("Moved NLP")
+    ids = [i["id"] for i in _stored(app, "overrides")["items"]]
+    assert len(ids) == len(set(ids)) == 2, f"two changes, two numbers: {ids}"
+
+    # And the reader's proof: undoing one change leaves the other standing.
+    panel = app.wait_css("[data-testid='your-changes']")
+    row = next(li for li in panel.find_elements(By.CSS_SELECTOR, "li")
+               if li.get_attribute("textContent").startswith("TOC"))
+    row.find_element(
+        By.XPATH, ".//button[normalize-space()=\"Back to CMI's time\"]").click()
+    app.wait_toast("TOC")
+    WebDriverWait(app.d, 10).until(
+        lambda d: [i["course"] for i in _stored(app, "overrides")["items"]] == ["NLP"],
+        message="taking back one change must never take back another")
+    assert app.chips("NLP", "td[data-day='4'][data-slot='930']"), \
+        "the other change is still on the timetable"
+
+
+# --- from t2-parser-gate.py ---------------------------------------
+def t211_site_data_switched_off_is_not_called_a_space_problem(app):
+    """R93 S4. Two different things stop a browser saving, and the app used
+    to have one sentence for both. Told to a reader whose browser is FULL it
+    is good advice: free some space, and clearing the downloaded timetable
+    frees the most of it in one press. Told to a reader whose browser is
+    BLOCKING site data, both halves are false. Nothing is short of space. And
+    "clear the downloaded timetable" frees nothing whatsoever when there is
+    no store to remove anything from — it takes their timetable off the
+    screen, drops them back on the welcome page, and toasts a success.
+
+    So the blocked browser gets its own sentence: here is what is actually
+    happening, no button in this app can change it, and here is the one thing
+    that does work — a file. This test reads that sentence and, just as
+    importantly, forbids the space advice and the dead remedy by name.
+
+    The control at the end is half the test: the SAME action in a browser
+    that is merely full still gets the space advice, so what is pinned is
+    that the two causes are told apart — not that the word "space" has
+    quietly left the app.
+    """
+    def banner_text():
+        found = app.css_all(".banner.warn")
+        return found[0].text if found else ""
+
+    def while_the_browser_cannot_save(break_storage, examine):
+        """Run `examine` on a first visit whose sync reaches CMI and then
+        cannot store a byte of what it got.
+
+        Storage is wiped, and the setup sync suppressed, while writes still
+        work — `boot` seeds through `localStorage` itself, so the injection
+        can only go in afterwards.
+        """
+        app.boot("/", seed=False,
+                 prefs={"ever_synced": True, "auto_sync": "manual"})
+        app.wait_css(".welcome-card", timeout=30)
+        app.d.execute_script("localStorage.clear(); sessionStorage.clear();")
+        ident = break_storage()
+        try:
+            app.d.get(f"{BASE}/")       # the same first visit, unable to save
+            app.wait_css(".welcome-card", timeout=30)
+            WebDriverWait(app.d, 60).until(
+                lambda d: banner_text() or False,
+                message="a sync that could not be saved must say so")
+            examine()
+        finally:
+            app.restore_site_data(ident)
+
+    def dismiss_banner():
+        app.xpath("//div[contains(@class,'banner')]"
+                  "//button[normalize-space()='Dismiss']").click()
+        WebDriverWait(app.d, 5).until(lambda d: not banner_text())
+
+    def pick_a_course():
+        """The door a reader reaches with no sync in sight: picking a course
+        the app then cannot remember."""
+        app.open_tab("Master grid")
+        app.wait_css("section[aria-label='Master grid'] table.tt")
+        app.chip("NLP").click()
+        return WebDriverWait(app.d, 10).until(
+            lambda d: banner_text() or False,
+            message="a pick the browser refused to store must say so")
+
+    seen = {}
+    serve_cmi()
+    try:
+        def blocked():
+            seen["sync"] = banner_text()
+            dismiss_banner()
+            seen["pick"] = pick_a_course()
+        while_the_browser_cannot_save(app.block_site_data, blocked)
+    finally:
+        stop_serving_cmi()
+
+    # What it must say: the true cause, and the one remedy that works.
+    for text in (seen["sync"], seen["pick"]):
+        assert "isn't letting the app store anything" in text, text
+        assert "site data is switched off for this page" in text, text
+        assert "Export everything" in text, text
+
+        # What it must never say. Every one of these is a sentence the app
+        # really holds and really says to a full browser — the control below
+        # makes it say two of them — so none is an assertion against text
+        # that has simply stopped existing.
+        for lie in ("Freeing some browser space",
+                    "Free some browser space",
+                    "there is no space left",
+                    "clearing the downloaded timetable",
+                    "older saved copy"):
+            assert lie not in text, \
+                f"blocked storage is not a space problem: {lie!r} in {text!r}"
+
+    # Each door names what it could not keep, in the reader's own words.
+    assert "your changes will be gone" in seen["sync"], seen["sync"]
+    assert "your course selection will be gone" in seen["pick"], seen["pick"]
+
+    # THE CONTROL. Same first visit, same sync, same two doors — a browser
+    # that is full instead of switched off. The space advice is right here,
+    # and it must still be given, downloaded timetable and all.
+    serve_cmi()
+    try:
+        def full():
+            seen["full_sync"] = banner_text()
+            dismiss_banner()
+            seen["full_pick"] = pick_a_course()
+        while_the_browser_cannot_save(app.refuse_site_data, full)
+    finally:
+        stop_serving_cmi()
+    for text in (seen["full_sync"], seen["full_pick"]):
+        assert "Freeing some browser space" in text, text
+        assert "clearing the downloaded timetable" in text, text
+        assert "isn't letting the app store anything" not in text, text
+
+
+# --- from t2-parser-gate.py ---------------------------------------
+def t212_a_write_the_browser_refused_is_never_reported_as_saved(app):
+    """R92 S11. My data lets a reader type in a helper site of their own —
+    the address of something that will fetch CMI's pages on the app's behalf
+    when every free one the app ships has stopped working. It is the one
+    setting in there nobody can re-derive: a URL only that reader knows.
+
+    The app answered "Saved." to every press, whether or not the browser had
+    taken the write. On a full browser the address was gone by the next
+    reload, and the last thing the reader had been told about it was that it
+    was saved. The "Cleared." arm was the sharper one: the box looked empty,
+    the old address was still in storage, and it came back.
+
+    Both directions are pinned, because either alone passes for the wrong
+    reason. A refused write must not claim to be saved; a write that landed
+    must still say plainly that it did.
+    """
+    MINE = "https://helper.example/get?url={url}"
+
+    def helper_field():
+        return app.xpath(
+            "//input[@placeholder='https://example.workers.dev/?url={url}']")
+
+    def type_helper_site(url):
+        """Open My data, put `url` in the helper-site box, commit it, and
+        return what the app said. Leaves the dialog closed."""
+        app.dismiss_toasts()
+        app.xpath("//button[normalize-space()='My data']").click()
+        app.wait_css(".dialog")
+        time.sleep(settle_s())          # the dialog scrim's stray-press guard
+        box = helper_field()
+        app.d.execute_script("arguments[0].scrollIntoView({block:'center'});", box)
+        box.click()
+        box.send_keys(Keys.CONTROL, "a")
+        box.send_keys(Keys.DELETE)
+        if url:
+            box.send_keys(url)
+        box.send_keys(Keys.TAB)         # the field commits on change: on blur
+        said = WebDriverWait(app.d, 10).until(
+            lambda d: app.toasts_text() or False,
+            message="typing a helper site must be answered")
+        app.xpath("//div[@class='dialog']//button[normalize-space()='Close']").click()
+        app.wait_gone(".dialog")
+        return said
+
+    def stored_helper_site():
+        return app.d.execute_script(
+            "return (JSON.parse(localStorage.getItem('cmitt.v1.prefs')||'{}')"
+            ").helper_site || '';")
+
+    refused = None
+    try:
+        app.boot("/", selection=["TOC"])
+        refused = app.refuse_site_data()
+        app.d.get(f"{BASE}/")           # reads fine; every cmitt.* write fails
+        app.wait_css("section[aria-label='My timetable']")
+
+        said = type_helper_site(MINE)
+        assert "Saved." not in said, \
+            f"nothing was saved, so nothing may say so: {said!r}"
+        assert "for the rest of this visit" in said, said
+        assert "Your browser is out of space," in said, said
+        assert "next time you open the app" in said, said
+        # …and it really did not land, which is why that toast is the only
+        # honest report the reader is ever going to get about it.
+        assert stored_helper_site() == "", stored_helper_site()
+    finally:
+        if refused is not None:
+            app.restore_site_data(refused)
+
+    # The other direction, same tab: a browser that takes the write. "Saved."
+    # is true now and has to be said — a fix that answered every press with
+    # the careful failure sentence would be lying the other way round.
+    app.d.get(f"{BASE}/")
+    app.wait_css("section[aria-label='My timetable']")
+    said = type_helper_site(MINE)
+    assert "Saved. The app will try your helper site first." in said, said
+    assert "rest of this visit" not in said, said
+    assert stored_helper_site() == MINE, stored_helper_site()
+
+    # And the arm that used to come back from the dead: emptying the box on a
+    # browser that takes the write really does empty it.
+    said = type_helper_site("")
+    assert "Cleared. The app will use its own helper sites." in said, said
+    assert stored_helper_site() == "", stored_helper_site()
+
+
+# --- from t2-parser-gate.py ---------------------------------------
+def t213_a_failed_sync_never_quotes_an_earlier_syncs_status(app):
+    """R92 S20. The app keeps a log of every fetch it makes for as long as
+    the tab is open, and the sync-failure message reads that log to work out
+    what happened. It read ALL of it — so the second sync of a session
+    described the first one.
+
+    Press Sync while CMI is answering 503 and the app correctly says
+    cmi.ac.in answered with an error, and quotes the status. Press it again a
+    minute later, when the host has stopped answering at all, and the app
+    used to repeat that story word for word: it said CMI had answered, it
+    quoted an HTTP status from a request minutes old, it skipped the probe
+    that is the only way to tell "we're not allowed to read it" from "nothing
+    is there", and it withheld "Load it from CMI's page" — the one way out —
+    on the strength of a 503 that belonged to a different request.
+
+    Three syncs in ONE tab, because that is the only shape this defect has:
+    every failure test before this one boots a fresh page per case, which is
+    a fresh log per case, which is exactly why none of them ever saw it. The
+    third sync goes back to 503 on purpose — a "fix" that simply stopped
+    reading the log would sail through the first two and fail that one.
+    """
+    def offers_the_way_out():
+        return app.d.find_elements(
+            By.XPATH,
+            "//div[contains(@class,'banner')]"
+            "//button[contains(., \"Load it from CMI's page\")]")
+
+    def banner_text():
+        found = app.css_all(".banner.warn")
+        return found[0].text if found else ""
+
+    def sync_again(previous):
+        """Press the button and wait for a NEW answer. `run_update` clears
+        the old banner as it starts, so "different from last time" is the
+        thing to wait for, not "a banner exists"."""
+        app.css(".welcome-card button.primary").click()
+        return WebDriverWait(app.d, 90).until(
+            lambda d: (banner_text() not in ("", previous)) and banner_text(),
+            message=f"the next sync never answered (still {previous!r})")
+
+    def direct_log_rows():
+        """The direct-route rows of the developer Fetch log, oldest first:
+        [time, route, url, status, ms, bytes, error]. Reached by a hash
+        change on the same document — a reload would empty the very log this
+        is asking about."""
+        app.d.get(f"{BASE}/#/developer/sync")
+        app.wait_css("section[aria-label='Developer mode']")
+        rows = app.d.find_elements(
+            By.XPATH,
+            "//div[contains(@class,'panel')][h3[normalize-space()='Fetch log']]"
+            "//table[contains(@class,'devlog')]/tbody/tr")
+        cells = [[td.text for td in r.find_elements(By.TAG_NAME, "td")]
+                 for r in reversed(rows)]
+        return [r for r in cells if r[1] == "direct"]
+
+    serve_cmi()
+    _cmi["bodies"] = {}          # up, and 503 on both pages, WITH CORS
+    try:
+        # (1) CMI answers an error, and the app is allowed to read the status.
+        app.boot("/", seed=False)
+        app.wait_css(".welcome-card", timeout=30)
+        first = WebDriverWait(app.d, 60).until(
+            lambda d: banner_text() or False,
+            message="the first sync must fail out loud")
+        assert "answered, but with an error" in first, first
+        assert "HTTP 503" in first, first
+        assert not offers_the_way_out(), first
+
+        # (2) Same tab, same log: now the host hangs up without answering.
+        _cmi["dead"] = True
+        second = sync_again(first)
+        assert "Nothing answered" in second, \
+            f"run 2 must not inherit run 1's story: {second!r}"
+        assert "HTTP 503" not in second, \
+            f"run 2 quoted a status from run 1: {second!r}"
+        assert "answered, but with an error" not in second, second
+        assert offers_the_way_out(), \
+            f"a host that hung up must still offer the way out: {second!r}"
+
+        # (3) …and back. That sentence is not gone from the app — it is
+        # simply owed to the run that earned it.
+        _cmi["dead"] = False
+        third = sync_again(second)
+        assert "answered, but with an error" in third, third
+        assert "HTTP 503" in third, third
+        assert not offers_the_way_out(), third
+
+        # The log was never cleared: run 1's 503 was still sitting in it,
+        # readable, while run 2 was being described. That is what makes this
+        # a test of the FILTER and not of an accidental reset — six direct
+        # rows, two per run, all three runs in one log.
+        #
+        # The ERROR column rather than the status one, because a
+        # cross-origin response the app IS allowed to read still arrives as a
+        # rejected fetch carrying its status in the message — which is why
+        # `run_update` treats `error.contains("HTTP ")` as the same signal as
+        # a status. The status column stays em-dashed for all six.
+        errors = [r[6] for r in direct_log_rows()]
+        assert errors[:2] == ["HTTP 503", "HTTP 503"], \
+            f"run 1's status must still be in the log run 2 read: {errors!r}"
+        assert any("Failed to fetch" in e for e in errors), \
+            f"the hung-up run must be in the same log: {errors!r}"
+        assert errors[-1] == "HTTP 503", \
+            f"and run 3's own status, after it: {errors!r}"
+    finally:
+        _cmi["dead"] = False
+        stop_serving_cmi()
+
+
+# --- from t3-calendar-share.py ------------------------------------
+_HARNESS = "/storage/MyFiles/github_files/rust_tutorial/timetable/timetable/e2e/test_app.py"
+
+
+# --- from t3-calendar-share.py ------------------------------------
+_src = open(_HARNESS, encoding="utf-8").read()
+
+
+# --- from t3-calendar-share.py ------------------------------------
+def _clear_downloads():
+    for f in os.listdir(DOWNLOADS):
+        os.remove(os.path.join(DOWNLOADS, f))
+
+
+# --- from t3-calendar-share.py ------------------------------------
+def _wait_ics(timeout=10):
+    """The .ics the browser has just written, read back as text.
+
+    Un-folds RFC 5545 continuation lines and un-escapes the commas the format
+    puts in front of every one in a DESCRIPTION — without both, a 74-octet
+    fold splits `?c=TOC` across two lines and an assertion fails for a reason
+    that has nothing to do with the app."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        files = [f for f in os.listdir(DOWNLOADS) if f.endswith(".ics")]
+        if files:
+            path = os.path.join(DOWNLOADS, files[0])
+            with open(path, encoding="utf-8") as f:
+                raw = f.read()
+            return raw.replace("\r\n ", "").replace("\\,", ",")
+        time.sleep(0.2)
+    return None
+
+
+# --- from t3-calendar-share.py ------------------------------------
+def _request_host(url):
+    """The host a recorded request went TO.
+
+    Never a substring test on the whole URL: the share link rides in the
+    query, percent-encoded, so every request to tinyurl.com literally
+    contains "127.0.0.1" too — a filter that looked for it anywhere passed
+    an empty list for eight requests to eight companies and reported perfect
+    silence."""
+    body = url.split("//", 1)[-1]
+    return body.split("/", 1)[0].split("?", 1)[0]
+
+
+# --- from t3-calendar-share.py ------------------------------------
+def _open_export(app):
+    app.xpath("//button[normalize-space()='Export to calendar']").click()
+    return app.wait_css(".dialog")
+
+
+# --- from t3-calendar-share.py ------------------------------------
+def _set_export_dates(app, value):
+    """Both date boxes at once. Set through the DOM and announced with an
+    `input` event, because a `<input type=date>` cannot be typed into
+    reliably headless."""
+    for sel in ("#ex-from", "#ex-to"):
+        el = app.wait_css(sel)
+        app.d.execute_script(
+            "arguments[0].value = arguments[1];"
+            "arguments[0].dispatchEvent(new Event('input', {bubbles: true}));",
+            el, value)
+
+
+# --- from t3-calendar-share.py ------------------------------------
+def _press_download(app):
+    """Re-queried every time: the dialog re-renders around its live region,
+    so a handle taken before the last press goes stale."""
+    app.xpath("//div[contains(@class,'dialog')]"
+              "//button[normalize-space()='Download calendar file']").click()
+
+
+# --- from t3-calendar-share.py ------------------------------------
+def t220_a_calendar_says_which_course_the_dates_left_out(app):
+    """Narrow the export dates and a course you picked could vanish from the
+    calendar without a word: the app said "Calendar file downloaded." and
+    nothing named the course that wasn't in it. Pick a range with no class in
+    it at all — two dates on the same Sunday — and it downloaded a calendar
+    holding zero events under that same cheerful sentence.
+
+    A file and the sentence about it have to describe the same week: a course
+    the dates left out is named, with the reason that is actually true for it
+    (its classes exist, they just fall outside), and a file that would hold
+    nothing is refused instead of written."""
+    # TOC meets Tue and Thu; GERMAN — the reader's own course — meets Mon only.
+    app.boot("/", selection=["TOC", "GERMAN"], customs=HALL_CUSTOM)
+
+    # The seeded semester is August–November 2026, so 11 Aug (a Tuesday) and
+    # 16 Aug (a Sunday) are both inside the popup's own default range. Said
+    # out loud, because a fixture that moves must fail HERE, with a reason,
+    # rather than three assertions later as a mystery.
+    _open_export(app)
+    span = (app.css("#ex-from").get_attribute("value"),
+            app.css("#ex-to").get_attribute("value"))
+    assert span[0] <= "2026-08-11" and "2026-08-16" <= span[1], \
+        f"the fixture semester no longer covers the dates this test picks: {span}"
+    # And the popup says what will happen before anything is pressed — the
+    # sentence is the promise the toast below has to keep.
+    assert "is left out, and the app says which" in app.css(".dialog").text, \
+        app.css(".dialog").text
+    app.xpath("//div[contains(@class,'dialog')]"
+              "//button[normalize-space()='Cancel']").click()
+    app.wait_gone(".dialog")
+
+    # -- The control. Over the whole semester both courses are in the file,
+    #    and the toast says nothing about anything being left out. Without
+    #    this, every assertion below could be passing because the export is
+    #    broken rather than because it is honest.
+    _clear_downloads()
+    _open_export(app)
+    _press_download(app)
+    app.wait_gone(".dialog")
+    wide = _wait_ics()
+    assert wide, "the plain export must still download a file"
+    assert "Theory of Computation" in wide and "German A1" in wide, wide[:400]
+    said = app.toasts_text()
+    assert "Calendar file downloaded." in said, said
+    assert "isn't in it" not in said, f"nothing was left out: {said}"
+    app.dismiss_toasts()
+
+    # -- A range with no class in it: a Sunday to the same Sunday. Refused,
+    #    on screen, with nothing written to disk.
+    _clear_downloads()
+    _open_export(app)
+    _set_export_dates(app, "2026-08-16")
+    _press_download(app)
+    err = app.wait_css(".dialog .form-error")
+    WebDriverWait(app.d, 5).until(
+        lambda d: "Nothing falls between those dates" in err.text,
+        message=f"expected a refusal, got: {err.text!r}")
+    assert app.css_all(".dialog"), "the popup must stay open so the dates can be fixed"
+    time.sleep(1.0)
+    assert not [f for f in os.listdir(DOWNLOADS) if f.endswith(".ics")], \
+        f"an empty range must not download an empty calendar: {os.listdir(DOWNLOADS)}"
+
+    # -- A single Tuesday: TOC has a class that day, GERMAN cannot have one.
+    #    The file is written, and the course it could not hold is NAMED.
+    _set_export_dates(app, "2026-08-11")
+    _press_download(app)
+    app.wait_gone(".dialog")
+    narrow = _wait_ics()
+    assert narrow, "a range that does hold a class must still download"
+    assert narrow.count("BEGIN:VEVENT") == 1, narrow
+    assert "Theory of Computation" in narrow and "German A1" not in narrow, narrow[:400]
+    said = app.toasts_text()
+    assert "GERMAN isn't in it" in said, said
+    assert "none of its classes fall between those dates" in said, said
+    # …and NOT with the other reason, which is false for this course: GERMAN
+    # has a weekly time. It is Monday.
+    assert "no weekly time" not in said, \
+        f"a course the dates dropped must not be reported as having no classes: {said}"
+
+
+# --- from t3-calendar-share.py ------------------------------------
+def t221_a_calendar_for_one_course_links_to_that_one_course(app):
+    """Export the calendar for a single course and every event in it used to
+    end with a link to the sender's WHOLE timetable — send a friend the one
+    course you share and opening the link put all of your courses on their
+    planner. The link in a file has to open the file's own courses and no
+    others."""
+    app.boot("/", selection=["TOC", "GERMAN"], customs=HALL_CUSTOM)
+
+    # One course, chosen in the popup's own dropdown.
+    _clear_downloads()
+    _open_export(app)
+    Select(app.wait_css("#ex-scope")).select_by_value("GERMAN")
+    _press_download(app)
+    app.wait_gone(".dialog")
+    one = _wait_ics()
+    assert one, "no .ics file downloaded"
+    assert "DESCRIPTION" in one and "?c=GERMAN" in one, one
+    assert "TOC" not in one, \
+        f"a one-course file must not name the sender's other courses: {one}"
+
+    # The control, and the promise that the ordinary path is untouched: with
+    # "All selected" the link carries exactly the courses in the file.
+    app.dismiss_toasts()
+    _clear_downloads()
+    _open_export(app)
+    Select(app.wait_css("#ex-scope")).select_by_value("__all__")
+    _press_download(app)
+    app.wait_gone(".dialog")
+    both = _wait_ics()
+    assert both, "no .ics file downloaded for the whole selection"
+    assert "?c=TOC,GERMAN" in both, both
+
+
+# --- from t3-calendar-share.py ------------------------------------
+_NOISE_ALPHABET = ("abcdefghijklmnopqrstuvwxyz"
+                   "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789")
+
+
+# --- from t3-calendar-share.py ------------------------------------
+def _noise(seed, n):
+    """`n` characters that do not compress. Deterministic, so the fixture is
+    the same on every machine — the share payload is LZ-compressed, and text
+    with any pattern in it shrinks away to nothing."""
+    x = (seed * 2654435761) % (2 ** 31)
+    out = []
+    for _ in range(n):
+        x = (x * 1103515245 + 12345) % (2 ** 31)
+        out.append(_NOISE_ALPHABET[x % len(_NOISE_ALPHABET)])
+    return "".join(out)
+
+
+# --- from t3-calendar-share.py ------------------------------------
+def _oversized_planner(courses=16, name_chars=110):
+    """A planner whose share link crosses clck.ru's measured ceiling.
+
+    Courses of the reader's own, because those travel in the link in full —
+    which is exactly how a real student gets there (two dozen courses with
+    every class moved was the measured case). Returns (selection, customs)."""
+    codes, made = [], []
+    for i in range(courses):
+        code = f"Z{i:02d}"
+        codes.append(code)
+        made.append({
+            "code": code, "name": _noise(i + 1, name_chars),
+            "instructors": [_noise(i + 500, 24)], "branches": [],
+            "credits": 4, "starts": None, "part_of_semester": None,
+            "optional_flag": False, "status": "Scheduled",
+            "meetings": [{"day": "Mon",
+                          "slot": {"start_min": 550, "end_min": 625},
+                          "hall": _noise(i + 900, 20), "temp_booking": False}],
+        })
+    return codes, {"courses": made}
+
+
+# --- from t3-calendar-share.py ------------------------------------
+def t222_a_link_no_shortener_will_take_is_never_sent(app):
+    """clck.ru's own buffer refuses a request line past about 4 000
+    characters, and no helper site can rescue it — every helper fetches the
+    same over-long URL. The app used to offer "Make it short" anyway: one
+    press handed the student's whole timetable to clck.ru AND to all seven
+    public relays, eight companies in half a second, on the way to a refusal
+    that was certain before the first byte left.
+
+    So the length is measured first. The service that cannot take this link
+    says so on its own option and on the button, the full link is already
+    open because it is the only thing that works — and pressing the button
+    sends nothing to anybody."""
+    codes, customs = _oversized_planner()
+    app.boot("/", selection=codes, customs=customs)
+    link = _open_shorten(app)
+    # Asked as a request line, which is what a server's buffer sees: the
+    # separators are percent-encoded on the way. If a codec change ever makes
+    # this fixture small again, the test must fail here and not silently stop
+    # testing anything.
+    asking = 23 + sum(1 if c.isalnum() or c in "-_.~" else 3 for c in link)
+    assert asking > 4200, \
+        f"the fixture must cross clck.ru's 4 000-character ceiling: {asking}"
+
+    opts = app.css_all(".shorten-opt")
+    assert len(opts) == 3, [o.text for o in opts]
+    # The service that cannot take it is annotated — and the two that CAN are
+    # not. "Try another service" is only real advice while that stays true,
+    # and a badge on all three would pin nothing.
+    assert "too long" in opts[2].text, opts[2].text
+    assert "as much as it will take" in opts[2].text, opts[2].text
+    assert not app.css_all(".shorten-opt")[0].find_elements(
+        By.CSS_SELECTOR, ".shorten-toolong"), opts[0].text
+    assert not app.css_all(".shorten-opt")[1].find_elements(
+        By.CSS_SELECTOR, ".shorten-toolong"), opts[1].text
+    # The option is annotated, never removed: a sign, not a hidden fact.
+    assert opts[2].find_elements(By.CSS_SELECTOR, "input[type=radio]"), \
+        "the service must stay choosable, with its reason on it"
+
+    # Pick it. The button stops asking for something that cannot work, and
+    # the full link — the only thing that does — is already open.
+    app.css_all(".shorten-opt input")[2].click()
+    btn_sel = ".shorten-dialog .actions button:last-child"
+    WebDriverWait(app.d, 5).until(
+        lambda d: "Too long for clck.ru" in app.css(btn_sel).text,
+        message="the button must stop offering a call that cannot work")
+    assert app.css(".shorten-long").get_attribute("open") is not None, \
+        "the full link must be open: it is the only link that works here"
+    # The chooser has just re-rendered around the button; the reflow shield
+    # eats a pointer that lands inside its window.
+    time.sleep(settle_s())
+
+    # Now the claim itself: a press spends nothing. Every fetch the page
+    # makes is recorded, so a request to clck.ru — or to any of the helper
+    # sites the old code fanned out to — cannot hide.
+    app.d.execute_script("""
+        window.__seen = [];
+        if (!window.__realFetch) window.__realFetch = window.fetch;
+        window.fetch = function (...args) {
+            try {
+                const a = args[0];
+                window.__seen.push(a && a.url ? a.url : String(a));
+            } catch (e) { window.__seen.push('unreadable'); }
+            return window.__realFetch.apply(this, args);
+        };
+    """)
+    app.css(btn_sel).click()
+    failed = WebDriverWait(app.d, 10).until(
+        lambda d: d.find_elements(By.CSS_SELECTOR, ".shorten-failed") or False)
+    text = failed[0].text
+    assert "too long for clck.ru" in text.lower(), text
+    # The measured reason, not a network one — and the way out in the same
+    # breath (t110's promise: a diagnosis never arrives without an escape).
+    assert "as much as clck.ru will take" in text, text
+    assert "copy the full link instead" in text, text
+    assert "HTTP" not in text, f"nothing answered, so nothing may be quoted: {text}"
+    assert "couldn't be reached" not in text, \
+        f"nothing was reached for, so nothing failed to be reached: {text}"
+    assert not app.css_all(".shorten-failed-saw"), \
+        "no helper site may be handed a link the app already knows is refused"
+    assert not app.css_all(".shorten-short"), "a refusal must not produce a link"
+    assert app.d.execute_script(
+        "return localStorage.getItem('cmitt.v1.shortlinks');") is None
+    sent = [u for u in app.d.execute_script("return window.__seen;")
+            if not _request_host(u).startswith("127.0.0.1")]
+    assert sent == [], f"nothing may leave the browser, and this did: {sent}"
+
+    # The control, and the point of the whole feature: the app DOES still
+    # send when the service can take the link. Without this the assertion
+    # above would pass just as happily on a browser that cannot fetch at all.
+    app.css_all(".shorten-opt input")[0].click()
+    WebDriverWait(app.d, 5).until(
+        lambda d: app.css(btn_sel).text == "Make it short")
+    time.sleep(settle_s())
+    app.d.execute_script("window.__seen = [];")
+    app.css(btn_sel).click()
+    WebDriverWait(app.d, 20).until(
+        lambda d: [u for u in d.execute_script("return window.__seen;")
+                   if not _request_host(u).startswith("127.0.0.1")],
+        message="TinyURL takes this link, so pressing must really ask it")
+
+
+# --- from t4-devmode-state.py -------------------------------------
+TREE = "/storage/MyFiles/github_files/rust_tutorial/timetable/timetable"
+
+
+# --- from t4-devmode-state.py -------------------------------------
+E2E = os.path.join(TREE, "e2e")
+
+
+# --- from t4-devmode-state.py -------------------------------------
+HARNESS = os.environ.get("T4_HARNESS", E2E)
+
+
+# --- from t4-devmode-state.py -------------------------------------
+def t230_a_click_on_the_questions_own_words_stays_inside_it(app):
+    """A confirmation is made of words, and words are not focusable — so one
+    ordinary click on the question itself used to drop focus to BODY, because
+    the box around it was not focusable either. The Tab trap is a keydown
+    handler on that box, and a keydown on body never reaches it: the next Tab
+    then walked the header buttons hidden BEHIND the overlay and Enter pressed
+    a control nobody could see, while a screen reader stood outside the
+    alertdialog altogether. t124 pins the cancel-and-restore path; nothing
+    pinned a click on the question's own words (R92 S12)."""
+    app.boot("/", selection=["TOC"])
+    app.xpath("//button[normalize-space()='My data']").click()
+    dlg = app.wait_css(".dialog")
+    btn = dlg.find_element(
+        By.XPATH, ".//button[contains(normalize-space(),'Delete all app data')]")
+    app.d.execute_script("arguments[0].scrollIntoView({block:'center'});", btn)
+    time.sleep(0.2)
+    btn.click()
+    box = app.wait_css(".dialog.confirm")
+    time.sleep(settle_s())
+
+    # Focusable but not tabbable — the same reason the main dialog's own
+    # container carries it. Without this there is nowhere for a click on the
+    # text to land except body.
+    assert box.get_attribute("tabindex") == "-1", \
+        "the confirm box must be focusable (not tabbable)"
+
+    def inside():
+        return app.d.execute_script(
+            "return arguments[0].contains(document.activeElement);", box)
+
+    # Both halves of the question: the heading and the sentence under it.
+    box.find_element(By.CSS_SELECTOR, "#confirm-title").click()
+    time.sleep(0.2)
+    assert inside(), "clicking the question's heading must keep focus in the confirm"
+    box.find_element(By.CSS_SELECTOR, ".confirm-lede").click()
+    time.sleep(0.2)
+    assert inside(), "clicking the question's own sentence must keep focus in it too"
+
+    # …and the trap holds from there. Shift+Tab first, because that is the
+    # dangerous direction and the one `trap_tab` has to wrap by hand: its
+    # native answer is the element BEFORE the dialog, which is the page behind
+    # the overlay. With focus dropped to body it reached the Close button of
+    # the dialog underneath, and the next Tab reached the planner behind THAT.
+    ActionChains(app.d).key_down(Keys.SHIFT).send_keys(Keys.TAB) \
+        .key_up(Keys.SHIFT).perform()
+    time.sleep(0.2)
+    assert inside(), \
+        "Shift+Tab after a click on the question's words reached the page behind it"
+    for i in range(3):
+        ActionChains(app.d).send_keys(Keys.TAB).perform()
+        time.sleep(0.15)
+        assert inside(), \
+            f"Tab #{i + 1} after a click on the question's words left the confirm"
+
+    # Escape from that state still answers the QUESTION, not the dialog under
+    # it — the other half of S12, which R93's reorder of the Escape chain
+    # closed. Both halves are checked here so neither can drift alone.
+    ActionChains(app.d).send_keys(Keys.ESCAPE).perform()
+    app.wait_gone(".dialog.confirm")
+    assert app.css_all(".dialog"), \
+        "Escape must answer the question on top, not the dialog underneath it"
+    assert "#/developer" not in app.d.execute_script("return location.hash;"), \
+        "and it must certainly not walk anywhere else"
+    ActionChains(app.d).send_keys(Keys.ESCAPE).perform()
+    app.wait_gone(".dialog")
+
+
+# --- from t4-devmode-state.py -------------------------------------
+def t231_the_free_hall_finder_drops_a_slot_that_left_the_grid(app):
+    """The free-hall finder's day and slot were plain signals that nothing
+    ever re-checked against the grid. Move a class to 18:30 and the grid grows
+    a column for it; ask the finder about that column, then take the move
+    back, and the column goes — but the finder kept answering. It reported
+    EVERY hall free, at a time with no name ("Tuesday · "), because the shared
+    "is something standing here" question reads NOT BUSY for a start that owns
+    no column — and the panel is a live region, so it re-announced that answer
+    for every new day the reader picked. The answer has to go, not become a
+    lie (R92 S13)."""
+    evening = {
+        "next_id": 1,
+        "items": [{
+            "id": 0, "course": "TOC",
+            "base": {"day": "Tue", "slot": {"start_min": 550, "end_min": 625},
+                     "hall": "Lecture Hall 803", "temp_booking": False},
+            "to": {"day": "Tue", "slot": {"start_min": 1110, "end_min": 1185},
+                   "hall": "Lecture Hall 803", "temp_booking": False},
+            "created_at": 1754000000000.0}],
+        "credits": [],
+    }
+    app.boot("/", selection=["TOC"], overrides=evening)
+    app.open_tab("Halls")
+    halls = "section[aria-label='Lecture halls']"
+    section = app.wait_css(halls)
+
+    def slot_value():
+        return app.d.execute_script(
+            f"return document.querySelector("
+            f"  \"{halls} select[aria-label='Time slot']\").value;")
+
+    # Ask about the out-of-hours column the move minted.
+    section.find_element(
+        By.CSS_SELECTOR, "select[aria-label='Time slot'] option[value='1110']").click()
+    section.find_element(
+        By.CSS_SELECTOR, "select[aria-label='Day'] option[value='1']").click()  # Tue
+    app.wait_css(".finder-result")
+    assert "18:30" in app.css(".finder-when").text, app.css(".finder-when").text
+
+    # Take the move back from My data — WITHOUT leaving the Halls tab, which
+    # is the point: nothing remounts the finder, so nothing resets its picks.
+    app.xpath("//button[normalize-space()='My data']").click()
+    dialog = app.wait_css(".dialog")
+    dialog.find_element(
+        By.XPATH,
+        ".//li[contains(.,'TOC')]//button[normalize-space()=\"Back to CMI's time\"]"
+    ).click()
+    app.xpath("//div[@class='dialog']//button[normalize-space()='Close']").click()
+    app.wait_gone(".dialog")
+
+    # The 18:30 column has left the grid, so the answer about it goes too.
+    WebDriverWait(app.d, 10).until(
+        lambda d: not d.find_elements(By.CSS_SELECTOR,
+                                      f"{halls} select[aria-label='Time slot'] "
+                                      "option[value='1110']"),
+        message="the grid must lose the 18:30 column when the move is taken back")
+    assert not app.css_all(".finder-result"), \
+        "a slot the grid no longer offers must not still be answered"
+    assert slot_value() == "", \
+        "and the picker must fall back to 'Pick a slot…'"
+
+    # Changing the day must not resurrect it: the panel is aria-live, so a
+    # false answer here was re-announced once per day the reader tried.
+    app.css(f"{halls} select[aria-label='Day']").find_element(
+        By.CSS_SELECTOR, "option[value='2']").click()  # Wed
+    time.sleep(0.5)
+    assert not app.css_all(".finder-result"), \
+        "a day change must not re-announce an answer for a slot that is gone"
+
+    # And the finder still WORKS — a validator that answered nothing ever
+    # would pass every assertion above and be a worse bug than the one it
+    # replaced.
+    section = app.css(halls)
+    section.find_element(
+        By.CSS_SELECTOR, "select[aria-label='Time slot'] option[value='840']").click()
+    section.find_element(
+        By.CSS_SELECTOR, "select[aria-label='Day'] option[value='1']").click()  # Tue
+    app.wait_css(".finder-result")
+    when = app.css(".finder-when").text
+    assert "14:00" in when and "Tuesday" in when, when
+    assert app.css_all(".hall-list li"), "a real slot still gets a real list"
+
+
+# --- from t4-devmode-state.py -------------------------------------
+def t232_undoing_an_answer_to_cmis_conflicts_puts_the_questions_back(app):
+    """Answering CMI's conflicts is offered as undoable, and the Undo used to
+    do half of it. The pre-answer times came back, but the QUESTIONS were gone
+    — out of memory and off disk — so the class drew twice, the stored queue
+    was empty, and the notice that offers Review had nothing left to count.
+    There was no route back to a decision the reader had just taken back, and
+    a reload changed nothing. Redo has to be symmetrical, and — the half that
+    makes the fix safe — an ORDINARY undo must still leave the queue alone: a
+    sync can raise a question without rewriting anything, so history from
+    before it is still alive, and its Ctrl+Z must not delete a question nobody
+    has read yet (R92 S14)."""
+    cached, overrides, gone = cache_from_before_cmi_moved_toc()
+    serve_cmi()
+    try:
+        app.boot("/", selection=["TOC", gone], overrides=overrides,
+                 raw_snapshot=cached)
+
+        def queue():
+            return app.d.execute_script(
+                "return localStorage.getItem('cmitt.v1.conflicts');")
+
+        app.xpath("//button[normalize-space()='Sync now']").click()
+        dialog = app.wait_css(".dialog", timeout=30)
+        dialog.find_element(
+            By.XPATH, ".//button[normalize-space()='Keep mine for all']").click()
+        dialog.find_element(By.XPATH, ".//button[normalize-space()='Apply']").click()
+        app.wait_toast("Your timetable now uses the times you picked.")
+        assert not queue(), \
+            "answering every row empties the queue — that is what is being undone"
+
+        # The Undo in that toast.
+        undo = [b for b in app.css_all(".toast button") if b.text.strip() == "Undo"]
+        assert undo, "answering conflicts has to offer an Undo"
+        undo[0].click()
+        app.wait_toast("Undid: resolve timetable conflicts")
+
+        # Back on disk…
+        WebDriverWait(app.d, 5).until(
+            lambda d: queue(), message="the undo must put the questions back on disk")
+        assert "TOC" in queue(), queue()
+        # …and back on screen, with the route back to them.
+        banner = WebDriverWait(app.d, 5).until(
+            lambda d: next((b for b in app.css_all(".banner.warn")
+                            if "conflict" in b.text), None),
+            message="the notice that offers Review must come back with the queue")
+        assert "Review" in banner.text, banner.text
+        app.dismiss_toasts()
+        time.sleep(settle_s())
+
+        # Redo takes them away again: undo of an answer is not a way to keep
+        # answered rows queued for ever.
+        app.xpath("//button[@aria-label='Redo']").click()
+        app.wait_toast("Redid: resolve timetable conflicts")
+        WebDriverWait(app.d, 5).until(
+            lambda d: not queue(),
+            message="redoing the answer must clear the queue again")
+        app.dismiss_toasts()
+        time.sleep(settle_s())
+
+        # And back once more, so there is a live queue for the last part.
+        app.xpath("//button[@aria-label='Undo']").click()
+        app.wait_toast("Undid: resolve timetable conflicts")
+        WebDriverWait(app.d, 5).until(lambda d: queue())
+        app.dismiss_toasts()
+        time.sleep(settle_s())
+
+        # THE GUARD. Every other action's undo has no opinion about the queue.
+        # Making the queue part of EVERY history entry — the obvious fix —
+        # would have let this Ctrl+Z delete a question the reader had not read.
+        app.open_tab("Master grid")
+        app.wait_css("section[aria-label='Master grid']")
+        app.chip("NLP", "section[aria-label='Master grid']").click()
+        app.wait_toast("NLP")
+        app.dismiss_toasts()
+        time.sleep(settle_s())
+        app.xpath("//button[@aria-label='Undo']").click()
+        WebDriverWait(app.d, 5).until(
+            lambda d: "Undid" in app.toasts_text())
+        assert "resolve timetable conflicts" not in app.toasts_text(), \
+            "that undo was for the course, not for the answer"
+        time.sleep(0.5)
+        assert queue() and "TOC" in queue(), \
+            "an ordinary undo must leave CMI's unanswered questions exactly alone"
+    finally:
+        stop_serving_cmi()
+
+
+# --- from t4-devmode-state.py -------------------------------------
+def t233_a_reload_that_came_back_on_the_old_build_says_so(app):
+    """Pressing "Update now" reloads the page, and on a slow connection this
+    app's own offline copy can answer that reload before the server does — so
+    the reader watches the page reload and lands back on the version they
+    already had. The app knew: it leaves a marker naming the build it went for
+    and compares it with the build that came back. When they differed it did
+    NOTHING — no toast, no notice, no word anywhere — while its next check went
+    quiet about that build for a day and blamed "something between this browser
+    and the server". It has to say so, tell the reader what actually gets the
+    new version, and keep the loop guard armed while it does (R92 S15)."""
+    app.boot("/", selection=["TOC"])
+
+    def landed_notice():
+        return next((b for b in app.css_all(".banner")
+                     if "didn't land" in b.text), None)
+
+    assert landed_notice() is None, "an ordinary visit says nothing about updates"
+
+    def plant(target):
+        app.d.execute_script("""
+            const s = JSON.parse(localStorage.getItem('cmitt.v1.update') || '{}');
+            s.reload_target = arguments[0];
+            s.reload_target_at = Date.now();
+            localStorage.setItem('cmitt.v1.update', JSON.stringify(s));
+        """, target)
+
+    # A guard for a build that is NOT the one running: exactly the state a
+    # reload that lost the race to the cached shell leaves behind.
+    plant("a-build-this-page-is-not")
+    app.d.refresh()
+    app.wait_css(".header h1")
+    banner = WebDriverWait(app.d, 15).until(
+        lambda d: landed_notice(),
+        message="a reload that came back on the old build must say so")
+    assert "hard refresh" in banner.text, banner.text
+    assert "Ctrl+Shift+R" in banner.text, \
+        "the notice has to carry the thing that actually works"
+    assert _update_state(app.d)["reload_target"] == "a-build-this-page-is-not", \
+        "the loop guard must stay armed — clearing it is how a reload loop starts"
+
+    # The other side of the same branch, so this test cannot pass on a notice
+    # the app shows all the time: a guard for the build that IS running is the
+    # success case, and it says the opposite and spends the marker.
+    app.dismiss_toasts()
+    plant(_build_id_of(app.d))
+    app.d.refresh()
+    app.wait_css(".header h1")
+    app.wait_toast("Updated to the newest version", timeout=15)
+    assert landed_notice() is None, \
+        "an update that DID land must not be reported as one that didn't"
+    assert _update_state(app.d)["reload_target"] is None, \
+        "and a spent guard is cleared, or the next check is silenced for a day"
+
+
+# --- from t4-devmode-state.py -------------------------------------
+def t234_the_update_checks_cap_stays_under_the_workers_nav_cap(app):
+    """The band that made the defect above possible. The update check gives up
+    on the shell after its own timeout; the service worker answers a NAVIGATION
+    with the cached copy after its. While the check's cap was the LARGER of the
+    two, a link in between — fast enough to fetch a shell, too slow to win a
+    navigation — could raise the "a new version is ready" notice and then lose
+    the reload it offered, every time. Two numbers in two languages that no
+    compiler compares: this is the comparison (R92 S15)."""
+    def const_ms(path, name):
+        with open(os.path.join(REPO, *path), encoding="utf-8") as f:
+            line = next(l for l in f if l.strip().startswith(f"const {name}"))
+        return int(line.split("=", 1)[1].strip().rstrip(";").replace("_", ""))
+
+    shell = const_ms(("app", "src", "update.rs"), "SHELL_TIMEOUT_MS")
+    nav = const_ms(("app", "hooks", "sw-body.js"), "NAV_TIMEOUT_MS")
+    assert shell < nav, (
+        f"the check's shell timeout ({shell} ms) must stay strictly below the "
+        f"worker's navigation timeout ({nav} ms): a link that can raise the "
+        f"question has to be able to answer it")
+
+
+# --- from t4-devmode-state.py -------------------------------------
+def t235_build_info_update_rows_answer_the_button_beside_them(app):
+    """Developer mode prints when the app last asked the server for a newer
+    version and when it will ask next — and four lines below them offers the
+    button that does the asking. The two rows were built once, from a value in
+    storage that no signal reaches, so pressing that button left them reading
+    "never yet in this browser" while the key it had just written held a real
+    timestamp. Walking to another category and back repaired them, which is
+    not a repair. The same rows must also follow the switch in My data that
+    turns the checks off (R92 S17)."""
+    app.boot("/#/developer")
+    app.wait_css("section[aria-label='Developer mode']")
+
+    def dd_after(label):
+        return app.d.execute_script("""
+            const dt = [...document.querySelectorAll('.panel dl.kv dt')]
+                .find(x => x.textContent.trim() === arguments[0]);
+            return dt ? dt.nextElementSibling : null;
+        """, label)
+
+    asked = dd_after("Update check")
+    schedule = dd_after("Next scheduled check")
+    assert asked is not None and schedule is not None, "Build info's update rows"
+    assert asked.text == "never yet in this browser", asked.text
+
+    hash_before = app.d.execute_script("return location.hash;")
+    app.css("[data-update-check]").click()
+    # The check itself cannot reach anything here, which is fine: the row is
+    # written before the network is touched, precisely so a failed check still
+    # says when it was tried.
+    WebDriverWait(app.d, 15).until(
+        lambda d: asked.text.startswith("last asked"),
+        message="the panel's own button must refresh the rows it writes")
+    assert app.d.execute_script("return location.hash;") == hash_before, \
+        "and it must do it here, without a walk to another category and back"
+    # …and IN PLACE. `asked` is the same element it was before the press: a
+    # rebuild of the panel — the old repair — replaces that node, so a text
+    # that changed on THIS one changed because something told it to.
+    assert app.d.execute_script("return document.contains(arguments[0]);", asked), \
+        "the row must refresh itself, not be rebuilt out from under the reader"
+
+    # The second row's other source: the switch in My data. It used to be read
+    # untracked, so it went stale the moment the switch was flipped.
+    assert "checks are off" not in schedule.text, schedule.text
+    _set_update_checks(app, False)
+    WebDriverWait(app.d, 10).until(
+        lambda d: "checks are off" in schedule.text,
+        message="the schedule row must follow the switch without a route change")
+    _set_update_checks(app, True)
+    WebDriverWait(app.d, 10).until(
+        lambda d: "checks are off" not in schedule.text,
+        message="and back again — the setting is not a one-way door")
+
+
+# --- from t4-devmode-state.py -------------------------------------
+MINE = [
+    t230_a_click_on_the_questions_own_words_stays_inside_it,
+    t231_the_free_hall_finder_drops_a_slot_that_left_the_grid,
+    t232_undoing_an_answer_to_cmis_conflicts_puts_the_questions_back,
+    t233_a_reload_that_came_back_on_the_old_build_says_so,
+    t234_the_update_checks_cap_stays_under_the_workers_nav_cap,
+    t235_build_info_update_rows_answer_the_button_beside_them,
+]
+
+
+# --- from t5-half-landed.py ---------------------------------------
+SCRATCH = ("/tmp/claude-1000/-storage-MyFiles-github-files-rust-tutorial-"
+           "timetable-timetable/663c9e78-0a57-4d25-9f43-540b204e93fe/scratchpad")
+
+
+# --- from t5-half-landed.py ---------------------------------------
+def snapshot_with_a_temp_booking(code="TOC", day="Tue", start=550, tmp=True,
+                                 moved_to=None):
+    """The seed snapshot with one of CMI's own meetings marked TMP\\*.
+
+    CMI decorates a room booking it has made for this week only; the parser
+    carries that as `Meeting.temp_booking` and the chip shows it as "Temp".
+    Everything in the app that asks "is this the same class?" is deliberately
+    blind to the flag (`Meeting::same_place_time`), so this fixture is how a
+    test can tell whether one particular question forgot that.
+
+    `tmp=False` leaves the flag alone, which is the control leg: the same
+    gesture must behave identically either way. `moved_to` puts the meeting
+    somewhere else entirely, so a stored change can point at a class CMI no
+    longer publishes there. Returns (snapshot_json, the meeting as CMI has it).
+    """
+    snap = json.loads(SEED_SNAPSHOT_JSON)
+    found = None
+    for course in snap["courses"]:
+        if course["code"] != code:
+            continue
+        for m in course["meetings"]:
+            if m["day"] == day and m["slot"]["start_min"] == start:
+                found = json.loads(json.dumps(m))
+                m["temp_booking"] = tmp
+                if moved_to is not None:
+                    m["day"], m["slot"] = moved_to["day"], moved_to["slot"]
+    assert found is not None, f"the fixture must still have {code} on {day} {start}"
+    return json.dumps(snap), found
+
+
+# --- from t5-half-landed.py ---------------------------------------
+def t240_a_temporary_booking_never_traps_a_class_away_from_cmis_time(app):
+    """Drag a class you had moved back onto the slot CMI gives it and the app
+    takes your change away again — "back to CMI's time", and nothing left in
+    Your changes. That stopped working the moment CMI marked the room booking
+    temporary: to decide whether the class was home, the app compared its
+    record of where CMI *had* put it against CMI's listing field by field,
+    "booked temporarily" included — and a listing it could no longer recognise
+    could never be handed back to. The drop wrote a second change instead and
+    announced a move to the very slot the class was already being dropped on.
+    """
+    def seeded(base_hall):
+        """One moved class: CMI has it Tue 09:10, the reader moved it to Wed
+        17:00. The change remembers CMI's slot as it was when it was made —
+        with no "temporary" note, because that is CMI's decoration and not
+        the reader's to reproduce."""
+        return {
+            "next_id": 1,
+            "items": [{
+                "id": 0, "course": "TOC",
+                "base": {"day": "Tue",
+                         "slot": {"start_min": 550, "end_min": 625},
+                         "hall": base_hall, "temp_booking": False},
+                "to": {"day": "Wed",
+                       "slot": {"start_min": 1020, "end_min": 1095},
+                       "hall": base_hall, "temp_booking": False},
+                "created_at": 1754000000000.0}],
+            "credits": [],
+        }
+
+    def drag_it_home():
+        app.open_tab("Master grid")
+        app.wait_css("section[aria-label='Master grid'] table.tt")
+        app.xpath("//button[contains(.,'Edit layout')]").click()
+        assert app.chips("TOC", "td[data-day='2'][data-slot='1020']"), \
+            "the seeded change must put TOC on Wed 17:00 to start with"
+        app.drag_hover(app.chip("TOC", "td[data-day='2'][data-slot='1020']"),
+                       app.cell(1, 550))
+        app.drop()
+
+    def stored_items():
+        raw = app.d.execute_script(
+            "return localStorage.getItem('cmitt.v1.overrides');")
+        return json.loads(raw)["items"] if raw else []
+
+    # 1. CMI's booking is temporary. This is the reported defect.
+    tmp_snap, cmi_meeting = snapshot_with_a_temp_booking()
+    hall = cmi_meeting.get("hall")
+    app.boot("/", selection=["TOC"], overrides=seeded(hall),
+             raw_snapshot=tmp_snap)
+    assert app.d.execute_script(
+        "return JSON.parse(localStorage.getItem('cmitt.v1.snapshot')).courses"
+        ".some(c => c.code === 'TOC' && c.meetings.some(m => m.temp_booking));"), \
+        "this test is about a temporary booking and the snapshot has none"
+    drag_it_home()
+    app.wait_toast("back to CMI's time")
+    assert stored_items() == [], \
+        f"the change was redundant and had to go: {stored_items()!r}"
+    assert app.chips("TOC", "td[data-day='1'][data-slot='550']"), \
+        "the class belongs in CMI's own cell again"
+    assert not app.chips("TOC", "td[data-day='2'][data-slot='1020']"), \
+        "and nowhere else"
+
+    # 2. The same gesture with no temporary note at all: unchanged, which is
+    #    what "the flag is not part of the question" means in both directions.
+    plain_snap, _ = snapshot_with_a_temp_booking(tmp=False)
+    app.boot("/", selection=["TOC"], overrides=seeded(hall),
+             raw_snapshot=plain_snap)
+    drag_it_home()
+    app.wait_toast("back to CMI's time")
+    assert stored_items() == [], \
+        f"an ordinary booking must behave the same: {stored_items()!r}"
+
+    # 3. And the guard it was tightened from is still there: when CMI has
+    #    since moved that class away, the slot you remember is not a place to
+    #    fall back to, so the drop is an ordinary move and takes nothing away
+    #    (R92 M5 — dropping the change there scattered the class to two cells
+    #    nobody had touched).
+    gone_snap, _ = snapshot_with_a_temp_booking(
+        moved_to={"day": "Fri", "slot": {"start_min": 840, "end_min": 915}})
+    app.boot("/", selection=["TOC"], overrides=seeded(hall),
+             raw_snapshot=gone_snap)
+    drag_it_home()
+    app.wait_toast("Moved TOC")
+    assert "back to CMI's time" not in app.toasts_text(), \
+        ("a class CMI no longer publishes there is not something to be handed "
+         f"back to: {app.toasts_text()!r}")
+    assert stored_items(), "the move had to be recorded, not dropped"
+
+
+# --- from t5-half-landed.py ---------------------------------------
+def raise_notices(app, codes=("TOC", "ISS", "NLP", "MFD", "CALG", "ECO")):
+    """Fill the notice rail by adding courses, one notice each.
+
+    Pressed from the page rather than with the mouse, because the rail is the
+    thing under test: once a few notices stand, they are over the chips and
+    Selenium refuses the click as intercepted — which is the harness noticing
+    the very overlap this test measures. Callers boot with
+    `prefs={"toast_life_secs": 0}` so nothing dismisses itself mid-test."""
+    app.open_tab("Master grid")
+    app.wait_css("section[aria-label='Master grid'] table.tt")
+    for code in codes:
+        found = app.chips(code, "section[aria-label='Master grid']")
+        if found:
+            app.d.execute_script("arguments[0].click();", found[0])
+            time.sleep(0.2)
+    WebDriverWait(app.d, 5).until(
+        lambda d: d.find_elements(By.CSS_SELECTOR, ".toasts .toast"))
+
+
+# --- from t5-half-landed.py ---------------------------------------
+def t241_a_notice_never_covers_the_question_however_the_screen_turns(app):
+    """A dialog gives up exactly as much room at the top of the screen as the
+    notice rail is using, so a sync that finishes while a question is open
+    cannot bury the question. That height was measured once, when the rail
+    last changed — and a rotation re-wraps every line in it. So turning the
+    phone left the dialog holding the number from the old shape: measured
+    here, a 420px-tall screen opened to 900 keeps reserving 139px for a rail
+    that is now 297px tall, and the notices stand over the dialog's title."""
+    def state():
+        return app.d.execute_script("""
+            const rail = document.querySelector('.toasts');
+            const dlg = document.querySelector('.dialog');
+            const covered = [];
+            const probe = (el, label) => {
+                if (!el) return;
+                const r = el.getBoundingClientRect();
+                const y = (r.top + r.bottom) / 2;
+                for (const x of [r.left + 4, (r.left + r.right) / 2, r.right - 4]) {
+                    const hit = document.elementFromPoint(x, y);
+                    if (hit && hit !== el && !el.contains(hit)
+                        && !el.parentElement.contains(hit)) {
+                        covered.push([label, Math.round(x), Math.round(y),
+                                      hit.className || hit.tagName]);
+                    }
+                }
+            };
+            if (dlg) {
+                probe(dlg.querySelector('h2'), 'the question');
+                dlg.querySelectorAll('.actions button')
+                   .forEach((b, i) => probe(b, 'answer ' + i));
+            }
+            return {
+                band: parseFloat(getComputedStyle(document.documentElement)
+                        .getPropertyValue('--toast-band')),
+                measured: rail ? rail.offsetHeight : null,
+                cap: window.innerHeight / 3,
+                covered: covered,
+            };
+        """)
+
+    def viewport(w, h):
+        app.d.execute_cdp_cmd("Emulation.setDeviceMetricsOverride",
+                              {"width": w, "height": h,
+                               "deviceScaleFactor": 1, "mobile": False})
+
+    try:
+        viewport(380, 420)
+        app.boot("/", seed=True, prefs={"toast_life_secs": 0})
+        raise_notices(app)
+        app.open_tab("My timetable")
+        app.wait_css("section[aria-label='My timetable']")
+        app.d.execute_script(
+            "arguments[0].click();",
+            app.xpath("//button[normalize-space()='Export to calendar']"))
+        app.wait_css(".dialog")
+        time.sleep(0.5)
+        before = state()
+        assert before["measured"] and before["measured"] > 40, \
+            f"this test needs a rail with something in it: {before!r}"
+        assert abs(before["band"] - min(before["measured"], before["cap"])) <= 2, \
+            f"the room given up must be the room the rail uses: {before!r}"
+        assert not before["covered"], \
+            f"a notice is standing over the question: {before!r}"
+
+        # Turn the screen. Every line in the rail re-wraps, so the height it
+        # takes is a different number now.
+        viewport(380, 900)
+        time.sleep(1.0)
+        after = state()
+        assert after["measured"] > before["measured"] + 20, \
+            f"the rail has to change shape for this to say anything: {after!r}"
+        assert abs(after["band"] - min(after["measured"], after["cap"])) <= 2, \
+            ("after the turn the dialog is still giving up the height the rail "
+             f"had in the old shape: {after!r}")
+        assert not after["covered"], \
+            f"a notice is standing over the question after the turn: {after!r}"
+    finally:
+        app.d.execute_cdp_cmd("Emulation.clearDeviceMetricsOverride", {})
+
+
+# --- from t5-half-landed.py ---------------------------------------
+def t242_a_corrected_time_costs_a_chip_one_line_not_three(app):
+    """When a class you moved lands inside the column it already borrowed, the
+    chip's second line is the only thing on the grid that says when it really
+    meets — so that line is never hidden. It was given `width: 100%` to keep
+    it, and a chip is a wrapping flex row: a full-width item eats a whole line
+    and pushed the ✎ badge onto a third one, so a chip carrying ~80px of ink
+    was drawn 162x74 beside 71x30 neighbours. It shrink-wraps now, like the
+    hall line it was modelled on. Two more things ride on the same line: on a
+    CLASHING chip it must be at full strength, because there it is the words
+    that carry the warning; and on a plain-ink sheet the chip must keep its
+    dashed "you changed this" outline, which a border shorthand used to turn
+    solid — a colour choice quietly dropping a sign."""
+    # TOC's Tuesday class moved to 09:30-10:20, entirely INSIDE the 09:10
+    # column — so no second column is minted and the chip's own second line
+    # is the only statement of the real time (t128's fixture).
+    inside_the_column = {
+        "next_id": 1,
+        "items": [{
+            "id": 0, "course": "TOC",
+            "base": {"day": "Tue", "slot": {"start_min": 550, "end_min": 625},
+                     "hall": "Lecture Hall 803", "temp_booking": False},
+            "to": {"day": "Tue", "slot": {"start_min": 570, "end_min": 620},
+                   "hall": "Lecture Hall 803", "temp_booking": False},
+            "created_at": 1754000000000.0}],
+        "credits": [],
+    }
+
+    def measure(selector):
+        return app.d.execute_script("""
+            const c = document.querySelector(arguments[0]);
+            if (!c) return null;
+            const s = c.querySelector('.subtime');
+            if (!s) return null;
+            const cs = getComputedStyle(c);
+            return {
+                chipH: c.getBoundingClientRect().height,
+                chipW: c.getBoundingClientRect().width,
+                subW: s.getBoundingClientRect().width,
+                inner: c.clientWidth - parseFloat(cs.paddingLeft)
+                       - parseFloat(cs.paddingRight),
+                opacity: getComputedStyle(s).opacity,
+                text: s.textContent.trim(),
+            };
+        """, selector)
+
+    grid_chip = ("section[aria-label='Master grid'] table.tt td "
+                 ".chip.overridden")
+    try:
+        # Measured where a cell has room to spare. In a tight cell the line
+        # fills the width whether or not it is told to, so the wide grid is
+        # the one that can tell the difference (measured: 143x74 with the
+        # declaration, 143x52 without, and identical at 430px).
+        app.d.set_window_size(1500, 1000)
+        app.boot("/", selection=["TOC"], overrides=inside_the_column)
+        app.open_tab("Master grid")
+        app.wait_css("section[aria-label='Master grid'] table.tt")
+        m = measure(grid_chip)
+        assert m, "no changed chip with a corrected time on the grid"
+        assert "09:30" in m["text"], m
+        assert m["subW"] < m["inner"] - 1, \
+            f"the corrected time still claims a whole line to itself: {m!r}"
+        # Against a chip with nothing but its code, in the same grid: one
+        # extra line is what a second statement costs. Two means the ✎ badge
+        # was pushed onto a line of its own behind it.
+        plain = app.d.execute_script("""
+            const c = document.querySelector(
+                "section[aria-label='Master grid'] table.tt td "
+                + ".chip:not(.overridden)");
+            return c ? c.getBoundingClientRect().height : null;
+        """)
+        assert plain, "no ordinary chip to measure against"
+        assert m["chipH"] < plain * 2, \
+            ("a chip with a corrected time is twice the height of one "
+             f"without — the ✎ is on a third line: {m!r} against {plain}")
+
+        # On a clashing chip the words ARE the warning, so this line is at
+        # full strength — the hall line beside it already is.
+        app.boot("/", selection=["TOC", "ISS"], overrides=inside_the_column)
+        app.wait_css("section[aria-label='My timetable'] table.tt")
+        clashing = measure("section[aria-label='My timetable'] .chip.clash")
+        assert clashing, "the fixture must put a clash on a chip that has a corrected time"
+        assert clashing["opacity"] == "1", \
+            f"a clashing chip dims the one line stating its real time: {clashing!r}"
+
+        # And plain ink is a colour choice, not a licence to drop a sign.
+        app.boot("/", selection=["TOC"], overrides=inside_the_column,
+                 prefs={"print_plain": True})
+        app.open_tab("Master grid")
+        app.wait_css("section[aria-label='Master grid'] table.tt")
+        app.d.execute_cdp_cmd("Emulation.setEmulatedMedia", {"media": "print"})
+        time.sleep(0.2)
+        border = app.d.execute_script("""
+            const c = document.querySelector(arguments[0]);
+            const cs = c ? getComputedStyle(c) : null;
+            return cs ? {style: cs.borderTopStyle, width: cs.borderTopWidth} : null;
+        """, grid_chip)
+        assert border and border["style"] == "dashed", \
+            ("a plain-ink sheet must keep the dashed \"you changed this\" "
+             f"outline: {border!r}")
+    finally:
+        app.d.execute_cdp_cmd("Emulation.setEmulatedMedia", {"media": ""})
+        app.d.set_window_size(1500, 1000)
+
+
+# --- from t5-half-landed.py ---------------------------------------
+def t243_a_sync_that_ends_the_undo_history_says_so(app):
+    """When CMI's new pages move a class you had moved yourself, the app
+    re-checks your changes against them — and once it has, every step you took
+    before that sync stops being undoable, because those steps no longer
+    describe the timetable in front of you. That happened in complete silence:
+    Undo and Redo simply greyed out, on a sync the app runs by itself twice a
+    day, while the app's own feature list promised "100 steps deep, with redo".
+    It is said now, on the notice the sync already raises — and only to a
+    reader who actually had steps to lose."""
+    def undo_disabled():
+        return app.css(".header button[aria-label='Undo']") \
+                  .get_attribute("disabled") is not None
+
+    def take_a_step():
+        """One undoable action, so "your earlier steps are gone" is about
+        something."""
+        app.open_tab("Master grid")
+        app.wait_css("section[aria-label='Master grid'] table.tt")
+        chip = app.chip("NLP", "section[aria-label='Master grid']")
+        app.d.execute_script("arguments[0].scrollIntoView({block:'center'});", chip)
+        chip.click()
+        WebDriverWait(app.d, 5).until(lambda d: not undo_disabled())
+
+    def sync():
+        app.dismiss_toasts()
+        app.open_tab("My timetable")
+        app.wait_css("section[aria-label='My timetable']")
+        app.xpath("//button[normalize-space()='Sync now']").click()
+
+    # The cache remembers TOC's first class on Friday and the reader moved it
+    # to where CMI in fact has it — so the sync agrees with them, retires
+    # their change, and rewrites the store. That is the path that ends the
+    # history.
+    cached, agreeing, _gone = cache_from_before_cmi_moved_toc()
+    agreeing["items"][0]["to"] = {
+        "day": "Tue", "slot": {"start_min": 550, "end_min": 625},
+        "hall": agreeing["items"][0]["base"]["hall"], "temp_booking": False}
+
+    serve_cmi()
+    try:
+        app.boot("/", selection=["TOC"], overrides=agreeing, raw_snapshot=cached)
+        take_a_step()
+        sync()
+        app.wait_toast("can no longer be undone", timeout=40)
+        WebDriverWait(app.d, 10).until(
+            lambda d: undo_disabled(),
+            message="the notice said the history was gone; the buttons must agree")
+
+        # And it is not a sentence the app says to everybody. A reader who has
+        # taken no steps has nothing to be told about — the first sync of a
+        # fresh browser must not report a loss that cannot have happened.
+        app.boot("/", selection=["TOC"], overrides=agreeing, raw_snapshot=cached)
+        assert undo_disabled(), "a freshly booted browser has no history"
+        sync()
+        app.wait_toast("Timetable updated", timeout=40)
+        time.sleep(0.6)
+        assert "can no longer be undone" not in app.toasts_text(), \
+            ("nothing was undoable, so nothing was lost: "
+             f"{app.toasts_text()!r}")
+
+        # Nor to a reader whose changes the sync did not have to re-check:
+        # steps taken, but nothing reconciled, so the history stands.
+        app.boot("/", selection=["TOC"])
+        take_a_step()
+        sync()
+        app.wait_toast("Timetable updated", timeout=40)
+        time.sleep(0.6)
+        assert "can no longer be undone" not in app.toasts_text(), \
+            f"this sync re-checked nothing: {app.toasts_text()!r}"
+        assert not undo_disabled(), \
+            "and the step taken before it is still there to undo"
+    finally:
+        stop_serving_cmi()
+
+
+# --- from t5-half-landed.py ---------------------------------------
+def t244_your_own_link_replaces_nothing_and_a_link_without_deletions_lifts_them(app):
+    """Opening a share link that would overwrite your work says what it is
+    about to take away, and offers an Undo. It used to say that whenever the
+    link carried any changes at all — so reopening your OWN bookmark announced
+    that it had "replaced the times and credits you set with its own", with
+    bytes identical to the ones already saved. The other half of the same
+    defect: a link carrying no deleted courses still ended "…with its own",
+    claiming it had brought deletions it does not have. What actually happens
+    there is the opposite — the courses you had struck out come back — and
+    that is what it says now."""
+    ovr = {
+        "next_id": 1,
+        "items": [{
+            "id": 0, "course": "TOC",
+            "base": {"day": "Tue", "slot": {"start_min": 550, "end_min": 625},
+                     "hall": "Lecture Hall 803", "temp_booking": False},
+            "to": {"day": "Wed", "slot": {"start_min": 1020, "end_min": 1095},
+                   "hall": "Lecture Hall 803", "temp_booking": False},
+            "created_at": 1754000000000.0}],
+        "credits": [{"course": "TOC", "credits": 6,
+                     "created_at": 1754000000000.0}],
+    }
+
+    def with_changes_link():
+        app.xpath("//button[normalize-space()='Share or import']").click()
+        app.wait_css(".dialog")
+        url = app.css("input[aria-label='Share link with courses and your changes']") \
+                 .get_attribute("value")
+        assert "s=" in url, url
+        # A `+` in a query is a SPACE, and the payload alphabet uses one.
+        return "/" + url[url.index("?"):].replace("+", "%2B")
+
+    def stored():
+        return json.loads(app.d.execute_script(
+            "return localStorage.getItem('cmitt.v1.overrides');") or "null")
+
+    # 1. Your own bookmark. Nothing in it is missing from what is saved here,
+    #    so it takes nothing away and has nothing to announce.
+    app.boot("/", selection=["TOC", "ISS"], overrides=ovr)
+    app.wait_css("section[aria-label='My timetable']")
+    link = with_changes_link()
+    app.d.get(f"{BASE}{link}")                 # no fresh boot: same storage
+    app.wait_css("section[aria-label='My timetable']")
+    time.sleep(1.2)                            # a notice would be up by now
+    assert "replaced" not in app.toasts_text(), \
+        f"reopening your own link replaces nothing: {app.toasts_text()!r}"
+    # …and it really was READ as a link with changes in it, rather than
+    # quietly failing to decode — which would make the silence above mean
+    # nothing at all.
+    after = stored()
+    assert after["items"] == ovr["items"] and after["credits"] == ovr["credits"], \
+        f"the link's own store must be what is saved: {after!r}"
+    assert not app.css_all(".unknown-codes"), app.toasts_text()
+
+    # 2. The control, from the same link: a browser holding a change the link
+    #    does not carry really does lose it, and really is told.
+    mine_too = json.loads(json.dumps(ovr))
+    mine_too["items"].append({
+        "id": 1, "course": "ISS",
+        "base": {"day": "Tue", "slot": {"start_min": 550, "end_min": 625},
+                 "hall": "Lecture Hall 803", "temp_booking": False},
+        "to": {"day": "Thu", "slot": {"start_min": 1020, "end_min": 1095},
+               "hall": "Lecture Hall 803", "temp_booking": False},
+        "created_at": 1754000000000.0})
+    mine_too["next_id"] = 2
+    app.boot("/", selection=["TOC", "ISS"], overrides=mine_too)
+    app.wait_css("section[aria-label='My timetable']")
+    app.d.get(f"{BASE}{link}")
+    app.wait_css("section[aria-label='My timetable']")
+    app.wait_toast("replaced the times and credits you set")
+
+    # 3. The reader's only saved work is a deletion, and the link carries
+    #    none. Nothing of theirs is replaced "with its own" — the course
+    #    comes back, and the notice says that instead.
+    with_deletion = json.loads(json.dumps(ovr))
+    with_deletion["hidden"] = [{"course": "RDBM", "was_selected": False,
+                                "created_at": 1754000000000.0}]
+    app.boot("/", selection=["TOC", "ISS"], overrides=with_deletion)
+    app.wait_css("section[aria-label='My timetable']")
+    app.d.get(f"{BASE}{link}")
+    app.wait_css("section[aria-label='My timetable']")
+    app.wait_toast("back in your catalog")
+    said = app.toasts_text()
+    assert "with its own" not in said, \
+        f"the link brought no deletions, so it replaced none: {said!r}"
+    assert not stored().get("hidden"), \
+        "and the deletion really was lifted, not merely described"
+
+
+# --- from t5-half-landed.py ---------------------------------------
+def serve_relay_reply(path, body):
+    """Let the helper sites answer `path` with a 200 and a body of our own.
+
+    Every relay resolves to the same stand-in as cmi.ac.in, so this is how a
+    test arranges the one shape the shortening copy is most easily wrong
+    about: the direct route dead, and a HELPER SITE answering — with something
+    that is not a short link. Whose words those are is the whole question."""
+    serve_relays()
+    _cmi["up"] = True
+    _cmi["bodies"][path] = body
+
+
+# --- from t5-half-landed.py ---------------------------------------
+def t245_a_failed_shortening_names_the_helper_sites_and_not_the_wrong_service(app):
+    """Shortening is the one thing in this app that sends a timetable away,
+    and the popup says so. When it fails, two things used to go wrong. The
+    relays that were handed the link were named only when the link came back
+    — so the failure page, in the very dialog that promises "the service you
+    pick can read it", said nothing about the helper sites that had just read
+    it. And a helper site's own refusal page was quoted under the SHORTENER's
+    name: "TinyURL answered with something that isn't a link: …" of a company
+    the browser never contacted, which the app then preferred over the true
+    sentence beside it."""
+    app.boot("/", selection=["TOC", "RDBM"])
+    _open_shorten(app)
+    app.css(".shorten-dialog .actions button:last-child").click()
+    failed = WebDriverWait(app.d, 40).until(
+        lambda d: d.find_elements(By.CSS_SELECTOR, ".shorten-failed") or False)
+    saw = app.css_all(".shorten-failed-saw")
+    assert saw, ("a shortening that failed still handed the link to the helper "
+                 f"sites, and has to say so: {failed[0].text!r}")
+    assert "helper site" in saw[0].text and "saw it" in saw[0].text, saw[0].text
+
+    # And now a helper site that answers — with a refusal of its own. The
+    # sentence must be about the helper site, must keep the way out, and must
+    # not put the helper site's words in the shortener's mouth.
+    serve_relay_reply("/api-create.php", "Error: Invalid URL")
+    try:
+        app.boot("/", selection=["TOC", "RDBM"])
+        _open_shorten(app)
+        app.css(".shorten-dialog .actions button:last-child").click()
+        blamed = WebDriverWait(app.d, 40).until(
+            lambda d: d.find_elements(By.CSS_SELECTOR, ".shorten-failed") or False)
+        text = blamed[0].text
+        assert "helper site" in text, \
+            f"a helper site answered, and it is the one that answered: {text!r}"
+        assert "isn't a link" not in text and "Invalid URL" not in text, \
+            ("a helper site's own page must never be quoted as the "
+             f"shortener's answer: {text!r}")
+        assert "copy the full link instead" in text, \
+            f"naming the right culprit must not cost the reader the way out: {text!r}"
+        assert not app.css_all(".shorten-short"), \
+            "and nothing that is not a link may be kept as one"
+        assert app.d.execute_script(
+            "return localStorage.getItem('cmitt.v1.shortlinks');") is None
+    finally:
+        stop_serving_cmi()
+
+
+# --- from t5-half-landed.py ---------------------------------------
+def pretend_pointers(app, pointer_coarse=None, any_pointer_coarse=None):
+    """Make the browser answer the two pointer media queries however this
+    test needs, for every document loaded from here on.
+
+    A touchscreen LAPTOP is `pointer: fine, any-pointer: coarse` — a mouse in
+    your hand and a finger available — and it is the device the drag copy was
+    wrong on. Chromium's own emulation cannot produce it: touch emulation
+    turns BOTH queries coarse, which is a phone, and `Emulation.setEmulatedMedia`
+    ignores pointer features altogether (measured, R96). So the queries are
+    answered directly, the same way `pin_weekday` answers `Date` — the app
+    reads its pointer through `matchMedia` and through the pointer type on
+    each event, and this touches only the first.
+
+    Returns an identifier for `unpretend_pointers`, which MUST be called in a
+    `finally`: an injected script outlives the test that added it.
+    """
+    return app.d.execute_cdp_cmd(
+        "Page.addScriptToEvaluateOnNewDocument",
+        {"source": r"""
+            (() => {
+              const forced = %s;
+              const real = window.matchMedia.bind(window);
+              window.matchMedia = (q) => {
+                const key = String(q).replace(/\s+/g, '');
+                if (key in forced) {
+                  return {media: q, matches: forced[key],
+                          addListener() {}, removeListener() {},
+                          addEventListener() {}, removeEventListener() {},
+                          onchange: null, dispatchEvent() { return false; }};
+                }
+                return real(q);
+              };
+            })();
+         """ % json.dumps({k: v for k, v in (
+             ("(pointer:coarse)", pointer_coarse),
+             ("(any-pointer:coarse)", any_pointer_coarse)) if v is not None})},
+    )["identifier"]
+
+
+# --- from t5-half-landed.py ---------------------------------------
+def unpretend_pointers(app, identifier):
+    """Undo `pretend_pointers`."""
+    app.d.execute_cdp_cmd("Page.removeScriptToEvaluateOnNewDocument",
+                          {"identifier": identifier})
+
+
+# --- from t5-half-landed.py ---------------------------------------
+def t246_a_touchscreen_laptop_is_told_the_gesture_that_works(app):
+    """A finger has to press and hold before it can drag a class; a mouse just
+    drags. Which sentence the app prints was decided by asking the browser
+    whether the MAIN pointer is a finger — and on a Windows or ChromeOS
+    laptop with a touchscreen it is not: the mouse is. So those readers were
+    told to "drag", the one gesture that does nothing there, while the drag
+    itself judged each press on its own and made their finger hold. The
+    sentence now follows the pointer actually in use, and corrects itself the
+    moment the reader changes hands.
+
+    The other half of the same fix is what it must NOT do. Widening the
+    question everywhere would also arm the confirm's 350 ms double-tap guard
+    for these readers' MICE, which is the regression three tests already
+    forbid — so the guard keeps asking the narrow question, and a mouse still
+    answers a question the instant it appears."""
+    def hints():
+        return " | ".join(e.text for e in app.css_all(".tray-hint, .hint"))
+
+    laptop = pretend_pointers(app, pointer_coarse=False, any_pointer_coarse=True)
+    try:
+        # Opened straight onto the Halls page, because CLICKING a tab is a
+        # mouse press and would answer the question this leg is asking.
+        app.boot("/", selection=["RDBM"], prefs={"tab": "Halls"})
+        app.wait_css("section[aria-label='Lecture halls']")
+        assert "press and hold" in app.css(".hint").text, \
+            f"the page that invites a drag must invite one that works: {hints()!r}"
+
+        # RDBM has no fixed slot, so the tray — and its own hint — are on
+        # screen on the timetable page.
+        app.boot("/", selection=["RDBM"])
+        app.wait_css(".tray-hint")
+        assert "press and hold" in app.css(".tray-hint").text, \
+            f"a finger on this screen must be told to hold first: {hints()!r}"
+
+        # A mouse press says which pointer is really in the reader's hand,
+        # and the sentence follows it — the fix is "say what will work", not
+        # "always say press and hold".
+        ActionChains(app.d).move_to_element(app.css(".tray-hint")).click().perform()
+        WebDriverWait(app.d, 5).until(
+            lambda d: "press and hold" not in app.css(".tray-hint").text,
+            message=f"a mouse press must correct the wording: {hints()!r}")
+        assert "drag one onto the grid" in app.css(".tray-hint").text, hints()
+
+        # And the guard that must not widen with it: on this same device a
+        # mouse answers a question at once. (Driven from the page so the
+        # press lands well inside the 350 ms window every time; the guard
+        # reads the media query, not the event.)
+        app.xpath("//button[normalize-space()='My data']").click()
+        app.wait_css(".dialog")
+        result = app.d.execute_async_script("""
+            const done = arguments[arguments.length - 1];
+            const opener = [...document.querySelectorAll('.dialog button')]
+                .find((b) => b.textContent.trim().startsWith('Delete all app data'));
+            if (!opener) { done({error: 'no opener'}); return; }
+            const t0 = performance.now();
+            opener.click();
+            const tick = () => {
+                const cancel = document.querySelector(
+                    '.dialog.confirm [data-confirm-cancel]');
+                if (cancel) {
+                    const at = performance.now() - t0;
+                    cancel.click();
+                    setTimeout(() => done({at: at, still: !!document.querySelector(
+                        '.dialog.confirm')}), 80);
+                    return;
+                }
+                if (performance.now() - t0 > 3000) {
+                    done({error: 'the confirm never appeared'});
+                    return;
+                }
+                requestAnimationFrame(tick);
+            };
+            requestAnimationFrame(tick);
+        """)
+        assert not result.get("error"), result
+        assert result["at"] < 300, \
+            f"this leg has to press inside the settle window: {result!r}"
+        assert not result["still"], (
+            "a mouse on a touchscreen laptop must not have to press twice — "
+            f"the double-tap guard is for fingers: {result!r}")
+    finally:
+        unpretend_pointers(app, laptop)
+
+
+# --- from t5-half-landed.py ---------------------------------------
+def t247_the_sender_is_told_their_deletions_travel(app):
+    """"Courses and your changes" puts four things into a link: the classes
+    you moved, the credits you set, the courses you made — and the courses you
+    struck out of the catalog. The button named the first three. So a reader
+    whose only change was a deletion pressed a live button described by a list
+    that did not include the one thing it was about to send, and handed out a
+    link that emptied someone else's catalog without knowing it had. The
+    recipient has been told since R92 (t161); this is the sender's half."""
+    # A reader whose ONLY change is a deletion.
+    app.boot("/", selection=["TOC"],
+             overrides={"next_id": 1, "items": [], "credits": [],
+                        "hidden": [{"course": "RDBM", "was_selected": False,
+                                    "created_at": 1754000000000.0}]})
+    app.wait_css("section[aria-label='My timetable']")
+    app.xpath("//button[normalize-space()='Share or import']").click()
+    app.wait_css(".dialog")
+    btn = app.css("button[aria-label='Copy link with courses and your changes']")
+    assert btn.get_attribute("disabled") is None, \
+        "a deletion IS a change — the link has something of yours to carry"
+    title = btn.get_attribute("title")
+    assert "deleted" in title, \
+        f"the link carries the courses you deleted and must say so: {title!r}"
+    for named in ("moved", "credit", "own courses"):
+        assert named in title, \
+            f"the other three things it carries are still named: {title!r}"
+
+    # And the sentence is about something real: the link does carry them.
+    url = app.css("input[aria-label='Share link with courses and your changes']") \
+             .get_attribute("value")
+    assert "s=" in url, url
+    app.boot("/" + url[url.index("?"):].replace("+", "%2B"), selection=["TOC"])
+    app.wait_css("section[aria-label='My timetable']")
+    WebDriverWait(app.d, 10).until(
+        lambda d: app.d.execute_script(
+            "const o = localStorage.getItem('cmitt.v1.overrides');"
+            "return o ? (JSON.parse(o).hidden || []).some("
+            "  h => h.course === 'RDBM') : false;"),
+        message="the deletion did not cross with the link the sender copied")
+
+
+# --- from t6-r92-canwait.py ---------------------------------------
+TWICE_IN_ONE_SLOT_CUSTOM = {"courses": [{
+    "code": "GERMAN", "name": "German A1", "instructors": [], "branches": [],
+    "credits": 2, "starts": None, "part_of_semester": None,
+    "optional_flag": False, "status": "Scheduled",
+    "meetings": [
+        {"day": "Tue", "slot": {"start_min": 550, "end_min": 625},
+         "hall": "Lecture Hall 803", "temp_booking": False},
+        {"day": "Tue", "slot": {"start_min": 550, "end_min": 625},
+         "hall": "Room 1002", "temp_booking": False},
+    ],
+}]}
+
+
+# --- from t6-r92-canwait.py ---------------------------------------
+ONE_HOUR = "Tuesday · 09:10–10:25"
+
+
+# --- from t6-r92-canwait.py ---------------------------------------
+def _whens(row):
+    """The time pills in one `.clash-list` row, in the order they are read."""
+    return [w.text for w in row.find_elements(By.CSS_SELECTOR, ".when")]
+
+
+# --- from t6-r92-canwait.py ---------------------------------------
+def _clash_row(app, sel, *codes):
+    """The one `.clash-list` row naming all of `codes`, or a failure saying
+    which rows were there instead."""
+    rows = app.css_all(sel)
+    hit = [r for r in rows if all(c in r.text for c in codes)]
+    assert len(hit) == 1, \
+        f"expected exactly one {' x '.join(codes)} row; got {[r.text for r in rows]!r}"
+    return hit[0]
+
+
+# --- from t6-r92-canwait.py ---------------------------------------
+def t250_a_class_that_meets_twice_in_one_hour_is_one_clash(app):
+    """Two courses can only collide once at a given hour of a given day, so
+    the Clashes panel has to name that hour once.
+
+    A course of your own may hold two meetings at the same day and time — the
+    editor takes them and the grid draws them — and each of those meetings
+    collides on its own with whatever else is there. The panel grouped those
+    by PAIR but not by TIME, so it listed "Tuesday · 09:10–10:25" twice under
+    one heading and told the reader there were two problems to fix at an hour
+    that holds one. The printed strip forty lines above it had counted this
+    way since R84, the screen had not, and the course details dialog the
+    grid's ⚠ sends you to had not either (R92 CW-1).
+
+    The control sits in the same panel: TOC and ISS really do collide twice,
+    on two different days, and both of those times must survive — a panel
+    that simply dropped every repeat would be a different bug."""
+    app.boot("/", selection=["TOC", "ISS", "GERMAN"],
+             customs=TWICE_IN_ONE_SLOT_CUSTOM, prefs={"ever_synced": True})
+    app.wait_css("section[aria-label='My timetable'] table.tt")
+
+    # The setup is real and not an artefact of the assertion: GERMAN draws TWO
+    # chips in the Tuesday 09:10 cell, so there genuinely are two collisions
+    # with each neighbour sitting there.
+    cell = "section[aria-label='My timetable'] td[data-day='1'][data-slot='550']"
+    assert len(app.chips("GERMAN", cell)) == 2, \
+        "the fixture must put two GERMAN meetings in one cell"
+
+    panel = "section[aria-label='My timetable'] .clash-list li"
+    for other in ("TOC", "ISS"):
+        row = _clash_row(app, panel, "GERMAN", other)
+        assert _whens(row) == [ONE_HOUR], \
+            f"one hour is one collision: {_whens(row)!r}"
+    both = _whens(_clash_row(app, panel, "TOC", "ISS"))
+    assert both == [ONE_HOUR, "Thursday · 09:10–10:25"], both
+
+    # The course details dialog groups the same collisions its own way and
+    # had the same hole. Its rows name the OTHER course, one row each.
+    app.open_tab("My courses")
+    app.wait_css("section[aria-label='My courses']")
+    app.chip("GERMAN", "section[aria-label='My courses']").click()
+    dialog = app.wait_css(".dialog")
+    assert "Clashes with 2 of your courses" in dialog.text, dialog.text
+    rows = app.css_all(".dialog .clash-list li")
+    assert [r.text.split("\n")[0] for r in rows] == ["ISS", "TOC"], \
+        [r.text for r in rows]
+    for row in rows:
+        assert _whens(row) == [ONE_HOUR], \
+            f"the dialog counts hours the way the panel does: {_whens(row)!r}"
+
+
+# --- from t6-r92-canwait.py ---------------------------------------
+def _active(app):
+    """What the keyboard is on, as a short readable label."""
+    return app.d.execute_script("""
+        const a = document.activeElement;
+        if (!a) return 'null';
+        if (a === document.body) return 'BODY';
+        return a.tagName + '[' + (a.getAttribute('aria-label') ||
+               a.className || a.outerHTML.slice(0, 40)) + ']';
+    """)
+
+
+# --- from t6-r92-canwait.py ---------------------------------------
+def t251_the_last_undo_hands_the_keyboard_to_the_button_beside_it(app):
+    """Undo is a button that switches itself off, and a browser drops focus to
+    <body> the moment the control holding it is disabled.
+
+    So a keyboard user undoing their last step lost the keyboard altogether:
+    the next Tab started again from the top of the page and a screen reader
+    said nothing, because <body> is nowhere to be. The undo has just woken
+    Redo, sitting right beside it, and that is where the keyboard belongs —
+    and only then: moving focus while Undo is still usable would steal the
+    next press from the reader (R92 CW-3, WCAG 2.4.3)."""
+    app.boot("/?c=TOC", selection=["TOC"], prefs={"ever_synced": True})
+    app.open_tab("Master grid")
+    app.wait_css("section[aria-label='Master grid'] table.tt")
+    # Two undoable steps, so the FIRST undo leaves the button alive.
+    app.chip("NLP", "section[aria-label='Master grid']").click()
+    app.wait_toast("Added NLP")
+    app.chip("AAT", "section[aria-label='Master grid']").click()
+    app.wait_toast("Added AAT")
+
+    undo = app.css("button[aria-label='Undo']")
+    redo = app.css("button[aria-label='Redo']")
+    app.d.execute_script("arguments[0].focus()", undo)
+    undo.click()
+    time.sleep(0.3)
+    assert not undo.get_attribute("disabled"), \
+        "the fixture must leave a second step to undo"
+    assert _active(app) == "BUTTON[Undo]", \
+        f"focus must not move while Undo is still usable: {_active(app)}"
+
+    # The undo that empties the stack: the button sleeps under the finger.
+    undo.click()
+    WebDriverWait(app.d, 5).until(lambda d: undo.get_attribute("disabled"))
+    assert _active(app) == "BUTTON[Redo]", \
+        f"the last undo hands the keyboard to Redo, not to <body>: {_active(app)}"
+
+    # …and the same in the other direction.
+    app.d.execute_script("arguments[0].focus()", redo)
+    redo.click()
+    time.sleep(0.3)
+    assert not redo.get_attribute("disabled")
+    assert _active(app) == "BUTTON[Redo]", _active(app)
+    redo.click()
+    WebDriverWait(app.d, 5).until(lambda d: redo.get_attribute("disabled"))
+    assert _active(app) == "BUTTON[Undo]", \
+        f"the last redo hands the keyboard to Undo: {_active(app)}"
+
+
+# --- from t6-r92-canwait.py ---------------------------------------
+def t252_resetting_every_tweak_leaves_the_keyboard_on_the_answer(app):
+    """"Reset all tweaks" is the one confirmed action that switches its own
+    opener off: with nothing differing any more the button sleeps, so the
+    dialog's habit of handing focus back to whatever opened it is a silent
+    no-op — `focus()` on a disabled button does nothing — and the keyboard is
+    left on <body>.
+
+    The honest destination is the sentence beside the button, because after
+    the reset that sentence IS the answer: it says nothing differs now. It
+    carries `tabindex="-1"` for exactly this, so it can be focused
+    programmatically without joining the Tab order (R92 CW-3)."""
+    app.boot("/#/developer/tweaks", prefs={"ever_synced": True})
+    app.wait_css("section[aria-label='Developer mode']")
+    app.xpath('//label[contains(@class,"opt")][.//span[normalize-space()='
+              '"Mark clashes with ⚠ and a red border"]]//input').click()
+    WebDriverWait(app.d, 5).until(
+        lambda d: "1 tweak differs" in app.css("[data-tweak-count]").text)
+    reset = app.xpath("//button[normalize-space()='Reset all tweaks']")
+    reset.click()
+    assert "Reset all tweaks?" in app.confirm_text()
+    time.sleep(settle_s())              # the confirm's own stray-press guard
+    app.answer_confirm(True)
+    app.wait_toast("back to how the app ships")
+    WebDriverWait(app.d, 5).until(
+        lambda d: reset.get_attribute("disabled"),
+        message="the reset must put the button back to sleep")
+    WebDriverWait(app.d, 5).until(
+        lambda d: d.execute_script(
+            "return document.activeElement.hasAttribute('data-tweak-count');"),
+        message="the reset must not leave the keyboard on <body>")
+    # The line is reachable by script and NOT by Tab: it is an answer, not a
+    # stop on the way through the page.
+    assert app.css("[data-tweak-count]").get_attribute("tabindex") == "-1"
+
+
+# --- from t6-r92-canwait.py ---------------------------------------
+def t253_dismissing_a_notice_does_not_drop_the_keyboard(app):
+    """A notice's ✕ deletes the notice it lives in, so the button being
+    pressed unmounts under the finger and focus falls to <body>.
+
+    Clearing three notices from the keyboard therefore cost three journeys
+    back from the top of the page, each one silent. The ✕ now walks down the
+    rail — the next notice's ✕ — and hands the keyboard back to the page's own
+    tab strip when the last notice goes (R92 CW-3)."""
+    app.boot("/", selection=["TOC"], prefs={"ever_synced": True})
+    app.open_tab("Master grid")
+    app.wait_css("section[aria-label='Master grid'] table.tt")
+    app.chip("NLP", "section[aria-label='Master grid']").click()
+    app.wait_toast("Added NLP")
+    app.chip("AAT", "section[aria-label='Master grid']").click()
+    app.wait_toast("Added AAT")
+    WebDriverWait(app.d, 5).until(
+        lambda d: len(app.css_all(".toast button[aria-label='Dismiss']")) == 2)
+
+    first = app.css_all(".toast button[aria-label='Dismiss']")[0]
+    app.d.execute_script("arguments[0].focus()", first)
+    first.click()
+    WebDriverWait(app.d, 5).until(
+        lambda d: len(app.css_all(".toast button[aria-label='Dismiss']")) == 1)
+    WebDriverWait(app.d, 5).until(
+        lambda d: d.execute_script(
+            "return document.activeElement.getAttribute('aria-label');")
+        == "Dismiss",
+        message="the keyboard walks down the rail to the next notice")
+
+    app.css(".toast button[aria-label='Dismiss']").click()
+    WebDriverWait(app.d, 5).until(
+        lambda d: not app.css_all(".toast button[aria-label='Dismiss']"))
+    WebDriverWait(app.d, 5).until(
+        lambda d: d.execute_script(
+            "return document.activeElement.matches("
+            "  \"nav.tabs button.tab, [data-mydata]\");"),
+        message="an empty rail hands the keyboard back to the page")
+
+
+# --- from t6-r92-canwait.py ---------------------------------------
+def t254_the_route_line_never_claims_an_order_the_app_does_not_use(app):
+    """My data remembers which way of reaching CMI worked last time, and it
+    used to add "The app tries it first."
+
+    Nothing computed that. It is wrong whenever the reader has a helper site
+    of their own — which the app really does try before every one of its own,
+    as the paragraph forty lines below says, so one dialog told the reader two
+    different things. It is wrong again with the app's own helper sites
+    switched off, when the remembered one is not asked at all. And it is
+    wrong for "direct", the route the app tries LAST, once every helper site
+    has failed. The remembered name is a fact and stays; the promise about
+    order goes, and the one paragraph that states an order correctly keeps
+    stating it (R92 CW-4)."""
+    def route_line(**prefs):
+        prefs["ever_synced"] = True     # no background sync to overwrite these
+        app.boot("/", prefs=prefs)
+        app.css("[data-mydata]").click()
+        text = app.wait_css(".dialog").text
+        app.xpath("//div[@class='dialog']//button[normalize-space()='Close']").click()
+        app.wait_gone(".dialog")
+        return text
+
+    text = route_line(last_good_route="codetabs.com",
+                      helper_site="https://example.workers.dev/?url={url}")
+    # The fact is still on screen. Without this, the absence below could pass
+    # on a dialog that never drew the line at all.
+    assert "Last worked: codetabs.com" in text, text
+    assert "tries it first" not in text, text
+    # …and the one place that DOES state an order still states it, so the
+    # honest sentence was not thrown out with the dishonest one.
+    assert "It is tried before the app's own list" in text, text
+
+    # The headline case, one stored value away even though today's cmi.ac.in
+    # cannot produce it: direct is tier 2 and runs only after every relay.
+    text = route_line(last_good_route="direct")
+    assert "Last worked: direct" in text, text
+    assert "tries it first" not in text, text
+
+
+# --- from t6-r92-canwait.py ---------------------------------------
+def t255_the_master_grid_says_when_a_filter_empties_it(app):
+    """Filter the Master grid down to nothing and it drew a blank ruled week:
+    five days, every column, and not one word about why they were empty.
+
+    Every other surface in the app explains itself — My timetable, My courses,
+    the Catalog and even the tweak search all name what happened and offer the
+    filter to drop — and this one left the reader to guess whether the app was
+    broken or their search was. It says so now, and offers the same "Clear all
+    filters" the Catalog offers, because those two share one filter set. The
+    note under the table goes with it: a footnote must never explain a mark
+    that is not on the sheet (R92 CW-5, t140's rule)."""
+    # TOC moved to Monday 18:30 — outside CMI's hours, so the grid grows a
+    # tinted column of its own and the note under the table appears.
+    evening = {
+        "next_id": 1,
+        "items": [{
+            "id": 0, "course": "TOC",
+            "base": {"day": "Tue", "slot": {"start_min": 550, "end_min": 625},
+                     "hall": "Lecture Hall 803", "temp_booking": False},
+            "to": {"day": "Mon", "slot": {"start_min": 1110, "end_min": 1185},
+                   "hall": "Lecture Hall 803", "temp_booking": False},
+            "created_at": 1754000000000.0}],
+        "credits": [],
+    }
+    app.boot("/", selection=["TOC"], overrides=evening,
+             prefs={"ever_synced": True})
+    app.open_tab("Master grid")
+    grid = app.wait_css("section[aria-label='Master grid']")
+    assert not app.css_all("section[aria-label='Master grid'] .empty.panel"), \
+        "a grid with courses on it says nothing"
+    assert "tinted column with the odd time" in grid.text, grid.text
+
+    box = grid.find_element(By.CSS_SELECTOR, ".filterbar input[type='search']")
+    box.send_keys("ZZZZ")
+    WebDriverWait(app.d, 10).until(
+        lambda d: app.css_all("section[aria-label='Master grid'] .empty.panel"),
+        message="a grid a filter has emptied must say so")
+    panel = app.css("section[aria-label='Master grid'] .empty.panel")
+    assert "No courses match." in panel.text, panel.text
+    assert "take a filter off" in panel.text, panel.text
+    # The tinted column is gone with the rest, so its footnote goes too.
+    assert "tinted column with the odd time" not in grid.text, grid.text
+
+    # NOTE for whoever lands the other half of this fix: `views.rs` marks the
+    # table `class:hidden-when-empty` when the panel is up, and NO rule in
+    # `app/styles.css` matches that class — so today the blank ruled week is
+    # still drawn underneath the panel. When the rule lands, add:
+    #   assert app.d.execute_script(
+    #       "return getComputedStyle(document.querySelector("
+    #       "  \"section[aria-label='Master grid'] .grid-scroll\")).display;"
+    #   ) == "none", "an empty grid must not draw a ruled week with nothing in it"
+
+    # The button in the PANEL, not the identically-worded one in the filter
+    # bar above it.
+    panel.find_element(
+        By.XPATH, ".//button[normalize-space()='Clear all filters']").click()
+    WebDriverWait(app.d, 10).until(
+        lambda d: not app.css_all("section[aria-label='Master grid'] .empty.panel"),
+        message="clearing the filters must put the grid back")
+    assert app.chips("TOC", "section[aria-label='Master grid']")
+    assert "tinted column with the odd time" in grid.text, grid.text
+
+
+# --- from t6-r92-canwait.py ---------------------------------------
+def t256_developer_mode_writes_the_semester_the_way_every_screen_does(app):
+    """CMI writes its semester as "August--November 2026" — two hyphens where
+    a dash belongs — and the app has one normaliser that turns that into an en
+    dash for anything a person reads.
+
+    The header, the printed masthead, My data and the calendar file's name all
+    call it. Developer mode's Overview did not, and neither did the
+    diagnostics block a bug report gets pasted into — so the one screen a
+    reader visits when something looks wrong was the screen showing the typo
+    (R92 CW-6)."""
+    app.boot("/#/developer", prefs={"ever_synced": True})
+    dev = app.wait_css("[id^='panel-dev-']")
+    # The stored label really does carry the two hyphens, so what follows is
+    # about the surface and not about lucky data.
+    assert app.d.execute_script(
+        "return JSON.parse(localStorage.getItem('cmitt.v1.snapshot'))"
+        ".semester_label;") == "August--November 2026"
+    assert "August–November 2026" in dev.text, dev.text
+    assert "August--November" not in dev.text, dev.text
+    # And the block a bug report carries away, which mirrors that line.
+    # Reading the clipboard back is refused in this harness, so the copy is
+    # caught on the way out instead — `domx::copy_to_clipboard` calls
+    # `navigator.clipboard.writeText`, and that is the payload.
+    app.d.execute_script(
+        "window.__copied = null;"
+        "navigator.clipboard.writeText = (t) => {"
+        "  window.__copied = t; return Promise.resolve(); };")
+    app.xpath("//button[contains(normalize-space(),'Copy diagnostics')]").click()
+    WebDriverWait(app.d, 5).until(
+        lambda d: d.execute_script("return window.__copied;"),
+        message="Copy diagnostics must put something on the clipboard")
+    copied = app.d.execute_script("return window.__copied;")
+    assert "August–November 2026" in copied, copied
+    assert "August--November" not in copied, copied
+
+
+# --- from t6-r92-canwait.py ---------------------------------------
+def t257_a_remembered_day_pick_lasts_as_long_as_the_page_says_it_does(app):
+    """"Remember the day pickers between visits", unticked, used to promise
+    that "a pick still holds until you close the tab".
+
+    It does not. The app clears both day picks at every load — deliberately,
+    so nothing races the values on the way in — so a plain reload of the same
+    tab opens on today again, one press of F5 from catching the copy out.
+
+    This pins BOTH halves. The behaviour, so nobody ever "fixes" the sentence
+    back by moving the clear out of boot; and the words, in the hint AND in
+    the text the tweak search matches on, because those are two separate
+    strings and only the search box notices when they drift (R92 CW-7)."""
+    app.d.set_window_size(430, 900)          # the day strip is phone-only
+    try:
+        pinned = app.pin_weekday(1)          # Tuesday
+        try:
+            app.boot("/?c=TOC", selection=["TOC"],
+                     prefs={"day_picks_forget": True, "ever_synced": True})
+            strip = "section[aria-label='My timetable'] div.seg[role='radiogroup']"
+            app.wait_css(strip)
+
+            def checked():
+                return app.css(
+                    f"{strip} button[role='radio'][aria-checked='true']").text
+
+            assert checked() == "Tue", f"the day strip opens on today: {checked()}"
+            # The strip is one of the toolbars that reflows on the way in, and
+            # its stray-press shield swallows anything pressed inside the
+            # settle window. This press MEANS to happen.
+            time.sleep(settle_s())
+            next(b for b in app.css_all(f"{strip} button[role='radio']")
+                 if b.text == "Thu").click()
+            WebDriverWait(app.d, 5).until(
+                lambda d: checked() == "Thu",
+                message="the day strip must take a press")
+            # The pick IS stored — "a pick still holds" is the true half of
+            # the sentence, and it is what makes the next line a real
+            # question rather than a tautology.
+            assert app.d.execute_script(
+                "return JSON.parse(localStorage.getItem('cmitt.v1.prefs'))"
+                ".plan_view;"), "the pick must reach storage at all"
+            app.d.refresh()
+            app.wait_css(strip)
+            WebDriverWait(
+                app.d, 5).until(
+                lambda d: checked() == "Tue",
+                message="a reload of the same tab opens on today again")
+        finally:
+            app.unpin_weekday(pinned)
+
+        app.d.set_window_size(1400, 1000)
+        app.boot("/#/developer/tweaks", prefs={"ever_synced": True})
+        dev = app.wait_css("section[aria-label='Developer mode']")
+        assert "Remember the day pickers between visits" in dev.text
+        assert "while the page stays open" in dev.text, \
+            "the hint has to say the lifetime the code actually gives"
+        assert "until you close the tab" not in dev.text, dev.text
+        # The search box matches on its own copy of that sentence. If the two
+        # drift, a reader searching the words on screen finds nothing.
+        app.css("input[aria-label='Search the tweaks']").send_keys(
+            "while the page stays open")
+        WebDriverWait(app.d, 5).until(
+            lambda d: "Remember the day pickers" in app.css(
+                "section[aria-label='Developer mode']").text,
+            message="the search haystack must carry the words the hint shows")
+    finally:
+        app.d.set_window_size(1400, 1000)
+
+
+# --- from t6-r92-canwait.py ---------------------------------------
+def _assert_in(needle, hay):
+    assert needle in hay, hay[:200]
+
+
+# --- from t6-r92-canwait.py ---------------------------------------
+def _assert_not_in(needle, hay):
+    assert needle not in hay, hay[:200]
+
+
+# --- from t6-r92-canwait.py ---------------------------------------
+def _must_raise(what, fn):
+    try:
+        fn()
+    except AssertionError as e:
+        return f"       broken -> {type(e).__name__}: {str(e)[:110]}"
+    except Exception as e:
+        return f"       broken -> {type(e).__name__}: {str(e)[:110]}"
+    raise NotBroken(f"{what}: the assertion still passed with the fix removed")
+
+
+# --- from t6-r92-canwait.py ---------------------------------------
+def b250_clash_panel(app):
+    """Pre-fix DOM: put the duplicate time pill back and re-run the count."""
+    app.boot("/", selection=["TOC", "ISS", "GERMAN"],
+             customs=TWICE_IN_ONE_SLOT_CUSTOM, prefs={"ever_synced": True})
+    app.wait_css("section[aria-label='My timetable'] table.tt")
+    panel = "section[aria-label='My timetable'] .clash-list li"
+    app.d.execute_script("""
+        for (const li of document.querySelectorAll(arguments[0])) {
+          const pills = li.querySelectorAll('.when');
+          if (pills.length === 1) pills[0].after(pills[0].cloneNode(true));
+        }
+    """, panel)
+
+    def check():
+        row = _clash_row(app, panel, "GERMAN", "TOC")
+        assert _whens(row) == [ONE_HOUR], f"{_whens(row)!r}"
+    return _must_raise("t250", check)
+
+
+# --- from t6-r92-canwait.py ---------------------------------------
+def b251_undo_focus(app):
+    """REAL pre-fix drive: the document-level Ctrl+Z handler (app/src/dnd.rs)
+    calls `app.undo()` with no `focus_soon` at all, so it is the same undo
+    without the fix. Focus must land on <body> — which is the defect."""
+    app.boot("/?c=TOC", selection=["TOC"], prefs={"ever_synced": True})
+    app.open_tab("Master grid")
+    app.wait_css("section[aria-label='Master grid'] table.tt")
+    app.chip("NLP", "section[aria-label='Master grid']").click()
+    app.wait_toast("Added NLP")
+    undo = app.css("button[aria-label='Undo']")
+    app.d.execute_script("arguments[0].focus()", undo)
+    ActionChains(app.d).key_down(Keys.CONTROL).send_keys("z").key_up(
+        Keys.CONTROL).perform()
+    WebDriverWait(app.d, 5).until(lambda d: undo.get_attribute("disabled"))
+
+    def check():
+        assert _active(app) == "BUTTON[Redo]", _active(app)
+    return _must_raise("t251", check)
+
+
+# --- from t6-r92-canwait.py ---------------------------------------
+def b252_reset_focus(app):
+    """Remove half the fix for real: strip `tabindex="-1"` off the answer line
+    before the confirm lands. `focus_soon` matches it, `focus()` on a
+    non-focusable span is a no-op, and the chain stops there — exactly the
+    pre-fix behaviour, focus left on <body>."""
+    app.boot("/#/developer/tweaks", prefs={"ever_synced": True})
+    app.wait_css("section[aria-label='Developer mode']")
+    app.xpath('//label[contains(@class,"opt")][.//span[normalize-space()='
+              '"Mark clashes with ⚠ and a red border"]]//input').click()
+    WebDriverWait(app.d, 5).until(
+        lambda d: "1 tweak differs" in app.css("[data-tweak-count]").text)
+    app.xpath("//button[normalize-space()='Reset all tweaks']").click()
+    app.confirm_text()
+    time.sleep(settle_s())
+    app.d.execute_script(
+        "document.querySelector('[data-tweak-count]').removeAttribute('tabindex');")
+    app.answer_confirm(True)
+    app.wait_toast("back to how the app ships")
+    time.sleep(0.5)
+
+    def check():
+        assert app.d.execute_script(
+            "return document.activeElement.hasAttribute('data-tweak-count');"), \
+            _active(app)
+    return _must_raise("t252", check)
+
+
+# --- from t6-r92-canwait.py ---------------------------------------
+def b253_toast_focus(app):
+    """REAL pre-fix drive: the toast's own Undo button unmounts the same rail
+    and never got the `focus_soon` line (the fix's optional item 4b was not
+    taken), so it is the ✕ without the fix."""
+    app.boot("/", selection=["TOC"], prefs={"ever_synced": True})
+    app.open_tab("Master grid")
+    app.wait_css("section[aria-label='Master grid'] table.tt")
+    app.chip("NLP", "section[aria-label='Master grid']").click()
+    app.wait_toast("Added NLP")
+    btn = [b for b in app.css_all(".toast button") if b.text == "Undo"][0]
+    app.d.execute_script("arguments[0].focus()", btn)
+    btn.click()
+    time.sleep(0.5)
+
+    def check():
+        assert app.d.execute_script(
+            "return document.activeElement.matches("
+            "  \"nav.tabs button.tab, [data-mydata], "
+            "   .toast button[aria-label='Dismiss']\");"), _active(app)
+    return _must_raise("t253", check)
+
+
+# --- from t6-r92-canwait.py ---------------------------------------
+def b254_route_line(app):
+    """Pre-fix DOM: put the deleted sentence back into the paragraph it was
+    deleted from."""
+    app.boot("/", prefs={"ever_synced": True, "last_good_route": "codetabs.com",
+                         "helper_site": "https://example.workers.dev/?url={url}"})
+    app.css("[data-mydata]").click()
+    app.wait_css(".dialog")
+    app.d.execute_script("""
+        for (const p of document.querySelectorAll('.dialog p')) {
+          if (p.textContent.startsWith('Last worked:')) {
+            p.textContent += ' The app tries it first.';
+          }
+        }
+    """)
+    text = app.css(".dialog").text
+
+    def check():
+        assert "Last worked: codetabs.com" in text, text
+        assert "tries it first" not in text, text[:200]
+    return _must_raise("t254", check)
+
+
+# --- from t6-r92-canwait.py ---------------------------------------
+def b255_master_grid_empty(app):
+    """Pre-fix DOM: take the panel and its footnote guard away, i.e. draw the
+    blank ruled week the way the grid used to."""
+    evening = {
+        "next_id": 1,
+        "items": [{
+            "id": 0, "course": "TOC",
+            "base": {"day": "Tue", "slot": {"start_min": 550, "end_min": 625},
+                     "hall": "Lecture Hall 803", "temp_booking": False},
+            "to": {"day": "Mon", "slot": {"start_min": 1110, "end_min": 1185},
+                   "hall": "Lecture Hall 803", "temp_booking": False},
+            "created_at": 1754000000000.0}],
+        "credits": [],
+    }
+    app.boot("/", selection=["TOC"], overrides=evening,
+             prefs={"ever_synced": True})
+    app.open_tab("Master grid")
+    grid = app.wait_css("section[aria-label='Master grid']")
+    box = grid.find_element(By.CSS_SELECTOR, ".filterbar input[type='search']")
+    box.send_keys("ZZZZ")
+    WebDriverWait(app.d, 10).until(
+        lambda d: app.css_all("section[aria-label='Master grid'] .empty.panel"))
+    app.d.execute_script(
+        "document.querySelector(\"section[aria-label='Master grid'] "
+        ".empty.panel\").remove();")
+
+    def check():
+        WebDriverWait(app.d, 3).until(
+            lambda d: app.css_all(
+                "section[aria-label='Master grid'] .empty.panel"),
+            message="a grid a filter has emptied must say so")
+    return _must_raise("t255", check)
+
+
+# --- from t6-r92-canwait.py ---------------------------------------
+def b256_semester_label(app):
+    """Pre-fix DOM: write the raw label back over the normalised one, which is
+    literally what `s.semester_label` interpolated."""
+    app.boot("/#/developer", prefs={"ever_synced": True})
+    app.wait_css("[id^='panel-dev-']")
+    app.d.execute_script("""
+        const walk = document.createTreeWalker(
+            document.querySelector("[id^='panel-dev-']"), NodeFilter.SHOW_TEXT);
+        let n;
+        while ((n = walk.nextNode())) {
+          if (n.nodeValue.includes('August\\u2013November')) {
+            n.nodeValue = n.nodeValue.replace('August\\u2013November',
+                                              'August--November');
+          }
+        }
+    """)
+    dev = app.css("[id^='panel-dev-']")
+    out = ["   (a) " + _must_raise("t256 overview", lambda: (
+        _assert_in("August–November 2026", dev.text),
+        _assert_not_in("August--November", dev.text))).strip()]
+
+    # The diagnostics half: capture the real payload, then put the raw label
+    # back into it — which is character for character what `s.semester_label`
+    # interpolated before the fix.
+    app.d.execute_script(
+        "window.__copied = null;"
+        "navigator.clipboard.writeText = (t) => {"
+        "  window.__copied = t; return Promise.resolve(); };")
+    app.xpath("//button[contains(normalize-space(),'Copy diagnostics')]").click()
+    WebDriverWait(app.d, 5).until(
+        lambda d: d.execute_script("return window.__copied;"))
+    raw = app.d.execute_script("return window.__copied;").replace(
+        "August–November", "August--November")
+    out.append("   (b) " + _must_raise("t256 diagnostics", lambda: (
+        _assert_in("August–November 2026", raw),
+        _assert_not_in("August--November", raw))).strip())
+    return "\n".join(out)
+
+
+# --- from t6-r92-canwait.py ---------------------------------------
+def b257_day_pick(app):
+    """Two halves, two breaks.
+
+    (a) REAL pre-fix drive for the behaviour: with the tweak OFF the clear in
+        `init_app` does not run, so the pick DOES survive the reload — the
+        world the old sentence described. The assertion must fail there.
+    (b) Pre-fix DOM for the words: put "until you close the tab" back."""
+    out = []
+    pinned = app.pin_weekday(1)
+    app.d.set_window_size(430, 900)
+    try:
+        app.boot("/?c=TOC", selection=["TOC"],
+                 prefs={"day_picks_forget": False, "ever_synced": True})
+        strip = "section[aria-label='My timetable'] div.seg[role='radiogroup']"
+        app.wait_css(strip)
+
+        def checked():
+            return app.css(
+                f"{strip} button[role='radio'][aria-checked='true']").text
+
+        time.sleep(settle_s())
+        next(b for b in app.css_all(f"{strip} button[role='radio']")
+             if b.text == "Thu").click()
+        WebDriverWait(app.d, 5).until(
+            lambda d: checked() == "Thu", message="the day strip must take a press")
+        app.d.refresh()
+        app.wait_css(strip)
+        time.sleep(0.5)
+
+        def check_a():
+            WebDriverWait(app.d, 3).until(
+                lambda d: checked() == "Tue",
+                message="a reload of the same tab opens on today again")
+        out.append("   (a) " + _must_raise("t257 behaviour", check_a).strip())
+    finally:
+        app.unpin_weekday(pinned)
+        app.d.set_window_size(1400, 1000)
+
+    app.boot("/#/developer/tweaks", prefs={"ever_synced": True})
+    app.wait_css("section[aria-label='Developer mode']")
+    app.d.execute_script("""
+        const walk = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+        let n;
+        while ((n = walk.nextNode())) {
+          if (n.nodeValue.includes('while the page stays open')) {
+            n.nodeValue = n.nodeValue.replace(
+              /a pick still holds while the page stays open, and a reload opens on today again\\./,
+              'a pick still holds until you close the tab.');
+          }
+        }
+    """)
+    dev = app.css("section[aria-label='Developer mode']")
+
+    def check_b():
+        assert "while the page stays open" in dev.text, dev.text[:200]
+        assert "until you close the tab" not in dev.text, dev.text[:200]
+    out.append("   (b) " + _must_raise("t257 copy", check_b).strip())
+    return "\n".join(out)
+
+
+# --- from t6-r92-canwait.py ---------------------------------------
+BREAKS = [b250_clash_panel, b251_undo_focus, b252_reset_focus, b253_toast_focus,
+          b254_route_line, b255_master_grid_empty, b256_semester_label,
+          b257_day_pick]
+
+
+# --- from t7-devmode-known.py -------------------------------------
+def _dev_panel(app, heading):
+    """One developer-mode panel, by its <h3>."""
+    return app.xpath("//div[contains(@class,'panel')]"
+                     f"[h3[normalize-space()='{heading}']]")
+
+
+# --- from t7-devmode-known.py -------------------------------------
+def t260_the_storage_page_never_describes_a_snapshot_it_has_not_got(app):
+    """sdm-5. A browser that has never synced has no snapshot at all — and
+    the Raw HTML viewer used to tell it two things about that snapshot
+    anyway: that its stored pages "may have been dropped to fit the storage
+    quota" (a reason invented for an object that does not exist) and which
+    parser version had parsed it. Both sentences are true only of a real
+    snapshot, and both must still be said for one."""
+    app.boot("/#/developer/storage", seed=False,
+             prefs={"last_update_attempt": time.time() * 1000.0})
+    app.wait_css("section[aria-label='Developer mode']")
+    empty = _dev_panel(app, "Raw HTML viewer").text
+    assert "nothing has been synced" in empty.lower(), empty
+    assert "storage quota" not in empty, \
+        f"no snapshot means no quota story: {empty!r}"
+    assert "was parsed with" not in empty, \
+        f"nothing was parsed — do not name the version that parsed it: {empty!r}"
+
+    # Both sentences survive for the case they are TRUE of — a snapshot that
+    # is really there and whose raw pages really were dropped to fit the
+    # quota. That arm is the one the fix must not have eaten.
+    dropped = json.loads(SEED_SNAPSHOT_JSON)
+    dropped.pop("raw_html_gz", None)
+    app.boot("/#/developer/storage", raw_snapshot=json.dumps(dropped))
+    app.wait_css("section[aria-label='Developer mode']")
+    full = _dev_panel(app, "Raw HTML viewer").text
+    assert "storage quota" in full, full
+    assert "was parsed with" in full, full
+    # …and the empty-browser wording is NOT what a real snapshot gets.
+    assert "nothing has been synced" not in full.lower(), full
+
+
+# --- from t7-devmode-known.py -------------------------------------
+def t261_the_next_scheduled_check_is_never_a_time_that_has_passed(app):
+    """sdm-2. "Next scheduled check" printed whatever was stored, so a
+    browser opened after a few days away read a two-day-old date as its
+    plan — while the code that acts on that number had already decided to
+    check on this very visit. One predicate now answers at both sites."""
+    def next_check_row():
+        return app.xpath("//dt[normalize-space()='Next scheduled check']"
+                         "/following-sibling::dd[1]").text.strip()
+
+    def last_asked_row():
+        return app.xpath("//dt[normalize-space()='Update check']"
+                         "/following-sibling::dd[1]").text.strip()
+
+    def reopen_developer():
+        # Off this document and back on: the row is decided at load, and
+        # `d.get` to the hash the page is already on is not a load at all.
+        app.d.get(f"{BASE}/e2e-blank")      # same origin, storage kept
+        app.boot("/#/developer", fresh=False)
+        app.wait_css("section[aria-label='Developer mode']")
+
+    def with_schedule(attempted_ago_ms, next_at_offset_ms):
+        app.d.execute_script(
+            "localStorage.setItem('cmitt.v1.update', JSON.stringify({"
+            "  attempted_at: Date.now() - arguments[0],"
+            "  next_check_at: Date.now() + arguments[1]}));",
+            attempted_ago_ms, next_at_offset_ms)
+        reopen_developer()
+
+    app.boot("/#/developer")
+    app.wait_css("section[aria-label='Developer mode']")
+
+    # A plan that has passed. The instant is stored as BOTH facts, so the
+    # row above prints it through the app's own formatter — which makes the
+    # property checkable without this test owning a date format: whatever
+    # that instant looks like on screen, it may not appear under "Next
+    # scheduled check".
+    two_days = 2 * 86400000
+    with_schedule(two_days, -two_days)
+    stamp = last_asked_row().replace("last asked ", "")
+    assert stamp and stamp[0].isdigit(), \
+        f"the harness needs a printed instant to compare against: {stamp!r}"
+    assert stamp not in next_check_row(), (
+        "a next check that has already passed was printed as the plan: "
+        f"{next_check_row()!r}")
+    assert "overdue" in next_check_row(), next_check_row()
+
+    # A plan still ahead is a plan: the fix must not call everything overdue.
+    with_schedule(2 * 3600000, 3600000)
+    ahead = next_check_row()
+    assert "overdue" not in ahead, ahead
+    assert ahead[0].isdigit(), f"a real plan prints its time: {ahead!r}"
+
+    # Further out than one whole interval means the clock moved — that half
+    # of the guard is the one that already worked, and still does.
+    with_schedule(2 * 3600000, 3 * 86400000)
+    assert "overdue" in next_check_row(), next_check_row()
+
+    # A browser that has never checked is not overdue — it has no plan yet.
+    app.d.execute_script("localStorage.removeItem('cmitt.v1.update');")
+    reopen_developer()
+    assert next_check_row() == "on the next visit", next_check_row()
+
+
+# --- from t7-devmode-known.py -------------------------------------
+def _fetch_log_rows(app):
+    """Every row of the developer Fetch log, oldest first, as dicts."""
+    # A hash change on the same document — never a reload, or the session's
+    # fetch log empties.
+    app.d.get(f"{BASE}/#/developer/sync")
+    app.wait_css("section[aria-label='Developer mode']")
+    return app.d.execute_script("""
+        const panel = [...document.querySelectorAll('.panel')]
+            .find((p) => p.querySelector('h3')
+                      && p.querySelector('h3').textContent.trim() === 'Fetch log');
+        if (!panel) return [];
+        return [...panel.querySelectorAll('table.devlog tbody tr')]
+            .reverse()
+            .map((tr) => {
+              const td = tr.querySelectorAll('td');
+              return {tier: td[1].textContent.trim(),
+                      url: td[2].textContent.trim(),
+                      status: td[3].textContent.trim(),
+                      ms: td[4].textContent.trim(),
+                      error: td[6].textContent.trim()};
+            });
+    """)
+
+
+# --- from t7-devmode-known.py -------------------------------------
+def t262_the_reachability_probe_is_in_the_record_it_promises(app):
+    """sync-tiers-5. After every route has failed the app makes one more
+    real request to cmi.ac.in — the probe that tells "CMI is up and we may
+    not read it" apart from "nothing answered" — and it appeared in neither
+    the Sync page's Fetch log nor the console echo, while the tweak beside
+    that echo says "every fetch" and FEATURES promises the same. It is a
+    request that left this browser, so it is in the record."""
+    patched = app.d.execute_cdp_cmd(
+        "Page.addScriptToEvaluateOnNewDocument", {"source": """
+        window.__console_lines = [];
+        const real = console.log;
+        console.log = function (...a) {
+            try { window.__console_lines.push(a.map(String).join(' ')); }
+            catch (e) {}
+            return real.apply(console, a);
+        };
+    """})["identifier"]
+    try:
+        def echoed():
+            return app.d.execute_script("return window.__console_lines || [];")
+
+        # The real cmi.ac.in, exactly: the pages answer 200 and send no
+        # Access-Control-Allow-Origin, so nothing readable comes back and the
+        # probe is the only thing that can tell the app CMI is alive.
+        serve_cmi(cors=False)
+        try:
+            app.boot("/", seed=False,
+                     prefs={"console_fetch_log_on": True,
+                            "last_update_attempt": time.time() * 1000.0})
+            app.wait_css(".welcome-card", timeout=30)
+            app.wait_css(".banner.warn", timeout=60)
+        finally:
+            stop_serving_cmi()
+
+        rows = _fetch_log_rows(app)
+        tiers = [r["tier"] for r in rows]
+        assert "probe" in tiers, \
+            f"the probe left this browser and must be logged: {tiers}"
+        assert tiers[-1] == "probe", \
+            f"and it is the last thing the failed sync did: {tiers}"
+        probe = rows[-1]
+        assert "cmi.ac.in" in probe["url"], probe
+        # A no-cors answer is opaque: there is no status and no byte count,
+        # and inventing one ("HTTP 0") would be a fact the browser never gave
+        # us. The empty status cell is the honest one.
+        assert probe["status"] == "—", \
+            f"a no-cors probe has no status to show: {probe}"
+        assert probe["error"] == "", \
+            f"something answered, so the row must not read as a failure: {probe}"
+        # Never tier "direct": run_update reads its own direct rows back to
+        # decide which of the three failure sentences to print.
+        assert not any(r["tier"] == "direct" and "probe" in r["error"]
+                       for r in rows), rows
+
+        lines = [l for l in echoed() if l.startswith("[sync] probe ")]
+        assert lines, (
+            "the console echo promises every fetch; the probe was missing "
+            f"from: {[l for l in echoed() if l.startswith('[sync]')]}")
+        assert "cmi.ac.in" in lines[-1], lines[-1]
+        assert "HTTP" not in lines[-1], \
+            f"an opaque answer has no status to echo: {lines[-1]}"
+
+        # And the outcome a reader opens this panel to see — nothing at that
+        # address at all — is recorded too, as a failure this time.
+        app.d.execute_script("window.__console_lines = [];")
+        _cmi["dead"] = True
+        try:
+            app.boot("/", seed=False,
+                     prefs={"console_fetch_log_on": True,
+                            "last_update_attempt": time.time() * 1000.0})
+            app.wait_css(".welcome-card", timeout=30)
+            app.wait_css(".banner.warn", timeout=60)
+        finally:
+            _cmi["dead"] = False
+            stop_serving_cmi()
+        rows = _fetch_log_rows(app)
+        probes = [r for r in rows if r["tier"] == "probe"]
+        assert probes, ("a probe that got nothing is still a probe: "
+                        f"{[r['tier'] for r in rows]}")
+        assert probes[-1]["error"], \
+            f"nothing answered, and the row must say so: {probes[-1]}"
+        assert any(l.startswith("[sync] probe ") for l in echoed()), echoed()
+    finally:
+        # The console patch is injected for every document from here on;
+        # leaving it armed would follow this test into the next one.
+        app.d.execute_cdp_cmd("Page.removeScriptToEvaluateOnNewDocument",
+                              {"identifier": patched})
+
+
+# --- from t7-devmode-known.py -------------------------------------
+def t263_turning_the_room_bands_off_keeps_the_row_under_the_pointer(app):
+    """tweaks-interlocks-4. "Band alternate rooms on the Halls page" promises
+    a flat table and nothing else, but its rule out-specified the row-hover
+    cue — so with banding off, half the rows of a wide sideways-scrolling
+    table stopped answering the pointer at all, and the two halves of the
+    same table behaved differently. The band goes; the cue stays."""
+    app.boot("/?c=TOC", selection=["TOC"])
+    app.open_tab("Halls")
+    section = app.wait_css("section[aria-label='Lecture halls']")
+    next(b for b in section.find_elements(By.CSS_SELECTOR, "[role='radio']")
+         if b.text == "Week").click()
+    app.wait_css("table.tt.halls-merged")
+
+    ALT = "table.tt.halls-merged tr.alt td:not(.extra)"
+    NON = "table.tt.halls-merged tr:not(.alt) td:not(.extra)"
+
+    def bg(sel, hover):
+        """The painted background of the first matching cell, with the
+        pointer really on its row or really off the table."""
+        td = app.css(sel)
+        app.d.execute_script(
+            "arguments[0].scrollIntoView({block:'center'});", td)
+        if hover:
+            ActionChains(app.d).move_to_element(td).perform()
+        else:
+            ActionChains(app.d).move_to_element(
+                app.css("section[aria-label='Lecture halls'] h2")).perform()
+        time.sleep(0.1)
+        return app.d.execute_script(
+            "return getComputedStyle(arguments[0]).backgroundColor;", td)
+
+    # Shipped: the band is a real difference, and hovering still changes it.
+    assert bg(ALT, False) != bg(NON, False), \
+        "the band must be visible before the tweak is asked to remove it"
+
+    _flip_tweak(app, "Band alternate rooms",
+                "Band alternate rooms on the Halls page")
+    app.css(".tabs .tab-exit").click()
+    app.wait_css("section[aria-label='Lecture halls']")
+    next(b for b in app.css_all(
+        "section[aria-label='Lecture halls'] [role='radio']")
+        if b.text == "Week").click()
+    app.wait_css("table.tt.halls-merged")
+
+    # The tweak still does its whole job: at rest the two halves match.
+    assert bg(ALT, False) == bg(NON, False), \
+        "unticked, an alternate row must rest the same as any other"
+    # And the pointer is still answered — by the SAME cue the other half
+    # gets, so a change that killed both would still be caught.
+    alt_hover, non_hover = bg(ALT, True), bg(NON, True)
+    assert alt_hover != bg(ALT, False), (
+        "with banding off, hovering an alternate row changed nothing: "
+        f"{alt_hover}")
+    assert alt_hover == non_hover, (
+        "an alternate row must highlight like any other row: "
+        f"alt={alt_hover} non-alt={non_hover}")
+
+
+# --- from t7-devmode-known.py -------------------------------------
+def _live_regions(app, scope):
+    """Everything inside `scope` that assistive technology would speak on
+    its own — whatever markup provides it — as (role, text) pairs."""
+    return app.d.execute_script("""
+        const root = document.querySelector(arguments[0]);
+        if (!root) return null;
+        const live = (el) => {
+          const l = (el.getAttribute('aria-live') || '').toLowerCase();
+          const r = (el.getAttribute('role') || '').toLowerCase();
+          if (l === 'polite' || l === 'assertive') return l;
+          if (r === 'status' || r === 'alert' || r === 'log') return r;
+          return null;
+        };
+        return [...root.querySelectorAll('*')]
+            .filter(live)
+            .map((el) => [live(el), (el.textContent || '').trim()]);
+    """, scope)
+
+
+# --- from t7-devmode-known.py -------------------------------------
+def t264_the_tweaks_search_says_out_loud_what_it_found(app):
+    """a11ykbd-6 — WCAG 2.1 SC 4.1.3 (AA). Rows disappearing is a sign only
+    a sighted reader gets. The planner's filter bar has said "N courses
+    match" out loud since R71; the tweaks search, which carries the very same
+    three switches, announced nothing at all — so a screen-reader user typing
+    into it learned only that the page had gone quiet."""
+    BAR = ".filterbar[aria-label='Find a tweak']"
+
+    def spoken():
+        """What the box announces about its own result, ignoring the
+        explanation line that speaks only about a broken pattern."""
+        regions = _live_regions(app, BAR)
+        assert regions is not None, "the tweaks filter bar is gone"
+        return [t for _, t in regions
+                if t and "Not a pattern yet" not in t]
+
+    def rows():
+        return len(app.css_all(".tweak"))
+
+    app.boot("/#/developer/tweaks")
+    app.wait_css("section[aria-label='Developer mode']")
+    box = app.css("input[aria-label='Search the tweaks']")
+
+    def announces(n):
+        said = spoken()
+        return len(said) == 1 and str(n) in said[0] and "tweak" in said[0]
+
+    assert announces(rows()), \
+        f"nothing announced the resting count ({rows()} rows): {spoken()}"
+
+    # Every keystroke's result, spoken — and the number is the number of
+    # rows really on the page, not a count of its own.
+    box.send_keys("console")
+    WebDriverWait(app.d, 5).until(lambda d: rows() == 1)
+    WebDriverWait(app.d, 5).until(
+        lambda d: announces(1),
+        message="one match must be announced as one")
+    assert "1 tweak matches" in spoken()[0], spoken()
+
+    app.css("button[aria-label='Clear search']").click()
+    WebDriverWait(app.d, 5).until(lambda d: announces(rows()))
+
+    box.send_keys("zzzz")
+    WebDriverWait(app.d, 5).until(lambda d: rows() == 0)
+    WebDriverWait(app.d, 5).until(
+        lambda d: announces(0),
+        message="finding nothing is a result, and must be said")
+
+    # A half-typed pattern is explained ONCE. The error line is already a
+    # status region; a count speaking over it is two announcements for one
+    # keystroke — the spoken form of the rule t144 pins for the empty state.
+    app.css("button[aria-label='Regular expression']").click()
+    app.css("button[aria-label='Clear search']").click()
+    box.send_keys("(unclosed")
+    app.wait_css("#search-pattern-error")
+    WebDriverWait(app.d, 5).until(
+        lambda d: spoken() == [],
+        message="one keystroke, one announcement — the error line is it")
+    said = [t for _, t in _live_regions(app, BAR) if t]
+    assert len(said) == 1 and "Not a pattern yet" in said[0], said
+
+
+# --- from t7-devmode-known.py -------------------------------------
+def _press_escape_from_the_page(app):
+    """Escape with the caret nowhere in particular — the ordinary case, and
+    the one a reader who has just been handed a notice is in."""
+    app.d.execute_script(
+        "if (document.activeElement) document.activeElement.blur();")
+    ActionChains(app.d).send_keys(Keys.ESCAPE).perform()
+
+
+# --- from t7-devmode-known.py -------------------------------------
+def t265_escape_clears_the_notices_from_wherever_you_are(app):
+    """a11ykbd-2 — WCAG 2.1 SC 2.4.3. The notice rail is painted over the
+    page but mounted after it, so a notice's ✕ was the LAST tab stop in the
+    document: 316 presses away on the Master grid. With "Notices stay for →
+    Until dismissed" there is no timer either, so those presses were the only
+    way to get a standing notice off the screen. Escape now clears the whole
+    stack in one press, from wherever the caret is — and still answers the
+    question in front of it first, because a notice is not modal."""
+    app.boot("/?c=TOC", selection=["TOC"], prefs={"toast_life_secs": 0})
+    app.open_tab("Master grid")
+    app.wait_css("section[aria-label='Master grid'] table.tt")
+    grid = "section[aria-label='Master grid']"
+    for code in ("NLP", "ISS"):
+        chip = app.chip(code, grid)
+        app.d.execute_script("arguments[0].scrollIntoView({block:'center'});", chip)
+        chip.click()
+        time.sleep(0.3)
+    WebDriverWait(app.d, 5).until(
+        lambda d: len(app.css_all(".toasts .toast")) >= 2,
+        message="two notices, so ONE press has something to clear twice over")
+
+    # From the middle of the grid, where the ✕ is hundreds of stops away.
+    far = app.chip("TOC", grid)
+    app.d.execute_script("arguments[0].scrollIntoView({block:'center'});"
+                         "arguments[0].focus();", far)
+    before = app.d.execute_script("return document.activeElement;")
+    ActionChains(app.d).send_keys(Keys.ESCAPE).perform()
+    WebDriverWait(app.d, 5).until(
+        lambda d: not app.css_all(".toasts .toast"),
+        message="one Escape must clear a stack that has no timer")
+    assert app.d.execute_script("return document.activeElement;") == before, \
+        "clearing what is in front of you must not move you"
+    # The rail hands its reserved height back (R93 R6's --toast-band).
+    WebDriverWait(app.d, 5).until(lambda d: app.d.execute_script(
+        "return !document.body.classList.contains('toasts-live');"))
+
+    # A question outranks the rail, even though the rail is drawn over it.
+    chip = app.chip("NLP", grid)
+    app.d.execute_script("arguments[0].scrollIntoView({block:'center'});", chip)
+    chip.click()
+    app.wait_css(".toasts .toast")
+    app.xpath("//button[normalize-space()='My data']").click()
+    app.wait_css(".dialog")
+    time.sleep(settle_s())
+    _press_escape_from_the_page(app)
+    WebDriverWait(app.d, 5).until(lambda d: not app.css_all(".dialog"))
+    assert app.css_all(".toasts .toast"), \
+        "the dialog answers Escape first; the notice behind it stays"
+    _press_escape_from_the_page(app)
+    WebDriverWait(app.d, 5).until(lambda d: not app.css_all(".toasts .toast"))
+
+    # In developer mode the notice goes first and the mode stays: clearing
+    # what is in front of the reader outranks navigating away from it.
+    _flip_tweak(app, "Band alternate rooms",
+                "Band alternate rooms on the Halls page")
+    app.wait_css(".toasts .toast")
+    _press_escape_from_the_page(app)
+    WebDriverWait(app.d, 5).until(lambda d: not app.css_all(".toasts .toast"))
+    assert app.d.execute_script("return location.hash").startswith("#/developer"), \
+        "the notice was the thing in front — the mode must not have exited too"
+    # …and with nothing standing, the same key still leaves the mode: the new
+    # arm costs a reader who has a notice up one extra press, and nobody else
+    # anything (t143 owns the rest of that rail's contract).
+    _press_escape_from_the_page(app)
+    WebDriverWait(app.d, 5).until(
+        lambda d: not app.css_all("section[aria-label='Developer mode']"),
+        message="with the rail empty, Escape must still leave developer mode")
+
+
+# --- from t7-devmode-known.py -------------------------------------
+def t266_the_developer_rails_exit_is_finger_sized_on_a_narrow_phone(app):
+    """mobile-touch-5. At 380px and below the ← Back button drops its word
+    and the arrow alone measured 15.8 x 44 — under WCAG 2.5.8's 24px floor,
+    on a rail whose own stylesheet block is titled "Finger-sized targets".
+    The room was always there: this is the DEVELOPER rail, four categories,
+    not the planner's five tabs."""
+    try:
+        app.d.execute_cdp_cmd("Emulation.setTouchEmulationEnabled",
+                              {"enabled": True, "maxTouchPoints": 5})
+        for width in (320, 380):
+            app.d.execute_cdp_cmd("Emulation.setDeviceMetricsOverride", {
+                "width": width, "height": 760, "deviceScaleFactor": 2,
+                "mobile": True,
+            })
+            app.boot("/#/developer")
+            app.wait_css("section[aria-label='Developer mode']")
+            got = app.d.execute_script("""
+                const b = document.querySelector('.tabs .tab-exit');
+                const rail = document.querySelector('nav.tabs');
+                const r = b.getBoundingClientRect();
+                return {w: r.width, h: r.height,
+                        scroll: rail.scrollWidth, client: rail.clientWidth,
+                        coarse: matchMedia('(pointer: coarse)').matches,
+                        word: [...b.querySelectorAll('*')].some(
+                          (el) => getComputedStyle(el).display !== 'none'
+                                  && el.textContent.trim().length > 1)};
+            """)
+            # Without a coarse pointer this measures a mouse, and the floor
+            # this fix raised lives in the coarse-pointer block: say so
+            # rather than pass for the wrong reason.
+            assert got["coarse"], f"not emulating a touch screen: {got!r}"
+            assert not got["word"], (
+                f"at {width}px the exit should be down to its arrow — this "
+                f"test is measuring the wrong thing otherwise: {got!r}")
+            assert got["w"] >= 24 and got["h"] >= 24, (
+                f"the exit is {got['w']:.1f}x{got['h']:.1f} at {width}px — "
+                f"WCAG 2.5.8's floor is 24x24")
+            # …and paying for it with a rail that runs off the screen is not
+            # a fix: `.tabs` takes `touch-action: pan-y`, so no finger can
+            # reach what is pushed past the edge.
+            assert got["scroll"] <= got["client"] + 1, (
+                f"the developer rail scrolls sideways at {width}px: {got!r}")
+            assert [t.text for t in app.css_all(".tabs .tab")] == [
+                "Overview", "Tweaks", "Sync", "Storage"], \
+                "and no category may be squeezed out to pay for it"
+    finally:
+        app.d.execute_cdp_cmd("Emulation.clearDeviceMetricsOverride", {})
+        app.d.execute_cdp_cmd("Emulation.setTouchEmulationEnabled",
+                              {"enabled": False})
+
+
+# --- from t7-devmode-known.py -------------------------------------
+BREAK_CSS_HOVER = """
+/* tweaks-interlocks-4 pre-fix: the tweak's rule WITHOUT `:not(:hover)`,
+   restored by rewriting the shipped rule's own selector. */
+(() => {
+  const walk = (rules) => {
+    for (const r of rules) {
+      if (r.cssRules) walk(r.cssRules);
+      if (r.selectorText && r.selectorText.includes('no-hall-bands')
+          && r.selectorText.includes(':not(:hover)')) {
+        r.selectorText = r.selectorText.split(':not(:hover)').join('');
+      }
+    }
+  };
+  const patch = () => {
+    for (const ss of document.styleSheets) {
+      let rules; try { rules = ss.cssRules; } catch (e) { continue; }
+      walk(rules);
+    }
+  };
+  setInterval(() => { try { patch(); window.__break_ticks =
+      (window.__break_ticks || 0) + 1; } catch (e) {} }, 25);
+})();
+"""
+
+
+# --- from t7-devmode-known.py -------------------------------------
+BREAK_CSS_MINWIDTH = """
+/* mobile-touch-5 pre-fix: `.tab-exit` taken back out of the coarse-pointer
+   min-width list, by rewriting the shipped rule's own selector. */
+(() => {
+  const walk = (rules) => {
+    for (const r of rules) {
+      if (r.cssRules) walk(r.cssRules);
+      if (r.selectorText && r.selectorText.includes('.tab-exit')
+          && r.selectorText.includes('.filterchip button')) {
+        r.selectorText = r.selectorText
+            .split(',').map((s) => s.trim())
+            .filter((s) => s !== '.tab-exit').join(', ');
+      }
+    }
+  };
+  const patch = () => {
+    for (const ss of document.styleSheets) {
+      let rules; try { rules = ss.cssRules; } catch (e) { continue; }
+      walk(rules);
+    }
+  };
+  setInterval(() => { try { patch(); window.__break_ticks =
+      (window.__break_ticks || 0) + 1; } catch (e) {} }, 25);
+})();
+"""
+
+
+# --- from t7-devmode-known.py -------------------------------------
+BREAK_LIVE_REGION = """
+/* a11ykbd-6 pre-fix: nothing inside the tweaks filter bar is a live region.
+   The pre-fix DOM had no count span at all; stripping aria-live from the one
+   that is there reproduces the property it provides being absent. The error
+   line carries role=status, not aria-live, so it is untouched. */
+(() => {
+  const strip = () => {
+    document.querySelectorAll(
+      ".filterbar[aria-label='Find a tweak'] [aria-live]"
+    ).forEach((el) => el.removeAttribute('aria-live'));
+  };
+  setInterval(() => { try { strip(); window.__break_ticks =
+      (window.__break_ticks || 0) + 1; } catch (e) {} }, 25);
+})();
+"""
+
+
+# --- from t7-devmode-known.py -------------------------------------
+BREAK_ESCAPE_TOASTS = """
+/* a11ykbd-2 pre-fix: the Escape chain has no toast arm. Swallowed in the
+   capture phase at the window, and ONLY when a notice is the thing on top —
+   so every arm above the new one (drag, confirm, dialog, move mode, facets)
+   still runs exactly as it does today. */
+window.addEventListener('keydown', (e) => {
+  if (e.key !== 'Escape') return;
+  if (document.querySelector('.dialog')) return;
+  if (document.querySelector('.toasts .toast')) e.stopPropagation();
+}, true);
+"""
+
+
+# --- from t7-devmode-known.py -------------------------------------
+BREAK_SDM5_COPY = r"""
+/* sdm-5 pre-fix: the Raw HTML viewer's `None` arm was reached whatever the
+   snapshot was, so an empty browser got the quota sentence and the parser
+   line named a version that had parsed nothing. Both strings below are the
+   app's own, byte for byte — the shipped `None` arm's text, and the
+   `has_data()` arm of the parser line with the version it prints. */
+(() => {
+  const rewrite = () => {
+    const panel = [...document.querySelectorAll('.panel')].find(
+      (p) => p.querySelector('h3')
+             && p.querySelector('h3').textContent.trim() === 'Raw HTML viewer');
+    if (!panel) return;
+    panel.querySelectorAll('p.muted.small').forEach((p) => {
+      const t = p.textContent;
+      if (t.includes('No snapshot yet')) {
+        p.textContent = 'The current snapshot has no stored raw pages '
+          + '(they may have been dropped to fit the storage quota).';
+      }
+      const m = t.match(/Shipped parser is v(\d+)\. Nothing has been parsed/);
+      if (m) {
+        p.textContent = 'Shipped parser is v' + m[1]
+          + '; the snapshot was parsed with v' + m[1] + '.';
+      }
+    });
+  };
+  setInterval(() => { try { rewrite(); window.__break_ticks =
+      (window.__break_ticks || 0) + 1; } catch (e) {} }, 25);
+})();
+"""
+
+
+# --- from t7-devmode-known.py -------------------------------------
+BREAK_SDM2_ROW = """
+/* sdm-2 pre-fix: `overdue` tested only the clock-moved-FORWARD half, so a
+   next-check that had simply passed was printed verbatim. The stored instant
+   is re-printed here through the app's OWN formatter — the row above it
+   shows the same instant — so this is the pre-fix rendering exactly. */
+(() => {
+  const rewrite = () => {
+    const dts = [...document.querySelectorAll('dt')];
+    const next = dts.find((d) => d.textContent.trim() === 'Next scheduled check');
+    const last = dts.find((d) => d.textContent.trim() === 'Update check');
+    if (!next || !last) return;
+    const nd = next.nextElementSibling, ld = last.nextElementSibling;
+    if (!nd || !ld) return;
+    if (nd.textContent.includes('overdue')
+        && ld.textContent.startsWith('last asked ')) {
+      nd.textContent = ld.textContent.replace('last asked ', '');
+    }
+  };
+  setInterval(() => { try { rewrite(); window.__break_ticks =
+      (window.__break_ticks || 0) + 1; } catch (e) {} }, 25);
+})();
+"""
+
+
+# --- from t7-devmode-known.py -------------------------------------
+BREAK_FETCHLOG_PROBE = """
+/* sync-tiers-5 pre-fix, sink 1 of 2: the probe's row never reached the Sync
+   page's Fetch log. Removed as it renders, which is the record the pre-fix
+   code left behind. */
+(() => {
+  const strip = () => {
+    document.querySelectorAll('table.devlog tbody tr').forEach((tr) => {
+      const td = tr.querySelectorAll('td');
+      if (td.length > 1 && td[1].textContent.trim() === 'probe') tr.remove();
+    });
+  };
+  setInterval(() => { try { strip(); window.__break_ticks =
+      (window.__break_ticks || 0) + 1; } catch (e) {} }, 25);
+})();
+"""
+
+
+# --- from t7-devmode-known.py -------------------------------------
+BREAK_CONSOLE_PROBE = """
+/* sync-tiers-5 pre-fix, sink 2 of 2: the console echo the tweak calls "every
+   fetch" never carried the probe. Every other [sync] line is untouched.
+   Swallowed at console.log AND swept out of whatever the test collected,
+   because both this rig and the test wrap console.log and the one registered
+   last is the outer wrapper — a rig whose bite depends on that order proves
+   nothing. */
+(() => {
+  const drop = (l) => String(l).startsWith('[sync] probe ');
+  const real = console.log;
+  console.log = function (...a) {
+    if (drop(a.map(String).join(' '))) return;
+    return real.apply(console, a);
+  };
+  setInterval(() => {
+    try {
+      if (Array.isArray(window.__console_lines)) {
+        window.__console_lines = window.__console_lines.filter((l) => !drop(l));
+      }
+    } catch (e) {}
+  }, 25);
+})();
+"""
+
+
+# --- from t8-break.py ---------------------------------------------
+PYTHON = os.path.join(REPO, "e2e", ".venv", "bin", "python")
+
+
+# --- from t8-break.py ---------------------------------------------
+RUNNER = os.path.join(HERE, "t8-css-visual.py")
+
+
+# --- from t8-break.py ---------------------------------------------
+CASES = [
+    ("s11", "t270", "`.covered` back to the initial flex-wrap: nowrap"),
+    ("s10", "t271", "`.row strong` back to R92 S19's `.row > strong`, no clip"),
+    ("s16", "t272", "the `input[type=search] { appearance: none }` rule deleted"),
+    ("s16-scoped", "t272", "that rule re-scoped to `.searchbox > input`"),
+    ("s17-gone", "t273", "the whole `@supports not (color-mix)` block deleted"),
+    ("s17-uncovered", "t273", "a 27th color-mix over a var() with no fallback"),
+    ("s17-placement", "t273", "the fallback block moved below `@media print`"),
+    ("s17-not", "t273", "the `not` dropped from the @supports condition"),
+    ("sp1", "t274", "`break-inside: avoid` back on the poster's grid"),
+    ("sp1-border", "t274", "the poster dropped from the `border: none` list"),
+    ("s9", "t275", "both day-list reveals scoped back to `table.tt td`"),
+    ("s9-names", "t275", "the chip-name reveal alone scoped back"),
+]
+
+
+# --- from t8-css-visual.py ----------------------------------------
+def t270_a_continuation_band_never_breaks_the_code_in_half(app):
+    """A class that runs past its column leaves a band in the columns it
+    covers, reading "TOC · until 14:00". In a narrow column the band put the
+    time beside the code and gave the code whatever was left — about 18px —
+    and the code then wrapped INSIDE ITSELF: "TO" on one line and "C" on the
+    next, in the one place on the grid where the three letters are the whole
+    message.
+
+    Measured as the reader sees it: how many lines the code's own text
+    occupies. The time is allowed to drop to its own line — that is the fix —
+    so the band's height is not the test; the CODE's is. The widths are the
+    ones that reproduce it (it is fine at 1024 and at 820, and wrong at every
+    narrow step between), so the sweep has to be a sweep."""
+    app.boot("/", selection=["TOC"], overrides=LONG_OVR)
+    app.open_tab("My timetable")
+    app.wait_css("section[aria-label='My timetable'] .covered")
+    try:
+        for width in (1280, 1024, 958, 900, 760, 700):
+            app.d.set_window_size(width, 1000)
+            time.sleep(0.35)
+            bands = app.d.execute_script("""
+                const out = [];
+                for (const band of document.querySelectorAll('.covered')) {
+                  const code = band.querySelector('.code');
+                  const when = band.querySelector('.span');
+                  const r = document.createRange();
+                  r.selectNodeContents(code);
+                  out.push({
+                    text: code.textContent,
+                    lines: r.getClientRects().length,
+                    codeH: code.getBoundingClientRect().height,
+                    whenH: when.getBoundingClientRect().height,
+                    whenText: when.textContent,
+                  });
+                }
+                return out;
+            """)
+            assert bands, f"{width}px: no continuation band to measure"
+            for b in bands:
+                assert b["text"] == "TOC", \
+                    f"{width}px: the band names {b['text']!r}, not the course"
+                assert b["lines"] == 1, (
+                    f"{width}px: {b['text']!r} is being drawn on {b['lines']} "
+                    "lines — the code is being broken between letters")
+                # Independent of the line-box count, and the number the
+                # original report quoted: one line of code, not two.
+                assert b["codeH"] <= b["whenH"] + 1, (
+                    f"{width}px: the code box is {b['codeH']}px tall where one "
+                    f"line of the same text is {b['whenH']}px")
+                assert "14:00" in b["whenText"], \
+                    f"{width}px: the band stopped saying when: {b['whenText']!r}"
+    finally:
+        app.d.set_window_size(1500, 1000)
+
+
+# --- from t8-css-visual.py ----------------------------------------
+def _custom(code, name):
+    """One of the reader's own courses, with a name we choose."""
+    return {"code": code, "name": name, "instructors": [], "branches": [],
+            "credits": 2, "starts": None, "part_of_semester": None,
+            "optional_flag": False, "status": "Scheduled",
+            "meetings": [{"day": "Mon", "slot": {"start_min": 550, "end_min": 625},
+                          "hall": "Room 1002", "temp_booking": False}]}
+
+
+# --- from t8-css-visual.py ----------------------------------------
+def t271_a_course_name_stays_inside_its_own_card(app):
+    """A course name made of combining accents paints where nothing stops it.
+    Every accent is drawn on top of the letter before it and takes NO width of
+    its own, so the name's box stays 23px tall and one letter wide while the
+    stack of marks climbs hundreds of pixels straight up — out of the card,
+    across two other courses' stated meeting times and their "Edit this
+    course" buttons. Nothing about the box gives it away; only the ink moves.
+
+    So the ink is what is measured. The strip of screen ABOVE the name is
+    photographed twice — once with a name of 120 combining marks and once with
+    the same course named "B" — and the two photographs have to be identical:
+    whatever is up there belongs to the other courses, and the name has no
+    business painting a single pixel of it.
+
+    The second half is the same rule for the Catalog, whose name sits one
+    <div> deeper and so was missed by the rule written for the card row: a
+    long unbroken name there used to push the whole page sideways on a phone.
+    And the third guards the other direction — an ordinary accented name
+    ("Ǻǽ Ïö") must still be drawn at its full height, because a clip that ate
+    real accents would be a worse bug than the one it fixed."""
+    app.d.set_window_size(1500, 1000)
+    shots = {}
+    for label, name in (("marks", "B" + "́" * 120), ("plain", "B")):
+        app.boot("/", selection=["AAA1", "BBB2", "ZZZ9"], customs={"courses": [
+            _custom("AAA1", "Alpha one"),
+            _custom("BBB2", "Beta two"),
+            _custom("ZZZ9", name),
+        ]})
+        app.open_tab("My courses")
+        app.wait_css("section[aria-label='My courses'] .card")
+        app.d.execute_script("window.scrollTo(0, 0);")
+        time.sleep(0.4)
+        box = app.d.execute_script("""
+            const card = document.querySelector(
+              "section[aria-label='My courses'] "
+              + ".card:has(button.chip[aria-label^='ZZZ9,'])");
+            const name = card.querySelector('.row > strong');
+            const n = name.getBoundingClientRect();
+            const c = card.getBoundingClientRect();
+            return {x: Math.round(c.left), y: Math.round(n.top) - 300,
+                    w: Math.round(c.width), h: 292,
+                    bottom: Math.round(n.top), h_name: Math.round(n.height)};
+        """)
+        assert box["y"] >= 0, \
+            "the strip above the name has to be on screen to be photographed"
+        assert box["h_name"] < 40, (
+            "the name's own box must stay one line tall — otherwise this test "
+            f"is measuring something else entirely (got {box['h_name']}px)")
+        shots[label] = app.d.execute_cdp_cmd("Page.captureScreenshot", {
+            "clip": {"x": box["x"], "y": box["y"], "width": box["w"],
+                     "height": box["h"], "scale": 1}})["data"]
+    assert shots["marks"] == shots["plain"], (
+        "the 300px of screen above the third course's name is not the same "
+        "with a name of combining marks as it is with a name of one letter — "
+        "the name is painting on the courses above it")
+
+    # The Catalog's name is one <div> deeper than the card row's, so a rule
+    # written with `>` never reached it. A single unbroken word there has to
+    # wrap inside its own column instead of widening the page.
+    long_name = "Ein" + "x" * 60
+    snap = json.loads(SEED_SNAPSHOT_JSON)
+    for course in snap["courses"]:
+        if course["code"] == "TOC":
+            course["name"] = long_name
+    app.boot("/", selection=[], raw_snapshot=json.dumps(snap))
+    app.open_tab("Catalog")
+    app.wait_css("section[aria-label='Catalog'] .card")
+    try:
+        for width in (430, 380):
+            app.d.set_window_size(width, 1000)
+            time.sleep(0.45)
+            m = app.d.execute_script("""
+                const card = [...document.querySelectorAll(
+                    "section[aria-label='Catalog'] .card")].find((c) => {
+                  const chip = c.querySelector('button.chip');
+                  return chip && chip.ariaLabel.startsWith('TOC,');
+                });
+                const name = card.querySelector('strong');
+                const sec = document.querySelector("section[aria-label='Catalog']");
+                return {right: name.getBoundingClientRect().right,
+                        holder: name.parentElement.getBoundingClientRect().right,
+                        scrollW: sec.scrollWidth, clientW: sec.clientWidth,
+                        docScroll: document.documentElement.scrollWidth,
+                        docClient: document.documentElement.clientWidth};
+            """)
+            assert m["right"] <= m["holder"] + 1, (
+                f"{width}px: the Catalog name reaches {m['right']}px where its "
+                f"column ends at {m['holder']}px")
+            assert m["scrollW"] <= m["clientW"] + 1, (
+                f"{width}px: one course name makes the Catalog "
+                f"{m['scrollW']}px wide in a {m['clientW']}px window")
+            assert m["docScroll"] <= m["docClient"] + 1, (
+                f"{width}px: and takes the whole page sideways with it "
+                f"({m['docScroll']} > {m['docClient']})")
+    finally:
+        app.d.set_window_size(1500, 1000)
+
+    # Nothing a reader would ever type is cut: an ordinary accented name is
+    # drawn at exactly the height of a plain one.
+    app.boot("/", selection=["AAA1", "BBB2"], customs={"courses": [
+        _custom("AAA1", "Alpha one"),
+        _custom("BBB2", "Ǻǽ Ïö"),
+    ]})
+    app.open_tab("My courses")
+    app.wait_css("section[aria-label='My courses'] .card")
+    heights = app.d.execute_script("""
+        const h = (code) => {
+          const card = document.querySelector(
+            "section[aria-label='My courses'] .card:has(button.chip[aria-label^='"
+            + code + ",'])");
+          const n = card.querySelector('.row > strong');
+          return [n.getBoundingClientRect().height, n.textContent];
+        };
+        return {plain: h('AAA1'), accents: h('BBB2')};
+    """)
+    assert heights["accents"][0] == heights["plain"][0], (
+        f"an accented name is drawn {heights['accents'][0]}px tall against "
+        f"{heights['plain'][0]}px for a plain one — real accents are being cut")
+
+
+# --- from t8-css-visual.py ----------------------------------------
+def t272_every_search_box_is_drawn_by_the_app_not_the_browser(app):
+    """Safari draws `input[type="search"]` as its own native capsule, and a
+    native widget reads none of the app's CSS: the padding, the border, the
+    radius, the inherited font and the focus ring are all discarded and Safari
+    paints its own. That hurts most in the planner's search box, where the
+    three switches are paid for ENTIRELY in `padding-right` and the strip that
+    holds them is absolutely positioned with `pointer-events: none` — lose the
+    padding and the student's typing runs underneath three buttons with
+    nothing to stop it.
+
+    WHAT THIS TEST CANNOT DO: prove the Safari rendering. The suite drives
+    Chromium, which already draws a search input as a plain text field, so no
+    pixel here moves either way and no assertion in this file will ever fail
+    because Safari regressed. A real check of the painting needs a WebKit
+    runner this repo does not have.
+
+    WHAT IT DOES PIN, and it is the half a refactor breaks: the REACH. The
+    opt-out has to be on the bare type, because 22 of the 26 search fields a
+    reader can reach are the little ones inside the filter menus — eight per
+    filter bar, on three tabs — and a rule scoped to `.searchbox` would leave
+    every one of them native. So every search box on every surface is counted
+    and asked the same question."""
+    app.boot("/", selection=["TOC"])
+    seen = {}
+    for tab, label in (("My courses", "My courses"), ("Master grid", "Master grid"),
+                       ("Catalog", "Catalog")):
+        app.open_tab(tab)
+        app.wait_css(f"section[aria-label='{label}'] .searchbox input")
+        # The filter menus hold most of the fields; open them all at once.
+        app.d.execute_script("""
+            for (const f of document.querySelectorAll('details.facet')) f.open = true;
+        """)
+        time.sleep(0.4)
+        found = app.d.execute_script("""
+            return [...document.querySelectorAll('input[type="search"]')].map((el) => {
+              const cs = getComputedStyle(el);
+              return {appearance: cs.appearance, webkit: cs.webkitAppearance,
+                      menu: el.classList.contains('menu-search'),
+                      where: (el.closest('details.facet') || {}).id
+                             || (el.getAttribute('placeholder') || '').slice(0, 24)};
+            });
+        """)
+        boxes = [f for f in found if not f["menu"]]
+        menus = [f for f in found if f["menu"]]
+        assert len(boxes) == 1, \
+            f"{label}: expected one search box on the page, found {len(boxes)}"
+        assert len(menus) >= 7, (
+            f"{label}: only {len(menus)} filter-menu search fields — this test "
+            "is not looking at the fields it exists to cover")
+        for f in found:
+            assert f["appearance"] == "none" and f["webkit"] == "none", (
+                f"{label}: a search field ({f['where']!r}) is still the "
+                f"browser's own widget: appearance {f['appearance']!r}, "
+                f"-webkit-appearance {f['webkit']!r}")
+        seen[label] = len(found)
+
+    # The third surface: the tweaks page has its own search box, and it is not
+    # inside any planner tab, so a fix that only ever ran on the planner would
+    # miss it.
+    app.d.get(f"{BASE}/#/developer/tweaks")
+    app.wait_css(".searchbox input[type='search']")
+    time.sleep(0.3)
+    dev = app.d.execute_script("""
+        return [...document.querySelectorAll('input[type="search"]')].map((el) => {
+          const cs = getComputedStyle(el);
+          return [cs.appearance, cs.webkitAppearance];
+        });
+    """)
+    assert dev and all(a == ["none", "none"] for a in dev), \
+        f"the tweaks page's search box is still the browser's own: {dev!r}"
+    assert sum(seen.values()) >= 24, \
+        f"only {sum(seen.values())} search fields were reached: {seen!r}"
+
+
+# --- from t8-css-visual.py ----------------------------------------
+COLOR_MIX_AUDIT_JS = r"""
+  const sheet = [...document.styleSheets].find(
+      (s) => s.href && s.href.includes('styles-'));
+  const top = [...sheet.cssRules];
+  const isGate = (r) => r.constructor.name === 'CSSSupportsRule'
+                        && r.conditionText.includes('color-mix');
+  const decls = (rule) => {
+    const text = rule.cssText;
+    const body = text.slice(text.indexOf('{') + 1, text.lastIndexOf('}'));
+    return body.split(';').map((s) => s.trim()).filter(Boolean).map((s) => ({
+      prop: s.slice(0, s.indexOf(':')).trim().toLowerCase(),
+      value: s.slice(s.indexOf(':') + 1).trim(),
+    }));
+  };
+  const mixes = [], covered = [];
+  const walk = (rules, inGate) => {
+    for (const r of rules) {
+      const gate = inGate || isGate(r);
+      if (r.cssRules && r.cssRules.length) walk([...r.cssRules], gate);
+      if (!r.selectorText) continue;
+      for (const d of decls(r)) {
+        for (const sel of r.selectorText.split(',').map((s) => s.trim())) {
+          if (gate) covered.push(sel + ' | ' + d.prop);
+          else if (d.value.includes('color-mix(')) {
+            mixes.push({key: sel + ' | ' + d.prop, sel, prop: d.prop,
+                        varying: d.value.includes('var('),
+                        value: d.value.slice(0, 80)});
+          }
+        }
+      }
+    }
+  };
+  walk(top, false);
+  // A flat element painted with the fallback token, so the test can compare
+  // colours without hard-coding a hex that the palette may move.
+  const probe = document.createElement('div');
+  probe.style.background = 'var(--surface-2)';
+  document.body.appendChild(probe);
+  const flat = getComputedStyle(probe).backgroundColor;
+  probe.remove();
+  // NOT the first `thead th`: that one is the grid's top-left corner, which
+  // is `.rowhead` and painted a flat `var(--surface-2)` by a rule of its own,
+  // so it would read as "the fallback won" in every state. A slot heading is
+  // the cell the mix actually paints.
+  const head = document.querySelector(
+      'table.tt thead th:not(.corner):not(.rowhead):not(.extra)');
+  return {
+    gateAt: top.findIndex(isGate),
+    pageAt: top.findIndex((r) => r.constructor.name === 'CSSPageRule'),
+    printAt: top.findIndex((r) => r.constructor.name === 'CSSMediaRule'
+                                 && r.conditionText.includes('print')),
+    engineHasColorMix: CSS.supports('color', 'color-mix(in srgb, red 50%, blue)'),
+    mixes, covered,
+    stickyHeader: head ? getComputedStyle(head).backgroundColor : null,
+    stickyHeaderText: head ? head.textContent.trim().slice(0, 12) : null,
+    flatFallback: flat,
+  };
+"""
+
+
+# --- from t8-css-visual.py ----------------------------------------
+def t273_a_browser_without_color_mix_still_gets_a_sticky_header(app):
+    """`color-mix()` arrived in Safari 16.2, Chrome 111 and Firefox 113. On
+    anything older every one of this sheet's mixes fails in the nastiest way
+    CSS has: the `var()` inside it makes the declaration look valid while the
+    sheet is being read, so it WINS the cascade, and only later — when the
+    value has to be computed — does the browser find it cannot. By then the
+    declaration underneath has been thrown away, and the property falls all
+    the way back to its unset value. `background` unset is transparent, so the
+    grid's sticky time-slot header becomes a see-through bar with the rows
+    scrolling through it; `box-shadow` unset is none, so a focused field has
+    no focus ring at all.
+
+    A plain declaration written above the mix therefore fixes nothing, and the
+    whole fix is one `@supports not (color-mix)` block that restates the
+    affected rules — which only works while three things stay true. This test
+    asks the browser about all three, reading the stylesheet the browser
+    actually parsed:
+
+    1. every `color-mix()` in the sheet that wraps a `var()` has a restatement
+       in that block for the same selector and the same property — the check
+       that catches the 27th mix being added without its fallback;
+    2. the block sits BEFORE `@page` and `@media print`, because a media query
+       adds no specificity and a block moved below them would repaint the
+       printed sheets on old browsers only, where nobody is looking;
+    3. on a browser that HAS `color-mix()` the block is inert — the sticky
+       header keeps its mixed colour rather than the flat fallback token. That
+       is what fails if the `not` is ever dropped from the condition."""
+    app.boot("/", selection=["TOC"])
+    app.open_tab("Master grid")
+    app.wait_css("table.tt thead th")
+    a = app.d.execute_script(COLOR_MIX_AUDIT_JS)
+
+    assert a["gateAt"] >= 0, \
+        "the sheet has no `@supports not (color: color-mix(…))` block at all"
+    varying = [m for m in a["mixes"] if m["varying"]]
+    assert len(varying) >= 20, (
+        f"only {len(varying)} color-mix declarations wrap a var() — either the "
+        "sheet changed shape or this audit has stopped seeing it, and an audit "
+        "that sees nothing agrees with everything")
+    covered = set(a["covered"])
+    missing = [m for m in varying if m["key"] not in covered]
+    assert not missing, (
+        "these color-mix declarations wrap a var() and have no restatement in "
+        "the @supports block, so on Safari 16.1 and older they compute to "
+        "their UNSET value: "
+        + "; ".join(f"{m['sel']} {{ {m['prop']}: {m['value']} }}"
+                    for m in missing[:6]))
+
+    assert a["pageAt"] > a["gateAt"] and a["printAt"] > a["gateAt"], (
+        f"the fallback block is rule {a['gateAt']} but @page is {a['pageAt']} "
+        f"and @media print is {a['printAt']} — sitting after them it would "
+        "out-rank the print sheet on the browsers it is meant to rescue, and "
+        "only on paper, where nobody measures")
+
+    # Chromium HAS color-mix, so the block must be doing nothing here.
+    assert a["engineHasColorMix"], \
+        "this browser has no color-mix(), so half of this test cannot mean anything"
+    assert a["stickyHeader"] and a["stickyHeaderText"], \
+        "no slot heading on the grid to read a colour off"
+    assert a["stickyHeader"] != a["flatFallback"], (
+        f"the sticky header is painted {a['stickyHeader']}, which is exactly "
+        f"the flat fallback {a['flatFallback']} — the @supports block is "
+        "applying on a browser that does not need it")
+
+
+# --- from t8-css-visual.py ----------------------------------------
+def t274_a_big_timetable_never_prints_a_blank_first_sheet(app):
+    """The printed poster used to promise the paper it was one page —
+    `break-inside: avoid` on its grid — and a promise like that is a hint the
+    browser has to abandon the moment the table is taller than the sheet. It
+    abandoned it by pushing the whole grid to page 2, so a reader with 48
+    courses got a first sheet carrying its title and nothing else, then the
+    timetable, then two more pages. The same premise had already had to be
+    walked back by hand for the Halls sheet (eight pages, two of them blank)
+    and for the Master grid; the poster was the third.
+
+    Pagination is the one thing `Emulation.setEmulatedMedia` cannot show —
+    emulating print media re-computes styles but never lays the document out
+    on sheets — so this prints a real PDF through `Page.printToPDF` and counts
+    the pages in it. No stubbing is needed and no print tab is opened:
+    `printToPDF` does not call `window.print`, and printing the app document
+    is a supported route in its own right (the Ctrl+P the Tweaks page tells
+    readers about).
+
+    The assertion is the one a reader would make: adding one more course must
+    not cost a whole extra sheet. 47 courses is the last size that fitted
+    before this was found, so 47 and 48 are printed and compared against each
+    other rather than against a page count written down today — a design that
+    fits more courses per sheet is an improvement, not a regression, and a
+    test that hard-codes "3" would call it one."""
+    # Local, and only here: the PDF arrives base64-encoded and is counted by
+    # its page objects. Neither module is otherwise used by this suite.
+    import base64
+    import re
+
+    codes = [c["code"] for c in json.loads(SEED_SNAPSHOT_JSON)["courses"]]
+    assert len(codes) >= 48, \
+        f"the fixture only has {len(codes)} courses; this test needs 48"
+
+    def sheets(n):
+        app.boot("/", selection=codes[:n])
+        app.open_tab("My timetable")
+        app.wait_css("section[aria-label='My timetable'] table.tt")
+        time.sleep(0.6)
+        pdf = base64.b64decode(app.d.execute_cdp_cmd("Page.printToPDF", {
+            "landscape": True, "printBackground": True,
+            "preferCSSPageSize": True,
+            "paperWidth": 11.69, "paperHeight": 8.27})["data"])
+        return len(re.findall(rb"/Type\s*/Page[^s]", pdf))
+
+    before, after = sheets(47), sheets(48)
+    assert after == before, (
+        f"48 courses print on {after} sheets where 47 print on {before} — the "
+        "poster is refusing to break and is being pushed off the first sheet, "
+        "which comes out with nothing on it but the title")
+
+    # And the two halves of the fix, read straight off the print styles: the
+    # poster may break, and a broken table does not draw a frame around the
+    # paper it did not fill. Both are checked for the other two grids too, so
+    # a future re-scoping cannot quietly move the exemption back onto the
+    # poster instead of removing it.
+    for tab, label in (("My timetable", "My timetable"),
+                       ("Master grid", "Master grid"),
+                       ("Halls", "Lecture halls")):
+        # Switch tabs on SCREEN media: `@media print` hides the tab strip, so
+        # a tab pressed under emulation is not interactable.
+        app.open_tab(tab)
+        app.wait_css(f"section[aria-label='{label}'] table.tt")
+        app.d.execute_cdp_cmd("Emulation.setEmulatedMedia", {"media": "print"})
+        try:
+            time.sleep(0.3)
+            m = app.d.execute_script("""
+                const sec = "section[aria-label='" + arguments[0] + "'] ";
+                const grid = document.querySelector(sec + '.grid-scroll');
+                const table = document.querySelector(sec + 'table.tt');
+                return {breakInside: getComputedStyle(grid).breakInside,
+                        border: getComputedStyle(table).borderTopStyle};
+            """, label)
+            assert m["breakInside"] == "auto", (
+                f"{label}: its grid says break-inside {m['breakInside']!r} on "
+                "paper — a grid taller than the sheet breaks anyway, so all "
+                "that buys is a blank page before it")
+            assert m["border"] == "none", (
+                f"{label}: its table still draws an outer frame "
+                f"({m['border']!r}), which on a continuation sheet is an empty "
+                "ruled well under the last row")
+        finally:
+            app.d.execute_cdp_cmd("Emulation.setEmulatedMedia", {"media": ""})
+
+
+# --- from t8-css-visual.py ----------------------------------------
+def t275_the_phones_day_list_gets_the_week_grid_tweaks_too(app):
+    """Two tweaks a reader can turn on — "Show course names on chips" and
+    "Show a ghost where CMI's time was" — were dead on a phone. Both spans are
+    in the day list's DOM (it is rendered by the very same code as the week
+    grid's cells), and the rules that reveal them named `table.tt td`, which
+    the day list has neither of. So the tick did nothing, on the surface a
+    phone opens My timetable on.
+
+    The day is TAPPED, never assumed: a phone with no stored choice opens on
+    today only when today is a teaching day, so on a Saturday or a Sunday it
+    lands on the week grid instead — where both tweaks always worked — and a
+    test that trusted the default would pass two days in seven without ever
+    looking at the thing it is about.
+
+    The last two thirds are the fence around the fix: the week grid's own
+    "tight rows keep names off" rule, and the rule that keeps names off chips
+    that already sit beside the written-out name, both still have to hold."""
+    app.d.set_window_size(390, 900)
+    try:
+        app.boot("/", selection=["TOC"], overrides=TOC_OVR,
+                 prefs={"chip_names": True, "move_ghosts": True})
+        app.open_tab("My timetable")
+        app.wait_css("section[aria-label='My timetable']")
+
+        def day(label):
+            app.xpath("//div[@aria-label='Day view']"
+                      f"//button[normalize-space()='{label}']").click()
+            time.sleep(0.5)
+
+        # Tuesday holds the ghost: TOC's CMI time, which this reader moved.
+        day("Tue")
+        state = app.d.execute_script("""
+            const ghost = document.querySelector('.day-list .ghost');
+            const week = document.querySelector('.week-grid');
+            return {haveList: !!document.querySelector('.day-list'),
+                    weekShown: week ? week.offsetParent !== null : false,
+                    ghost: ghost && getComputedStyle(ghost).display,
+                    ghostText: ghost && ghost.textContent.trim()};
+        """)
+        assert state["haveList"] and not state["weekShown"], (
+            "the day list has to be the surface on screen for this test to "
+            f"mean anything: {state!r}")
+        assert state["ghost"] == "flex", (
+            "the ghost marking where CMI put TOC is in the day list's DOM but "
+            f"drawn as {state['ghost']!r} — the tick did nothing")
+        assert state["ghostText"] and "TOC" in state["ghostText"], \
+            f"the ghost has to say which course it is: {state['ghostText']!r}"
+
+        # Wednesday holds the class itself, and its chip has to carry the name.
+        day("Wed")
+        chip = app.d.execute_script("""
+            const el = document.querySelector('.day-list .chip .chip-name');
+            return el && [getComputedStyle(el).display, el.textContent.trim()];
+        """)
+        assert chip and chip[0] == "block", (
+            "the course name is in every chip's DOM; in the day list it is "
+            f"still {chip and chip[0]!r}")
+        assert chip[1] == "Theory of Computation", \
+            f"and it has to be the course's name, not {chip[1]!r}"
+
+        # The triage's own repro, and the honest control: the same tick on the
+        # week grid at the same width, which always worked.
+        day("Week")
+        week_chip = app.d.execute_script("""
+            const el = document.querySelector('.week-grid .chip .chip-name');
+            return el && [getComputedStyle(el).display, el.textContent.trim()];
+        """)
+        assert week_chip and week_chip[0] == "block", \
+            f"the week grid's names must still be shown: {week_chip!r}"
+
+        # Fence 1: tight rows still keep names off the WEEK GRID — and the day
+        # list, which is a sibling of that grid and not inside it, still shows
+        # them, because a day row grows and a fixed-height cell does not.
+        app.boot("/", selection=["TOC"], overrides=TOC_OVR,
+                 prefs={"chip_names": True, "move_ghosts": True,
+                        "density": "Compact", "density_everywhere": True})
+        app.open_tab("My timetable")
+        app.wait_css("section[aria-label='My timetable']")
+        day("Wed")
+        assert app.d.execute_script("""
+            const el = document.querySelector('.day-list .chip .chip-name');
+            return el && getComputedStyle(el).display;
+        """) == "block", "tight rows must not reach into the day list"
+        day("Week")
+        assert app.d.execute_script("""
+            const el = document.querySelector(
+                '.density-compact table.tt td .chip .chip-name');
+            return el && getComputedStyle(el).display;
+        """) == "none", \
+            "tight rows in the week grid still keep the names off"
+    finally:
+        app.d.set_window_size(1500, 1000)
+
+    # Fence 2: a chip in a text row sits beside the written-out name already,
+    # so it never carries one, at any width.
+    app.open_tab("My courses")
+    app.wait_css("section[aria-label='My courses'] .card")
+    assert app.d.execute_script("""
+        const el = document.querySelector(
+            "section[aria-label='My courses'] .row .chip .chip-name");
+        return el && getComputedStyle(el).display;
+    """) == "none", \
+        "a chip standing next to the course's name must not repeat it"
+
+
+# --- from t9-webkit-and-reflow.py ---------------------------------
+def _load_harness():
+    """Import `e2e/test_app.py` as `test_app`.
+
+    Not a plain `import`: while this agent ran, the working tree's
+    `test_app.py` carried a literal backslash-n in the TESTS list
+    (`t166_picking_a_course_stays_in_its_own_tab,\\n    t167_…`) from an
+    in-flight sed, so the module did not parse at all. The repair is applied
+    to the SOURCE TEXT here and nothing on disk is touched; once the main
+    session fixes the file this branch never runs.
+    """
+    path = os.path.join(E2E, "test_app.py")
+    with open(path, encoding="utf-8") as f:
+        src = f.read()
+    try:
+        compile(src, path, "exec")
+    except SyntaxError:
+        src = src.replace(",\\n    t", ",\n    t")
+        compile(src, path, "exec")
+        print("NOTE: repaired a literal \\n in e2e/test_app.py's TESTS list "
+              "(in memory only — the file on disk still does not parse)")
+    mod = types.ModuleType("test_app")
+    mod.__file__ = path
+    sys.modules["test_app"] = mod
+    exec(compile(src, path, "exec"), mod.__dict__)
+    return mod
+
+
+# --- from t9-webkit-and-reflow.py ---------------------------------
+def t280_the_shell_says_it_is_an_app_and_the_note_says_why(app):
+    """R93 S15. iPhones, iPads and Safari erase everything a site has saved
+    after seven days of using the browser without opening the page — on this
+    app that is the reader's whole timetable, because everything lives in
+    localStorage. Apple exempts one thing: a page added to the Home Screen
+    AS AN APP, which a page only counts as if it says so. So the shell now
+    ships the manifest and the apple-prefixed meta tag, the manifest really
+    is published (a dropped copy-file tag would be silent otherwise), it
+    opens the app at its own directory rather than the domain root, and the
+    backup section says the sentence out loud so the reader can act on it.
+
+    What this cannot pin, said plainly: there is no WebKit on this machine
+    and no way to emulate its eviction, so this pins the precondition Apple
+    documents and the disclosure — never the erasure itself."""
+    app.boot("/")
+
+    tags = app.d.execute_script("""
+        const link = document.querySelector('link[rel="manifest"]');
+        const apple = document.querySelector(
+            'meta[name="apple-mobile-web-app-capable"]');
+        return {
+          href: link ? link.getAttribute('href') : null,
+          resolved: link ? link.href : null,
+          apple: apple ? apple.content : null,
+          base: new URL('.', document.baseURI).href,
+        };""")
+    assert tags["apple"] == "yes", (
+        "iOS reads apple-mobile-web-app-capable to decide whether a Home "
+        f"Screen icon is an app or a bookmark; got {tags['apple']!r}")
+    assert tags["href"] and not tags["href"].startswith("/"), (
+        "the manifest link must be relative — the app is also published under "
+        f"a project sub-path; got {tags['href']!r}")
+    assert tags["resolved"].startswith(tags["base"]), (
+        f"{tags['resolved']} is not inside {tags['base']}")
+
+    # Fetched through the LINK's own href, so this fails both when the file
+    # is not published and when the link points at nothing.
+    raw = app.d.execute_async_script("""
+        const cb = arguments[arguments.length - 1];
+        fetch(document.querySelector('link[rel="manifest"]').href)
+          .then(r => r.ok ? r.text() : Promise.reject('HTTP ' + r.status))
+          .then(cb, e => cb('ERR ' + e));""")
+    assert not raw.startswith("ERR "), f"the manifest is not served: {raw}"
+    manifest = json.loads(raw)
+    assert manifest["display"] == "standalone", (
+        "'standalone' is what makes iOS treat the Home Screen icon as an app "
+        f"— and what exempts it from the seven-day erase; got {manifest}")
+    assert manifest["start_url"] == "./" and manifest["scope"] == "./", (
+        f"both must be relative for a project sub-path: {manifest}")
+    assert manifest["name"], manifest
+
+    # The disclosure, beside the button that acts on it. No build step can
+    # put this back if it goes.
+    app.xpath("//button[normalize-space()='Share or import']").click()
+    dialog = app.wait_css(".dialog")
+    everything = dialog.find_element(
+        By.XPATH, ".//button[normalize-space()='Export everything']")
+    app.d.execute_script(
+        "arguments[0].scrollIntoView({block: 'center'});", everything)
+    note = app.d.execute_script(
+        "return arguments[0].closest('.data-section').innerText;", everything)
+    assert "seven days" in note, (
+        f"the backup section must say what it protects against: {note!r}")
+    assert "Home Screen" in note, (
+        f"…and the one thing that stops it: {note!r}")
+
+
+# --- from t9-webkit-and-reflow.py ---------------------------------
+def t281_the_free_hall_finder_seeds_cmis_clock_not_the_devices(app):
+    """R93 S18. The free-hall finder can open already set to "today, and the
+    hour happening now" — and it read the hour off the DEVICE, then matched it
+    against CMI's grid, which is an Indian Standard Time grid. Abroad that
+    seeded, and announced through a live region, a class hour at which CMI is
+    shut: a phone in Arizona reading 10:00 was told which halls are free in
+    the 09:10 class, at 22:30 Chennai time. The seed now asks what time it is
+    AT CMI — both halves of it, the day as well as the slot, because at a
+    quarter to eleven in Chennai a device further west is still on yesterday
+    evening.
+
+    The clock is SHIFTED, never frozen, and `last_update_attempt` is shifted
+    with it so a clock a few days out does not also start a background sync.
+    Both the shim and the zone override are removed in a `finally`: either one
+    left behind would quietly move the clock for every test after this."""
+    IST = datetime.timedelta(hours=5, minutes=30)
+    SEC = "section[aria-label='Lecture halls']"
+    # CMI's own grid, from the fixture: the columns the finder can seed.
+    SLOTS = [(550, 625), (630, 705), (710, 785), (840, 915), (930, 1005),
+             (1020, 1095)]
+
+    def shift_to(hour, minute, weekdays=None):
+        """Milliseconds to add to the browser's clock so that CMI's clock
+        reads the next `hour:minute` — on one of `weekdays` (Mon=0), if
+        given."""
+        now = datetime.datetime.now(datetime.timezone.utc)
+        for day in range(8):
+            at_cmi = (now + IST + datetime.timedelta(days=day)).replace(
+                hour=hour, minute=minute, second=0, microsecond=0)
+            if at_cmi <= now + IST:
+                continue
+            if weekdays and at_cmi.weekday() not in weekdays:
+                continue
+            return (at_cmi - IST - now).total_seconds() * 1000.0, at_cmi
+        raise AssertionError("no such instant in the next week")
+
+    def seed_in(zone, shift_ms):
+        """What the finder's two boxes come up set to, on a device in `zone`
+        whose clock has been shifted by `shift_ms` — plus what that device
+        itself thinks the time is, so a stage that failed to take cannot pass
+        for a fix that worked."""
+        ident = app.d.execute_cdp_cmd(
+            "Page.addScriptToEvaluateOnNewDocument",
+            {"source": """
+                (() => {
+                  const SHIFT = %f;
+                  const Real = Date;
+                  const Shifted = function (...args) {
+                    if (args.length === 0) return new Real(Real.now() + SHIFT);
+                    return new Real(...args);
+                  };
+                  Shifted.prototype = Real.prototype;
+                  Shifted.now = () => Real.now() + SHIFT;
+                  Shifted.parse = Real.parse;
+                  Shifted.UTC = Real.UTC;
+                  window.Date = Shifted;
+                })();""" % shift_ms})["identifier"]
+        app.d.execute_cdp_cmd("Emulation.setTimezoneOverride",
+                              {"timezoneId": zone})
+        try:
+            app.boot("/", prefs={
+                "finder_now": True,
+                "last_update_attempt": time.time() * 1000.0 + shift_ms})
+            app.open_tab("Halls")
+            app.wait_css(SEC)
+            return app.d.execute_script("""
+                const s = document.querySelector(arguments[0]);
+                const v = (l) => s.querySelector(
+                    "select[aria-label='" + l + "']").value;
+                const d = new Date();
+                return {day: v('Day'), slot: v('Time slot'),
+                        answered: !!document.querySelector('.finder-result'),
+                        device_weekday: (d.getDay() + 6) % 7,
+                        device_min: d.getHours() * 60 + d.getMinutes()};""",
+                SEC)
+        finally:
+            app.d.execute_cdp_cmd("Page.removeScriptToEvaluateOnNewDocument",
+                                  {"identifier": ident})
+            app.d.execute_cdp_cmd("Emulation.setTimezoneOverride",
+                                  {"timezoneId": ""})
+
+    def in_a_slot(minutes):
+        return next((s for s, e in SLOTS if s <= minutes < e), None)
+
+    # 1. A quarter to eleven in the morning at CMI — the 10:30 class, which is
+    #    what all three devices must be told, whatever their own clock says.
+    #    Arizona (no daylight saving, so this holds in January too) is on the
+    #    evening BEFORE; Tokyo is in the middle of CMI's afternoon class.
+    shift, at_cmi = shift_to(10, 45, weekdays={1, 2, 3, 4})
+    seeds = {z: seed_in(z, shift)
+             for z in ("America/Phoenix", "Asia/Tokyo", "Asia/Kolkata")}
+    day_index, slot = str(at_cmi.weekday()), "630"
+    for zone, got in seeds.items():
+        assert (got["day"], got["slot"]) == (day_index, slot), (
+            f"in {zone} the finder seeded {got} — CMI's clock said "
+            f"{at_cmi:%A %H:%M}, so every device must seed day {day_index} "
+            f"and the {slot}-minute column")
+    # The stage really moved those devices: Arizona was on the previous day
+    # (an ordinary teaching day, so the old seed had one to offer) and Tokyo
+    # was inside a DIFFERENT column of the same grid.
+    az, jp = seeds["America/Phoenix"], seeds["Asia/Tokyo"]
+    assert az["device_weekday"] == (at_cmi.weekday() - 1) % 7, az
+    assert in_a_slot(jp["device_min"]) not in (None, int(slot)), jp
+
+    # 2. Half past ten at night at CMI: nothing is being taught, so the slot
+    #    box waits for a choice. The same instant in Arizona is a class hour
+    #    on CMI's grid — the seed the reader used to be shown and told about.
+    shift, at_cmi = shift_to(22, 30)
+    away = seed_in("America/Phoenix", shift)
+    assert in_a_slot(away["device_min"]) is not None, (
+        f"the stage is vacuous: the device's own clock ({away['device_min']} "
+        "minutes) is outside CMI's grid anyway")
+    assert away["slot"] == "", (
+        f"at {at_cmi:%H:%M} in Chennai nothing is being taught, but the "
+        f"finder came up set to {away['slot']}")
+    assert not away["answered"], (
+        "…and with no slot picked there is nothing to announce")
+
+
+# --- from t9-webkit-and-reflow.py ---------------------------------
+def t282_a_browser_with_no_clipboard_or_worker_still_works(app):
+    """R93 BC-5. Two optional browser APIs were reached through getters that
+    cannot fail — `navigator.serviceWorker` and `navigator.clipboard`. Where
+    a browser does not offer one (a Firefox private window before 138, a
+    profile with service workers turned off, or any page served over plain
+    http:// to a phone on the same network) the getter hands back a handle
+    that is really `undefined`, and the first call on it throws a TypeError
+    out of a wasm frame, where nothing catches it: the daily update check
+    died for the life of the tab, and the same throw inside the app's own
+    Root blanked the whole page — a JS exception is not a Rust panic, so the
+    panic hook never saw it and the reader got a white screen. The seven Copy
+    buttons had the matching honesty bug: they said "copied." whether or not
+    anything had been.
+
+    Staged the way `pin_weekday` stages a date, and in the Firefox SHAPE: the
+    properties are deleted, so `'serviceWorker' in navigator` is false — the
+    exact question the app's own guard asks."""
+    ident = app.d.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {
+        "source": """
+            window.__errs = [];
+            addEventListener('error', (e) => window.__errs.push(String(e.message)));
+            addEventListener('unhandledrejection',
+                             (e) => window.__errs.push('rejected: ' + e.reason));
+            delete Navigator.prototype.serviceWorker;
+            delete Navigator.prototype.clipboard;"""})["identifier"]
+
+    def escaped():
+        """Anything that got out of a wasm frame in this document."""
+        return app.d.execute_script("return window.__errs || [];")
+
+    try:
+        app.boot("/", selection=["TOC"])
+        assert app.d.execute_script(
+            "return 'serviceWorker' in navigator || 'clipboard' in navigator;"
+        ) is False, "the stage did not take — everything below would be vacuous"
+
+        # 1. It mounted at all. This is the assertion the blank page fails.
+        assert app.css(".header h1").text.strip(), "the app did not mount"
+
+        # 2. A Copy button is a FAILURE the reader is told about, not a throw
+        #    and not a lie. Before the fix the getter threw inside the click
+        #    handler, so no toast of any kind appeared.
+        app.xpath("//button[normalize-space()='Share or import']").click()
+        dialog = app.wait_css(".dialog")
+        copy = dialog.find_element(
+            By.XPATH, ".//div[contains(@class,'fieldrow')]"
+                      "[span[normalize-space()='Courses only']]"
+                      "//button[normalize-space()='Copy link']")
+        app.d.execute_script("arguments[0].scrollIntoView({block:'center'});", copy)
+        copy.click()
+        app.wait_toast("clipboard")
+        said = app.toasts_text()
+        assert "copied." not in said.lower() or "nothing was copied" in said, (
+            f"nothing reached the clipboard, and the app said: {said!r}")
+        assert escaped() == [], f"an exception escaped a wasm frame: {escaped()}"
+        app.dismiss_toasts()
+
+        # 3. The update check still answers, which is how we know its spawned
+        #    task did not die on the way: a task that throws never polls again.
+        app.boot("/#/developer")
+        app.wait_css("[data-update-check]").click()
+        app.wait_toast("version")
+        assert escaped() == [], f"an exception escaped a wasm frame: {escaped()}"
+    finally:
+        # MUST be removed: an injected new-document script outlives its test,
+        # and this one would delete the service worker for every test after
+        # it — including the whole offline-copy suite.
+        app.d.execute_cdp_cmd("Page.removeScriptToEvaluateOnNewDocument",
+                              {"identifier": ident})
+
+
+# --- from t9-webkit-and-reflow.py ---------------------------------
+def t283_a_second_click_on_more_cannot_remove_a_filter(app):
+    """R92 S1. Expanding the active-filters line used to drop the hidden
+    chips into the space the "+N more" button had occupied, so a chip's own
+    ✕ slid under a cursor that had not moved and the second half of a
+    double-click took one of the reader's filters off — no toast, written
+    straight to `cmitt.v1.prefs`, still gone after a reload. The toggle now
+    keeps ONE slot in the line, in both states and to the pixel, and the
+    chips it reveals arrive after it: a second click at one unmoved point
+    lands on the toggle it just pressed and collapses the line again.
+
+    `element.click()` re-finds and re-centres the element between clicks,
+    which is exactly how t78 walked straight past this; ActionChains moves
+    the pointer once and leaves it there."""
+    CAT = "section[aria-label='Catalog']"
+    app.boot("/")
+    app.open_tab("Catalog")
+    app.wait_css(f"{CAT} .filterbar")
+    app.xpath("//section[@aria-label='Catalog']//details[contains(@class,'facet')]"
+              "/summary[starts-with(normalize-space(),'Course')]").click()
+    app.wait_css("details.facet[open] .menu")
+    app.xpath("//details[contains(@class,'facet') and @open]"
+              "//button[normalize-space()='All']").click()
+    time.sleep(0.6)
+    app.d.find_element(By.CSS_SELECTOR, "body").send_keys(Keys.ESCAPE)
+    assert len(app.css_all(f"{CAT} .chipline .filterchip")) == 8, \
+        "sanity: the line collapses to one line's worth"
+
+    def toggle_box():
+        return app.d.execute_script(
+            "const b = document.querySelector(arguments[0] + ' .chipline-more');"
+            "const r = b.getBoundingClientRect();"
+            "return {x: Math.round(r.left), y: Math.round(r.top),"
+            "        w: Math.round(r.width), h: Math.round(r.height),"
+            "        label: b.textContent.trim(),"
+            "        last: b === b.parentElement.lastElementChild};", CAT)
+
+    # 1. The slot itself. Expanding must not move the toggle's box by a pixel
+    #    — not its position (it used to be rendered after every chip, so the
+    #    revealed chips took its place) and not its width (the two labels are
+    #    different lengths, and a wider box moves whatever sits to its right).
+    collapsed = toggle_box()
+    assert collapsed["label"].startswith("+"), collapsed
+    # The middle of the box — where a reader aiming at a button aims, and
+    # where the ninth chip's remove ✕ landed when the toggle was rendered
+    # last (measured: it covered the middle 28px of this box).
+    point = (collapsed["x"] + collapsed["w"] // 2,
+             collapsed["y"] + collapsed["h"] // 2)
+    app.css(f"{CAT} .chipline-more").click()
+    WebDriverWait(app.d, 5).until(
+        lambda d: len(app.css_all(f"{CAT} .chipline .filterchip")) > 8)
+    expanded = toggle_box()
+    assert expanded["label"] == "Show fewer", expanded
+    assert (expanded["x"], expanded["y"], expanded["w"]) == \
+           (collapsed["x"], collapsed["y"], collapsed["w"]), \
+        f"the toggle's slot moved when the line expanded: {collapsed} -> {expanded}"
+    assert not expanded["last"], \
+        "the chips the toggle reveals must arrive AFTER it, not in its place"
+    under = app.d.execute_script(
+        "const e = document.elementFromPoint(arguments[0], arguments[1]);"
+        "return e && e.closest('.chipline-more') ? 'toggle'"
+        "     : (e ? e.className + '/' + e.tagName : 'nothing');", *point)
+    assert under == "toggle", \
+        f"after expanding, the toggle's own box holds {under}"
+    app.css(f"{CAT} .chipline-more").click()   # back to collapsed
+    WebDriverWait(app.d, 5).until(
+        lambda d: len(app.css_all(f"{CAT} .chipline .filterchip")) == 8)
+
+    # 2. And the gesture itself: two clicks, one pointer position, nothing of
+    #    the reader's touched.
+    before = app.d.execute_script("return localStorage.getItem('cmitt.v1.prefs');")
+    more = app.css(f"{CAT} .chipline-more")
+    ActionChains(app.d).move_to_element(more).click().click().perform()
+    time.sleep(0.5)
+    assert app.d.execute_script(
+        "return localStorage.getItem('cmitt.v1.prefs');") == before, \
+        "a second click at one unmoved point took one of the reader's filters off"
+    assert len(app.css_all(f"{CAT} .chipline .filterchip")) == 8, \
+        "the second click must land on the toggle again and collapse the line"
+    assert app.css(f"{CAT} .chipline-more").text.strip().startswith("+"), \
+        "…and say so"
+
+
+# --- from t9-webkit-and-reflow.py ---------------------------------
+def t284_a_double_click_on_delete_cannot_delete_the_next_course(app):
+    """R93 S12. Deleting a course takes its card out of the Catalog, so the
+    NEXT card slid up and its own Delete arrived under a cursor that had not
+    moved: a double-click deleted a second course nobody had pointed at, and
+    the notice saying so scrolled past with the first one. The cards are all
+    one height, so this was not a near miss — the next Delete landed on the
+    pressed one to the pixel. The list now refuses POINTERS for a moment
+    after a card leaves it; the keyboard is never shielded, and never needed
+    to be (activation follows focus, and the pressed button takes its focus
+    with it).
+
+    The first deletion of a browser's life is the one case that does NOT
+    reproduce it — the "N deleted courses" note appears above the list at
+    that moment and pushes everything DOWN instead — so the test clears that
+    one-off out of the way from the keyboard first, and then MEASURES that
+    the next Delete really would land under the pointer before pressing
+    anything. Without that measurement this test would pass on a page where
+    nothing moves at all.
+
+    A native test cannot reach this: `delete_course` is correct, and always
+    was — it deletes exactly the code it is handed, twice. The defect lives
+    entirely in where the browser sends the second press."""
+    CAT = "section[aria-label='Catalog']"
+    app.boot("/")
+    app.open_tab("Catalog")
+    app.wait_css(f"{CAT} .print-cols .card")
+
+    def deleted():
+        return app.d.execute_script(
+            "return (JSON.parse(localStorage.getItem('cmitt.v1.overrides')"
+            " || '{}').hidden || []).map(h => h.course);")
+
+    def delete_buttons():
+        return [b for b in app.css_all(f"{CAT} .print-cols .card button")
+                if b.text.strip() == "Delete"]
+
+    def unshielded():
+        WebDriverWait(app.d, 5).until(
+            lambda d: not app.css_all(f"{CAT} .print-cols.settling"))
+
+    assert len(delete_buttons()) > 3, "sanity: several deletable courses"
+
+    # 1. One deletion from the KEYBOARD, which the shield never touches: it
+    #    raises the "deleted courses" note, whose arrival is the one-off
+    #    shift that would otherwise absorb the reflow this test is about.
+    first = delete_buttons()[0]
+    app.d.execute_script("arguments[0].focus();", first)
+    first.send_keys(Keys.ENTER)
+    app.wait_css(f"{CAT} .deleted-note")
+    WebDriverWait(app.d, 5).until(lambda d: len(deleted()) == 1)
+    unshielded()
+
+    # 2. The page really does hand the next card's Delete to a pointer that
+    #    has not moved. Asserted, not assumed.
+    aim = delete_buttons()[0]
+    app.d.execute_script("arguments[0].scrollIntoView({block: 'center'});", aim)
+    time.sleep(0.2)
+    lands = app.d.execute_script("""
+        const cards = [...document.querySelectorAll(arguments[0] + ' .print-cols .card')];
+        const del = (c) => [...c.querySelectorAll('button')]
+            .find(b => b.textContent.trim() === 'Delete');
+        const [a, b] = cards;
+        const shift = b.getBoundingClientRect().top - a.getBoundingClientRect().top;
+        const ar = del(a).getBoundingClientRect(), br = del(b).getBoundingClientRect();
+        const x = ar.left + ar.width / 2, y = ar.top + ar.height / 2;
+        return {x, y, dx: Math.round(br.left + br.width / 2 - x),
+                dy: Math.round(br.top + br.height / 2 - shift - y)};""", CAT)
+    assert abs(lands["dx"]) <= 4 and abs(lands["dy"]) <= 4, (
+        "the next card's Delete no longer arrives under the pressed one "
+        f"({lands}) — this test would prove nothing on this layout")
+
+    # 3. Two clicks, one pointer position.
+    ActionChains(app.d).move_to_element(aim).click().click().perform()
+    time.sleep(0.6)
+    assert len(deleted()) == 2, (
+        f"the second click deleted a course nobody pointed at: {deleted()}")
+
+    # 4. The shield is a moment, not a mode: it lifts on its own, and it only
+    #    ever stopped POINTERS — `pointer-events: none`, not a gate inside the
+    #    handler, so a decisive reader never presses twice for anything.
+    unshielded()
+    nxt = delete_buttons()[0]
+    app.d.execute_script("arguments[0].focus();", nxt)
+    nxt.send_keys(Keys.ENTER)
+    WebDriverWait(app.d, 5).until(
+        lambda d: len(deleted()) == 3,
+        message="the keyboard must still delete, once, on one press")
+
+
+# --- from t9-webkit-and-reflow.py ---------------------------------
+def t285_a_double_tap_on_follow_today_cannot_arm_editing(app):
+    """R92 S3. "Follow today" hands a pinned day back to the clock and then
+    unmounts itself — it exists only while a pick is stored — so at phone
+    width the toolbar re-wrapped and Edit layout took the vanished button's
+    box, under a finger that had not moved. A double-tap therefore turned
+    editing on, on a page the reader had just asked to stop pinning a day,
+    and stacked two notices saying so. The toolbar refuses POINTERS for a
+    moment after the button leaves it; the keyboard is never shielded.
+
+    The measurement is part of the test: it asserts that Edit layout really
+    did arrive under the pointer before it asserts that the press did not
+    reach it — otherwise this would pass on a toolbar that never reflowed."""
+    SEC = "section[aria-label='My timetable']"
+    # No clock pin: "Follow today" appears whenever a day is PINNED, whatever
+    # day it is, so this runs the same on a Sunday — and a shifted clock would
+    # let the sync throttle lapse mid-test.
+    app.boot("/?c=TOC", selection=["TOC"])
+    try:
+        app.d.set_window_size(412, 915)
+        app.open_tab("My timetable")
+        app.wait_css(f"{SEC} .seg.mobile-only")
+
+        def follow():
+            return next((b for b in app.css_all(f"{SEC} .toolbar button")
+                         if b.text.strip() == "Follow today"), None)
+
+        def edit():
+            return next(b for b in app.css_all(f"{SEC} .toolbar button")
+                        if "Edit layout" in b.text or "Done editing" in b.text)
+
+        # Pin a day, which is what puts "Follow today" on the toolbar.
+        next(b for b in app.css_all(f"{SEC} .seg.mobile-only button")
+             if b.text.strip() == "Mon").click()
+        WebDriverWait(app.d, 5).until(lambda d: follow() is not None)
+        target = follow()
+        app.d.execute_script("arguments[0].scrollIntoView({block:'center'});", target)
+        time.sleep(0.2)
+        point = app.d.execute_script(
+            "const r = arguments[0].getBoundingClientRect();"
+            "return [Math.round(r.left + r.width / 2),"
+            "        Math.round(r.top + r.height / 2)];", target)
+        # The spot is the button's, and nothing is standing in front of it —
+        # asserted before the press, so a missed click reports itself as a
+        # missed click rather than as the defect this test hunts.
+        aimed_at = app.d.execute_script(
+            "const e = document.elementFromPoint(arguments[0], arguments[1]);"
+            "const b = e && e.closest('button');"
+            "return b ? b.textContent.trim() : 'nothing';", *point)
+        assert aimed_at == "Follow today", f"aimed at {aimed_at!r}"
+
+        # One move, two clicks: the second lands where Edit layout has just
+        # slid.
+        ActionChains(app.d).move_to_element(target).click().click().perform()
+        app.wait_toast("follows today again")
+        time.sleep(0.6)
+
+        arrived = app.d.execute_script(
+            "const e = document.elementFromPoint(arguments[0], arguments[1]);"
+            "const b = e && e.closest('button');"
+            "return b ? b.textContent.trim() : 'nothing';", *point)
+        # Either label: the button says "Done editing" once it is on, which
+        # is the very state this test exists to forbid — so the report has to
+        # come from the assertion below, not from this one.
+        assert "Edit layout" in arrived or "Done editing" in arrived, (
+            f"the toolbar did not hand this spot to Edit layout ({arrived!r}) — "
+            "this test would prove nothing on this layout")
+        assert edit().get_attribute("aria-pressed") != "true", \
+            "the second half of the double-tap armed Edit layout"
+        assert "Edit layout is on" not in app.toasts_text(), \
+            "…and it must not have said it did"
+
+        # Pointer-only, and a moment long: the shield lifts by itself and the
+        # very next press works.
+        WebDriverWait(app.d, 5).until(
+            lambda d: not app.css_all(f"{SEC} .toolbar.settling"))
+        edit().click()
+        WebDriverWait(app.d, 5).until(
+            lambda d: edit().get_attribute("aria-pressed") == "true",
+            message="the shield must never outlast the moment it guards")
+    finally:
+        app.d.set_window_size(1500, 1000)
+
+
 TESTS = [
     t01_header_sync_button_and_hidden_dev,
     t02_developer_endpoint_only,
@@ -10354,6 +15161,60 @@ TESTS = [
     t165_a_comma_code_survives_the_apps_own_url,
     t166_picking_a_course_stays_in_its_own_tab,
     t167_a_class_is_drawn_where_most_of_it_happens,
+    t200_a_link_cannot_state_a_class_time_that_does_not_exist,
+    t201_saved_changes_the_app_cannot_state_are_set_aside_once,
+    t202_a_backup_holding_an_impossible_class_time_is_refused_whole,
+    t203_a_courses_file_cannot_hand_you_credits_you_never_chose,
+    t204_settings_that_arrive_out_of_range_are_stated_as_what_the_app_does,
+    t205_a_link_files_its_changes_under_this_browsers_spelling,
+    t206_an_id_no_counter_can_follow_is_set_aside_and_the_counter_moved_on,
+    t211_site_data_switched_off_is_not_called_a_space_problem,
+    t212_a_write_the_browser_refused_is_never_reported_as_saved,
+    t213_a_failed_sync_never_quotes_an_earlier_syncs_status,
+    t220_a_calendar_says_which_course_the_dates_left_out,
+    t221_a_calendar_for_one_course_links_to_that_one_course,
+    t222_a_link_no_shortener_will_take_is_never_sent,
+    t230_a_click_on_the_questions_own_words_stays_inside_it,
+    t231_the_free_hall_finder_drops_a_slot_that_left_the_grid,
+    t232_undoing_an_answer_to_cmis_conflicts_puts_the_questions_back,
+    t233_a_reload_that_came_back_on_the_old_build_says_so,
+    t234_the_update_checks_cap_stays_under_the_workers_nav_cap,
+    t235_build_info_update_rows_answer_the_button_beside_them,
+    t240_a_temporary_booking_never_traps_a_class_away_from_cmis_time,
+    t241_a_notice_never_covers_the_question_however_the_screen_turns,
+    t242_a_corrected_time_costs_a_chip_one_line_not_three,
+    t243_a_sync_that_ends_the_undo_history_says_so,
+    t244_your_own_link_replaces_nothing_and_a_link_without_deletions_lifts_them,
+    t245_a_failed_shortening_names_the_helper_sites_and_not_the_wrong_service,
+    t246_a_touchscreen_laptop_is_told_the_gesture_that_works,
+    t247_the_sender_is_told_their_deletions_travel,
+    t250_a_class_that_meets_twice_in_one_hour_is_one_clash,
+    t251_the_last_undo_hands_the_keyboard_to_the_button_beside_it,
+    t252_resetting_every_tweak_leaves_the_keyboard_on_the_answer,
+    t253_dismissing_a_notice_does_not_drop_the_keyboard,
+    t254_the_route_line_never_claims_an_order_the_app_does_not_use,
+    t255_the_master_grid_says_when_a_filter_empties_it,
+    t256_developer_mode_writes_the_semester_the_way_every_screen_does,
+    t257_a_remembered_day_pick_lasts_as_long_as_the_page_says_it_does,
+    t260_the_storage_page_never_describes_a_snapshot_it_has_not_got,
+    t261_the_next_scheduled_check_is_never_a_time_that_has_passed,
+    t262_the_reachability_probe_is_in_the_record_it_promises,
+    t263_turning_the_room_bands_off_keeps_the_row_under_the_pointer,
+    t264_the_tweaks_search_says_out_loud_what_it_found,
+    t265_escape_clears_the_notices_from_wherever_you_are,
+    t266_the_developer_rails_exit_is_finger_sized_on_a_narrow_phone,
+    t270_a_continuation_band_never_breaks_the_code_in_half,
+    t271_a_course_name_stays_inside_its_own_card,
+    t272_every_search_box_is_drawn_by_the_app_not_the_browser,
+    t273_a_browser_without_color_mix_still_gets_a_sticky_header,
+    t274_a_big_timetable_never_prints_a_blank_first_sheet,
+    t275_the_phones_day_list_gets_the_week_grid_tweaks_too,
+    t280_the_shell_says_it_is_an_app_and_the_note_says_why,
+    t281_the_free_hall_finder_seeds_cmis_clock_not_the_devices,
+    t282_a_browser_with_no_clipboard_or_worker_still_works,
+    t283_a_second_click_on_more_cannot_remove_a_filter,
+    t284_a_double_click_on_delete_cannot_delete_the_next_course,
+    t285_a_double_tap_on_follow_today_cannot_arm_editing,
 ]
 
 

@@ -7358,6 +7358,44 @@ The span's CSS class is renamed `.until` → **`.span`** for the same reason: a
 name that states one of two cases lies half the time. `t122` selected the old
 name and was updated with it.
 
+### R96b — the tests R95 owed, and two ways a fleet can eat your work
+
+R95 shipped 61 fixes and wrote 5 tests. A nine-agent fleet
+(`wf_409ab8eb-d72`, `.workagents/r96/`) wrote the rest: **66 tests, 55 e2e and
+11 native**, of which **63 were verified to go RED when the fix is removed** —
+the standard set because R95 shipped two tests that passed without exercising
+anything. The three that could not meet it say so (2 `PASSES_ONLY`, 1
+`NOT_TESTABLE`). Where a fix could not be un-shipped from a read-only dist, the
+agent substituted a vacuity control (the same body driven with input the fix
+does not act on) or a native break-it in core, and recorded which.
+
+**TWO PROCESS FAILURES, both mine, both worth not repeating.**
+
+1. **Agents restoring source with `git checkout` destroy UNCOMMITTED work.**
+   The instruction said an agent may break a fix to verify its test provided it
+   restores the file. `git checkout` restores to HEAD — and HEAD did not have
+   R97's placement rule, which was still in the working tree. `place_meeting`,
+   `home_column`, `Placement` and `Slot::overlap_minutes` were wiped from
+   `core/src/model.rs` TWICE, minutes apart. The fix is not a better
+   instruction, it is **commit before launching a fleet**: with the work in
+   HEAD, the same `git checkout` restores TO it. (The t1 agent named the window
+   in its own report rather than hiding it, which is how it was diagnosed.)
+2. **Merging by regex ate the harness.** An unanchored
+   `def name\(self\):…` pattern, used to drop module-level duplicates,
+   matched INSIDE indented code and deleted `App::unpin_weekday`. The merge is
+   now one pass driven by `ast`: top-level defs and assignments are collected,
+   a `RIG` set drops the scaffolding that only means something in a standalone
+   script (argv parsing, `globals()` auto-registration, `X = T.Y` aliases), and
+   the three methods written with `self` go inside `class App`. Restored from
+   the commit — the second time that day committing early saved the work.
+
+**Merging a fleet's tests: what to expect.** Every agent used a different
+paste-marker style, so parse, never slice on markers. Three classes of
+scaffolding will not compile inside the suite and must be dropped: argv
+parsing, a `globals()`-scanning auto-registration list, and harness aliases
+(`By = T.By`). Anything written with `self` is an `App` method and belongs in
+the class.
+
 ## 8. Open bugs — found, confirmed, NOT fixed (do not delete)
 
 Rules for this section: entries stay until the bug is actually fixed and a

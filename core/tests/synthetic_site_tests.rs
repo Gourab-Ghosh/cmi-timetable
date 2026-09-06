@@ -1057,6 +1057,74 @@ fn the_clock_is_read_from_the_page() {
     );
 }
 
+/// R93 S2 — one mistyped digit in a column heading is refused, not repaired.
+///
+/// The parser has a rule that moves an unmarked END forward twelve hours,
+/// because "6:30-7:45" in a column heading means the evening: the bare-hour
+/// rule has already moved the START, and a range never runs backwards. That
+/// repair used to fire on ANY range that came out backwards, including ones
+/// whose start was never touched — so a heading that lost a digit
+/// ("11:30-12:45" typed as "11:30-11:30") came out of the parser as
+/// 11:30-23:30, sailed through the gate, and became a twelve-hour column the
+/// app drew, counted clashes against, and stated as CMI's own timetable.
+///
+/// The page must be refused instead, by name, and the previously stored
+/// snapshot kept. That is what the whole fail-closed gate is for: a page
+/// nobody can read is a page nobody should be shown a guess about.
+#[test]
+fn a_heading_that_lost_a_digit_is_refused_not_repaired() {
+    // Exactly `january_term`, with one character gone from the third
+    // heading. Everything else on both pages is untouched, so the only
+    // thing that can change the verdict is that one range.
+    let out = january_term()
+        .slots(&[
+            "08:30-09:45",
+            "10:00-11:15",
+            "11:30-11:30", // was 11:30-12:45
+            "14:30-15:45",
+            "16:00-17:15",
+        ])
+        .read();
+
+    assert!(
+        !out.report.gate_passed(),
+        "a zero-length class must not pass the gate: {:#?}",
+        out.report.gate
+    );
+    assert!(
+        out.snapshot.is_none(),
+        "fail closed: no half-snapshot from a page the gate refused"
+    );
+    assert!(
+        failed_rules(&out).iter().any(|r| r == "slot sanity"),
+        "slot sanity is the rule that must catch this: {:?}",
+        failed_rules(&out)
+    );
+
+    // And it must be refused for the range that is actually on the page.
+    // This is the assertion that cannot be satisfied by a laundered slot:
+    // repaired, the range is 11:30-23:30 and this string never appears
+    // anywhere in the report.
+    let detail = out
+        .report
+        .gate
+        .iter()
+        .find(|c| c.rule == "slot sanity")
+        .map(|c| c.detail.clone())
+        .unwrap_or_default();
+    assert!(
+        detail.contains("11:30\u{2013}11:30"),
+        "the gate must name the range CMI's page really printed: {detail:?}"
+    );
+
+    // The control, one character away: the same page with the heading typed
+    // correctly is a perfectly ordinary term.
+    assert!(
+        january_term().read().report.gate_passed(),
+        "the unmangled page must still pass — otherwise this test proves nothing"
+    );
+}
+
 /// Two branches can be given different columns. The master grid takes the
 /// union, and every course keeps the times its own grid printed.
 #[test]

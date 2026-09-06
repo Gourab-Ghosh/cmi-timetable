@@ -569,6 +569,45 @@ mod tests {
         assert_eq!(parse_slot("no time here"), None);
     }
 
+    /// R93 S2 — a time range that runs backwards is handed on as it is, so
+    /// the gate can refuse the page.
+    ///
+    /// One mistyped digit in a column heading on CMI's timetable page
+    /// ("11:50-13:05" losing its 3) used to come out of this function as
+    /// 11:50-23:50 and pass every check after it: the master grid drew a
+    /// twelve-hour column, the clash panel grew by thirty pairs, and the app
+    /// stated as a fact that a course met until ten to midnight. The +12 h
+    /// only ever existed to finish the job the bare-afternoon rule starts —
+    /// "6:30-7:45" is an evening class — so it may only fire when the START
+    /// really was moved. Nothing else is a half-day guess, and a range that
+    /// was never guessed at is not the parser's to repair.
+    ///
+    /// Handing the bad slot on rather than dropping it is deliberate:
+    /// dropping the column loses a whole day-column of the week behind a
+    /// warning only developer mode shows, while passing it on reaches gate
+    /// rule 6 ("slot sanity"), which refuses the page and keeps the stored
+    /// snapshot — drop-and-say, never silently clamp.
+    #[test]
+    fn a_backwards_range_is_handed_on_rather_than_laundered() {
+        // The repair this guard must NOT break: a bare "6" start is evening,
+        // so an unmarked end belongs to the same half-day.
+        assert_eq!(parse_slot("6:30-7:45"), Some(Slot::new(1110, 1185)));
+        // Crosses noon; the END is the one the rule moves, and it already
+        // came out forwards, so nothing here changes either.
+        assert_eq!(parse_slot("11:50-1:05"), Some(Slot::new(710, 785)));
+
+        // Degenerate: the mistyped heading. Zero length, kept zero length.
+        assert_eq!(parse_slot("11:50-11:50"), Some(Slot::new(710, 710)));
+        // Plainly backwards, both hours unambiguous.
+        assert_eq!(parse_slot("13:05-11:50"), Some(Slot::new(785, 710)));
+        // A morning hour is not a half-day guess either.
+        assert_eq!(parse_slot("09:30-09:30"), Some(Slot::new(570, 570)));
+        // Already refused before the fix, because 12 is not "bare
+        // afternoon" — kept as the control that says which half of the
+        // condition is doing the work.
+        assert_eq!(parse_slot("12:00-12:00"), Some(Slot::new(720, 720)));
+    }
+
     #[test]
     fn pipeless_grid_falls_back_to_columns() {
         let text = "\
