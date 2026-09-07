@@ -15507,6 +15507,69 @@ def t298_the_release_stylesheet_keeps_every_fallback_the_source_wrote(app):
         "fallback plain and the enhancement inside @supports:\n  "
         + "\n  ".join(dupes[:5]))
 
+    # (3) Every `dvh` enhancement and its `vh` fallback must say the SAME
+    # THING. The audit that found the deleted fallbacks asked only "does each
+    # dvh declaration have a vh partner", never "does the partner agree" —
+    # and one did not: the gated version capped the dialog at 800px and the
+    # fallback did not, while the fallback's selector (0,3,1) outranks the
+    # `.dialog` rule that carries the cap. So on every browser the fallback
+    # exists FOR, with a toast up and a tall window, the reading ceiling that
+    # governs every other dialog silently vanished (R100).
+    at = text.find("@supports (height:1dvh)")
+    assert at >= 0, "the dvh enhancements are not in a @supports gate at all"
+    # Brace-match the at-rule body; a regex stops at the first inner '}'.
+    open_at = text.index("{", at)
+    depth, i = 0, open_at
+    while i < len(text):
+        if text[i] == "{":
+            depth += 1
+        elif text[i] == "}":
+            depth -= 1
+            if depth == 0:
+                break
+        i += 1
+    inside = text[open_at + 1:i]
+    outside = text[:at] + text[i + 1:]
+    pairs = _re.findall(r"([^{}]+)\{([^{}]*)\}", inside)
+    assert pairs, f"no rules inside the dvh gate: {inside[:120]!r}"
+    disagreements = []
+    for sel, body in pairs:
+        sel = sel.strip()
+        for decl in body.split(";"):
+            if ":" not in decl:
+                continue
+            prop, val = (x.strip() for x in decl.split(":", 1))
+            want = val.replace("dvh", "vh")
+            # ANCHORED: `.dialog{` is a substring of
+            # `body.modal-open.toasts-live .dialog{`, and matching that
+            # compared one rule's enhancement against another's fallback.
+            base = _re.search(
+                r"(?:^|[}]|/\*/)\s*" + _re.escape(sel) + r"\{([^{}]*)\}", outside)
+            if not base:
+                disagreements.append(f"{sel} is enhanced but has no fallback rule")
+                continue
+            got = None
+            for d2 in base.group(1).split(";"):
+                if ":" in d2 and d2.split(":", 1)[0].strip() == prop:
+                    got = d2.split(":", 1)[1].strip()
+            if got is None:
+                disagreements.append(f"{sel} {{ {prop} }} is enhanced but has no fallback")
+            elif got.replace(" ", "") != want.replace(" ", ""):
+                disagreements.append(
+                    f"{sel} {{ {prop} }}: fallback says {got!r}, "
+                    f"enhancement says {val!r} (i.e. {want!r})")
+    assert not disagreements, (
+        "a fallback must say exactly what its enhancement says, with vh for "
+        "dvh — otherwise the browsers it exists for get different behaviour "
+        "from the ones that do not need it:\n  " + "\n  ".join(disagreements))
+
+    # (4) The prefixed blur survives. It was 4 in the source and 0 in the
+    # shipped bytes: the minifier removes a prefix it judges unnecessary, but
+    # Safari only took the unprefixed property in 18.
+    assert "-webkit-backdrop-filter" in text, (
+        "the prefixed backdrop-filter was stripped from the shipped sheet "
+        "again — gate it in @supports, which minification preserves")
+
     # (2) The fallbacks that were being eaten are really there.
     for needle, why in [
         ("85vh", ".dialog's max-height fallback for browsers without dvh"),

@@ -483,8 +483,9 @@ fn stale_changes_lapse_and_are_reported() {
 /// SILENTLY INSTEAD OF ASKING. Here the question is still asked and still
 /// waiting; answering "keep it removed" performs this very re-anchor. Doing it
 /// up front only makes the pending state agree with the answer the dialog
-/// offers by default — `Conflict::default_pick` keeps a removal removed "until
-/// they say otherwise".
+/// offers by default: a removal stays removed until they say otherwise. That
+/// policy lives at the re-anchor site in `merge_overrides` — R100 deleted the
+/// `default_pick` that used to state it, because it had no production caller.
 ///
 /// There is no neutral state, because the week has to draw something. The
 /// choice is which default is safer, and it is the one that keeps the reader's

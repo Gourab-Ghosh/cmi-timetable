@@ -235,7 +235,6 @@ button {
   flex-wrap: wrap;
   padding: 0.55rem 1rem;
   background: var(--glass);
-  -webkit-backdrop-filter: blur(14px) saturate(1.4);
   backdrop-filter: blur(14px) saturate(1.4);
   border-bottom: 1px solid var(--line);
   position: sticky;
@@ -532,7 +531,6 @@ button {
     z-index: 40;
     justify-content: space-around;
     background: var(--glass);
-    -webkit-backdrop-filter: blur(14px) saturate(1.4);
     backdrop-filter: blur(14px) saturate(1.4);
     /* A sideways drag on the bar means "next section", so the browser must
        not also pan the bar under the finger — the two would fight and the
@@ -2294,7 +2292,14 @@ details.facet .menu .menu-empty { margin: 0.2rem 0 0; }
      unbounded rail overlapped the dialog it had just made room for, buried
      its title and its answer buttons, and — being on top — swallowed the
      clicks aimed at them. Scrolls within its own bounds instead. */
-  max-height: 33dvh;
+  /* Plain `vh` here, `dvh` in the @supports gate below. Written as a
+     duplicate pair this was DELETED by the release minifier, which keeps
+     only the last of a repeated property — and `dvh` is invalid at parse
+     time on iOS < 15.4 / Chrome < 108 / Firefox < 101, so on those browsers
+     this rule did not exist and `max-height` was `none`. That is R93 R6
+     exactly as the comment above describes it, unfixed, in the shipped
+     bytes (R100). */
+  max-height: 33vh;
   overflow-y: auto;
   overscroll-behavior: contain;
 }
@@ -2332,7 +2337,7 @@ body.modal-open .toasts { top: 0.8rem; bottom: auto; }
    a dialog keeps enough height to show a line of text and its buttons. */
 body.modal-open.toasts-live .overlay {
   align-items: flex-start;
-  padding-top: calc(min(var(--toast-band, 0px), 33dvh) + 1.4rem);
+  padding-top: calc(min(var(--toast-band, 0px), 33vh) + 1.4rem);
 }
 body.modal-open.toasts-live .dialog {
   /* Plain fallback here, `dvh` enhancement in the @supports block below
@@ -2342,7 +2347,10 @@ body.modal-open.toasts-live .dialog {
      height to show a line of text and its buttons" — but only the `dvh`
      version ever had it, so on the browsers this fallback exists FOR the
      promise was not kept (R100). */
-  max-height: max(12rem, calc(100vh - min(var(--toast-band, 0px), 33vh) - 2.8rem));
+  max-height: max(
+    12rem,
+    min(calc(100vh - min(var(--toast-band, 0px), 33vh) - 2.8rem), 800px)
+  );
 }
 /* The fold marker (R93 R2): quieter than a notice, because it is a count and
    not a message — it must never be mistaken for the thing it is counting. */
@@ -2400,7 +2408,6 @@ body.modal-open { overflow: hidden; }
   position: fixed;
   inset: 0;
   background: rgba(10, 14, 22, 0.5);
-  -webkit-backdrop-filter: blur(3px);
   backdrop-filter: blur(3px);
   z-index: 80;
   display: flex;
@@ -3829,11 +3836,34 @@ label.field > input { width: 100%; }
   /* The layout viewport lies when a phone keyboard is up, and the actions
      row must stay reachable. */
   .dialog { max-height: min(85dvh, 800px); }
+  .toasts { max-height: 33dvh; }
+  body.modal-open.toasts-live .overlay {
+    padding-top: calc(min(var(--toast-band, 0px), 33dvh) + 1.4rem);
+  }
   body.modal-open.toasts-live .dialog {
     max-height: max(
       12rem,
       min(calc(100dvh - min(var(--toast-band, 0px), 33dvh) - 2.8rem), 800px)
     );
+  }
+}
+/* The prefixed blur, kept where the minifier cannot drop it.
+   `-webkit-backdrop-filter` appeared FOUR times in this sheet and ZERO times
+   in the bytes the site served: lightningcss removes a prefix it judges
+   unnecessary for its default targets, but Safari only took the unprefixed
+   property in 18, so every Safari from 9 to 17 lost the effect entirely
+   (R100). Cosmetic — each of these surfaces also paints a solid or
+   translucent background — but the same class as the rest: correct in the
+   source, absent from the deploy. */
+@supports (-webkit-backdrop-filter: blur(1px)) {
+  .header { -webkit-backdrop-filter: blur(14px) saturate(1.4); }
+  .overlay { -webkit-backdrop-filter: blur(3px); }
+}
+/* `.tabs` gets the blur only where it is the phone's bottom bar, which is the
+   only place the unprefixed rule sits too. */
+@media (max-width: 640px) {
+  @supports (-webkit-backdrop-filter: blur(1px)) {
+    .tabs { -webkit-backdrop-filter: blur(14px) saturate(1.4); }
   }
 }
 @supports (overflow: clip) {

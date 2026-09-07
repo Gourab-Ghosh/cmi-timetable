@@ -7607,7 +7607,8 @@ the pending question had already been half-answered — as "put it back" and
 
 **There is no neutral state**, because the week has to draw something. The
 choice is which default is safer, and this codebase had already made it twice:
-`Conflict::default_pick` keeps a removal removed "until they say otherwise",
+`Conflict::default_pick` kept a removal removed "until they say otherwise" (a
+function R100 then DELETED — see below),
 and the honesty law puts the reader's own work first. So R100 RE-ANCHORS an
 override onto the meeting CMI moved it to at the moment the question is
 raised, capturing `was` first so the story still names the time CMI moved away
@@ -7683,9 +7684,69 @@ rests on an accidental subscription (`course_by_code` and
 `courses_running_into` make tracked reads), not on a stated rule. That receipt
 is worth more than the finding would have been.
 
-**Gates:** 214 native, 233 e2e (7 new: t296–t302), clippy and fmt clean. Every
-new test was break-verified, and t296/t297 were verified ORTHOGONALLY — each
-catches its own half of the fix and neither covers for the other.
+#### What the completeness critic found, which was the round's best output
+
+**Every browser measurement the fleet took was against a dist that predated
+the code it was auditing.** `r99-dist-e2e` was stamped 19:05; `styles.css` was
+last written at 20:00. So slice a6's whole "shipped stylesheet vs source"
+census — the only method that catches the minifier class this entry calls the
+one to remember — diffed against a sheet lacking the rules in question, and
+slice a7 read `85vh occurs 0 times` off the PRE-FIX artifact and reported it as
+confirmation of the fix. It is the byte-for-byte signature of the bug. **No
+release build of HEAD existed anywhere on the machine.** The critic built one
+and re-measured; the lesson is a rule: a claim about the shipped bytes is worth
+nothing unless the artifact was built from the tree being audited, and the
+timestamps must be checked, not assumed.
+
+**It then found a defect in this round's own fix, two hours old.** The `vh`
+fallback added to `body.modal-open.toasts-live .dialog` said something
+DIFFERENT from the `dvh` twin it stands in for: the gated version caps at
+`800px` and the fallback did not, while the fallback's selector (0,3,1)
+outranks the `.dialog` rule that carries the cap. So on exactly the browsers
+the fallback exists for, with a toast up and a window over ~940px, the reading
+ceiling that governs every other dialog vanished. The assertion nobody had
+made: a6 checked "does each `dvh` declaration have a `vh` partner", never "does
+the partner SAY THE SAME THING". `t298` now checks it and fails on that pair.
+
+**Two more the same census had missed**, both fixed here: `.toasts`'s
+`max-height: 33dvh` and the overlay's `padding-top` were ungated, so on
+iOS < 15.4 both declarations were dropped and **R93 R6 did not exist in the
+shipped bytes** — an unbounded toast rail burying a dialog's title and buttons
+and swallowing the clicks aimed at them, which is the bug R93 R6 was written to
+fix. And `-webkit-backdrop-filter` was 4 in source and **0** shipped:
+lightningcss removes a prefix it judges unnecessary, but Safari only took the
+unprefixed property in 18. All three now sit inside `@supports`.
+
+**A documentation defect of exactly the R99 class.** Seventeen doc lines saying
+"Everything starts TICKED … untick what you don't want" sat above
+`empty_pick`, which returns nothing ticked, while the function they described
+(`default_pick`) sat below with no doc and **no production caller**. The
+critic's observation is the sharp one: R99's shipped `keep_cmi` bug was born in
+that same gap, a contract stated in one place and implemented in another. So
+`default_pick` is deleted, its reasoning moved to the re-anchor that actually
+carries the policy, and `empty_pick` documents what it does.
+
+**And "1 seconds alone"** — the one numeric control in the developer tweaks
+that does not go through the shared `tweak_number` helper (it needs
+`step="0.5"`, so it is hand-rolled), which is why the same sweep that fixed
+"1 warnings" in the same file missed it. A sweep that reads a helper and its
+call sites sees three of four.
+
+**Where it looked and found nothing, so nobody pays twice:** `join.rs` is
+deterministic by construction; `search.rs` cannot be regex-bombed (probed);
+`ics.rs`'s output is RFC-correct on the points that usually break; `print.html`
+reads `ThemePref` correctly. And the deploy path itself, which no slice was
+assigned and which is what is about to be exercised, was tested end to end —
+two dists differing in every hashed asset, A installed, the tree replaced with
+B and A's files DELETED as a gh-pages deploy does, then one reload with
+`Cache-Control: no-store`: exactly one cache survives and it is B's, no A-named
+request is made, and the next visit is already offline-capable on B. The most
+deploy-critical behaviour in the app has no test and happens to be correct.
+
+**Gates:** 213 native (one test went with the function it tested), 235 e2e
+(8 new: t296–t302 plus t298's fourth and fifth halves), clippy and fmt clean.
+Every new test was break-verified, and t296/t297 were verified ORTHOGONALLY —
+each catches its own half of the fix and neither covers for the other.
 
 ## 8. Open bugs — found, confirmed, NOT fixed (do not delete)
 
@@ -7721,6 +7782,73 @@ entry as the rules here require. 8.19 (a self-update landing on top of a
 live Undo offer, found by R72's screenshots) was fixed in R73 by removing every
 self-initiated reload — R73's §7 entry says what replaced it and which phase of
 t114 fails without it.
+
+### 8.27 A drop may store a class shorter than the cell it was dropped in — PLAUSIBLE, not confirmed
+
+`app/src/dnd.rs`, `perform_drop`, at the slot lookup:
+
+```rust
+let Some(slot) = app.display_slot_grid().into_iter()
+    .chain(app.master_slot_grid()).chain(app.hall_slot_grid())
+    .map(|(s, _)| s).find(|s| s.start_min == slot_start)
+```
+
+The three grids share CMI's official columns but mint their SYNTHETIC columns
+from three different source sets (selected courses' effective meetings; every
+override's `to.slot`; hall bookings plus hall-carrying overrides plus selected
+customs), and `push_extra_column` widens same-start extras to the maximum only
+within ONE grid's own list. So two grids can publish the same `start_min` with
+a different `end_min`, and `.find` takes whichever comes first in the chain —
+always `display_slot_grid`, the reader's own week, which is not necessarily the
+tab they are dragging on.
+
+The construction: an override to an out-of-grid 19:00–20:15 on a selected
+course, plus a hall-carrying override at 19:00–21:00 on an unselected one. The
+Halls tab then draws 19:00–21:00 and the drop would store 19:00–20:15 — a class
+45 minutes shorter than the cell it was dropped in, with the `.ics`, the clash
+panel and the printed sheet all following the shorter time.
+
+NOT FIXED, and NOT CONFIRMED: nobody drove the drag. Two candidate one-liners
+disagree about what "correct" means, which is why this wants its own sitting
+rather than a guess before a deploy — `.filter(...).max_by_key(|s| s.end_min)`
+takes the longest column, while the arguably right answer is the column of the
+grid the reader is actually looking at. Whoever takes it on should decide that
+question first and then write the test.
+
+Worth knowing why it went unexamined for so long: `perform_drop` never appears
+in R100's 4,831 lines of findings, and its own comments record FIVE separately
+shipped wrong-state bugs (a drop that announced a move it did not make; one
+that deleted a room change; one that scattered a class to two cells and toasted
+"back to CMI's time" for a time CMI no longer had; one that added nothing; one
+that drew a class twice and exported two identical events). That is the highest
+historical density of wrong-state defects in the codebase, and no slice was
+pointed at it.
+
+### 8.28 Deliberate non-fix — do NOT `untrack` the conflict dialog's course lookups
+
+R100's slice a3 proposed wrapping `App::course_by_code` and moving
+`App::courses_running_into` out of the conflict dialog's render, so that a sync
+or an Undo behind the open dialog stops blanking the reader's in-progress
+ticks. The symptom is real: `picks` is a fresh `RwSignal` on every rebuild, so
+a rebuild resets what they had ticked.
+
+The fix must not be that one. Those two calls are the ONLY tracked reads the
+dialog makes, and they are what keeps it fresh: `conflicts_dialog` snapshots
+the queue with `get_untracked()`, and Save zips that frozen vector against
+`picks` by index. Remove the subscriptions and a sync that REPLACES the queue
+(as opposed to emptying it, which the R99 effect handles) leaves the dialog
+answering a list that no longer exists — and `resolve_conflicts` ends in
+`set_conflicts(remaining)`, computed entirely from the stale snapshot, which
+would then overwrite the live queue and destroy the new questions silently.
+Slice a1 measured the self-healing and wrote down that it "rests on an
+accidental subscription, not on a stated rule"; a3's patch removes precisely
+that accident and converts a withdrawn finding into a real one.
+
+Anyone fixing the tick-reset must therefore make the dialog's freshness a
+STATED rule first — the queue read tracked, `picks` keyed by something stable
+(`override_id`, not position) and preserved across a rebuild, and Save merging
+rather than replacing. That is a redesign of the dialog's state, not a
+one-line `untrack`.
 
 ### 8.26 — FIXED IN R100. A question you postponed lasted only until the next sync
 

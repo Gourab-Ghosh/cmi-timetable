@@ -132,36 +132,30 @@ impl Conflict {
         }
     }
 
-    /// What the boxes look like before the reader touches anything.
+    /// Nothing ticked, at the right length — the state a row is in the moment
+    /// the reader first touches it, and the ONLY way the app should ever build
+    /// a pick from scratch. See [`ConflictPick::keep_cmi`] for what building
+    /// one by hand cost.
     ///
-    /// Everything starts TICKED, so pressing Save without reading a word
-    /// throws nothing away. The radio version deliberately pre-selected
-    /// nothing, and was right to: its only available pre-selection ("use
-    /// CMI's") silently discarded the reader's own times for every row they
-    /// never looked at. Ticking everything is the pre-selection that cannot
-    /// lose anything, which is why it is safe to have one at all — and it
-    /// makes the dialog read the way it should, as "here is every time in
-    /// play; untick what you don't want".
+    /// Nothing is ticked for the reader, and that is the shipped behaviour:
+    /// `t29` asserts "no conflict row may come pre-answered" and `t293`
+    /// asserts that an untouched row and a deliberately emptied one are told
+    /// apart in WORDS rather than by their ticks.
     ///
-    /// One exception: a class the reader had REMOVED. Ticking CMI's new time
-    /// there would put back a class they took off their timetable on
-    /// purpose, so a removal stays a removal until they say otherwise.
-    /// Nothing ticked, at the right length — the state a row is in the
-    /// moment the reader first touches it, and the only way the app should
-    /// ever build a pick from scratch. See [`ConflictPick::keep_cmi`] for
-    /// what building one by hand cost.
+    /// This doc comment is written out because of what stood here before it.
+    /// Seventeen lines describing a DIFFERENT function — "Everything starts
+    /// TICKED … untick what you don't want" — sat directly above this one,
+    /// which returns nothing ticked, while the function they actually
+    /// described (`default_pick`) sat below with no doc at all and no
+    /// production caller. R99's `keep_cmi` bug was born in exactly that gap:
+    /// a contract stated in one place and implemented in another. R100
+    /// deleted the dead function and moved its reasoning to the code that now
+    /// carries the policy — the re-anchor in [`merge_overrides`], which is
+    /// what actually keeps a removal removed while its question waits.
     pub fn empty_pick(&self) -> ConflictPick {
         ConflictPick {
             keep_cmi: vec![false; self.theirs.len()],
             keep_mine: false,
-        }
-    }
-
-    pub fn default_pick(&self) -> ConflictPick {
-        let removed = self.mine.is_none();
-        ConflictPick {
-            keep_cmi: vec![!removed; self.theirs.len()],
-            keep_mine: !removed,
         }
     }
 }
@@ -387,12 +381,18 @@ pub fn merge_overrides(
                             //
                             // There is no neutral state — the week must draw
                             // something — so the choice is which default is
-                            // safer, and this codebase has already made it
-                            // twice: `Conflict::default_pick` keeps a removal
-                            // removed "until they say otherwise", and the
-                            // honesty law puts the reader's own work first.
-                            // So the override follows the class CMI moved,
-                            // and the question stands.
+                            // safer, and the honesty law answers it: the
+                            // reader's own work comes first, so their edit
+                            // stays in force until they replace it. So the
+                            // override follows the class CMI moved, and the
+                            // question stands.
+                            //
+                            // THIS is where that policy lives. R100 deleted
+                            // `Conflict::default_pick`, which stated it in a
+                            // doc comment and had no production caller,
+                            // because a contract implemented somewhere other
+                            // than where it is written is exactly how R99's
+                            // `keep_cmi` bug happened.
                             //
                             // `merge_tests::an_unanswered_removal_lapses_out_loud`
                             // used to pin the opposite, on a premise that has

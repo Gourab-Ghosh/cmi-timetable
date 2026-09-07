@@ -218,29 +218,6 @@ fn an_empty_pick_is_as_long_as_cmis_list_of_times() {
     );
 }
 
-/// Nothing is ticked for the reader, so opening the dialog to look cannot
-/// cost them a time — except that a class they had REMOVED stays removed,
-/// which is the one default that preserves rather than discards a decision.
-#[test]
-fn the_default_keeps_everything_but_never_un_removes() {
-    let (c, ..) = moved();
-    let d = c.default_pick();
-    assert!(d.keep_mine && d.cmi(0), "a move: keep both by default");
-
-    let was = mtg(Day::Wed, 550, 625, "Lecture Hall 1");
-    let old = snap(vec![course("MFD", vec![was.clone()])]);
-    let new = snap(vec![course(
-        "MFD",
-        vec![mtg(Day::Fri, 930, 1005, "Lecture Hall 1")],
-    )]);
-    let r = merge_overrides(&old, &new, &[], &store_of("MFD", Some(was), None));
-    let d = r.conflicts[0].default_pick();
-    assert!(
-        !d.cmi(0) && !d.keep_mine,
-        "a class taken off the timetable stays off until the reader says otherwise"
-    );
-}
-
 // ---------------------------------------------------------------------------
 // Every combination, and what it leaves in the store
 // ---------------------------------------------------------------------------

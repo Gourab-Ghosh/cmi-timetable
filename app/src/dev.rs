@@ -2004,10 +2004,38 @@ fn rows_syncing(app: App, v: [Signal<bool>; 6]) -> AnyView {
                                                      faster, and less private."
                                                         .to_string()
                                                 } else {
-                                                    format!(
-                                                        "The leading helper site gets {} seconds alone.",
-                                                        f64::from(ms) / 1000.0,
-                                                    )
+                                                    {
+                                                        // The ONE numeric
+                                                        // control that does
+                                                        // not go through
+                                                        // `tweak_number` —
+                                                        // it needs
+                                                        // `step="0.5"`, so
+                                                        // it is hand-rolled,
+                                                        // and it was
+                                                        // therefore the one
+                                                        // that said
+                                                        // "1 seconds". The
+                                                        // shared helper's
+                                                        // caller handles
+                                                        // `n == 1`
+                                                        // explicitly, so a
+                                                        // sweep that reads
+                                                        // the helper and its
+                                                        // call sites sees
+                                                        // three of four
+                                                        // (R100).
+                                                        let s = f64::from(ms) / 1000.0;
+                                                        format!(
+                                                            "The leading helper site gets {s} \
+                                                             {} alone.",
+                                                            if (s - 1.0).abs() < f64::EPSILON {
+                                                                "second"
+                                                            } else {
+                                                                "seconds"
+                                                            },
+                                                        )
+                                                    }
                                                 });
                                             }
                                             None => {
