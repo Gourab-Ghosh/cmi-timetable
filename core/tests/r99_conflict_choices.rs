@@ -155,7 +155,18 @@ fn the_four_shapes_are_told_apart() {
 /// no time for.
 #[test]
 fn a_queue_stored_without_the_anchor_is_repaired_not_guessed() {
-    let (mut c, store, ..) = moved();
+    // The store a legacy queue actually pairs with is the PRE-merge one.
+    // `moved()` returns the post-merge store, whose override R100 has already
+    // re-anchored onto CMI's new time — reading `was` from that would report
+    // that CMI moved the class away from where it just moved it to. The two
+    // are only ever paired correctly because `backfill_anchors` runs at a
+    // LOAD door, before any merge; see its doc comment.
+    let (mut c, _post_merge, _, mine, _) = moved();
+    let store = store_of(
+        "MFD",
+        Some(mtg(Day::Wed, 550, 625, "Lecture Hall 1")),
+        Some(mine),
+    );
     let real = c.was.clone().expect("this shape has an anchor");
     c.was = None; // exactly how an older localStorage blob deserialises
     assert_eq!(

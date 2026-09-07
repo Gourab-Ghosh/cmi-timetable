@@ -213,6 +213,31 @@ pub fn remove(key: &str) {
     if let Some(storage) = raw() {
         let _ = storage.remove_item(key);
     }
+    drop_session_shadow(key);
+}
+
+/// Writing the SELECTION key raw has to invalidate this tab's copy of it.
+///
+/// R96 made the selection per-tab: `init_app` reads the sessionStorage copy
+/// FIRST and only falls back to localStorage, so a door that changes the
+/// localStorage copy alone changes nothing this tab will ever see.
+/// `persist_selection` pairs the two, and R100 taught the backup import to —
+/// but the developer panel's Clear and Import act on an arbitrary key BY
+/// NAME, so there is no natural place there to remember this. Putting it in
+/// the two raw writers means every door gets the rule, including doors nobody
+/// has written yet.
+///
+/// This is the second time the same shape has bitten: R83 found that a plain
+/// reload handed the cleared selection back from the `?c=` in the address bar,
+/// under a confirm reading "No backup is kept" and "This cannot be undone".
+/// The address bar was one shadow copy; sessionStorage is another. A control
+/// that promises to clear the selection has to clear all of them.
+fn drop_session_shadow(key: &str) {
+    if key == KEY_SELECTION
+        && let Some(s) = session_raw()
+    {
+        let _ = s.remove_item(key);
+    }
 }
 
 /// Raw text under a key, exactly as stored — the backup import photographs
@@ -284,6 +309,12 @@ pub fn all_entries() -> Vec<(String, String)> {
 }
 
 pub fn set_raw(key: &str, value: &str) -> Result<(), String> {
+    // Same rule as `remove`: a raw write to the selection key must not leave
+    // this tab reading its own older copy. Dropping the shadow rather than
+    // mirroring the value is deliberate — the caller is handing over bytes
+    // from a file, and `init_app`'s fallback to localStorage is exactly the
+    // path that should parse them.
+    drop_session_shadow(key);
     raw()
         .ok_or("localStorage unavailable")?
         .set_item(key, value)

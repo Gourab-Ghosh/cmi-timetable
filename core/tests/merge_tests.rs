@@ -462,17 +462,35 @@ fn stale_changes_lapse_and_are_reported() {
     assert!(r.overrides.items[0].is_removal());
 }
 
-/// The two-sync story behind [`stale_changes_lapse_and_are_reported`].
+/// Asking is not answering, so asking must not change the week (R100).
 ///
-/// A student strikes out one of a course's classes. CMI then moves that
-/// class, so the next sync asks whether to keep it removed — and they close
-/// the dialog without answering. Unanswered conflicts are not persisted and
-/// the cached snapshot has already moved on, so by the following sync the
-/// override's base is in neither snapshot. What must NOT happen then is the
-/// removal quietly disappearing (the class reappears with no word) or being
-/// re-aimed at the class CMI moved it to (which the student never removed).
+/// A student strikes out one of a course's classes. CMI then moves that class,
+/// so the next sync asks whether to keep it removed — and they press "Decide
+/// later".
+///
+/// This test used to pin the opposite outcome, and its premise has since
+/// expired. It read: "Unanswered conflicts are not persisted and the cached
+/// snapshot has already moved on, so by the following sync the override's base
+/// is in neither snapshot." R87 made deferred questions persist and survive
+/// reloads, so the first half is no longer true — and the second half was the
+/// bug, not the design. With the override left pointing at CMI's OLD meeting
+/// it goes STALE, and a stale override is not inert: a removal suppresses
+/// nothing, so the struck-out class REAPPEARED the moment the reader pressed
+/// "Decide later", while the notice told them "there's nothing left to remove".
+///
+/// The old test also objected to "being re-aimed at the class CMI moved it to
+/// (which the student never removed)". That objection is about doing it
+/// SILENTLY INSTEAD OF ASKING. Here the question is still asked and still
+/// waiting; answering "keep it removed" performs this very re-anchor. Doing it
+/// up front only makes the pending state agree with the answer the dialog
+/// offers by default — `Conflict::default_pick` keeps a removal removed "until
+/// they say otherwise".
+///
+/// There is no neutral state, because the week has to draw something. The
+/// choice is which default is safer, and it is the one that keeps the reader's
+/// own work in force until they replace it.
 #[test]
-fn an_unanswered_removal_lapses_out_loud() {
+fn asking_about_a_removal_does_not_put_the_class_back() {
     let monday = mtg(Day::Mon, 550, 625, "Lecture Hall 1");
     let moved = mtg(Day::Mon, 630, 705, "Lecture Hall 2");
     let other = mtg(Day::Thu, 840, 915, "Lecture Hall 1");
@@ -480,38 +498,66 @@ fn an_unanswered_removal_lapses_out_loud() {
     let before = snap(vec![course("MFD", vec![monday.clone(), other.clone()])]);
     let after = snap(vec![course("MFD", vec![moved.clone(), other.clone()])]);
     let selection = vec!["MFD".to_string()];
-    let store = removal_store("MFD", monday);
+    let store = removal_store("MFD", monday.clone());
 
-    // Sync 1 — CMI moved the class they had struck out, so they are asked.
+    // The week BEFORE any sync: the struck-out Monday is hidden.
+    let week_before = {
+        let mut w = effective(&store, "MFD", &[monday, other.clone()]);
+        w.sort_by_key(|m| (m.day.index(), m.slot.start_min));
+        w
+    };
+    assert_eq!(week_before, vec![other.clone()], "they removed the Monday");
+
+    // Sync 1 — CMI moved the class they had struck out, so they are asked…
     let first = merge_overrides(&before, &after, &selection, &store);
     assert_eq!(first.conflicts.len(), 1);
-    assert_eq!(first.overrides.items.len(), 1);
     assert!(first.lapsed.is_empty());
+    // …and the question names the time CMI moved AWAY from, not the new one.
+    assert_eq!(
+        first.conflicts[0].was,
+        Some(mtg(Day::Mon, 550, 625, "Lecture Hall 1"))
+    );
+    assert_eq!(first.conflicts[0].theirs, vec![moved.clone()]);
+    // The override now follows the class CMI moved, so it still hides it.
+    assert_eq!(first.overrides.items.len(), 1);
+    assert!(first.overrides.items[0].is_removal());
+    assert_eq!(first.overrides.items[0].base, Some(moved.clone()));
 
-    // They close the dialog. The snapshot is stored anyway; the question is
-    // not. Sync 2 sees a base that is in neither snapshot.
+    // THE POINT: pressing "Decide later" left the week exactly as it was.
+    let mut week_pending = effective(&first.overrides, "MFD", &[moved.clone(), other.clone()]);
+    week_pending.sort_by_key(|m| (m.day.index(), m.slot.start_min));
+    assert_eq!(
+        week_pending, week_before,
+        "asking a question may not answer it — the struck-out class must not \
+         come back while the reader is deciding"
+    );
+
+    // Sync 2 sees an override that agrees with CMI, so it derives nothing —
+    // and nothing LAPSES either, because nothing has gone stale. (Keeping the
+    // unanswered question alive across this sync is the app's job, not the
+    // merge's: see `fetch.rs`'s carry-forward.)
     let second = merge_overrides(&after, &after, &selection, &first.overrides);
     assert!(second.conflicts.is_empty(), "{:#?}", second.conflicts);
-    assert_eq!(second.lapsed.len(), 1, "it must be said out loud");
-    assert_eq!(second.lapsed[0].course, "MFD");
-    assert!(second.overrides.items.is_empty());
+    assert!(
+        second.lapsed.is_empty(),
+        "there is nothing stale left to lapse: {:#?}",
+        second.lapsed
+    );
+    assert_eq!(second.overrides.items.len(), 1, "the removal still stands");
 
-    // Both of CMI's classes are in their week, untouched. In particular the
-    // class CMI moved is NOT struck out — they never removed that one.
-    let mut still = effective(&second.overrides, "MFD", &[moved.clone(), other.clone()]);
-    still.sort_by_key(|m| (m.day.index(), m.slot.start_min));
-    assert_eq!(still, vec![moved, other]);
-
-    // And it does not come round again.
-    let third = merge_overrides(&after, &after, &selection, &second.overrides);
-    assert!(third.lapsed.is_empty());
-    assert!(third.conflicts.is_empty());
+    // And if CMI moves the class AGAIN, they are asked again — about the move
+    // that just happened, anchored to where CMI had it last.
+    let moved_again = mtg(Day::Tue, 630, 705, "Lecture Hall 2");
+    let later = snap(vec![course("MFD", vec![moved_again.clone(), other])]);
+    let third = merge_overrides(&after, &later, &selection, &second.overrides);
+    assert_eq!(
+        third.conflicts.len(),
+        1,
+        "a second upstream move asks again"
+    );
+    assert_eq!(third.conflicts[0].was, Some(moved));
+    assert_eq!(third.conflicts[0].theirs, vec![moved_again]);
 }
-
-// ---------------------------------------------------------------------------
-// A fresh browser (empty old snapshot) — the share-link cases. "We have no
-// history" must never be read as "CMI changed something".
-// ---------------------------------------------------------------------------
 
 /// The reported bug (R43): a share link carrying a user-ADDED meeting
 /// (base = None), opened in a browser that has never synced. The old

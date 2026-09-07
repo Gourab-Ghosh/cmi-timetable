@@ -175,6 +175,21 @@ impl Conflict {
 /// for this class, so you placed one yourself", which for a plain move is
 /// simply false. Running it at every door that loads a queue is what lets
 /// [`Conflict::shape`] treat a missing anchor as a fact rather than a maybe.
+///
+/// # Call this at a LOAD door and nowhere else
+///
+/// `base` is only the original anchor until a merge has seen it. Since R100,
+/// raising a question RE-ANCHORS its override onto the meeting CMI moved it
+/// to, so after a merge `base` is CMI's NEW time and reading `was` from it
+/// would tell the reader that CMI moved the class away from the place it just
+/// moved it to. That is safe today only because of an ordering fact, and the
+/// ordering is the whole guarantee: the queues that need repair are the ones
+/// written before `was` existed, by a build that did not re-anchor, and they
+/// are repaired at boot (`app.rs`) and at import (`export.rs`) BEFORE any
+/// merge runs. Do not call this after a sync, and do not "simplify" it into
+/// running unconditionally — a queue that already has its anchor must keep
+/// it. `r99_conflict_choices::a_queue_stored_without_the_anchor_is_repaired_not_guessed`
+/// pins the pairing this function is for.
 pub fn backfill_anchors(conflicts: &mut [Conflict], store: &OverridesStore) {
     for c in conflicts.iter_mut().filter(|c| c.was.is_none()) {
         if let Some(ov) = store.items.iter().find(|o| o.id == c.override_id) {
@@ -290,6 +305,9 @@ pub fn merge_overrides(
     let mut drop_ids: Vec<u64> = Vec::new();
     // Overrides that keep their destination but lose their anchor.
     let mut unanchor_ids: Vec<u64> = Vec::new();
+    // Overrides to RE-ANCHOR onto the meeting CMI moved them to, while the
+    // question about them stays unanswered. See `reanchor` below for why.
+    let mut reanchor: Vec<(u64, Meeting)> = Vec::new();
 
     for ov in &overrides.items {
         let old_meetings = old.course(&ov.course).map(|c| c.meetings.as_slice());
@@ -345,9 +363,50 @@ pub fn merge_overrides(
                                 override_id: ov.id,
                                 course: ov.course.clone(),
                                 mine: ov.to.clone(),
-                                theirs: vec![cmi_new],
+                                theirs: vec![cmi_new.clone()],
+                                // The ORIGINAL anchor, captured before the
+                                // re-anchor below — it is what the dialog
+                                // reads out, and it must stay the time the
+                                // reader actually edited.
                                 was: Some(base.clone()),
                             });
+                            // ASKING IS NOT ANSWERING, so asking must not
+                            // change the week (R100).
+                            //
+                            // The override still points at CMI's OLD meeting,
+                            // which this sync has just replaced. Left that
+                            // way it goes stale, and a stale override is not
+                            // inert: a removal suppresses nothing, so a class
+                            // the reader had struck out REAPPEARS the moment
+                            // they press "Decide later" — and the notice told
+                            // them "there's nothing left to remove". A stale
+                            // move floats free, so CMI's new time shows
+                            // beside theirs. Either way the app has answered
+                            // for them, while its own dialog promises
+                            // "nothing changes until you press Save".
+                            //
+                            // There is no neutral state — the week must draw
+                            // something — so the choice is which default is
+                            // safer, and this codebase has already made it
+                            // twice: `Conflict::default_pick` keeps a removal
+                            // removed "until they say otherwise", and the
+                            // honesty law puts the reader's own work first.
+                            // So the override follows the class CMI moved,
+                            // and the question stands.
+                            //
+                            // `merge_tests::an_unanswered_removal_lapses_out_loud`
+                            // used to pin the opposite, on a premise that has
+                            // since expired ("unanswered conflicts are not
+                            // persisted" — R87 made them survive reloads) and
+                            // on an objection to re-aiming a removal at a
+                            // class the student never removed. That objection
+                            // is about doing it SILENTLY INSTEAD OF ASKING;
+                            // here the question is still asked, and answering
+                            // "keep it removed" performs this very re-anchor
+                            // (`resolve_conflict`). Doing it up front only
+                            // makes the pending state agree with the answer
+                            // the dialog offers by default.
+                            reanchor.push((ov.id, cmi_new));
                         }
                     }
                     Ok(None) => {
@@ -423,6 +482,11 @@ pub fn merge_overrides(
 
     for id in drop_ids {
         result.overrides.remove(id);
+    }
+    for (id, to) in reanchor {
+        if let Some(o) = result.overrides.items.iter_mut().find(|o| o.id == id) {
+            o.base = Some(to);
+        }
     }
     for id in unanchor_ids {
         if let Some(o) = result.overrides.items.iter_mut().find(|o| o.id == id) {

@@ -7569,6 +7569,124 @@ the time stack and align exactly, tap targets are 65–86px, and the desktop row
 sits at exactly the 44px finger-size floor. Screenshots of every shape, both
 themes, desktop and phone, are in `.workagents/r99/shots/`.
 
+### R100 — the audit round: nine defects, and the one that was mine twice over
+
+The ask: *"Check for such mistakes in the whole app so that the app becomes
+totally bug-free… I will deploy the app [after]. So I don't want any bugs in
+the app once it is already deployed. Test the app in all possible ways:
+visually, functionally, and programmatically."*
+
+**"Such mistakes" was read as CLASSES, not as three incidents.** R99 shipped
+three: a collection built at the wrong length whose out-of-range read had a
+NON-NEUTRAL default; a UI surface that could render with nothing to show; a
+modern CSS feature with no fallback. Plus, from the same round, copy that is
+false on a reachable path (§8.26).
+
+**The greppable classes were done by hand, not delegated.** Six
+`.get().unwrap_or()` sites (all neutral or documented), 18 sized `vec!`s (all
+length-correct, including `state.rs`'s parallel `kept`), and t273 already
+audits color-mix globally. Delegating a grep only buys translation loss. An
+8-slice read-only fleet (`wf_5f3279e0-578`, `.workagents/r100/`) took the
+dimensions that need reading comprehension, every finding adversarially
+refuted before the parent acted on it.
+
+#### The one that mattered most: asking a question answered it
+
+`probe_decide_later.py`. The dialog promises "Nothing changes until you press
+Save". Pressing **Decide later** changed the week immediately — and for a
+class the reader had STRUCK OUT, it put the class back, while the notice that
+followed said *"there's nothing left to remove."*
+
+The cause is one step upstream of the copy. An override is anchored to CMI's
+OLD meeting, and the sync that raises the question has already stored the new
+snapshot, so the anchor matches nothing and the override goes STALE. A stale
+override is NOT inert: `effective_meetings` renders a stale removal as
+nothing-suppressed and a stale move as a free-floating class of its own. So
+the pending question had already been half-answered — as "put it back" and
+"keep both" respectively.
+
+**There is no neutral state**, because the week has to draw something. The
+choice is which default is safer, and this codebase had already made it twice:
+`Conflict::default_pick` keeps a removal removed "until they say otherwise",
+and the honesty law puts the reader's own work first. So R100 RE-ANCHORS an
+override onto the meeting CMI moved it to at the moment the question is
+raised, capturing `was` first so the story still names the time CMI moved away
+FROM. `t296` is the assertion; it goes red without the re-anchor and passes
+without the carry-forward, which is the orthogonality that makes the pair
+trustworthy.
+
+**Re-anchoring made "replace, never accumulate" wrong**, which is the second
+half. The next merge sees an override that agrees with CMI and derives
+nothing, so replacing the queue outright wiped a question the reader had
+deliberately postponed, moments after this same sync restored it. `fetch.rs`
+now carries forward an unanswered question while its override still exists and
+this merge did not raise a fresher one about that same override. `t297` is the
+assertion, and it fails only when the carry-forward is removed.
+
+**`merge_tests::an_unanswered_removal_lapses_out_loud` pinned the opposite**,
+and its premise had expired: "Unanswered conflicts are not persisted" stopped
+being true in R87. Its other objection — against "being re-aimed at the class
+CMI moved it to (which the student never removed)" — is about doing it
+SILENTLY INSTEAD OF ASKING; answering "keep it removed" performs that very
+re-anchor. It is now
+`asking_about_a_removal_does_not_put_the_class_back`, with the argument
+written out, and the genuine lapse path
+(`stale_changes_lapse_and_are_reported`) still passes untouched. §8.26 is
+therefore closed at the root rather than reworded.
+
+#### The rest, by severity
+
+| what | where | why it mattered |
+|---|---|---|
+| `next_id: u64::MAX` from a backup file overflows the very next change | `model.rs` `bump_next_id` | white screen in debug; in release wraps to 0, hands out `id: u64::MAX` (deleted on next boot, so a moved class is silently put back), then `id: 0` twice, after which `remove` deletes BOTH |
+| "Import everything" kept the reader's OWN courses | `export.rs` | under a confirm reading "Replace everything with this file?" and "This cannot be undone" |
+| Developer → Storage → Clear on the selection did nothing | `storage.rs` | same confirm, same silence |
+| the release MINIFIER deleted three CSS fallbacks | `styles.css` | a dialog with NO max-height on iOS < 15.4: title above the screen, buttons below it, nothing able to scroll |
+| the week grid could collapse to ZERO pixels | `styles.css` `.grid-scroll` | Android split-screen landscape: five rows and six chips in the DOM, none on screen, no message |
+| the outcome line claimed the whole timetable | `ui.rs` `conflict_outcome` | "TOC will not appear on your timetable at all" while TOC sat on Thursday — 63 of 75 courses run more than once a week, so this was the COMMON case |
+| the digest said "your custom changes are untouched" | `ui.rs` | on the very sync that deleted one, contradicting its own toast — and the digest is where a reader goes to CHECK |
+| "moved to the time you'd picked… showing CMI's time" | `fetch.rs` | for a REMOVAL, where nothing was picked and CMI had deleted the class: every clause false |
+| a screen reader heard the WRONG course code | `ui.rs` | two rows, one group name, and the only code in a box's accessible name was the clash partner's |
+| "1 warnings" | `dev.rs` | on the state every real sync produces — CMI's halls page carries no semester label, so a healthy sync has exactly one warning |
+
+**Two of those were R96's per-tab selection coming back.** `init_app` reads
+the sessionStorage copy FIRST, so a door that writes only localStorage changes
+nothing this tab will see. `persist_selection` paired them; the backup import
+and the developer panel's raw key controls did not. The rule now lives in
+`storage::remove`/`set_raw` rather than in the doors, so doors nobody has
+written yet get it too — and it is the SECOND time this shape has bitten: R83
+found a plain reload handing the cleared selection back from the `?c=` in the
+address bar. The address bar was one shadow copy; sessionStorage is another.
+
+**The minifier finding is the one to remember.** A fallback written as a
+duplicate declaration is correct in the source, correct under `trunk serve`,
+and correct to every test that reads `app/styles.css` — and absent from the
+bytes the public site serves, because lightningcss keeps only the last of a
+repeated property. `85vh` occurred ZERO times in the shipped stylesheet. The
+fallback now goes plain and the enhancement inside `@supports` (which survives
+minification verbatim), and **`t298` reads the SHIPPED stylesheet** and fails
+if the idiom ever returns. It is the only kind of test that could have caught
+this.
+
+**A cross-change interaction, caught by R99's own test.** Re-anchoring
+invalidated `backfill_anchors`'s data source: it recovers a legacy conflict's
+anchor from `ov.base`, which is now CMI's NEW time once a question has been
+raised. It stays correct only because of an ordering fact — the queues needing
+repair were written by builds that did not re-anchor, and repair happens at
+boot and at import BEFORE any merge — so that ordering is now the function's
+documented contract rather than an accident.
+
+**What the fleet got right, and one thing it got right by withdrawing.** Slice
+a1 hypothesised that the dialog could be left answering a replaced queue,
+tested it, found it self-heals, and wrote down WHY: the dialog's freshness
+rests on an accidental subscription (`course_by_code` and
+`courses_running_into` make tracked reads), not on a stated rule. That receipt
+is worth more than the finding would have been.
+
+**Gates:** 214 native, 233 e2e (7 new: t296–t302), clippy and fmt clean. Every
+new test was break-verified, and t296/t297 were verified ORTHOGONALLY — each
+catches its own half of the fix and neither covers for the other.
+
 ## 8. Open bugs — found, confirmed, NOT fixed (do not delete)
 
 Rules for this section: entries stay until the bug is actually fixed and a
@@ -7603,6 +7721,17 @@ entry as the rules here require. 8.19 (a self-update landing on top of a
 live Undo offer, found by R72's screenshots) was fixed in R73 by removing every
 self-initiated reload — R73's §7 entry says what replaced it and which phase of
 t114 fails without it.
+
+### 8.26 — FIXED IN R100. A question you postponed lasted only until the next sync
+
+Kept here for one round because the entry below is the measurement that found
+it, and because the fix changed arbitration rules that had a test arguing the
+other way. R100's §7 entry says what changed and which tests pin it
+(`t296`, `t297`,
+`merge_tests::asking_about_a_removal_does_not_put_the_class_back`). What
+follows is the original entry.
+
+#### (original entry)
 
 ### 8.26 A question you postponed lasts only until the next sync, which answers it as "keep both"
 

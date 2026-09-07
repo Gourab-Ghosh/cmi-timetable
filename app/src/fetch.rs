@@ -746,12 +746,32 @@ pub fn adopt(app: &App, new_snapshot: Snapshot, announce: bool, from: Adoption) 
     });
 
     if !quiet {
+        // ONE sentence, TWO paths — and it was only ever true of one.
+        //
+        // `dropped_matching` holds every change CMI has made unnecessary, and
+        // that comes in two shapes. A MOVE converges: CMI adopted the time
+        // the reader had picked, so "moved to the time you'd picked … showing
+        // CMI's time" is exactly right. A REMOVAL converges the other way:
+        // CMI deleted the very meeting they had struck out
+        // (`merge.rs`, "both sides agree"). There the reader picked NO time,
+        // CMI moved nothing, and there is no CMI time to show — every clause
+        // of that sentence was false, about a class that is gone (R100,
+        // slice a2).
         for dropped in &merge.dropped_matching {
-            app.toast(format!(
-                "CMI has moved {} to the time you'd picked, so your change isn't \
-                 needed any more. The app removed it and is showing CMI's time.",
-                dropped.course
-            ));
+            app.toast(if dropped.is_removal() {
+                format!(
+                    "CMI has stopped running the {} class you had removed, so \
+                     your change isn't needed any more. The app removed it.",
+                    dropped.course
+                )
+            } else {
+                format!(
+                    "CMI has moved {} to the time you'd picked, so your change \
+                     isn't needed any more. The app removed it and is showing \
+                     CMI's time.",
+                    dropped.course
+                )
+            });
         }
         // A change whose class CMI hasn't run for a term. It can't be kept
         // pointing at nothing and it can't be re-aimed at a class the user
@@ -819,11 +839,41 @@ pub fn adopt(app: &App, new_snapshot: Snapshot, announce: bool, from: Adoption) 
     if !first_data && !quiet && !merge.diff.is_empty() {
         app.what_changed.set(Some(merge.diff.clone()));
     }
-    // Replace, never accumulate: any still-relevant conflict is re-derived
-    // by every merge, and stale ones referencing resolved overrides vanish.
-    // On a re-parse the user's value simply stays — there is no CMI edit to
-    // arbitrate, and asking them to choose would be asking about our own
-    // parser under CMI's name.
+    // Replace, PLUS carry forward what is still unanswered.
+    //
+    // "Replace, never accumulate" was right while every still-relevant
+    // question was re-derived by every merge. Since R100 that is no longer
+    // true: raising a question RE-ANCHORS its override onto the meeting CMI
+    // moved it to, so asking does not change the week — and the very next
+    // merge then sees an override that agrees with CMI and derives nothing.
+    // Replacing outright at that point would wipe a question the reader had
+    // deliberately postponed, moments after this sync restored it. So an
+    // unanswered question is kept when BOTH still hold: the override it asks
+    // about still exists (answering it must still be able to do something),
+    // and this merge did not raise a FRESHER question about that same
+    // override — if CMI has moved the class again, the new question describes
+    // reality and the old one is superseded, never shown alongside it.
+    let derived_ids: Vec<u64> = merge.conflicts.iter().map(|c| c.override_id).collect();
+    // Read from the STORE, not from `merge.overrides` — that was moved into
+    // the store above, and the store is the honest answer to "does the change
+    // this question is about still exist?" anyway.
+    let live_ids: Vec<u64> = app
+        .overrides
+        .with_untracked(|o| o.items.iter().map(|x| x.id).collect());
+    let mut conflicts = merge.conflicts.clone();
+    let carried: Vec<ttcore::merge::Conflict> = app.conflicts.with_untracked(|pending| {
+        pending
+            .iter()
+            .filter(|c| !derived_ids.contains(&c.override_id))
+            .filter(|c| live_ids.contains(&c.override_id))
+            .cloned()
+            .collect()
+    });
+    conflicts.extend(carried);
+    // The dialog opens for a question this sync RAISED. A carried-forward one
+    // is not news — the reader has already seen it and said "later" — so it
+    // stays on the banner's Review button rather than taking the screen
+    // again on every sync.
     let has_conflicts = !merge.conflicts.is_empty() && !quiet;
     // A quiet adoption (re-parse of the SAME cached pages by a newer parser)
     // must leave the conflict queue alone entirely: it can't raise real
@@ -831,7 +881,7 @@ pub fn adopt(app: &App, new_snapshot: Snapshot, announce: bool, from: Adoption) 
     // questions the user deferred with "Decide later" — the startup re-parse
     // would wipe them moments after boot restored them.
     if !quiet {
-        app.set_conflicts(merge.conflicts);
+        app.set_conflicts(conflicts);
     }
     // Only when nothing else is open. A sync can land while the user is
     // halfway through the course editor, and there is ONE dialog slot — so

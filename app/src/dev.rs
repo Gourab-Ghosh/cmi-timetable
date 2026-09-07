@@ -62,6 +62,17 @@ pub fn developer(app: App, tab: DevTab) -> impl IntoView {
 /// landing category — bare `#/developer` opens here, so the URL that has
 /// been typed and tested since the beginning still shows Build info and its
 /// `[data-update-check]` button (t114 boots it verbatim).
+/// "1 warning" / "2 warnings" — a count and its noun, agreeing.
+///
+/// Not a nicety: the developer Sync page read "1 warnings" on the state that
+/// EVERY real sync of CMI's own pages produces. `lecturehalls.php` carries no
+/// semester label and `validate.rs` makes that warn-only, so a healthy sync
+/// has exactly one warning, and the one number a reader sees most often was
+/// the one the grammar got wrong (R100, slice a1).
+fn count_of(n: usize, one: &str, many: &str) -> String {
+    format!("{n} {}", if n == 1 { one } else { many })
+}
+
 fn overview_page(app: App) -> impl IntoView {
     view! {
         {build_info(app)}
@@ -345,14 +356,14 @@ fn parse_reports(app: App) -> impl IntoView {
                                     <summary>
                                         <span class="mono">{r.source.clone()}</span>
                                         {format!(
-                                            " · {} · {} · {} branch grids, {} courses, {} halls, {} warnings, {} errors",
+                                            " · {} · {} · {}, {}, {}, {}, {}",
                                             domx::fmt_local(r.at),
                                             if r.report.gate_passed() { "gate PASSED" } else { "gate FAILED" },
-                                            stats.branch_grids,
-                                            stats.unique_courses,
-                                            stats.halls,
-                                            r.report.warnings.len(),
-                                            r.report.errors.len(),
+                                            count_of(stats.branch_grids, "branch grid", "branch grids"),
+                                            count_of(stats.unique_courses, "course", "courses"),
+                                            count_of(stats.halls, "hall", "halls"),
+                                            count_of(r.report.warnings.len(), "warning", "warnings"),
+                                            count_of(r.report.errors.len(), "error", "errors"),
                                         )}
                                     </summary>
                                     <table class="devlog">
@@ -385,7 +396,13 @@ fn parse_reports(app: App) -> impl IntoView {
                                         .then(|| {
                                             view! {
                                                 <details>
-                                                    <summary>{format!("{} warnings", r.report.warnings.len())}</summary>
+                                                    <summary>
+                                                        {count_of(
+                                                            r.report.warnings.len(),
+                                                            "warning",
+                                                            "warnings",
+                                                        )}
+                                                    </summary>
                                                     <ul class="small">
                                                         {r.report
                                                             .warnings
@@ -416,8 +433,12 @@ fn parse_reports(app: App) -> impl IntoView {
                                                 <details>
                                                     <summary>
                                                         {format!(
-                                                            "{} branch grids (per-branch stats)",
-                                                            r.report.branch_stats.len(),
+                                                            "{} (per-branch stats)",
+                                                            count_of(
+                                                                r.report.branch_stats.len(),
+                                                                "branch grid",
+                                                                "branch grids",
+                                                            ),
                                                         )}
                                                     </summary>
                                                     <table class="devlog">
@@ -456,8 +477,12 @@ fn parse_reports(app: App) -> impl IntoView {
                                     <details>
                                         <summary>
                                             {format!(
-                                                "{} <pre> blocks classified",
-                                                r.report.classifications.len(),
+                                                "{} classified",
+                                                count_of(
+                                                    r.report.classifications.len(),
+                                                    "<pre> block",
+                                                    "<pre> blocks",
+                                                ),
                                             )}
                                         </summary>
                                         <table class="devlog">
@@ -620,7 +645,9 @@ fn storage_inspector(app: App) -> impl IntoView {
                             <details style="margin-bottom:0.5rem">
                                 <summary>
                                     <span class="mono">{key}</span>
-                                    <span class="muted small">{format!(" · {size} bytes")}</span>
+                                    <span class="muted small">
+                                        {format!(" · {}", count_of(size, "byte", "bytes"))}
+                                    </span>
                                 </summary>
                                 <div class="row" style="display:flex;gap:0.4rem;flex-wrap:wrap;margin:0.4rem 0">
                                     <button
@@ -866,7 +893,13 @@ fn this_browser(app: App) -> impl IntoView {
             <h3>"This browser"</h3>
             <dl class="kv mono small">
                 <dt>"Stored here"</dt>
-                <dd>{format!("{keys} keys · {} KB", bytes.div_ceil(1024))}</dd>
+                <dd>
+                    {format!(
+                        "{} · {} KB",
+                        count_of(keys, "key", "keys"),
+                        bytes.div_ceil(1024),
+                    )}
+                </dd>
             </dl>
             <p class="muted small">
                 "Other tabs share this storage. A change made in one tab lands in \

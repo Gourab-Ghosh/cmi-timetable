@@ -15080,7 +15080,15 @@ def t291_cmis_time_and_your_own_can_both_be_kept(app):
             app.d.execute_script("arguments[0].click()", b)
         time.sleep(settle_s())
         promise = dialog.find_element(By.CSS_SELECTOR, ".conflict-outcome").text
-        assert "twice" in promise, f"two kept times read as 'twice': {promise!r}"
+        assert "Both times go on your timetable" in promise, promise
+        # And it must NOT claim to describe the whole timetable: TOC also runs
+        # Thu 09:10 in the fixtures, which this question does not touch. That
+        # line used to read "Your timetable will show TOC twice" while the
+        # grid showed it three times (R100, slice a2).
+        assert "timetable will show" not in promise, (
+            f"the outcome line may only speak for the times in the question: {promise!r}")
+        untouched = dialog.find_element(By.CSS_SELECTOR, ".conflict-untouched").text
+        assert "Thu 09:10" in untouched and "does not change" in untouched, untouched
         dialog.find_element(
             By.XPATH, ".//button[starts-with(normalize-space(),'Save')]").click()
         app.wait_gone(".dialog")
@@ -15164,8 +15172,11 @@ def t293_an_untouched_row_and_an_emptied_one_do_not_look_the_same(app):
         app.d.execute_script("arguments[0].click()", box)   # …and clear it
         time.sleep(settle_s())
         outcome = dialog.find_element(By.CSS_SELECTOR, ".conflict-outcome")
-        assert "will not appear" in outcome.text, \
+        assert "will not be on your timetable" in outcome.text, \
             f"an emptied row must say what it means: {outcome.text!r}"
+        # …about THIS CLASS, not the course: TOC's Thursday lecture is not in
+        # the question and does not go anywhere (R100, slice a2).
+        assert "This class" in outcome.text, outcome.text
         assert "Not decided" not in outcome.text, outcome.text
         assert dialog.find_element(
             By.XPATH, ".//button[starts-with(normalize-space(),'Save')]"
@@ -15196,11 +15207,20 @@ def t294_a_time_that_would_clash_says_what_it_runs_into(app):
     knows the rest of their week, so each time on offer says whether it runs
     into another course they have picked — which is the whole question,
     stated where the decision is made."""
-    cached, overrides, _gone = cache_from_before_cmi_moved_toc(also_move_iss=True)
+    # ONLY TOC is in question. ISS stays where CMI officially has it — Tue
+    # 09:10 — which is exactly where CMI has moved TOC, so TOC's new time runs
+    # into it.
+    #
+    # This used to move ISS too, and "passed" for the wrong reason: with both
+    # overrides left stale, both courses' CMI times were on the grid at once
+    # and each appeared to clash with the other. Since R100 re-anchors an
+    # override when its question is raised, ISS now genuinely sits at its own
+    # Thursday while the question about it waits, so reporting a clash there
+    # would have been FALSE. The clash has to be with a course that is not
+    # itself waiting on an answer.
+    cached, overrides, _gone = cache_from_before_cmi_moved_toc()
     serve_cmi()
     try:
-        # Both TOC and ISS are pulled back to Tue 09:10 upstream, so each
-        # one's CMI time runs into the other's.
         app.boot("/", selection=["TOC", "ISS"], overrides=overrides,
                  raw_snapshot=cached)
         app.xpath("//button[normalize-space()='Sync now']").click()
@@ -15208,7 +15228,7 @@ def t294_a_time_that_would_clash_says_what_it_runs_into(app):
         notes = [n.text for n in dialog.find_elements(By.CSS_SELECTOR, ".timebox-note")]
         assert notes, "a time that collides with another course has to say so"
         assert any("clashes with" in n for n in notes), notes
-        assert any("ISS" in n for n in notes) and any("TOC" in n for n in notes), notes
+        assert any("ISS" in n for n in notes), notes
         # The warning belongs to CMI's time, which is the colliding one — not
         # to the reader's Wednesday/Thursday, which are free.
         for tb in dialog.find_elements(By.CSS_SELECTOR, ".timebox"):
@@ -15267,6 +15287,569 @@ def t295_deciding_all_at_once_is_offered_only_when_it_is_shorter(app):
         assert not app.css_all(
             "td[data-day='1'][data-slot='550'] button.chip[aria-label^='ISS,']"), \
             "'My times only' must not leave CMI's time on the week"
+    finally:
+        stop_serving_cmi()
+
+
+def cache_where_a_removed_class_was_moved(code="TOC"):
+    """A cached snapshot plus a REMOVAL anchored to the meeting CMI has since
+    moved — the shape that used to put a struck-out class back on the
+    timetable the moment the reader pressed "Decide later".
+
+    Returns (snapshot_json, overrides).
+    """
+    snap = json.loads(SEED_SNAPSHOT_JSON)
+    hall = None
+    for course in snap["courses"]:
+        if course["code"] == code:
+            for m in course["meetings"]:
+                if m["day"] == "Tue" and m["slot"]["start_min"] == 550:
+                    hall = m.get("hall")
+                    m["day"] = "Fri"
+                    m["slot"] = {"start_min": 840, "end_min": 915}
+    assert hall is not None, f"the fixture must still have {code} on Tue 09:10"
+    overrides = {"next_id": 1, "credits": [], "items": [
+        {"id": 0, "course": code,
+         "base": {"day": "Fri", "slot": {"start_min": 840, "end_min": 915},
+                  "hall": hall, "temp_booking": False},
+         "to": None, "created_at": 1754000000000.0},
+    ]}
+    return json.dumps(snap), overrides
+
+
+def t296_asking_about_a_class_does_not_change_your_week(app):
+    """Asking is not answering (R100).
+
+    The conflict dialog promises "Nothing changes until you press Save". It
+    was not true. An override is anchored to CMI's OLD meeting, and the sync
+    that raises the question has already replaced the snapshot — so the
+    anchor matched nothing and the override went STALE. A stale override is
+    not inert: a removal suppresses nothing, so a class the reader had
+    deliberately struck out came BACK the instant they pressed "Decide
+    later", and the notice that followed told them "there's nothing left to
+    remove". A stale move floated free, so CMI's new time appeared beside
+    theirs.
+
+    Both halves are checked here, because both were broken, and the removal
+    is the one that misstates the reader's own decision."""
+    for kind in ("removal", "move"):
+        if kind == "removal":
+            cached, overrides = cache_where_a_removed_class_was_moved()
+            # They struck out the Tuesday, so only the Thursday shows.
+            expected = [("3", "550")]
+        else:
+            cached, overrides, _gone = cache_from_before_cmi_moved_toc()
+            # Their Wednesday, plus the Thursday nobody touched.
+            expected = [("2", "1020"), ("3", "550")]
+        serve_cmi()
+        try:
+            app.boot("/", selection=["TOC"], overrides=overrides,
+                     raw_snapshot=cached)
+
+            def week():
+                app.open_tab("My timetable")
+                time.sleep(settle_s())
+                out = []
+                for el in app.css_all("td button.chip[aria-label^='TOC,']"):
+                    td = el.find_element(By.XPATH, "./ancestor::td[1]")
+                    out.append((td.get_attribute("data-day"),
+                                td.get_attribute("data-slot")))
+                return sorted(set(out))
+
+            before = week()
+            assert before == sorted(expected), f"{kind}: fixture wrong, {before}"
+            app.xpath("//button[normalize-space()='Sync now']").click()
+            dialog = app.wait_css(".dialog", timeout=30)
+            dialog.find_element(
+                By.XPATH, ".//button[normalize-space()='Decide later']").click()
+            app.wait_gone(".dialog")
+            after = week()
+            assert after == before, (
+                f"{kind}: postponing the question changed the week — "
+                f"{before} became {after}. The dialog promises 'Nothing "
+                f"changes until you press Save'.")
+            # …and the notice that used to accompany it — "CMI no longer runs
+            # the TOC class you had removed, so there's nothing left to
+            # remove" — was false on this path and must not appear.
+            assert "no longer runs" not in app.toasts_text(), app.toasts_text()
+        finally:
+            stop_serving_cmi()
+
+
+def t297_a_postponed_question_survives_the_next_sync(app):
+    """"Decide later" used to mean "decide before the next sync".
+
+    The queue was replaced outright by every sync, on the reasoning that any
+    still-relevant question is re-derived. Since the override is now
+    re-anchored when the question is raised, the next merge sees it agreeing
+    with CMI and derives nothing — so replacing outright would wipe a
+    question the reader had deliberately postponed, moments after this same
+    sync restored it. It is kept while the change it asks about still
+    exists, and answering it still works afterwards."""
+    cached, overrides, _gone = cache_from_before_cmi_moved_toc()
+    serve_cmi()
+    try:
+        app.boot("/", selection=["TOC"], overrides=overrides, raw_snapshot=cached)
+        app.xpath("//button[normalize-space()='Sync now']").click()
+        dialog = app.wait_css(".dialog", timeout=30)
+        dialog.find_element(
+            By.XPATH, ".//button[normalize-space()='Decide later']").click()
+        app.wait_gone(".dialog")
+        assert len(app.d.execute_script(
+            "return JSON.parse(localStorage.getItem('cmitt.v1.conflicts'));")) == 1
+
+        # Sync again without answering.
+        app.xpath("//button[normalize-space()='Sync now']").click()
+        WebDriverWait(app.d, 20).until(
+            lambda d: "Timetable updated" in app.toasts_text()
+            or "up to date" in app.toasts_text(),
+            message="the second sync never reported",
+        )
+        time.sleep(settle_s())
+        stored = app.d.execute_script(
+            "return JSON.parse(localStorage.getItem('cmitt.v1.conflicts'));")
+        assert stored and len(stored) == 1, (
+            f"a postponed question must outlive a sync that raises nothing: {stored}")
+        assert stored[0]["course"] == "TOC", stored
+        # It is not thrown back on screen either — the reader already said
+        # "later", so it waits on the banner's Review button.
+        assert not app.css_all(".dialog"), \
+            "a carried-forward question must not re-open the dialog on every sync"
+        banner = app.xpath(
+            "//div[contains(@class,'banner')][contains(.,'Review')]")
+        assert banner, "it has to still be reachable"
+
+        # And answering it now still works.
+        banner.find_element(By.XPATH, ".//button[normalize-space()='Review']").click()
+        dialog = app.wait_css(".dialog", timeout=15)
+        dialog.find_element(
+            By.XPATH, ".//label[contains(.,'the time you set')]//input").click()
+        time.sleep(settle_s())
+        dialog.find_element(
+            By.XPATH, ".//button[starts-with(normalize-space(),'Save')]").click()
+        app.wait_gone(".dialog")
+        app.open_tab("My timetable")
+        app.wait_css("td[data-day='2'][data-slot='1020'] button.chip[aria-label^='TOC,']")
+        assert not app.d.execute_script(
+            "return localStorage.getItem('cmitt.v1.conflicts');"), \
+            "answering it empties the queue"
+    finally:
+        stop_serving_cmi()
+
+
+def t298_the_release_stylesheet_keeps_every_fallback_the_source_wrote(app):
+    """A fallback written as a duplicate declaration does not survive the
+    build, so it must not be written that way.
+
+    `.dialog` carried the progressive-enhancement idiom:
+
+        max-height: min(85vh, 800px);
+        max-height: min(85dvh, 800px);
+
+    lightningcss (Trunk's `minify = "on_release"`) treats that as one
+    repeated property and keeps the LAST — so `85vh` occurred ZERO times in
+    the stylesheet the deployed site served. On a browser without `dvh`
+    (iOS < 15.4, Chrome < 108, Firefox < 101) the surviving line is invalid
+    at parse time and dropped too, leaving `.dialog` with NO max-height: its
+    title sits above the top of the screen and its Save/Close row below the
+    bottom, with nothing able to scroll to either, because `.overlay` is
+    fixed with no overflow and `body.modal-open` has locked the page. The
+    reader cannot answer or dismiss the dialog.
+
+    The nastiest part is WHERE it lived: the source is correct, `trunk serve`
+    is correct, and every test that reads `app/styles.css` is correct. Only
+    the bytes the public site serves are wrong. So this test reads the SHIPPED
+    stylesheet, and it is the only kind of test that could have caught it.
+
+    Two halves, and the second is what keeps the first honest:
+      1. no rule may declare the same property twice — the idiom itself;
+      2. the fallbacks that used to be eaten are actually present, so a test
+         that has stopped seeing the sheet cannot pass by agreeing with
+         everything.
+    """
+    app.boot("/", selection=["TOC"])
+    app.wait_css(".tabs .tab")
+    css = app.d.execute_async_script("""
+        const done = arguments[arguments.length - 1];
+        const link = [...document.querySelectorAll('link[rel=stylesheet]')]
+            .map((l) => l.href).find((h) => /styles-.*\\.css$/.test(h));
+        if (!link) { done({error: 'no hashed stylesheet link on the page'}); return; }
+        fetch(link).then((r) => r.text()).then((t) => done({text: t, href: link}))
+                   .catch((e) => done({error: String(e)}));
+    """)
+    assert not css.get("error"), css
+    text = css["text"]
+    assert len(text) > 20000, f"that is not the whole sheet: {len(text)} bytes"
+
+    # (1) The idiom, hunted in the shipped bytes. Strip @-rule preludes and
+    # look at each declaration block.
+    import re as _re
+    dupes = []
+    for m in _re.finditer(r"\{([^{}]*)\}", text):
+        seen = {}
+        for decl in m.group(1).split(";"):
+            if ":" not in decl:
+                continue
+            name = decl.split(":", 1)[0].strip()
+            # Custom properties may legitimately repeat across themes, and
+            # they are never a parse-time fallback for one another.
+            if not name or name.startswith("--"):
+                continue
+            seen.setdefault(name, []).append(decl.split(":", 1)[1].strip())
+        for name, vals in seen.items():
+            if len(vals) > 1:
+                start = max(0, m.start() - 90)
+                dupes.append(f"{name} declared {len(vals)}x near: "
+                             f"…{text[start:m.start()][-90:]}{{ {'; '.join(vals)} }}")
+    assert not dupes, (
+        "these rules in the SHIPPED stylesheet declare a property twice, so "
+        "the minifier has already thrown one of them away — write the "
+        "fallback plain and the enhancement inside @supports:\n  "
+        + "\n  ".join(dupes[:5]))
+
+    # (2) The fallbacks that were being eaten are really there.
+    for needle, why in [
+        ("85vh", ".dialog's max-height fallback for browsers without dvh"),
+        ("overflow:hidden", ".row strong's fallback for browsers without overflow:clip"),
+        ("@supports (height:1dvh)", "the dvh enhancement, gated so it survives minification"),
+        ("@supports (overflow:clip)", "the overflow:clip enhancement, gated"),
+    ]:
+        assert needle in text, (
+            f"{needle!r} is missing from the shipped stylesheet — {why}. Either "
+            "the fallback was removed or this test has stopped reading the "
+            "right file, and an audit that sees nothing agrees with everything.")
+
+
+def t299_the_conflict_dialog_can_be_answered_without_seeing_it(app):
+    """What a screen reader is told, measured through the accessibility tree.
+
+    Three defects, all in the dialog R99 rebuilt and all invisible to a
+    sighted test:
+
+    1. With two rows on screen both groups announced the identical "Tick the
+       times you want", and no course code appeared in ANY box's accessible
+       name — except the clash partner's, so a reader answering the ISS row
+       heard "TOC" and had no way to tell which class they were deciding.
+    2. The outcome line — the only thing distinguishing a row nobody has read
+       from one deliberately emptied — was in no live region, so ticking a box
+       changed it silently.
+    3. The disabled Save carried no reason.
+    """
+    cached, overrides, _gone = cache_from_before_cmi_moved_toc(also_move_iss=True)
+    serve_cmi()
+    try:
+        app.boot("/", selection=["TOC", "ISS"], overrides=overrides,
+                 raw_snapshot=cached)
+        app.xpath("//button[normalize-space()='Sync now']").click()
+        dialog = app.wait_css(".dialog", timeout=30)
+
+        # (1) each group names its own course
+        groups = app.d.execute_script("""
+            return [...document.querySelectorAll('.dialog fieldset.conflict-times')]
+                .map((f) => f.getAttribute('aria-label') || '');
+        """)
+        assert len(groups) == 2, groups
+        assert any("TOC" in g for g in groups) and any("ISS" in g for g in groups), (
+            f"each row's group has to name the class it is about: {groups}")
+        assert groups[0] != groups[1], \
+            f"two rows may not announce the same group name: {groups}"
+
+        # (2) the outcome line sits inside a live region that is NOT itself
+        # replaced when the text changes — a region that is replaced
+        # announces nothing.
+        info = app.d.execute_script("""
+            const p = document.querySelector('.dialog .conflict-outcome');
+            const live = p && p.closest('[aria-live]');
+            return {found: !!p, live: live ? live.getAttribute('aria-live') : null,
+                    sameNode: live === p};
+        """)
+        assert info["found"], "no outcome line"
+        assert info["live"] == "polite", \
+            f"the outcome line must be announced when it changes: {info}"
+        assert not info["sameNode"], \
+            "the live region must be a stable wrapper, not the element that gets replaced"
+
+        # (3) the disabled Save says why, in the reading order — a disabled
+        # button is not focusable, so the reason cannot live only on it.
+        save = dialog.find_element(
+            By.XPATH, ".//button[starts-with(normalize-space(),'Save')]")
+        assert save.get_attribute("disabled") is not None
+        note = dialog.find_element(By.CSS_SELECTOR, ".actions-note")
+        assert note.text.strip(), "a disabled Save has to carry a reason"
+        assert save.get_attribute("aria-describedby") == note.get_attribute("id")
+
+        # …and the reason goes away once it is no longer true.
+        box = dialog.find_element(By.CSS_SELECTOR, ".timebox input[type='checkbox']")
+        app.d.execute_script("arguments[0].click()", box)
+        time.sleep(settle_s())
+        assert not app.css_all(".dialog .actions-note"), \
+            "the reason must not outlive the state it explains"
+
+        # The boxes are genuinely operable from the keyboard, not just
+        # clickable: Space toggles.
+        app.d.execute_script("arguments[0].focus()", box)
+        was = box.is_selected()
+        box.send_keys(" ")
+        time.sleep(settle_s())
+        assert box.is_selected() != was, "Space must toggle a tick box"
+    finally:
+        stop_serving_cmi()
+
+
+def t300_every_door_that_changes_your_courses_changes_this_tabs_copy(app):
+    """R96 gave the selection a second home, and three doors never learned.
+
+    `init_app` reads the per-tab sessionStorage copy FIRST and only falls
+    back to localStorage, which is what makes two tabs two timetables.
+    `persist_selection` writes both. These did not:
+
+      * "Import everything…" — replaced the theme, the tweaks and the
+        changes, and left the reader's OWN courses on the timetable with the
+        file's list parked where only a new tab would see it. Under a confirm
+        reading "Replace everything with this file?" and "This cannot be
+        undone."
+      * Developer → Storage → Clear on `cmitt.v1.selection` — removed the
+        localStorage copy and changed nothing the reader could see, under the
+        same "No backup is kept" / "This cannot be undone".
+
+    This is the second time the same shape has bitten. R83 found that a plain
+    reload handed the cleared selection back from the `?c=` in the address
+    bar; the address bar was one shadow copy, sessionStorage is another. So
+    the rule now lives in `storage::remove`/`set_raw` rather than in the
+    doors, and this test walks the doors.
+    """
+    # A backup holding ONE course, exported from a browser that has it.
+    app.boot("/", selection=["RDBM"])
+    app.xpath("//button[normalize-space()='Share or import']").click()
+    dialog = app.wait_css(".dialog")
+    everything = dialog.find_element(
+        By.XPATH, ".//button[normalize-space()='Export everything']")
+    app.d.execute_script("arguments[0].scrollIntoView({block: 'center'});", everything)
+    everything.click()
+    time.sleep(1.2)
+    backup = os.path.join(DOWNLOADS, "r100-doors-backup.json")
+    os.rename(newest_download("cmi-planner-"), backup)
+
+    # --- DOOR 1: import everything, into a tab that has picked its own ----
+    app.boot("/", selection=[])
+    app.open_tab("Master grid")
+    app.chip("TOC", "section[aria-label='Master grid']").click()
+    app.wait_toast("Added TOC")
+    stores = app.d.execute_script("""
+        return {loc: localStorage.getItem('cmitt.v1.selection'),
+                ses: sessionStorage.getItem('cmitt.v1.selection')};
+    """)
+    assert stores["ses"] and "TOC" in stores["ses"], (
+        "picking from the grid is what writes the per-tab copy — without it "
+        f"this test proves nothing: {stores}")
+
+    app.xpath("//button[normalize-space()='Share or import']").click()
+    app.wait_css(".dialog").find_element(
+        By.XPATH, ".//button[normalize-space()='Import everything…']").click()
+    WebDriverWait(app.d, 10).until(
+        lambda d: d.find_element(By.CSS_SELECTOR, "#cmitt-import-input")
+    ).send_keys(backup)
+    app.answer_confirm(True)
+    app.wait_css(".tabs .tab", timeout=20)
+    time.sleep(settle_s())
+    after = app.d.execute_script("""
+        return {loc: localStorage.getItem('cmitt.v1.selection'),
+                ses: sessionStorage.getItem('cmitt.v1.selection')};
+    """)
+    assert "RDBM" in (after["loc"] or ""), f"the file's course must land: {after}"
+    assert "TOC" not in (after["ses"] or ""), (
+        "the per-tab copy still holds this tab's own pick, so the reload will "
+        f"hand it straight back and the import changed nothing visible: {after}")
+    app.open_tab("My courses")
+    time.sleep(settle_s())
+    body = app.css("body").text
+    assert "RDBM" in body, f"the imported course is not on screen: {body[:400]}"
+    assert not app.chips("TOC"), \
+        "'Replace everything with this file' must replace the courses too"
+
+    # --- DOOR 2: Developer -> Storage -> Clear on the selection key -------
+    app.boot("/", selection=[])
+    app.open_tab("Master grid")
+    app.chip("NLP", "section[aria-label='Master grid']").click()
+    app.wait_toast("Added NLP")
+    app.d.get(f"{BASE}/#/developer/storage")
+    app.wait_css(".tabs .tab, .dev-page, main", timeout=20)
+    time.sleep(settle_s())
+    # Each key's controls live inside a collapsed <details>, so the
+    # disclosure has to be opened before its Clear is a real target.
+    opened = app.d.execute_script(
+        "const d = [...document.querySelectorAll('details')].find("
+        "  (x) => (x.textContent || '').includes('cmitt.v1.selection'));"
+        "if (!d) return null;"
+        "d.open = true;"
+        "const b = [...d.querySelectorAll('button')].find("
+        "  (x) => x.textContent.trim() === 'Clear');"
+        "if (b) b.scrollIntoView({block: 'center'});"
+        "return b || null;")
+    assert opened is not None, "no Clear control for cmitt.v1.selection"
+    time.sleep(settle_s())
+    opened.click()
+    app.answer_confirm(True)
+    app.wait_css(".tabs .tab, main", timeout=20)
+    time.sleep(settle_s())
+    cleared = app.d.execute_script("""
+        return {loc: localStorage.getItem('cmitt.v1.selection'),
+                ses: sessionStorage.getItem('cmitt.v1.selection')};
+    """)
+    assert not cleared["loc"], f"Clear left the shared copy: {cleared}"
+    assert not cleared["ses"], (
+        "Clear left this tab's own copy, so the page it reloaded still shows "
+        f"the courses it promised to remove: {cleared}")
+
+
+JS_WEEK_VISIBILITY = """
+    const s = document.querySelector('.grid-scroll');
+    if (!s) return null;
+    const rows = [...document.querySelectorAll('table.tt tbody tr')];
+    const chips = [...document.querySelectorAll('table.tt button.chip')];
+    const onScreen = (e) => {
+        const r = e.getBoundingClientRect();
+        return r.height > 0 && r.bottom > 0 && r.top < innerHeight;
+    };
+    return {
+        maxH: getComputedStyle(s).maxHeight,
+        clientH: s.clientHeight,
+        scrollH: s.scrollHeight,
+        rows: rows.length, rowsSeen: rows.filter(onScreen).length,
+        chips: chips.length, chipsSeen: chips.filter(onScreen).length,
+        dayList: !!document.querySelector('.day-list'),
+    };
+"""
+
+
+def t301_a_short_window_never_hides_the_whole_week(app):
+    """The week grid could shrink to nothing, and say nothing.
+
+    `.grid-scroll` took a FIXED 13rem (208px) of furniture off the viewport
+    height with no floor, so the scrollport shrank one-for-one and reached
+    ZERO at a 208px viewport. `overflow: auto` on a 0px-tall box has nothing
+    to scroll, so every row and every chip was in the DOM and none of them on
+    screen — behind a 2px hairline, with no message. This is R99's "a surface
+    that renders with nothing to show", in CSS rather than in Rust.
+
+    Reachable with no stored state and no link: an 800x360 landscape phone in
+    Chrome split-screen leaves the page ~180px, and the phone day-list is not
+    rendered past 640px wide, so the table is the reader's ONLY view of their
+    own timetable. An installed PWA window dragged short does it too.
+
+    The VIEWPORT is set through CDP, not `set_window_size`: a window is taller
+    than the page it contains by however much browser chrome it has, and
+    `set_window_size(800, 180)` leaves a 37px viewport on this driver — a
+    number that tests something real but not the thing being described.
+
+    At these heights the furniture alone fills the page, so the week is
+    legitimately below the fold. The fix is not that it needs no scrolling —
+    it is that there is now something to scroll TO.
+    """
+    app.boot("/", selection=["TOC", "NLP"])
+    app.open_tab("My timetable")
+    app.wait_css("table.tt tbody tr")
+    try:
+        for vw, vh in ((800, 180), (960, 176), (1280, 200), (800, 240)):
+            app.d.execute_cdp_cmd("Emulation.setDeviceMetricsOverride", {
+                "width": vw, "height": vh, "deviceScaleFactor": 1, "mobile": False,
+            })
+            time.sleep(settle_s())
+            got = app.d.execute_script("return [innerWidth, innerHeight];")
+            assert got == [vw, vh], f"viewport override did not take: {got}"
+            app.d.execute_script(
+                "const s = document.querySelector('.grid-scroll');"
+                "if (s) s.scrollIntoView({block: 'start'});")
+            time.sleep(settle_s())
+            m = app.d.execute_script(JS_WEEK_VISIBILITY)
+            assert m, f"{vw}x{vh}: no .grid-scroll at all"
+            assert m["rows"] > 0 and m["chips"] > 0, f"{vw}x{vh}: fixture empty, {m}"
+            assert not m["dayList"], \
+                f"{vw}x{vh}: past 640px the table is the only view — {m}"
+            # The scrollport keeps a usable height instead of collapsing…
+            assert m["clientH"] >= 150, (
+                f"{vw}x{vh}: the week's scrollport collapsed to {m['clientH']}px "
+                f"(max-height {m['maxH']}) — the whole timetable is off screen "
+                f"with nothing saying so: {m}")
+            # …and once scrolled to, the week is actually there.
+            assert m["rowsSeen"] > 0 and m["chipsSeen"] > 0, (
+                f"{vw}x{vh}: {m['rows']} rows and {m['chips']} chips in the DOM, "
+                f"{m['rowsSeen']} rows and {m['chipsSeen']} chips on screen "
+                f"even after scrolling to the grid: {m}")
+            # …with the rest reachable inside it.
+            assert m["scrollH"] > m["clientH"], \
+                f"{vw}x{vh}: nothing left to scroll to, so the floor is too tall: {m}"
+    finally:
+        app.d.execute_cdp_cmd("Emulation.clearDeviceMetricsOverride", {})
+        time.sleep(settle_s())
+
+
+
+def t302_a_sync_never_claims_something_it_cannot_know(app):
+    """Two sentences, each reached by two paths and true on only one.
+
+    The fixture: the cache remembers a TOC class on Saturday that CMI no
+    longer runs, and the reader had STRUCK THAT CLASS OUT. So the merge finds
+    both sides agree and drops the change — the `dropped_matching` path.
+
+    1. The notice said "CMI has moved TOC to the time you'd picked … and is
+       showing CMI's time". On this path the reader picked no time, CMI moved
+       nothing (it deleted the class), and there is no CMI time to show:
+       every clause was false. The wording is right for the OTHER producer of
+       `dropped_matching` — a move CMI adopted — which is the whole defect.
+    2. The "what changed" digest, opened by that same sync, said "Your
+       courses and your custom changes are untouched" — on the sync that had
+       just removed one, contradicting its own toast. The digest is where a
+       reader goes to CHECK, which made it the worst place to be wrong.
+    """
+    snap = json.loads(SEED_SNAPSHOT_JSON)
+    hall = None
+    for course in snap["courses"]:
+        if course["code"] == "TOC":
+            for m in course["meetings"]:
+                if m["day"] == "Tue" and m["slot"]["start_min"] == 550:
+                    hall = m.get("hall")
+            # A class the cache has and CMI's live pages do not.
+            course["meetings"].append({
+                "day": "Sat", "slot": {"start_min": 550, "end_min": 625},
+                "hall": hall, "temp_booking": False})
+    assert hall is not None, "the fixture must still have TOC on Tue 09:10"
+    overrides = {"next_id": 1, "credits": [], "items": [
+        {"id": 0, "course": "TOC",
+         "base": {"day": "Sat", "slot": {"start_min": 550, "end_min": 625},
+                  "hall": hall, "temp_booking": False},
+         "to": None, "created_at": 1754000000000.0},
+    ]}
+    serve_cmi()
+    try:
+        app.boot("/", selection=["TOC"], overrides=overrides,
+                 raw_snapshot=json.dumps(snap))
+        app.xpath("//button[normalize-space()='Sync now']").click()
+        app.wait_toast("you had removed")
+        toasts = app.toasts_text()
+        # (1) the notice describes what actually happened…
+        assert "stopped running" in toasts, toasts
+        # …and not the other path's story.
+        assert "to the time you'd picked" not in toasts, (
+            "the reader picked no time and CMI moved nothing on this path: "
+            + toasts)
+        assert "showing CMI's time" not in toasts, toasts
+        # The change really is gone, which is what makes claim (2) false.
+        assert app.d.execute_script(
+            "return JSON.parse(localStorage.getItem('cmitt.v1.overrides')).items.length;"
+        ) == 0, "the fixture must actually drop the change"
+
+        # (2) the digest may not claim nothing of theirs was touched.
+        banner = app.xpath(
+            "//div[contains(@class,'banner')][contains(.,'See what changed')]")
+        banner.find_element(
+            By.XPATH, ".//button[normalize-space()='See what changed']").click()
+        dialog = app.wait_css(".dialog", timeout=15)
+        lede = dialog.find_element(By.CSS_SELECTOR, "p.muted").text
+        assert "untouched" not in lede, (
+            "this sync removed one of the reader's changes, so the digest may "
+            f"not say theirs are untouched: {lede!r}")
+        assert "CMI's own edits" in lede, lede
     finally:
         stop_serving_cmi()
 
@@ -15498,6 +16081,13 @@ TESTS = [
     t293_an_untouched_row_and_an_emptied_one_do_not_look_the_same,
     t294_a_time_that_would_clash_says_what_it_runs_into,
     t295_deciding_all_at_once_is_offered_only_when_it_is_shorter,
+    t296_asking_about_a_class_does_not_change_your_week,
+    t297_a_postponed_question_survives_the_next_sync,
+    t298_the_release_stylesheet_keeps_every_fallback_the_source_wrote,
+    t299_the_conflict_dialog_can_be_answered_without_seeing_it,
+    t300_every_door_that_changes_your_courses_changes_this_tabs_copy,
+    t301_a_short_window_never_hides_the_whole_week,
+    t302_a_sync_never_claims_something_it_cannot_know,
 ]
 
 

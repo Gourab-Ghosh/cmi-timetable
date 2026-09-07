@@ -846,7 +846,18 @@ button.badge.warn {
   max-width: 100%;
   /* Vertical scrolling happens inside this container so the sticky slot
      header actually engages (sticky is relative to the scroll container). */
-  max-height: calc(100vh - 13rem);
+  /* A FLOOR under the subtraction (R100, slice a7). `13rem` is a fixed 208px
+     of furniture taken off the window height, and with no floor the
+     scrollport shrank one-for-one and hit ZERO at a 208px-tall window — where
+     `overflow: auto` on a 0px box has nothing to scroll, so the entire week
+     was simply absent behind a 2px hairline, with nothing saying so. Five
+     rows and six chips in the DOM, none on screen. Reachable without any
+     stored state: an 800x360 landscape phone in Chrome split-screen gets the
+     browser ~180px, and the phone day-list is not rendered past 640px wide,
+     so the table is the reader's ONLY view of their timetable. An installed
+     PWA window dragged short does it too.
+     One declaration, not a fallback pair — see the @supports note below. */
+  max-height: max(12rem, calc(100vh - 13rem));
   /* Panels (.panel has no margin-top) and other blocks follow the grid
      directly in every view — without this they sit flush against it. */
   margin-bottom: 0.9rem;
@@ -2324,11 +2335,14 @@ body.modal-open.toasts-live .overlay {
   padding-top: calc(min(var(--toast-band, 0px), 33dvh) + 1.4rem);
 }
 body.modal-open.toasts-live .dialog {
-  max-height: calc(100vh - min(var(--toast-band, 0px), 33vh) - 2.8rem);
-  max-height: max(
-    12rem,
-    min(calc(100dvh - min(var(--toast-band, 0px), 33dvh) - 2.8rem), 800px)
-  );
+  /* Plain fallback here, `dvh` enhancement in the @supports block below
+     (R100) — a duplicate declaration is deleted by the release minifier. */
+  /* The floor belongs here too. The rule above this one calls it "the second
+     half of the same promise: whatever the band says, a dialog keeps enough
+     height to show a line of text and its buttons" — but only the `dvh`
+     version ever had it, so on the browsers this fallback exists FOR the
+     promise was not kept (R100). */
+  max-height: max(12rem, calc(100vh - min(var(--toast-band, 0px), 33vh) - 2.8rem));
 }
 /* The fold marker (R93 R2): quieter than a notice, because it is a count and
    not a message — it must never be mistaken for the thing it is counting. */
@@ -2412,8 +2426,19 @@ body.modal-open { overflow: hidden; }
      either had more to say. The reader can still scroll, but a dialog that
      *looks* finished and is not is a dialog whose last section does not exist.
      85dvh still governs every window shorter than ~940px. */
+  /* R100: the fallback is the PLAIN declaration and the enhancement is
+     gated, because a duplicate-declaration pair does not survive the
+     release build. lightningcss (Trunk's `minify = "on_release"`) treats the
+     two as one repeated property and keeps the LAST — so `85vh` occurred
+     ZERO times in the shipped stylesheet, and on a browser without `dvh`
+     (iOS < 15.4, Chrome < 108, Firefox < 101) the `dvh` line is invalid at
+     parse time and dropped too, leaving `.dialog` with NO max-height. Its
+     title then sits above the top of the screen and its Save/Close row below
+     the bottom, with nothing able to scroll to either: `.overlay` is fixed
+     with no overflow and `body.modal-open` has locked the page. The reader
+     cannot answer or dismiss the dialog at all. `@supports` blocks are
+     preserved verbatim by the same minifier. */
   max-height: min(85vh, 800px);
-  max-height: min(85dvh, 800px);
   overflow: auto;
   /* Belt to the body lock above: even if the lock is ever off, a wheel that
      reaches this scroller's end stops here instead of chaining to the page. */
@@ -2973,6 +2998,27 @@ body.modal-open { overflow: hidden; }
   line-height: 1.5;
 }
 
+/* The reason a disabled Save is disabled, beside it and only while true. */
+.actions-note {
+  color: var(--muted);
+  font-size: 0.8rem;
+  margin-right: auto;
+}
+/* The live region wraps and does nothing else — the <p> inside carries every
+   visual (its own margin and top rule). Deliberately NOT `display: contents`:
+   that has a history of dropping the element from the accessibility tree,
+   which on an `aria-live` region removes the announcement this exists for. */
+.conflict-outcome-live { display: block; }
+
+/* The course's other classes, named once. Quieter than the story it sits
+   under, because it is context for the question rather than part of it. */
+.conflict-untouched {
+  margin: -0.35rem 0 0.55rem;
+  color: var(--muted);
+  font-size: 0.8rem;
+  line-height: 1.45;
+}
+
 .conflict-times { border: 0; margin: 0; padding: 0; min-width: 0; }
 .conflict-times > legend {
   padding: 0;
@@ -3108,8 +3154,11 @@ label.timebox input:checked + .timebox-body .now { color: var(--accent); }
   display: block;
   min-width: 0;
   overflow-wrap: anywhere;
+  /* R100: plain fallback, gated enhancement — see `.dialog`. The release
+     minifier keeps only the last of a duplicate pair, and `overflow: clip`
+     is Chrome 90 / Safari 16, so the shipped rule left older browsers with
+     no overflow rule at all and a long course name ran out of its card. */
   overflow: hidden;
-  overflow: clip;
 }
 /* The one-line hint under "No longer listed" — the record itself opens as
    a popup from the code, so the list stays one line per course. */
@@ -3767,6 +3816,32 @@ label.field > input { width: 100%; }
    background and text carry the signal; where it tinted a surface the
    fallback is that surface. Three exceptions are called out inline.
    ========================================================================== */
+/* Progressive enhancements, gated rather than doubled (R100).
+   A fallback written as a duplicate declaration is DELETED by the release
+   minifier, which keeps only the last of a repeated property — so the
+   fallback exists in the source, in `trunk serve`, and in every test that
+   reads the source, and is simply absent from the bytes the deployed site
+   serves. `@supports` survives minification verbatim, so every
+   fallback/enhancement pair in this sheet is written this way: the OLD value
+   plain, the NEW value here. t298 reads the SHIPPED stylesheet and fails if
+   a duplicate pair ever comes back. */
+@supports (height: 1dvh) {
+  /* The layout viewport lies when a phone keyboard is up, and the actions
+     row must stay reachable. */
+  .dialog { max-height: min(85dvh, 800px); }
+  body.modal-open.toasts-live .dialog {
+    max-height: max(
+      12rem,
+      min(calc(100dvh - min(var(--toast-band, 0px), 33dvh) - 2.8rem), 800px)
+    );
+  }
+}
+@supports (overflow: clip) {
+  /* `clip` cannot be scrolled to programmatically, which `hidden` can — a
+     focus ring landing inside a clipped box does not drag the box. */
+  .row strong { overflow: clip; }
+}
+
 @supports not (color: color-mix(in srgb, red 50%, blue)) {
   /* Delete buttons: `color: var(--alarm)` above already says "danger", and
      unset would make border-color currentColor — a full-strength red box

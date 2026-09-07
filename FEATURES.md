@@ -863,6 +863,15 @@ timetable.
   class will not appear at all. A row you have not touched says *"Not decided
   yet"* instead — so an untouched row and one you deliberately emptied never
   look the same.
+- **Asking is not answering.** Postponing a question with **Decide later**
+  leaves your timetable exactly as it was — a class you had taken off stays
+  off, a class you had moved stays where you put it — and the question waits
+  for you, through reloads and through later syncs, until you answer it. It
+  used to change your week the moment you postponed it.
+- **It tells you what it is not asking about.** Most CMI courses run more than
+  once a week and a question is about one of those classes, so the dialog names
+  the rest: *"TOC also runs Thu 09:10–10:25, which this question does not
+  change."*
 - **Nothing is answered for you.** Every box starts clear, **Save** is disabled
   until you decide something, and it acts only on the rows you decided — the
   rest keep waiting, and the button says so (*"Save 1 of 2"*). With more than a

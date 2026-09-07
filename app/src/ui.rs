@@ -7215,7 +7215,7 @@ fn conflict_story(c: &ttcore::merge::Conflict) -> String {
         ),
         S::Dropped => format!(
             "CMI used to run this class on {was}, and you had moved it to {}. \
-             CMI no longer lists it at all.",
+             CMI no longer lists that class.",
             c.mine.as_ref().map(when).unwrap_or_default(),
         ),
         S::NewlyScheduled => format!(
@@ -7235,30 +7235,67 @@ fn conflict_story(c: &ttcore::merge::Conflict) -> String {
 /// could never be confused that way. So the difference is said rather than
 /// drawn: an untouched row reads "Not decided yet", and an emptied one says
 /// out loud that the class will not appear.
-fn conflict_outcome(code: &str, kept: &[ttcore::model::Meeting]) -> (String, bool) {
+fn conflict_outcome(kept: &[ttcore::model::Meeting]) -> (String, bool) {
     let when = |m: &ttcore::model::Meeting| format!("{} {}", m.day.short(), m.slot.label());
+    // Scoped to THIS CLASS, never to "your timetable".
+    //
+    // It used to read "TOC will not appear on your timetable at all" — and
+    // then TOC was still sitting on Thursday, because a conflict is about ONE
+    // weekly meeting and every other meeting of the course has no override
+    // aimed at it. 63 of the 75 courses in CMI's own pages run more than once
+    // a week, so the false version was the COMMON case, not a corner. The
+    // course's other classes are named once, next to the story, where they do
+    // not have to be recounted on every tick (R100, slice a2).
     match kept.len() {
         0 => (
-            format!("{code} will not appear on your timetable at all."),
+            "This class will not be on your timetable.".to_string(),
             true,
         ),
         1 => (
-            format!("Your timetable will show {code} on {}.", when(&kept[0])),
+            format!("This class goes on your timetable at {}.", when(&kept[0])),
+            false,
+        ),
+        2 => (
+            format!(
+                "Both times go on your timetable — {} and {}.",
+                when(&kept[0]),
+                when(&kept[1])
+            ),
             false,
         ),
         n => (
             format!(
-                "Your timetable will show {code} {} — {}.",
-                if n == 2 {
-                    "twice".to_string()
-                } else {
-                    format!("{n} times")
-                },
+                "All {n} go on your timetable — {}.",
                 kept.iter().map(when).collect::<Vec<_>>().join(", ")
             ),
             false,
         ),
     }
+}
+
+/// The course's OTHER classes — the ones this question does not control.
+///
+/// Named once under the story, because a reader told "this class will not be
+/// on your timetable" needs to know the course still runs on Thursday, and
+/// because the alarming state is exactly the one where they would otherwise
+/// assume the whole course had gone.
+fn conflict_untouched(app: App, c: &ttcore::merge::Conflict) -> Vec<ttcore::model::Meeting> {
+    let Some(course) = app.course_by_code(&c.course) else {
+        return Vec::new();
+    };
+    let in_question = |m: &ttcore::model::Meeting| {
+        c.theirs.iter().any(|t| t.same_place_time(m))
+            || c.mine.as_ref().is_some_and(|x| x.same_place_time(m))
+            || c.was.as_ref().is_some_and(|x| x.same_place_time(m))
+    };
+    let mut out: Vec<ttcore::model::Meeting> = app
+        .effective_meetings(&course)
+        .into_iter()
+        .map(|e| e.meeting)
+        .filter(|m| !in_question(m))
+        .collect();
+    out.sort_by_key(|m| (m.day.index(), m.slot.start_min));
+    out
 }
 
 fn conflicts_dialog(app: App) -> AnyView {
@@ -7368,6 +7405,7 @@ fn conflicts_dialog(app: App) -> AnyView {
                         .map(|x| x.name.clone())
                         .unwrap_or_default();
                     let story = conflict_story(&c);
+                    let untouched = conflict_untouched(app, &c);
                     let removed = c.mine.is_none();
                     // Reading the pick, with the undecided state resolved to
                     // "nothing ticked" — one place, so a box, the outcome
@@ -7421,7 +7459,7 @@ fn conflicts_dialog(app: App) -> AnyView {
                                     .into_any();
                             }
                             let kept = ttcore::merge::kept_meetings(&c, &pick_or_empty());
-                            let (text, gone) = conflict_outcome(&code, &kept);
+                            let (text, gone) = conflict_outcome(&kept);
                             view! {
                                 <p class="conflict-outcome" class:gone=gone>
                                     {gone.then(|| view! { <span aria-hidden="true">"⚠ "</span> })}
@@ -7432,7 +7470,7 @@ fn conflicts_dialog(app: App) -> AnyView {
                         }
                     };
                     let boxes_label = match c.shape() {
-                        S::Dropped => "The only time left is the one you set:",
+                        S::Dropped => "The only time left for it is the one you set:",
                         S::MovedWhatYouRemoved => "Tick it to put the class back:",
                         _ => "Tick the times you want:",
                     };
@@ -7444,7 +7482,39 @@ fn conflicts_dialog(app: App) -> AnyView {
                                     .then(|| view! { <span class="conflict-name">{name}</span> })}
                             </header>
                             <p class="conflict-story">{story}</p>
-                            <fieldset class="conflict-times">
+                            {(!untouched.is_empty())
+                                .then(|| {
+                                    let when = |m: &ttcore::model::Meeting| {
+                                        format!("{} {}", m.day.short(), m.slot.label())
+                                    };
+                                    let times = untouched
+                                        .iter()
+                                        .map(when)
+                                        .collect::<Vec<_>>()
+                                        .join(" and ");
+                                    view! {
+                                        <p class="conflict-untouched">
+                                            {format!(
+                                                "{} also runs {times}, which this question does not change.",
+                                                code.clone(),
+                                            )}
+                                        </p>
+                                    }
+                                })}
+                            // The group is NAMED with its course. With two
+                            // rows on screen both fieldsets announced the
+                            // identical "Tick the times you want", and the
+                            // only course code inside a box's accessible name
+                            // was the CLASH PARTNER'S — so a screen-reader
+                            // user answering the ISS row heard "TOC" and had
+                            // no way to tell which class they were deciding.
+                            // The visible legend is unchanged; this is the
+                            // same fact, said to a reader who cannot see the
+                            // heading above it (R100, slice a8).
+                            <fieldset
+                                class="conflict-times"
+                                aria-label=format!("{code} — {boxes_label}")
+                            >
                                 <legend>{boxes_label}</legend>
                                 {c
                                     .theirs
@@ -7537,17 +7607,44 @@ fn conflicts_dialog(app: App) -> AnyView {
                                         }
                                     })}
                             </fieldset>
-                            {outcome}
+                            // `aria-live` belongs on a STABLE element: the
+                            // two branches below replace the <p> wholesale,
+                            // and a live region that is itself replaced
+                            // announces nothing. So the region is this
+                            // wrapper and only its contents change — which
+                            // matters more here than usual, because this line
+                            // is the ONLY thing distinguishing a row nobody
+                            // has read from one deliberately emptied.
+                            <div class="conflict-outcome-live" aria-live="polite">
+                                {outcome}
+                            </div>
                         </div>
                     }
                 })
                 .collect_view()}
             <div class="actions">
+                // A disabled button is not self-explanatory, and it is the
+                // one control the reader must eventually press. Saying why —
+                // once, beside it, and only while it is true — beats leaving
+                // them to guess (R100, slice a8).
+                {move || {
+                    (decided.get() == 0)
+                        .then(|| {
+                            view! {
+                                <span class="actions-note" id="save-why">
+                                    "Tick a time above to choose."
+                                </span>
+                            }
+                        })
+                }}
                 <button class="btn" on:click=move |_| app.dialog.set(None)>
                     "Decide later"
                 </button>
                 <button
                     class="btn primary"
+                    aria-describedby=move || {
+                        if decided.get() == 0 { "save-why" } else { "" }
+                    }
                     // Nothing decided means nothing for Save to do, and this
                     // app doesn't offer controls that cannot act.
                     disabled=move || decided.get() == 0
@@ -8973,8 +9070,21 @@ fn what_changed_dialog(app: App) -> impl IntoView {
         <div>
             <h2 id="dialog-title">"What changed since last sync"</h2>
             <p class="muted small">
-                "These are CMI's own edits to its pages. Your courses and your custom \
-                 changes are untouched."
+                // It says what this list IS, and no longer what it cannot
+                // know. The same sync that opens this digest can drop a
+                // change (CMI adopted it), lapse one (the class has not run
+                // for a term), re-anchor one (a question is waiting) or
+                // delete one outright — and the dialog is handed only a
+                // `SnapshotDiff`, so it has no way to tell. It nevertheless
+                // stated the strongest form: "your custom changes are
+                // untouched", on the very sync that removed one, while the
+                // toast beside it said so. The digest is where a reader goes
+                // to CHECK, so it was the worst possible place to be wrong
+                // (R100, slice a2). What is still true, always, is that this
+                // list contains CMI's edits and not theirs.
+                "These are CMI's own edits to its pages — not a list of your own \
+                 courses or changes. Anything of yours that this sync altered is \
+                 in the messages at the top of the page."
             </p>
             // The one control in the digest, and it belongs up here with the
             // lede: it decides what you are about to read, not what you do

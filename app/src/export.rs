@@ -471,8 +471,20 @@ fn import_planner_backup_inner(app: App, text: &str, already_asked: bool) {
     let wrote = !matches!(
         crate::storage::save_snapshot(&backup.snapshot),
         crate::storage::SnapshotSave::Failed(_)
-    ) && crate::storage::save(KEY_SELECTION, &selection).is_ok()
-        && crate::storage::save(KEY_OVERRIDES, &overrides).is_ok()
+    ) && {
+        // BOTH stores, or the reload hands this tab its own old picks back.
+        //
+        // R96 made the selection per-tab: `init_app` reads the sessionStorage
+        // copy FIRST and falls back to localStorage. `persist_selection` is
+        // the only other writer and it keeps the two together. This door did
+        // not, so "Replace everything with this file" replaced the theme, the
+        // tweaks and the changes — and left the reader's own courses on the
+        // timetable, with the file's list parked in localStorage where only a
+        // NEW tab would ever see it. Under a confirm that says
+        // "This cannot be undone." (R100, found by slice a4.)
+        crate::storage::session_save(KEY_SELECTION, &selection);
+        crate::storage::save(KEY_SELECTION, &selection).is_ok()
+    } && crate::storage::save(KEY_OVERRIDES, &overrides).is_ok()
         && crate::storage::save(KEY_CUSTOM, &customs).is_ok()
         && crate::storage::save(KEY_PREFS, &prefs).is_ok()
         && if conflicts.is_empty() {
@@ -483,6 +495,12 @@ fn import_planner_backup_inner(app: App, text: &str, already_asked: bool) {
         };
     if !wrote {
         let mut restored = true;
+        // The per-tab copy is written above, so rolling back localStorage
+        // alone would leave this tab holding the FILE's courses while every
+        // other store went back — a state neither the file nor the reader
+        // asked for. Clearing it makes the tab fall back to the restored
+        // localStorage copy, which is exactly the tab they had.
+        crate::storage::session_clear();
         for (key, old) in &ledger {
             restored &= crate::storage::restore_raw(key, old);
         }

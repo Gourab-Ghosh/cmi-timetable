@@ -848,6 +848,33 @@ impl OverridesStore {
     /// different change. `checked_add`, so it is safe even before
     /// `retain_sane` has run.
     pub fn bump_next_id(&mut self) {
+        // R100: the COUNTER has to stay a number `add` can count past.
+        //
+        // R93 S8 fixed the item ids and left this, which is the value that
+        // actually feeds `next_id += 1` — and `is_sane` says nothing about
+        // it, so a backup file carrying
+        // `{"next_id": 18446744073709551615, "items": []}` walks through
+        // every door. The next change the reader makes then overflows: a
+        // PANIC in any debug build (a white screen on `trunk serve`), and in
+        // the shipped release profile a wrap to 0, which hands out
+        // `id: u64::MAX` — an id `MeetingOverride::is_sane` deletes on the
+        // next boot, so the class they just moved is silently put back — and
+        // then hands out `id: 0` twice, after which `remove`'s
+        // `retain(|o| o.id != id)` deletes BOTH entries.
+        //
+        // Pulling the ceiling down loses nothing: ids are only ever compared
+        // for equality, never ordered or reserved. This is the clamp law's
+        // shape — one rule inside the store, so every door (boot, share
+        // link, backup file, courses file) gets it without having to
+        // remember to.
+        if self.next_id == u64::MAX {
+            self.next_id = self
+                .items
+                .iter()
+                .map(|o| o.id)
+                .max()
+                .map_or(0, |m| m.saturating_add(1));
+        }
         if let Some(after) = self
             .items
             .iter()
