@@ -7190,90 +7190,354 @@ fn focus_later(id: String) {
 // Conflict dialog — never auto-resolve
 // ---------------------------------------------------------------------------
 
-fn conflicts_dialog(app: App) -> impl IntoView {
+/// One line of story for a conflict: what the reader did, and what CMI did.
+///
+/// This is the sentence the old dialog did not have, and its absence was the
+/// whole problem. Shown two bare values — "CMI's new time: Tue 09:10" and
+/// "your time: Wed 17:00" — a reader cannot answer, because the fact that
+/// decides it is missing: CMI's time BEFORE the move is the one they edited,
+/// and the reason they edited it. A student who moved a class off Friday
+/// because it clashed needs to be told that Friday is what has changed.
+fn conflict_story(c: &ttcore::merge::Conflict) -> String {
+    use ttcore::merge::ConflictShape as S;
+    let when = |m: &ttcore::model::Meeting| format!("{} {}", m.day.short(), m.slot.label());
+    let was = c.was.as_ref().map(when).unwrap_or_default();
+    let theirs = c.theirs.iter().map(when).collect::<Vec<_>>().join(" and ");
+    match c.shape() {
+        S::Moved => format!(
+            "CMI used to run this class on {was}, and you had moved it to {}. \
+             CMI has now moved it to {theirs}.",
+            c.mine.as_ref().map(when).unwrap_or_default(),
+        ),
+        S::MovedWhatYouRemoved => format!(
+            "CMI used to run this class on {was}, and you had taken it off your \
+             timetable. CMI has now moved it to {theirs}."
+        ),
+        S::Dropped => format!(
+            "CMI used to run this class on {was}, and you had moved it to {}. \
+             CMI no longer lists it at all.",
+            c.mine.as_ref().map(when).unwrap_or_default(),
+        ),
+        S::NewlyScheduled => format!(
+            "CMI listed no time for this class, so you placed it on {} yourself. \
+             CMI has now scheduled it for {theirs}.",
+            c.mine.as_ref().map(when).unwrap_or_default(),
+        ),
+    }
+}
+
+/// What the ticked boxes will actually put on the week — stated in words,
+/// under the boxes, live.
+///
+/// It carries a second job that is the reason this dialog can use tick boxes
+/// at all. A row nobody has touched yet and a row whose every box was
+/// deliberately unticked LOOK THE SAME — all empty — where two radio buttons
+/// could never be confused that way. So the difference is said rather than
+/// drawn: an untouched row reads "Not decided yet", and an emptied one says
+/// out loud that the class will not appear.
+fn conflict_outcome(code: &str, kept: &[ttcore::model::Meeting]) -> (String, bool) {
+    let when = |m: &ttcore::model::Meeting| format!("{} {}", m.day.short(), m.slot.label());
+    match kept.len() {
+        0 => (
+            format!("{code} will not appear on your timetable at all."),
+            true,
+        ),
+        1 => (
+            format!("Your timetable will show {code} on {}.", when(&kept[0])),
+            false,
+        ),
+        n => (
+            format!(
+                "Your timetable will show {code} {} — {}.",
+                if n == 2 {
+                    "twice".to_string()
+                } else {
+                    format!("{n} times")
+                },
+                kept.iter().map(when).collect::<Vec<_>>().join(", ")
+            ),
+            false,
+        ),
+    }
+}
+
+fn conflicts_dialog(app: App) -> AnyView {
+    use ttcore::merge::{ConflictPick, ConflictShape as S};
     let conflicts = app.conflicts.get_untracked();
-    // Every row starts UNANSWERED. Pre-choosing a side answered "use CMI's"
-    // for whoever opened the dialog just to look — Apply then threw away
-    // their times for rows they never touched.
-    let keep_mine = RwSignal::new(vec![None::<bool>; conflicts.len()]);
+    let n = conflicts.len();
+
+    // The queue can empty while this dialog is open. A sync REPLACES it
+    // rather than accumulating (fetch.rs), so a second sync that finds
+    // nothing to arbitrate leaves this with nothing to ask — and it used to
+    // draw "CMI changed 0 classes you had edited" over a live Save button,
+    // found by photographing the dark-theme shot in R99. Closing is the rule
+    // the "what changed" dialog already follows: a dialog that cannot ask
+    // anything does not stand. An effect rather than a one-off check, because
+    // the queue can empty a minute AFTER the reader opened this.
+    Effect::new(move |_| {
+        if app.conflicts.with(|c| c.is_empty()) {
+            app.dialog.set(None);
+        }
+    });
+    if n == 0 {
+        return ().into_any();
+    }
+
+    // `None` is "not decided yet", and stays that way until the reader
+    // touches the row: opening the dialog to look must never cost an answer,
+    // and Save must never act on a row nobody read. The tick boxes of an
+    // undecided row are all clear — the state is named in the outcome line
+    // instead of being inferred from them.
+    let picks = RwSignal::new(vec![None::<ConflictPick>; n]);
+
+    // A shortcut is only offered when it is actually shorter. With a single
+    // moved class there are exactly two boxes and each is one click, so three
+    // bulk buttons above them would be pure clutter; from three boxes up
+    // (several classes, or one class CMI now runs twice) they start to earn
+    // their space.
+    let total_boxes: usize = conflicts
+        .iter()
+        .map(|c| c.theirs.len() + usize::from(c.mine.is_some()))
+        .sum();
+    let show_bulk = total_boxes > 2;
+
+    let bulk = {
+        let conflicts = conflicts.clone();
+        move |cmi: bool, mine: bool| {
+            let picks_now: Vec<Option<ConflictPick>> = conflicts
+                .iter()
+                .map(|c| {
+                    Some(ConflictPick {
+                        keep_cmi: vec![cmi; c.theirs.len()],
+                        keep_mine: mine,
+                    })
+                })
+                .collect();
+            picks.set(picks_now);
+        }
+    };
+
+    let title = if n == 1 {
+        "CMI changed a class you had edited".to_string()
+    } else {
+        format!("CMI changed {n} classes you had edited")
+    };
+
     let conflicts_apply = conflicts.clone();
+    let conflicts_count = conflicts.clone();
+    // How many rows Save will act on, so the button can say so rather than
+    // leaving the reader to guess whether it covers the row they skipped.
+    let decided = Memo::new(move |_| picks.with(|v| v.iter().filter(|p| p.is_some()).count()));
 
     view! {
-        <div>
-            <h2 id="dialog-title">"CMI changed times you customised"</h2>
+        <div class="conflicts-dialog">
+            <h2 id="dialog-title">{title}</h2>
             <p class="muted">
-                "Pick what to keep for each change. Nothing is picked for you, \
-                 and nothing changes until you press Apply. Anything you leave \
-                 unanswered stays waiting, so you can come back and finish later."
+                "Tick every time you want on your timetable — CMI's, your own, or \
+                 both. Nothing changes until you press Save, and anything you \
+                 leave undecided stays waiting."
             </p>
-            <div class="actions" style="justify-content:flex-start">
-                <button
-                    class="btn small"
-                    on:click=move |_| {
-                        keep_mine.update(|v| v.iter_mut().for_each(|x| *x = Some(false)));
+            {show_bulk
+                .then(|| {
+                    let b1 = bulk.clone();
+                    let b2 = bulk.clone();
+                    let b3 = bulk.clone();
+                    view! {
+                        <div class="conflict-bulk">
+                            <span class="conflict-bulk-label">"Decide all at once:"</span>
+                            <button class="btn small" on:click=move |_| b1(true, false)>
+                                "CMI's times only"
+                            </button>
+                            <button class="btn small" on:click=move |_| b2(false, true)>
+                                "My times only"
+                            </button>
+                            <button class="btn small" on:click=move |_| b3(true, true)>
+                                "Keep everything"
+                            </button>
+                        </div>
                     }
-                >
-                    "Use CMI's for all"
-                </button>
-                <button
-                    class="btn small"
-                    on:click=move |_| {
-                        keep_mine.update(|v| v.iter_mut().for_each(|x| *x = Some(true)));
-                    }
-                >
-                    "Keep mine for all"
-                </button>
-            </div>
+                })}
             {conflicts
                 .iter()
+                .cloned()
                 .enumerate()
                 .map(|(i, c)| {
-                    // Both sides read as the same kind of thing — a tag
-                    // saying whose it is, then the time itself — so the
-                    // choice is between two values, not two sentences.
-                    let mine_value = match &c.mine {
-                        Some(m) => m.describe(),
-                        None => "no meeting — you removed it".to_string(),
+                    let code = c.course.clone();
+                    let name = app
+                        .course_by_code(&code)
+                        .map(|x| x.name.clone())
+                        .unwrap_or_default();
+                    let story = conflict_story(&c);
+                    let removed = c.mine.is_none();
+                    // Reading the pick, with the undecided state resolved to
+                    // "nothing ticked" — one place, so a box, the outcome
+                    // line and Save can never disagree about what is ticked.
+                    let pick_or_empty = {
+                        let c = c.clone();
+                        move || {
+                            picks.with(|v| v[i].clone()).unwrap_or_else(|| c.empty_pick())
+                        }
                     };
-                    let theirs_value = match c.theirs.len() {
-                        0 => "no meeting — CMI no longer lists one".to_string(),
-                        _ => c
-                            .theirs
-                            .iter()
-                            .map(|m| m.describe())
-                            .collect::<Vec<_>>()
-                            .join(" · "),
+                    let set_cmi = {
+                        let c = c.clone();
+                        move |j: usize, on: bool| {
+                            picks
+                                .update(|v| {
+                                    let mut p = v[i]
+                                        .clone()
+                                        .unwrap_or_else(|| c.empty_pick());
+                                    p.keep_cmi[j] = on;
+                                    v[i] = Some(p);
+                                });
+                        }
                     };
-                    let group = format!("conflict-{i}");
+                    let set_mine = {
+                        let c = c.clone();
+                        move |on: bool| {
+                            picks
+                                .update(|v| {
+                                    let mut p = v[i]
+                                        .clone()
+                                        .unwrap_or_else(|| c.empty_pick());
+                                    p.keep_mine = on;
+                                    v[i] = Some(p);
+                                });
+                        }
+                    };
+                    // The live outcome line.
+                    let outcome = {
+                        let c = c.clone();
+                        let code = code.clone();
+                        let pick_or_empty = pick_or_empty.clone();
+                        move || {
+                            if picks.with(|v| v[i].is_none()) {
+                                return view! {
+                                    <p class="conflict-outcome undecided">
+                                        "Not decided yet — nothing about "
+                                        {code.clone()}
+                                        " changes until you tick a time and press Save."
+                                    </p>
+                                }
+                                    .into_any();
+                            }
+                            let kept = ttcore::merge::kept_meetings(&c, &pick_or_empty());
+                            let (text, gone) = conflict_outcome(&code, &kept);
+                            view! {
+                                <p class="conflict-outcome" class:gone=gone>
+                                    {gone.then(|| view! { <span aria-hidden="true">"⚠ "</span> })}
+                                    {text}
+                                </p>
+                            }
+                                .into_any()
+                        }
+                    };
+                    let boxes_label = match c.shape() {
+                        S::Dropped => "The only time left is the one you set:",
+                        S::MovedWhatYouRemoved => "Tick it to put the class back:",
+                        _ => "Tick the times you want:",
+                    };
                     view! {
                         <div class="conflict-item">
-                            <div class="row">
-                                {chip(app, ChipProps::list(&c.course))}
-                            </div>
-                            <label class="opt">
-                                <input
-                                    type="radio"
-                                    name=group.clone()
-                                    prop:checked=move || keep_mine.with(|v| v[i] == Some(false))
-                                    on:change=move |_| keep_mine.update(|v| v[i] = Some(false))
-                                />
-                                <span class="change-what">
-                                    {change_tag("CMI's new time", false)}
-                                    <span class="now">{theirs_value}</span>
-                                </span>
-                            </label>
-                            <label class="opt">
-                                <input
-                                    type="radio"
-                                    name=group
-                                    prop:checked=move || keep_mine.with(|v| v[i] == Some(true))
-                                    on:change=move |_| keep_mine.update(|v| v[i] = Some(true))
-                                />
-                                <span class="change-what">
-                                    {change_tag("your time", true)}
-                                    <span class="now">{mine_value}</span>
-                                </span>
-                            </label>
+                            <header class="conflict-head">
+                                <span class="conflict-code">{code.clone()}</span>
+                                {(!name.is_empty())
+                                    .then(|| view! { <span class="conflict-name">{name}</span> })}
+                            </header>
+                            <p class="conflict-story">{story}</p>
+                            <fieldset class="conflict-times">
+                                <legend>{boxes_label}</legend>
+                                {c
+                                    .theirs
+                                    .iter()
+                                    .cloned()
+                                    .enumerate()
+                                    .map(|(j, m)| {
+                                        let clash = app.courses_running_into(&code, &m);
+                                        let pick_or_empty = pick_or_empty.clone();
+                                        let set_cmi = set_cmi.clone();
+                                        let label = if c.theirs.len() == 1 {
+                                            "CMI's new time".to_string()
+                                        } else {
+                                            format!("CMI's new time {}", j + 1)
+                                        };
+                                        view! {
+                                            <label class="timebox">
+                                                <input
+                                                    type="checkbox"
+                                                    prop:checked=move || pick_or_empty().cmi(j)
+                                                    on:change=move |ev| {
+                                                        set_cmi(j, event_target_checked(&ev));
+                                                    }
+                                                />
+                                                <span class="timebox-body">
+                                                    <span class="timebox-line">
+                                                        {change_tag(&label, false)}
+                                                        <span class="now">{m.describe()}</span>
+                                                    </span>
+                                                    {(!clash.is_empty())
+                                                        .then(|| {
+                                                            view! {
+                                                                <span class="timebox-note">
+                                                                    {format!(
+                                                                        "⚠ clashes with {}",
+                                                                        clash.join(", "),
+                                                                    )}
+                                                                </span>
+                                                            }
+                                                        })}
+                                                </span>
+                                            </label>
+                                        }
+                                    })
+                                    .collect_view()}
+                                {c
+                                    .mine
+                                    .clone()
+                                    .map(|m| {
+                                        let clash = app.courses_running_into(&code, &m);
+                                        let pick_or_empty = pick_or_empty.clone();
+                                        view! {
+                                            <label class="timebox">
+                                                <input
+                                                    type="checkbox"
+                                                    prop:checked=move || pick_or_empty().keep_mine
+                                                    on:change=move |ev| {
+                                                        set_mine(event_target_checked(&ev));
+                                                    }
+                                                />
+                                                <span class="timebox-body">
+                                                    <span class="timebox-line">
+                                                        {change_tag("the time you set", true)}
+                                                        <span class="now">{m.describe()}</span>
+                                                    </span>
+                                                    {(!clash.is_empty())
+                                                        .then(|| {
+                                                            view! {
+                                                                <span class="timebox-note">
+                                                                    {format!(
+                                                                        "⚠ clashes with {}",
+                                                                        clash.join(", "),
+                                                                    )}
+                                                                </span>
+                                                            }
+                                                        })}
+                                                </span>
+                                            </label>
+                                        }
+                                    })}
+                                // A class the reader had REMOVED has no time
+                                // of its own to offer, and saying so beats an
+                                // empty space where a second box would be.
+                                {removed
+                                    .then(|| {
+                                        view! {
+                                            <p class="timebox-none">
+                                                "Leave it unticked to keep the class off your timetable."
+                                            </p>
+                                        }
+                                    })}
+                            </fieldset>
+                            {outcome}
                         </div>
                     }
                 })
@@ -7284,35 +7548,46 @@ fn conflicts_dialog(app: App) -> impl IntoView {
                 </button>
                 <button
                     class="btn primary"
-                    // With nothing answered there is nothing Apply could do,
-                    // and this app doesn't offer controls that cannot act.
-                    disabled=move || keep_mine.with(|v| v.iter().all(|k| k.is_none()))
+                    // Nothing decided means nothing for Save to do, and this
+                    // app doesn't offer controls that cannot act.
+                    disabled=move || decided.get() == 0
                     on:click=move |_| {
-                        let picks = keep_mine.get_untracked();
-                        // Only the rows the user actually answered; the rest
-                        // go back to the queue, exactly as they were.
+                        let chosen = picks.get_untracked();
                         let answered: Vec<_> = conflicts_apply
                             .iter()
                             .cloned()
-                            .zip(picks.iter())
-                            .filter_map(|(c, k)| k.map(|k| (c, k)))
+                            .zip(chosen.iter())
+                            .filter_map(|(c, p)| p.clone().map(|p| (c, p)))
                             .collect();
                         let remaining: Vec<_> = conflicts_apply
                             .iter()
                             .cloned()
-                            .zip(picks.iter())
-                            .filter(|(_, k)| k.is_none())
+                            .zip(chosen.iter())
+                            .filter(|(_, p)| p.is_none())
                             .map(|(c, _)| c)
                             .collect();
                         app.resolve_conflicts(answered, remaining);
                         app.dialog.set(None);
                     }
                 >
-                    "Apply"
+                    {move || {
+                        let d = decided.get();
+                        let total = conflicts_count.len();
+                        // The count earns its place only when the answer is
+                        // partial — on a disabled button "Save 0 of 2" is
+                        // just noise, and "Save 2 of 2" says nothing "Save"
+                        // doesn't.
+                        if d == 0 || d == total {
+                            "Save".to_string()
+                        } else {
+                            format!("Save {d} of {total}")
+                        }
+                    }}
                 </button>
             </div>
         </div>
     }
+    .into_any()
 }
 
 // ---------------------------------------------------------------------------

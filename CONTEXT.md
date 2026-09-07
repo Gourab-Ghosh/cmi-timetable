@@ -7463,6 +7463,112 @@ five tabs and asserts each renders real content rather than merely existing.
 Live result: **10/10**, `79 real courses from cmi.ac.in via a live relay`,
 worker `cmitt-sw-efc84638ee1f90bc`.
 
+### R99 — the conflict answer stopped being either/or
+
+The ask, in two parts. First: *"Suppose I have already edited a course and CMI
+updates the course to a different time. In that case, the pop-up box that
+occurs is not really very user friendly… Also, there should be another option
+to keep both my timetable and CMI timetable as well."* Then, mid-round, the
+design: *"there should be multiple checkboxes for each and every time in the
+CMI timetable, and also… for all the times I have set myself. Now the user may
+select multiple boxes from both sets… There should also be an option to select
+all CMI timetables only or select all My timetables only."*
+
+**The reader's design was better than the one being built, and generalises the
+ask.** A third radio button ("keep both") answers the letter of the first
+message. Tick boxes answer the shape of the problem: the question was never
+either/or. Tick CMI's → follow CMI. Tick yours → keep yours. Tick both → both.
+Tick none → the class comes off the timetable, which is a real answer nobody
+could give before. And when CMI schedules a course it had listed no time for
+and runs it TWICE, each of CMI's times is its own box, so one can be kept and
+the other dropped — a combination three radio buttons still could not express.
+
+**The data model already supported every combination**, which is why this was a
+UI round and not a storage round. `effective_meetings` replaces an official
+meeting only when an override's `base` matches it; an override with `base: None`
+draws BESIDE the official ones. So "keep both" is `base = None`, "mine instead
+of CMI's" is a replacement, and "drop that one" is a removal override — the
+three shapes the app already had. `resolve_conflict` was rewritten to REBUILD
+from the ticked set rather than patch `base` in place: one code path, sixteen
+shapes of answer, none of them half-expressible.
+
+**What the old dialog was actually missing was a fact, not a control.** It
+showed two destinations — "CMI's new time: Tue 09:10", "your time: Wed 17:00" —
+and never the time CMI moved AWAY from. That is the meeting the reader edited
+and the reason they edited it: someone who moved a class off Friday because it
+clashed cannot tell, from two destinations, whether their reason still holds.
+So `Conflict` gained `was` (`#[serde(default)]`, with `backfill_anchors` at both
+load doors recovering it from the override a stored queue still points at — so a
+missing anchor is a FACT, "the course had no official time", and not a maybe).
+`conflict_story` turns it into one sentence per course, in four wordings for the
+four shapes `Conflict::shape` distinguishes.
+
+**Three more things the reader could not previously see.** Each time on offer
+now says whether it runs into another of their courses (`courses_running_into`
+— a candidate-meeting question, which `meeting_has_clash` cannot answer because
+the times in this dialog exist in no store yet); a live line under the boxes
+says what the week will look like; and the course is named, not just coded. The
+`⚠ TOC` chip that used to head each row is gone — it was an interactive red
+button that opened ANOTHER dialog on top of the question being answered.
+
+**The one thing tick boxes lose, and how it is paid for.** Two radio buttons
+have a natural un-answered state: neither is filled. Tick boxes do not — a row
+nobody has read and a row deliberately emptied are both just empty, and the app
+must not confuse "I have not looked" with "take this class off my timetable".
+Radios never had that risk, so it is new, and it is answered in WORDS rather
+than ticks: untouched reads *"Not decided yet"* and Save will not act on it;
+emptied says the class will not appear at all, and Save will. `t293` is the
+assertion, and `.conflict-outcome` carries a comment saying the line is
+load-bearing and must not be dropped to save space. Nothing is pre-ticked, so
+`t29`'s "no conflict row may come pre-answered" and `t82`'s partial answers both
+survived the rewrite — updated for boxes, not weakened.
+
+**TWO BUGS FOUND BY TESTING, one of them mine and shipped.**
+
+1. **A short `keep_cmi` invented a tick.** `ConflictPick::cmi` reads out of
+   range as TICKED — deliberately, because for a malformed pick that is the
+   lossless direction. But the UI built the vector at length `j + 1` when the
+   reader first touched box `j`, so on a row with two of CMI's times, ticking
+   the first stored `[true]` and the second read as ticked, DREW itself ticked,
+   and kept a class nobody had asked for. Caught by driving all eight tick
+   combinations against the real week rather than trusting the dialog's own
+   read-back. Fixed at the root: `Conflict::empty_pick` is the only way to build
+   one, and it is always as long as `theirs`. Two native tests go red without
+   it (verified by re-introducing it).
+2. **The dialog could stand with nothing to ask.** Photographing the dark-theme
+   shot produced **"CMI changed 0 classes you had edited"** over a live Save
+   button. A sync REPLACES the conflict queue rather than accumulating, so a
+   second sync that finds nothing to arbitrate empties it under an open dialog.
+   Now an `Effect` closes it — the rule the "what changed" dialog already
+   followed ("the banner is the only way in… that dialog can never open with
+   nothing to say"), applied here too.
+
+**A third bug, caught by a test written five rounds earlier.** `t273` audits
+every `color-mix()` in the sheet that wraps a `var()` and demands a
+restatement in the `@supports not (color-mix)` block — because such a
+declaration LOOKS valid while the sheet is parsed, wins the cascade, and only
+then fails to compute, taking the property to its UNSET value. Two of the new
+tick-row rules were mixes (`border-color`), and unset `border-color` is
+`currentColor`, which on a ticked row is the accent-coloured time text: every
+filled row would have been drawn in a heavy blue box on Safari 16.1. The rule
+to remember is the one t273's docstring states — **a plain declaration written
+ABOVE the mix fixes nothing**; the fallback has to be in the `@supports`
+block. This is what an audit test is for, and it earned its keep.
+
+**A harness trap worth keeping.** `ThemePref` serialises as `"Light"`/`"Dark"`.
+Passing `"light"` makes the whole prefs blob unparseable, so prefs reset to
+defaults — which re-enables the background sync, which then races the test's
+own explicit sync, empties the conflict queue and closes the dialog. The
+symptom (an empty dialog) is three steps from the cause (a lowercase string);
+the tell is the header reading "Theme: auto" plus a corrupt-storage banner.
+
+**Gates:** 214 native (12 new in `core/tests/r99_conflict_choices.rs`), 227 e2e
+(6 new, t290–t295), clippy and fmt clean. The phone layout was MEASURED, not
+eyeballed (`.workagents/r99/measure_phone.py`): at 390/360/320px the tag and
+the time stack and align exactly, tap targets are 65–86px, and the desktop row
+sits at exactly the 44px finger-size floor. Screenshots of every shape, both
+themes, desktop and phone, are in `.workagents/r99/shots/`.
+
 ## 8. Open bugs — found, confirmed, NOT fixed (do not delete)
 
 Rules for this section: entries stay until the bug is actually fixed and a
@@ -7497,6 +7603,37 @@ entry as the rules here require. 8.19 (a self-update landing on top of a
 live Undo offer, found by R72's screenshots) was fixed in R73 by removing every
 self-initiated reload — R73's §7 entry says what replaced it and which phase of
 t114 fails without it.
+
+### 8.26 A question you postponed lasts only until the next sync, which answers it as "keep both"
+
+Measured in R99 (`.workagents/r99/probe_resync.py`): raise a conflict, press
+**Decide later**, then sync again without answering. The queue empties. The
+reason is sound as far as it goes — the first sync already replaced the stored
+snapshot, so on the second one the override's `base` (CMI's OLD time) is in
+NEITHER snapshot, which is exactly `counterpart`'s `Err(())` "this class has
+not run for a term" path, and that path LAPSES the change: it unanchors the
+override and announces it.
+
+Nothing is destroyed, and the outcome is benign: the reader's time stays as a
+class of their own, CMI's new time is no longer suppressed, and the week ends
+up showing BOTH — which is precisely the "keep both" answer R99 made explicit.
+So the question resolves itself to the safest of the available answers, out
+loud.
+
+Two things are still wrong with it. The notice says *"CMI no longer runs the
+TOC class you had moved"*, which is FALSE on this path — CMI moved that class,
+and the app had already asked about it; the honest sentence is that a question
+went unanswered and was settled the safe way. And "Decide later" reads as an
+open-ended postponement when it is good for one sync (up to twice a day).
+
+NOT FIXED because the fix is a design change, not a wording change: the merge
+would have to either keep the pre-sync snapshot alive for as long as a question
+is pending, or re-anchor a deferred conflict onto CMI's new meeting when it
+stores it. Both are real changes to the arbitration rules and want their own
+sitting with their own tests. Anyone taking it on: the distinction the app
+needs is already available at the lapse site — `app.conflicts` still holds the
+unanswered question for that very `override_id` — so telling the two cases
+apart in the copy is the cheap half, and could ship first.
 
 ### 8.24 A reader who loaded the page in the 10 minutes before a deploy stays on the old build for one navigation
 

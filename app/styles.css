@@ -321,7 +321,7 @@ button {
   color: var(--accent-ink);
 }
 /* A disabled primary is still the button the reader must eventually press —
-   "Apply" waits while they answer three questions — and fading the whole button
+   the conflict dialog's "Save" waits while they tick their times — and fading it
    took its white label to 2.03:1 against its own fill, because `opacity` pulls
    the text and the fill toward the same page white together. So the disabled
    state changes the FILL instead of dimming everything: no gradient, no shadow,
@@ -2948,9 +2948,121 @@ body.modal-open { overflow: hidden; }
 .conflict-item {
   border: 1px solid var(--line);
   border-radius: var(--r-md);
-  padding: 0.65rem 0.75rem;
-  margin-bottom: 0.6rem;
+  padding: 0.7rem 0.8rem 0.6rem;
+  margin-bottom: 0.7rem;
   background: var(--surface-2);
+}
+
+/* R99 rebuilt this dialog around tick boxes, because the question it asks
+   turned out not to be either/or: a reader can want CMI's new time AND the
+   one they set, and a class CMI now runs twice can be wanted once. */
+
+/* The course, named. The old dialog put an interactive ⚠ chip here — a red
+   button that opened ANOTHER dialog from inside this one, on the row whose
+   question you were part-way through answering. A code and its name are
+   what identify a class; neither needs to be a control. */
+.conflict-head { display: flex; align-items: baseline; gap: 0.5rem; flex-wrap: wrap; }
+.conflict-code { font-weight: 700; font-size: 0.98rem; color: var(--text); }
+.conflict-name { color: var(--muted); font-size: 0.85rem; min-width: 0; }
+
+/* What happened, in one sentence. */
+.conflict-story {
+  margin: 0.35rem 0 0.6rem;
+  color: var(--text);
+  font-size: 0.88rem;
+  line-height: 1.5;
+}
+
+.conflict-times { border: 0; margin: 0; padding: 0; min-width: 0; }
+.conflict-times > legend {
+  padding: 0;
+  color: var(--muted);
+  font-size: 0.78rem;
+  letter-spacing: 0.02em;
+  margin-bottom: 0.3rem;
+}
+
+/* A tick box is a ROW, not a checkbox with words next to it: the whole thing
+   is the target, at finger height, so a choice on a phone never needs a
+   careful tap at a 13px square. */
+label.timebox {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.6rem;
+  min-height: 44px;
+  padding: 0.4rem 0.55rem;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  cursor: pointer;
+  margin-bottom: 0.35rem;
+}
+label.timebox:hover { border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); }
+label.timebox:focus-within { outline: 2px solid var(--accent); outline-offset: 1px; }
+/* Aligned with the FIRST line, not with the block: a row that also carries
+   a clash note is two lines tall, and centring the box against the pair
+   floats it into the gap between them. */
+label.timebox > input { margin-top: 0.52rem; flex: none; }
+.timebox-body { display: flex; flex-direction: column; gap: 0.15rem; min-width: 0; padding: 0.15rem 0; }
+/* The tag and the time stay ONE run of text so the pair reads, and copies,
+   as a line rather than as two stacked fragments. */
+.timebox-line { display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap; min-width: 0; }
+.timebox-line .now { color: var(--text); font-weight: 600; font-size: 0.88rem; min-width: 0; }
+
+/* A ticked row is filled in, not merely marked — the state has to survive a
+   glance across five rows. `:has` does the box; the sibling rule is the
+   fallback that still shows SOMETHING on a browser without it (t273's rule:
+   never let a modern selector be the only thing carrying a state). */
+label.timebox:has(input:checked) {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--line));
+  background: var(--accent-wash);
+}
+label.timebox input:checked + .timebox-body .now { color: var(--accent); }
+
+/* Why a time might be the wrong one to tick. Never colour alone — the words
+   say it and the ⚠ is in the text. */
+.timebox-note { color: var(--alarm); font-size: 0.78rem; font-weight: 600; }
+.timebox-none { margin: 0.1rem 0 0; color: var(--muted); font-size: 0.8rem; }
+
+/* What the ticks will DO, live, under the boxes.
+   This line is load-bearing, not decoration: an untouched row and a row
+   whose boxes were all deliberately cleared look identical — every box
+   empty — where two radio buttons never could. The words are what tell them
+   apart, so they must never be dropped to save space. */
+.conflict-outcome {
+  margin: 0.5rem 0 0;
+  padding-top: 0.45rem;
+  border-top: 1px dashed var(--line);
+  color: var(--text);
+  font-size: 0.83rem;
+}
+.conflict-outcome.undecided { color: var(--muted); font-style: italic; }
+.conflict-outcome.gone { color: var(--alarm); font-weight: 600; }
+
+/* Decide-all-at-once, offered only when it is genuinely shorter than
+   ticking the boxes (three boxes up). */
+.conflict-bulk {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+  margin: 0 0 0.75rem;
+}
+.conflict-bulk-label { color: var(--muted); font-size: 0.8rem; }
+
+/* Reading width. The stories are sentences, and a dialog stretched to a
+   desktop's full width makes them a chore to scan. */
+.conflicts-dialog { max-width: 40rem; }
+
+@media (prefers-contrast: more) {
+  label.timebox:has(input:checked) { border-width: 2px; }
+}
+
+/* On a phone the tag and the time cannot share a line, and letting them wrap
+   left the time indented under the pill rather than flush with it. Stack
+   them deliberately instead of leaving it to the wrap. */
+@media (max-width: 460px) {
+  .timebox-line { flex-direction: column; align-items: flex-start; gap: 0.2rem; }
 }
 
 /* Details popover (rendered as a centered dialog for reliability) */
@@ -3661,6 +3773,14 @@ label.field > input { width: 100%; }
      around every Delete in the app. */
   .btn.danger { border-color: var(--line-strong); }
   .btn.ghost-accent { border-color: var(--line-strong); }
+
+  /* The conflict dialog's tick rows (R99). Unset border-color is
+     currentColor, which on a filled row is the accent-coloured time text —
+     so an old Safari would draw every ticked row in a heavy blue box, and
+     the hovered one too. Full accent instead: the cue this carries is
+     "ticked", and a whole-strength accent border says that plainly. */
+  label.timebox:hover { border-color: var(--accent); }
+  label.timebox:has(input:checked) { border-color: var(--accent); }
 
   /* THE STICKY TIME-SLOT HEADER. `background` is a SHORTHAND, so unset takes
      every background longhand to its initial value — background-color

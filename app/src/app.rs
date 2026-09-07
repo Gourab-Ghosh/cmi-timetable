@@ -87,8 +87,13 @@ fn init_app() -> (App, bool, usize) {
     let set_aside = overrides.retain_sane() + customs.retain_sane();
     // Questions the user deferred with "Decide later": they survive reloads
     // until answered — a refresh must not answer them silently.
-    let conflicts: Vec<ttcore::merge::Conflict> =
+    let mut conflicts: Vec<ttcore::merge::Conflict> =
         load_or(storage::KEY_CONFLICTS, &mut corrupt, Vec::new);
+    // A queue stored before `Conflict::was` existed still points at its
+    // overrides, so the anchor CMI moved AWAY from is recoverable rather
+    // than lost — and recovering it is what stops the dialog describing an
+    // old plain move as "CMI listed no time for this class" (R99).
+    ttcore::merge::backfill_anchors(&mut conflicts, &overrides);
     // Short links already made. Nothing depends on these being there — a
     // browser that has never shortened anything simply has none.
     let shortlinks: Vec<ttcore::shorten::ShortLink> =

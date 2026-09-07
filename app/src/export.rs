@@ -353,7 +353,7 @@ fn import_planner_backup_inner(app: App, text: &str, already_asked: bool) {
     prefs.clamp_tweaks();
     // Absent in older files → no postponed conflicts; anything present must
     // parse whole.
-    let conflicts: Vec<ttcore::merge::Conflict> = if backup.pending_conflicts.is_null() {
+    let mut conflicts: Vec<ttcore::merge::Conflict> = if backup.pending_conflicts.is_null() {
         Vec::new()
     } else {
         match serde_json::from_value(backup.pending_conflicts.take()) {
@@ -364,6 +364,10 @@ fn import_planner_backup_inner(app: App, text: &str, already_asked: bool) {
             }
         }
     };
+    // Same repair as the boot door: a file written before `Conflict::was`
+    // existed carries no anchor, and the overrides arriving in the same file
+    // still hold it (R99).
+    ttcore::merge::backfill_anchors(&mut conflicts, &overrides);
 
     // Asked only when there is something to lose. A browser holding nothing
     // but a downloaded copy of CMI's timetable — a first visit, or a fresh

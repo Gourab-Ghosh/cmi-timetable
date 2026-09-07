@@ -1,7 +1,7 @@
 //! Three-way-merge tests — one per row of the spec §5 decision table, plus
 //! removed-course, new-course and unscheduled-course cases.
 
-use cmi_timetable_core::merge::{merge_overrides, resolve_conflict};
+use cmi_timetable_core::merge::{ConflictPick, merge_overrides, resolve_conflict};
 use cmi_timetable_core::model::{
     Course, Day, Meeting, OverridesStore, ScheduleStatus, Slot, Snapshot, SourceTier,
 };
@@ -176,17 +176,29 @@ fn conflict_resolution_paths() {
     let r = merge_overrides(&old, &new, &[], &store);
     let conflict = r.conflicts[0].clone();
 
-    // Keep mine → base becomes CMI's new meeting; re-merging is quiet.
+    // Mine only → still a REPLACEMENT anchored to CMI's new meeting, so the
+    // next sync is quiet. R99 turned the answer into tick boxes; this one
+    // combination has to keep behaving exactly as it did, because an
+    // unanchored copy would leave the reader with a made-up time that never
+    // gets re-examined.
     let mut kept = r.overrides.clone();
-    resolve_conflict(&mut kept, &conflict, true);
+    let mine_only = ConflictPick {
+        keep_cmi: vec![false],
+        keep_mine: true,
+    };
+    resolve_conflict(&mut kept, &conflict, &mine_only, 1.0);
     assert_eq!(kept.items[0].base, Some(cmi_new));
     let r2 = merge_overrides(&new, &new, &[], &kept);
     assert!(r2.conflicts.is_empty());
     assert_eq!(r2.overrides.items.len(), 1);
 
-    // Use CMI's → override removed.
+    // CMI's only → override removed.
     let mut dropped = r.overrides;
-    resolve_conflict(&mut dropped, &conflict, false);
+    let cmi_only = ConflictPick {
+        keep_cmi: vec![true],
+        keep_mine: false,
+    };
+    resolve_conflict(&mut dropped, &conflict, &cmi_only, 1.0);
     assert!(dropped.items.is_empty());
 }
 
@@ -270,9 +282,14 @@ fn meeting_deleted_upstream() {
     assert_eq!(r.conflicts.len(), 1);
     assert!(r.conflicts[0].theirs.is_empty());
 
-    // "Keep mine" then turns it into a user-created meeting.
+    // Ticking only the time the reader set turns it into a class of their
+    // own — there is nothing of CMI's left to anchor it to.
     let mut kept = r.overrides;
-    resolve_conflict(&mut kept, &r.conflicts[0], true);
+    let mine_only = ConflictPick {
+        keep_cmi: vec![],
+        keep_mine: true,
+    };
+    resolve_conflict(&mut kept, &r.conflicts[0], &mine_only, 1.0);
     assert_eq!(kept.items[0].base, None);
 }
 
@@ -348,8 +365,15 @@ fn removal_conflicts_when_cmi_moves_the_meeting() {
     assert_eq!(r.conflicts[0].mine, None);
     assert_eq!(r.conflicts[0].theirs, vec![cmi_new.clone()]);
 
+    // Leaving CMI's new time unticked keeps the class off the timetable —
+    // and re-anchors the removal to that new meeting, so the next sync is
+    // quiet instead of asking again.
     let mut kept = r.overrides.clone();
-    resolve_conflict(&mut kept, &r.conflicts[0], true);
+    let stay_removed = ConflictPick {
+        keep_cmi: vec![false],
+        keep_mine: false,
+    };
+    resolve_conflict(&mut kept, &r.conflicts[0], &stay_removed, 1.0);
     assert_eq!(kept.items.len(), 1);
     assert!(kept.items[0].is_removal());
     assert_eq!(kept.items[0].base, Some(cmi_new));
@@ -362,8 +386,15 @@ fn removal_conflicts_when_cmi_moves_the_meeting() {
     // last branch — a third answer would have to put the clone back.
     #[allow(clippy::redundant_clone)]
     let mut dropped = r.overrides.clone();
-    resolve_conflict(&mut dropped, &r.conflicts[0], false);
-    assert!(dropped.items.is_empty(), "use-CMI's restores the meeting");
+    let put_it_back = ConflictPick {
+        keep_cmi: vec![true],
+        keep_mine: false,
+    };
+    resolve_conflict(&mut dropped, &r.conflicts[0], &put_it_back, 1.0);
+    assert!(
+        dropped.items.is_empty(),
+        "ticking CMI's time restores the meeting"
+    );
 }
 
 /// A change whose meeting is in NEITHER snapshot has lost the thing it was
@@ -685,10 +716,20 @@ fn convergence_boundaries() {
     assert_eq!(r.conflicts.len(), 1);
     assert_eq!(r.conflicts[0].theirs.len(), 2);
     let mut kept = r.overrides;
-    resolve_conflict(&mut kept, &r.conflicts[0], true);
+    let keep_everything = ConflictPick {
+        keep_cmi: vec![true, true],
+        keep_mine: true,
+    };
+    resolve_conflict(&mut kept, &r.conflicts[0], &keep_everything, 1.0);
+    assert_eq!(
+        kept.items.len(),
+        1,
+        "keeping both of CMI's times suppresses neither, so only the \
+         reader's own placement needs storing"
+    );
     assert_eq!(
         kept.items[0].base, None,
-        "no single candidate to re-base on"
+        "the reader's time sits BESIDE CMI's two, so it anchors to nothing"
     );
     let r2 = merge_overrides(&scheduled_now, &scheduled_now, &[], &kept);
     assert!(r2.conflicts.is_empty() && r2.dropped_matching.is_empty());

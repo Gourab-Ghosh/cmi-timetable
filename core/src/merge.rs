@@ -45,6 +45,142 @@ pub struct Conflict {
     /// when CMI deleted the meeting entirely; several when CMI scheduled a
     /// previously unscheduled course the user had placed manually.
     pub theirs: Vec<Meeting>,
+    /// CMI's time the change was anchored to — the meeting the reader
+    /// actually edited, before CMI moved it. `None` only for the
+    /// newly-scheduled shape, where the course had no official time at all
+    /// and the reader placed one themselves.
+    ///
+    /// The dialog cannot ask an answerable question without this. A reader
+    /// who moved a class off Friday because it clashed needs to be told that
+    /// Friday is what changed; shown only "CMI: Tue 09:10" and "yours: Wed
+    /// 17:00" they have no way to tell whether their reason still holds.
+    /// R99 added it, so `#[serde(default)]`: conflicts are persisted (both
+    /// `cmitt.v1.conflicts` and a backup file's `pending_conflicts`), and a
+    /// queue stored before this field existed must still load — it simply
+    /// reads as the newly-scheduled shape, which is the honest answer when
+    /// the anchor was never recorded.
+    #[serde(default)]
+    pub was: Option<Meeting>,
+}
+
+/// The boxes a reader has ticked for one conflict.
+///
+/// Every time in play gets its own box — each of CMI's new times, and the
+/// time the reader set themselves — and ANY combination is legal, including
+/// none of them. That is the whole point: a class CMI now runs twice can be
+/// kept once, and a reader who wants both their time and CMI's can say so
+/// instead of being made to choose. The old dialog offered two radio
+/// buttons, which could express neither.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ConflictPick {
+    /// One flag per entry of [`Conflict::theirs`], in the same order.
+    ///
+    /// Build it with [`Conflict::empty_pick`] and never by hand: a vector
+    /// SHORTER than `theirs` reads its missing tail through [`Self::cmi`]'s
+    /// fallback, and R99 shipped a bug doing exactly that. A row with two of
+    /// CMI's times, ticked at index 0, was stored as `[true]` — so index 1
+    /// read as ticked, drew itself ticked, and kept a class the reader had
+    /// never asked for.
+    pub keep_cmi: Vec<bool>,
+    /// Keep [`Conflict::mine`]. Ignored when the reader had REMOVED the
+    /// class, because then there is no time of theirs to keep.
+    pub keep_mine: bool,
+}
+
+impl ConflictPick {
+    /// Whether CMI's `i`th time is ticked.
+    ///
+    /// Out of range reads as TICKED, which is the lossless direction: a
+    /// malformed pick then keeps a class rather than quietly writing a
+    /// removal override for one the reader never mentioned. It is a
+    /// backstop, not a mechanism — [`Conflict::empty_pick`] makes every
+    /// vector the right length, so a correct caller never reaches it.
+    pub fn cmi(&self, i: usize) -> bool {
+        self.keep_cmi.get(i).copied().unwrap_or(true)
+    }
+}
+
+/// Which of the four situations a conflict is, so the dialog can say what
+/// happened in a sentence instead of showing two bare times and leaving the
+/// reader to infer it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConflictShape {
+    /// CMI moved a class the reader had moved somewhere else.
+    Moved,
+    /// CMI moved a class the reader had taken OFF their timetable — a real
+    /// question, because the move may well fix whatever made them remove it.
+    MovedWhatYouRemoved,
+    /// CMI no longer lists a class the reader had moved. Nothing of CMI's is
+    /// left to tick.
+    Dropped,
+    /// The course had no official time at all, so the reader placed one
+    /// themselves — and CMI has now scheduled it.
+    NewlyScheduled,
+}
+
+impl Conflict {
+    pub fn shape(&self) -> ConflictShape {
+        match (&self.was, self.theirs.is_empty(), self.mine.is_some()) {
+            // No anchor means the override replaced nothing, which is only
+            // true of the newly-scheduled shape. `backfill_anchors` restores
+            // the anchor on any queue stored before `was` existed, so this
+            // arm can be trusted rather than merely assumed.
+            (None, _, _) => ConflictShape::NewlyScheduled,
+            (Some(_), true, _) => ConflictShape::Dropped,
+            (Some(_), false, true) => ConflictShape::Moved,
+            (Some(_), false, false) => ConflictShape::MovedWhatYouRemoved,
+        }
+    }
+
+    /// What the boxes look like before the reader touches anything.
+    ///
+    /// Everything starts TICKED, so pressing Save without reading a word
+    /// throws nothing away. The radio version deliberately pre-selected
+    /// nothing, and was right to: its only available pre-selection ("use
+    /// CMI's") silently discarded the reader's own times for every row they
+    /// never looked at. Ticking everything is the pre-selection that cannot
+    /// lose anything, which is why it is safe to have one at all — and it
+    /// makes the dialog read the way it should, as "here is every time in
+    /// play; untick what you don't want".
+    ///
+    /// One exception: a class the reader had REMOVED. Ticking CMI's new time
+    /// there would put back a class they took off their timetable on
+    /// purpose, so a removal stays a removal until they say otherwise.
+    /// Nothing ticked, at the right length — the state a row is in the
+    /// moment the reader first touches it, and the only way the app should
+    /// ever build a pick from scratch. See [`ConflictPick::keep_cmi`] for
+    /// what building one by hand cost.
+    pub fn empty_pick(&self) -> ConflictPick {
+        ConflictPick {
+            keep_cmi: vec![false; self.theirs.len()],
+            keep_mine: false,
+        }
+    }
+
+    pub fn default_pick(&self) -> ConflictPick {
+        let removed = self.mine.is_none();
+        ConflictPick {
+            keep_cmi: vec![!removed; self.theirs.len()],
+            keep_mine: !removed,
+        }
+    }
+}
+
+/// Fill in [`Conflict::was`] for a queue stored before that field existed.
+///
+/// A deferred conflict still points at its override by id, and that override
+/// still carries the anchor in `base` — so the fact is recoverable and does
+/// not have to be guessed. Without this, an old stored conflict would arrive
+/// with `was: None` and be described to the reader as "CMI listed no time
+/// for this class, so you placed one yourself", which for a plain move is
+/// simply false. Running it at every door that loads a queue is what lets
+/// [`Conflict::shape`] treat a missing anchor as a fact rather than a maybe.
+pub fn backfill_anchors(conflicts: &mut [Conflict], store: &OverridesStore) {
+    for c in conflicts.iter_mut().filter(|c| c.was.is_none()) {
+        if let Some(ov) = store.items.iter().find(|o| o.id == c.override_id) {
+            c.was = ov.base.clone();
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -210,6 +346,7 @@ pub fn merge_overrides(
                                 course: ov.course.clone(),
                                 mine: ov.to.clone(),
                                 theirs: vec![cmi_new],
+                                was: Some(base.clone()),
                             });
                         }
                     }
@@ -226,6 +363,7 @@ pub fn merge_overrides(
                                 course: ov.course.clone(),
                                 mine: ov.to.clone(),
                                 theirs: Vec::new(),
+                                was: Some(base.clone()),
                             });
                         }
                     }
@@ -274,6 +412,9 @@ pub fn merge_overrides(
                         course: ov.course.clone(),
                         mine: ov.to.clone(),
                         theirs: new_meetings.unwrap().to_vec(),
+                        // No anchor exists: CMI listed no time for this
+                        // course, which is why the reader placed one.
+                        was: None,
                     });
                 }
             }
@@ -292,33 +433,89 @@ pub fn merge_overrides(
     result
 }
 
-/// Apply one conflict resolution to an overrides store.
-/// `keep_mine == true` re-bases the override onto CMI's new meeting so the
-/// same conflict doesn't re-trigger on every future sync; `false` drops the
-/// override so CMI's official time shows through.
-pub fn resolve_conflict(store: &mut OverridesStore, conflict: &Conflict, keep_mine: bool) {
-    if keep_mine {
-        let mut drop = false;
-        if let Some(ov) = store
-            .items
-            .iter_mut()
-            .find(|o| o.id == conflict.override_id)
-        {
-            ov.base = if conflict.theirs.len() == 1 {
-                Some(conflict.theirs[0].clone())
-            } else {
-                // Meeting deleted upstream (or several candidates): the
-                // user's meeting is now effectively user-created.
-                None
-            };
-            // "Keep it removed" of a meeting that no longer exists is a
-            // no-op override — the removal is already a fact; drop it.
-            drop = ov.is_removal() && ov.base.is_none();
-        }
-        if drop {
-            store.remove(conflict.override_id);
-        }
-    } else {
-        store.remove(conflict.override_id);
+/// What one answer will draw, in reading order — the sentence the dialog
+/// shows under the boxes, and what a native test can pin without a browser.
+///
+/// An empty result means the class will not appear at all, which is a legal
+/// answer (CMI moved it somewhere impossible and the old workaround is void)
+/// and the one the dialog has to say out loud.
+pub fn kept_meetings(conflict: &Conflict, pick: &ConflictPick) -> Vec<Meeting> {
+    let mut out: Vec<Meeting> = conflict
+        .theirs
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| pick.cmi(*i))
+        .map(|(_, m)| m.clone())
+        .collect();
+    if pick.keep_mine
+        && let Some(mine) = &conflict.mine
+    {
+        out.push(mine.clone());
+    }
+    out.sort_by_key(|m| (m.day.index(), m.slot.start_min));
+    out
+}
+
+/// Apply one answer to an overrides store.
+///
+/// The question is settled either way, so the override that raised it always
+/// goes and the ticked times are written back as fresh entries. Rebuilding
+/// rather than patching is deliberate: ONE code path produces all sixteen
+/// shapes of answer (any subset of CMI's times × the reader's time × whether
+/// they had removed the class), and there is no combination it can only
+/// half-express. The old two-way version patched `base` in place and
+/// therefore could not say "both" at all.
+///
+/// Three rules do the work:
+/// - an UNTICKED time of CMI's becomes a removal override, which is exactly
+///   how the rest of the app hides an official meeting;
+/// - a TICKED time of the reader's is written with `base: None`, i.e. a class
+///   of their own, which is what lets it sit BESIDE CMI's instead of
+///   replacing it;
+/// - the one case that stays a replacement is "my time instead of CMI's" —
+///   exactly one official time, unticked, with the reader's time ticked.
+///   Both forms draw the same week, but a replacement is still ANCHORED to
+///   CMI's meeting, so if CMI moves it again the reader is asked again. The
+///   unanchored pair would leave them with a made-up time that quietly
+///   drifts out of date forever, and that is the shape this dialog exists to
+///   prevent.
+pub fn resolve_conflict(
+    store: &mut OverridesStore,
+    conflict: &Conflict,
+    pick: &ConflictPick,
+    now: f64,
+) {
+    store.remove(conflict.override_id);
+
+    let dropped: Vec<&Meeting> = conflict
+        .theirs
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| !pick.cmi(*i))
+        .map(|(_, m)| m)
+        .collect();
+    // A reader who had REMOVED the class has no time of their own to keep,
+    // whatever the flag says.
+    let mine = pick.keep_mine.then_some(conflict.mine.as_ref()).flatten();
+
+    if let Some(mine) = mine
+        && conflict.theirs.len() == 1
+        && dropped.len() == 1
+    {
+        // "My time instead of CMI's" — keep it anchored (see above).
+        store.add(
+            &conflict.course,
+            Some(conflict.theirs[0].clone()),
+            Some(mine.clone()),
+            now,
+        );
+        return;
+    }
+
+    for m in dropped {
+        store.add(&conflict.course, Some(m.clone()), None, now);
+    }
+    if let Some(mine) = mine {
+        store.add(&conflict.course, None, Some(mine.clone()), now);
     }
 }

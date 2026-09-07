@@ -842,18 +842,39 @@ timetable.
 
 - **What changed** — a readable digest: new courses, courses no longer listed,
   and per-course lines like *renamed: X → Y* or *credits: 2 → 4*.
-- **Conflicts** — when CMI moves a class you had moved yourself, you are asked
-  which version to keep, per course, and told what each choice means. Nothing
-  is answered for you: every row starts blank, Apply is disabled until you
-  answer something, and it acts only on the rows you answered — the rest keep
-  waiting. Answer **Decide later** and the question stays — through reloads
-  too — until you answer it; the banner's **Dismiss** just hides the banner
-  for this sitting (hiding a question is not answering it — it returns with
-  the next sync or reload). And if CMI's change and yours turn out to say the
-  same thing (same day, time and room), there is nothing to ask: your change
-  is retired with a note, and CMI's own listing takes over. Any sync that
-  re-checks your changes like this also ends the undo history — see **Undo,
-  for everything** — and says so on its notice.
+- **Conflicts — keep CMI's time, your own, or both.** When CMI changes a class
+  you had edited, you get a tick box for every time in play: each of CMI's new
+  times, and the time you set. Tick any combination. Want CMI's new lecture
+  *and* the slot you had moved it to? Tick both, and your timetable shows both.
+  Want none of them? Clear every box and the class comes off your timetable.
+  When CMI schedules a course it had listed no time for and runs it twice, each
+  of those times gets its own box, so you can keep one and drop the other.
+- **The question tells you what actually happened.** Each course gets a
+  sentence naming all three times — *"CMI used to run this class on Fri
+  14:00–15:15, and you had moved it to Wed 17:00–18:15. CMI has now moved it to
+  Tue 09:10–10:25."* The time CMI moved **away** from is the one you edited, and
+  the reason you edited it, so it is the fact that makes the question
+  answerable. Any time that would run into another course you have picked says
+  so on the spot — *"⚠ clashes with ISS"* — because that is usually why you
+  moved the class in the first place.
+- **It says what your week will look like before you commit.** Under the boxes,
+  a line updates as you tick: *"Your timetable will show TOC twice — Tue
+  09:10–10:25, Wed 17:00–18:15."* Clear every box and it says, plainly, that the
+  class will not appear at all. A row you have not touched says *"Not decided
+  yet"* instead — so an untouched row and one you deliberately emptied never
+  look the same.
+- **Nothing is answered for you.** Every box starts clear, **Save** is disabled
+  until you decide something, and it acts only on the rows you decided — the
+  rest keep waiting, and the button says so (*"Save 1 of 2"*). With more than a
+  couple of boxes on screen you also get **CMI's times only**, **My times
+  only** and **Keep everything** to decide every row at once. Answer **Decide
+  later** and the questions stay — through reloads too; the banner's
+  **Dismiss** just hides the banner for this sitting (hiding a question is not
+  answering it — it returns with the next sync or reload). And if CMI's change
+  and yours turn out to say the same thing (same day, time and room), there is
+  nothing to ask: your change is retired with a note, and CMI's own listing
+  takes over. Any sync that re-checks your changes like this also ends the undo
+  history — see **Undo, for everything** — and says so on its notice.
 - **Opening a share link in a fresh browser never invents a conflict.** A
   browser that has never synced has no history to compare, so the first sync
   asks nothing — the link's changes simply apply.

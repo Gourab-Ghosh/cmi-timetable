@@ -166,6 +166,36 @@ def build_seed():
     SEED_SNAPSHOT_JSON = json.dumps(SEED_SNAPSHOT)
 
 
+
+def cache_where_cmi_had_no_time_for(code="AG1", mine=None):
+    """A cached snapshot in which `code` had NO official time, plus the
+    reader's own placement for it — so the next sync raises the
+    newly-scheduled conflict, with as many of CMI's new times on offer as the
+    live pages give it.
+
+    AG1 runs TWICE in the fixtures (Mon and Wed 09:10), which is the point:
+    this is the shape the old two-radio dialog could not express, because
+    "keep mine" there quietly kept CMI's as well.
+
+    Returns (snapshot_json, overrides).
+    """
+    snap = json.loads(SEED_SNAPSHOT_JSON)
+    found = False
+    for course in snap["courses"]:
+        if course["code"] == code:
+            assert len(course["meetings"]) >= 2, \
+                f"{code} must run more than once upstream, or this shape is not exercised"
+            course["meetings"] = []
+            found = True
+    assert found, f"{code} is not in the fixtures"
+    mine = mine or {"day": "Thu", "slot": {"start_min": 1020, "end_min": 1095},
+                    "hall": "NKN AV Hall", "temp_booking": False}
+    overrides = {"next_id": 1, "credits": [], "items": [
+        {"id": 0, "course": code, "base": None, "to": mine,
+         "created_at": 1754000000000.0},
+    ]}
+    return json.dumps(snap), overrides
+
 def cache_from_before_cmi_moved_toc(gone_code="QCOM", also_move_iss=False):
     """A cached snapshot that disagrees with CMI's live pages, plus the
     override anchored to it.
@@ -1659,21 +1689,23 @@ def t30_sync_merge_conflict_flow(app):
                  raw_snapshot=cached)
         app.xpath("//button[normalize-space()='Sync now']").click()
         dialog = app.wait_css(".dialog", timeout=30)
-        assert "your time" in dialog.text and "Tue 09:10" in dialog.text, dialog.text
-        # NOTHING is answered for you: no radio pre-checked, and Apply
-        # (which would have nothing to do) is disabled until you answer.
+        assert "the time you set" in dialog.text and "Tue 09:10" in dialog.text, dialog.text
+        # NOTHING is answered for you: no box ticked, and Save (which would
+        # have nothing to do) is disabled until you answer. R99 turned the two
+        # radio buttons into tick boxes so both times can be kept, and the
+        # no-pre-answer rule survived the change.
         assert not [r for r in dialog.find_elements(
-            By.CSS_SELECTOR, ".conflict-item input[type='radio']")
+            By.CSS_SELECTOR, ".conflict-item input[type='checkbox']")
             if r.is_selected()], "no conflict row may come pre-answered"
-        apply_btn = dialog.find_element(
-            By.XPATH, ".//button[normalize-space()='Apply']")
-        assert apply_btn.get_attribute("disabled") is not None, \
-            "Apply must be disabled while nothing is answered"
-        # Answer every row: keep the user's time.
+        save_btn = dialog.find_element(
+            By.XPATH, ".//button[starts-with(normalize-space(),'Save')]")
+        assert save_btn.get_attribute("disabled") is not None, \
+            "Save must be disabled while nothing is answered"
+        # Answer the row: tick the time the reader set, and only that.
         dialog.find_element(
-            By.XPATH, ".//button[normalize-space()='Keep mine for all']"
-        ).click()
-        dialog.find_element(By.XPATH, ".//button[normalize-space()='Apply']").click()
+            By.XPATH, ".//label[contains(.,'the time you set')]//input").click()
+        dialog.find_element(
+            By.XPATH, ".//button[starts-with(normalize-space(),'Save')]").click()
         app.wait_toast("Your timetable now uses the times you picked.")
         app.wait_css("td[data-day='2'][data-slot='1020'] button.chip[aria-label^='TOC,']")
         app.wait_toast(f"CMI dropped {gone} from its timetable")
@@ -4928,8 +4960,9 @@ def t82_conflicts_apply_answers_only_what_you_answered(app):
         # Answer ONE row — keep the user's Wednesday for TOC — and leave ISS.
         toc_item = next(i for i in items if "TOC" in i.text)
         toc_item.find_element(
-            By.XPATH, ".//label[contains(.,'your time')]//input").click()
-        dialog.find_element(By.XPATH, ".//button[normalize-space()='Apply']").click()
+            By.XPATH, ".//label[contains(.,'the time you set')]//input").click()
+        dialog.find_element(
+            By.XPATH, ".//button[starts-with(normalize-space(),'Save')]").click()
         app.wait_toast("still waiting")
 
         # The answered row is applied…
@@ -11518,8 +11551,9 @@ def t232_undoing_an_answer_to_cmis_conflicts_puts_the_questions_back(app):
         app.xpath("//button[normalize-space()='Sync now']").click()
         dialog = app.wait_css(".dialog", timeout=30)
         dialog.find_element(
-            By.XPATH, ".//button[normalize-space()='Keep mine for all']").click()
-        dialog.find_element(By.XPATH, ".//button[normalize-space()='Apply']").click()
+            By.XPATH, ".//label[contains(.,'the time you set')]//input").click()
+        dialog.find_element(
+            By.XPATH, ".//button[starts-with(normalize-space(),'Save')]").click()
         app.wait_toast("Your timetable now uses the times you picked.")
         assert not queue(), \
             "answering every row empties the queue — that is what is being undone"
@@ -14993,6 +15027,249 @@ def t285_a_double_tap_on_follow_today_cannot_arm_editing(app):
         app.d.set_window_size(1500, 1000)
 
 
+
+def t290_a_conflict_says_what_cmi_moved_away_from(app):
+    """The fact the old dialog left out.
+
+    It showed two destinations — "CMI's new time: Tue 09:10" and "your time:
+    Wed 17:00" — and nowhere the time CMI moved AWAY from. That is the one
+    the reader actually edited, and the reason they edited it: someone who
+    moved a class off Friday because it clashed cannot tell, from two
+    destinations, whether their reason still holds. The story sentence names
+    all three times, and the course by name as well as by code."""
+    cached, overrides, _gone = cache_from_before_cmi_moved_toc()
+    serve_cmi()
+    try:
+        app.boot("/", selection=["TOC"], overrides=overrides, raw_snapshot=cached)
+        app.xpath("//button[normalize-space()='Sync now']").click()
+        dialog = app.wait_css(".dialog", timeout=30)
+        story = dialog.find_element(By.CSS_SELECTOR, ".conflict-story").text
+        # The cache had TOC on Fri 14:00, the reader moved it to Wed 17:00,
+        # and the live pages put it on Tue 09:10.
+        assert "Fri 14:00" in story, f"the time CMI moved away from is missing: {story}"
+        assert "Wed 17:00" in story, story
+        assert "Tue 09:10" in story, story
+        head = dialog.find_element(By.CSS_SELECTOR, ".conflict-head").text
+        assert "TOC" in head and len(head) > len("TOC"), \
+            f"a code alone does not identify a class to a reader: {head!r}"
+        # And the code is NOT a control: the old dialog put an interactive
+        # chip here, which opened a second dialog on top of the question.
+        assert not dialog.find_elements(By.CSS_SELECTOR, ".conflict-head button"), \
+            "nothing in the row's heading may open another dialog"
+    finally:
+        stop_serving_cmi()
+
+
+def t291_cmis_time_and_your_own_can_both_be_kept(app):
+    """The answer the dialog could not give before.
+
+    Two radio buttons force a choice; a reader who wants CMI's new lecture
+    AND the time they had set for themselves could not say so. Ticking both
+    draws both, and the store says why it can: CMI's meeting is left alone
+    and the reader's becomes a class of their own rather than a replacement
+    for it."""
+    cached, overrides, _gone = cache_from_before_cmi_moved_toc()
+    serve_cmi()
+    try:
+        app.boot("/", selection=["TOC"], overrides=overrides, raw_snapshot=cached)
+        app.xpath("//button[normalize-space()='Sync now']").click()
+        dialog = app.wait_css(".dialog", timeout=30)
+        boxes = dialog.find_elements(By.CSS_SELECTOR, ".timebox input[type='checkbox']")
+        assert len(boxes) == 2, f"CMI's new time and the reader's: {len(boxes)}"
+        for b in boxes:
+            app.d.execute_script("arguments[0].click()", b)
+        time.sleep(settle_s())
+        promise = dialog.find_element(By.CSS_SELECTOR, ".conflict-outcome").text
+        assert "twice" in promise, f"two kept times read as 'twice': {promise!r}"
+        dialog.find_element(
+            By.XPATH, ".//button[starts-with(normalize-space(),'Save')]").click()
+        app.wait_gone(".dialog")
+        app.open_tab("My timetable")
+        # CMI's Tuesday AND the reader's Wednesday.
+        app.wait_css("td[data-day='1'][data-slot='550'] button.chip[aria-label^='TOC,']")
+        app.wait_css("td[data-day='2'][data-slot='1020'] button.chip[aria-label^='TOC,']")
+        # Nothing was written to hide CMI's meeting, and the reader's time
+        # replaces nothing — that is what lets the two coexist.
+        items = app.d.execute_script(
+            "return JSON.parse(localStorage.getItem('cmitt.v1.overrides')).items;")
+        assert not [o for o in items if o["to"] is None], \
+            f"keeping CMI's time must not write a removal: {items}"
+        assert [o for o in items if o["base"] is None and o["to"]], \
+            f"the reader's time must be stored as a class of their own: {items}"
+    finally:
+        stop_serving_cmi()
+
+
+def t292_one_of_cmis_two_new_times_can_be_kept(app):
+    """CMI schedules a course it had no time for, and runs it twice.
+
+    The old dialog's "keep mine" here did not keep only the reader's time —
+    with no single meeting to re-base on it silently kept CMI's as well, so
+    the button's label was simply untrue. Tick boxes make each of CMI's times
+    its own answer: keep Monday, drop Wednesday, keep your own Thursday."""
+    cached, overrides = cache_where_cmi_had_no_time_for("AG1")
+    serve_cmi()
+    try:
+        app.boot("/", selection=["AG1"], overrides=overrides, raw_snapshot=cached)
+        app.xpath("//button[normalize-space()='Sync now']").click()
+        dialog = app.wait_css(".dialog", timeout=30)
+        boxes = dialog.find_elements(By.CSS_SELECTOR, ".timebox input[type='checkbox']")
+        assert len(boxes) == 3, \
+            f"two of CMI's times plus the reader's own: {len(boxes)}"
+        # CMI's times are numbered when there is more than one, so a reader
+        # can tell which box is which.
+        labels = dialog.find_elements(By.CSS_SELECTOR, ".timebox .ck")
+        assert "CMI's new time 1" in [x.text for x in labels], \
+            [x.text for x in labels]
+        # Keep CMI's first time and the reader's own; drop CMI's second.
+        app.d.execute_script("arguments[0].click()", boxes[0])
+        app.d.execute_script("arguments[0].click()", boxes[2])
+        time.sleep(settle_s())
+        dialog.find_element(
+            By.XPATH, ".//button[starts-with(normalize-space(),'Save')]").click()
+        app.wait_gone(".dialog")
+        app.open_tab("My timetable")
+        app.wait_css("td[data-day='0'][data-slot='550'] button.chip[aria-label^='AG1,']")
+        app.wait_css("td[data-day='3'][data-slot='1020'] button.chip[aria-label^='AG1,']")
+        assert not app.css_all(
+            "td[data-day='2'][data-slot='550'] button.chip[aria-label^='AG1,']"), \
+            "the Wednesday nobody ticked must not be drawn"
+    finally:
+        stop_serving_cmi()
+
+
+def t293_an_untouched_row_and_an_emptied_one_do_not_look_the_same(app):
+    """The one thing tick boxes lose, said in words instead.
+
+    Two radio buttons can be un-answered — neither is filled. Tick boxes
+    cannot: a row nobody has read and a row whose every box was deliberately
+    cleared are both simply empty. So the difference is stated. Untouched
+    reads "Not decided yet" and Save will not act on it; emptied says the
+    class will not appear at all, and Save will."""
+    cached, overrides, _gone = cache_from_before_cmi_moved_toc()
+    serve_cmi()
+    try:
+        app.boot("/", selection=["TOC"], overrides=overrides, raw_snapshot=cached)
+        app.xpath("//button[normalize-space()='Sync now']").click()
+        dialog = app.wait_css(".dialog", timeout=30)
+        outcome = dialog.find_element(By.CSS_SELECTOR, ".conflict-outcome")
+        assert "Not decided yet" in outcome.text, outcome.text
+        save = dialog.find_element(
+            By.XPATH, ".//button[starts-with(normalize-space(),'Save')]")
+        assert save.get_attribute("disabled") is not None, \
+            "an untouched row is not an answer"
+        box = dialog.find_element(By.CSS_SELECTOR, ".timebox input[type='checkbox']")
+        app.d.execute_script("arguments[0].click()", box)   # tick…
+        time.sleep(settle_s())
+        app.d.execute_script("arguments[0].click()", box)   # …and clear it
+        time.sleep(settle_s())
+        outcome = dialog.find_element(By.CSS_SELECTOR, ".conflict-outcome")
+        assert "will not appear" in outcome.text, \
+            f"an emptied row must say what it means: {outcome.text!r}"
+        assert "Not decided" not in outcome.text, outcome.text
+        assert dialog.find_element(
+            By.XPATH, ".//button[starts-with(normalize-space(),'Save')]"
+        ).get_attribute("disabled") is None, \
+            "clearing every box IS an answer — take the class off my timetable"
+        dialog.find_element(
+            By.XPATH, ".//button[starts-with(normalize-space(),'Save')]").click()
+        app.wait_gone(".dialog")
+        app.open_tab("My timetable")
+        time.sleep(settle_s())
+        assert not app.css_all(
+            "td[data-day='1'][data-slot='550'] button.chip[aria-label^='TOC,']"), \
+            "CMI's new time was not ticked, so it may not be drawn"
+        assert not app.css_all(
+            "td[data-day='2'][data-slot='1020'] button.chip[aria-label^='TOC,']"), \
+            "the reader's time was not ticked either"
+        # …and the course's OTHER lecture, which nobody was asked about, is
+        # untouched. A dialog about one class may not disturb another.
+        app.wait_css("td[data-day='3'][data-slot='550'] button.chip[aria-label^='TOC,']")
+    finally:
+        stop_serving_cmi()
+
+
+def t294_a_time_that_would_clash_says_what_it_runs_into(app):
+    """Why the reader edited the class in the first place.
+
+    "CMI's time or yours?" is unanswerable in the abstract. The app already
+    knows the rest of their week, so each time on offer says whether it runs
+    into another course they have picked — which is the whole question,
+    stated where the decision is made."""
+    cached, overrides, _gone = cache_from_before_cmi_moved_toc(also_move_iss=True)
+    serve_cmi()
+    try:
+        # Both TOC and ISS are pulled back to Tue 09:10 upstream, so each
+        # one's CMI time runs into the other's.
+        app.boot("/", selection=["TOC", "ISS"], overrides=overrides,
+                 raw_snapshot=cached)
+        app.xpath("//button[normalize-space()='Sync now']").click()
+        dialog = app.wait_css(".dialog", timeout=30)
+        notes = [n.text for n in dialog.find_elements(By.CSS_SELECTOR, ".timebox-note")]
+        assert notes, "a time that collides with another course has to say so"
+        assert any("clashes with" in n for n in notes), notes
+        assert any("ISS" in n for n in notes) and any("TOC" in n for n in notes), notes
+        # The warning belongs to CMI's time, which is the colliding one — not
+        # to the reader's Wednesday/Thursday, which are free.
+        for tb in dialog.find_elements(By.CSS_SELECTOR, ".timebox"):
+            if "the time you set" in tb.text:
+                assert "clashes with" not in tb.text, \
+                    f"the reader's own time is free and must not be flagged: {tb.text!r}"
+    finally:
+        stop_serving_cmi()
+
+
+def t295_deciding_all_at_once_is_offered_only_when_it_is_shorter(app):
+    """A shortcut that isn't shorter is clutter.
+
+    With one moved class there are exactly two boxes and each is one click,
+    so three bulk buttons above them would only add noise; from three boxes
+    up — several classes, or one class CMI now runs twice — they start to
+    earn their space. And when they appear they must actually decide every
+    row, including the "only mine" answer that the old dialog mislabelled."""
+    one, overrides, _gone = cache_from_before_cmi_moved_toc()
+    serve_cmi()
+    try:
+        app.boot("/", selection=["TOC"], overrides=overrides, raw_snapshot=one)
+        app.xpath("//button[normalize-space()='Sync now']").click()
+        dialog = app.wait_css(".dialog", timeout=30)
+        assert len(dialog.find_elements(
+            By.CSS_SELECTOR, ".timebox input[type='checkbox']")) == 2
+        assert not dialog.find_elements(By.CSS_SELECTOR, ".conflict-bulk"), \
+            "two boxes need no bulk row above them"
+        stop_serving_cmi()
+
+        # Two classes: now it helps.
+        two, overrides2, _g = cache_from_before_cmi_moved_toc(also_move_iss=True)
+        serve_cmi()
+        app.boot("/", selection=["TOC", "ISS"], overrides=overrides2, raw_snapshot=two)
+        app.xpath("//button[normalize-space()='Sync now']").click()
+        dialog = app.wait_css(".dialog", timeout=30)
+        bulk = app.wait_css(".conflict-bulk")
+        names = [b.text for b in bulk.find_elements(By.CSS_SELECTOR, "button")]
+        assert names == ["CMI's times only", "My times only", "Keep everything"], names
+        # "My times only" answers BOTH rows with the reader's own time.
+        bulk.find_element(By.XPATH, ".//button[normalize-space()='My times only']").click()
+        time.sleep(settle_s())
+        outcomes = [o.text for o in dialog.find_elements(
+            By.CSS_SELECTOR, ".conflict-outcome")]
+        assert len(outcomes) == 2 and not any("Not decided" in o for o in outcomes), \
+            outcomes
+        assert dialog.find_element(
+            By.XPATH, ".//button[normalize-space()='Save']"), \
+            "with every row decided the button drops its count"
+        dialog.find_element(By.XPATH, ".//button[normalize-space()='Save']").click()
+        app.wait_gone(".dialog")
+        app.open_tab("My timetable")
+        # Each reader's own time, and neither of CMI's Tuesdays.
+        app.wait_css("td[data-day='2'][data-slot='1020'] button.chip[aria-label^='TOC,']")
+        app.wait_css("td[data-day='3'][data-slot='1020'] button.chip[aria-label^='ISS,']")
+        assert not app.css_all(
+            "td[data-day='1'][data-slot='550'] button.chip[aria-label^='ISS,']"), \
+            "'My times only' must not leave CMI's time on the week"
+    finally:
+        stop_serving_cmi()
+
 TESTS = [
     t01_header_sync_button_and_hidden_dev,
     t02_developer_endpoint_only,
@@ -15215,6 +15492,12 @@ TESTS = [
     t283_a_second_click_on_more_cannot_remove_a_filter,
     t284_a_double_click_on_delete_cannot_delete_the_next_course,
     t285_a_double_tap_on_follow_today_cannot_arm_editing,
+    t290_a_conflict_says_what_cmi_moved_away_from,
+    t291_cmis_time_and_your_own_can_both_be_kept,
+    t292_one_of_cmis_two_new_times_can_be_kept,
+    t293_an_untouched_row_and_an_emptied_one_do_not_look_the_same,
+    t294_a_time_that_would_clash_says_what_it_runs_into,
+    t295_deciding_all_at_once_is_offered_only_when_it_is_shorter,
 ]
 
 

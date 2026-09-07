@@ -3386,17 +3386,22 @@ impl App {
             .with(|links| ttcore::shorten::find_any(links, service).cloned())
     }
 
-    /// Resolve the ANSWERED conflicts in one undoable step; the unanswered
-    /// `remaining` go back to the queue exactly as they were, so opening
-    /// the dialog to look never costs an answer.
-    /// `choices[i] = (conflict, keep_mine)`.
-    pub fn resolve_conflicts(&self, choices: Vec<(Conflict, bool)>, remaining: Vec<Conflict>) {
+    /// Resolve the answered conflicts in one undoable step; anything in
+    /// `remaining` goes back to the queue exactly as it was, so opening the
+    /// dialog to look never costs an answer.
+    /// `choices[i] = (conflict, the boxes that were ticked)`.
+    pub fn resolve_conflicts(
+        &self,
+        choices: Vec<(Conflict, ttcore::merge::ConflictPick)>,
+        remaining: Vec<Conflict>,
+    ) {
         // Read BEFORE `act`, because `act` is what pushes the entry that has
         // to carry it.
         let before = self.conflicts.get_untracked();
         self.act("resolve timetable conflicts", |_, ovs| {
-            for (conflict, keep_mine) in &choices {
-                ttcore::merge::resolve_conflict(ovs, conflict, *keep_mine);
+            let now = crate::domx::now_ms();
+            for (conflict, pick) in &choices {
+                ttcore::merge::resolve_conflict(ovs, conflict, pick, now);
             }
         });
         // The entry `act` just pushed holds the pre-answer overrides; give it
@@ -3574,6 +3579,37 @@ impl App {
     /// The same question about ONE meeting of a course.
     pub fn meeting_has_clash(&self, code: &str, meeting: &Meeting) -> bool {
         self.overlaps_selection(code, Some(meeting))
+    }
+
+    /// Which OTHER selected courses a candidate meeting would run into.
+    ///
+    /// Not `meeting_has_clash`: that asks about a meeting the timetable
+    /// already has, and this asks about one it might be about to get — the
+    /// times offered by the conflict dialog exist in no store yet. Answering
+    /// it there is what turns an abstract choice ("CMI's time or yours?")
+    /// into the concrete one a reader can actually make ("CMI's time runs
+    /// into NLP; yours is free"), which is the whole reason they edited the
+    /// class in the first place.
+    ///
+    /// `code` itself is excluded, exactly as `clashes()` does it: a course
+    /// never clashes with itself, and two of its own times sitting in one
+    /// hour is what the dialog is FOR, not a warning it should raise.
+    pub fn courses_running_into(&self, code: &str, meeting: &Meeting) -> Vec<String> {
+        let mut hits: Vec<String> = self.overrides.with(|overrides| {
+            self.selected_courses()
+                .iter()
+                .filter(|c| c.code != code)
+                .filter(|c| {
+                    effective_meetings(c, overrides).iter().any(|e| {
+                        e.meeting.day == meeting.day && e.meeting.slot.overlaps(&meeting.slot)
+                    })
+                })
+                .map(|c| c.code.clone())
+                .collect()
+        });
+        hits.sort();
+        hits.dedup();
+        hits
     }
 
     /// Shared engine for both: does `code` (all of it, or just `only`) run
