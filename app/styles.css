@@ -3859,9 +3859,15 @@ label.field > input { width: 100%; }
   .header { -webkit-backdrop-filter: blur(14px) saturate(1.4); }
   .overlay { -webkit-backdrop-filter: blur(3px); }
 }
-/* `.tabs` gets the blur only where it is the phone's bottom bar, which is the
-   only place the unprefixed rule sits too. */
-@media (max-width: 640px) {
+/* `.tabs` gets the blur wherever it is the phone/tablet bottom bar — which is
+   the `max-width: 899px` block above, where the unprefixed rule sits (see the
+   `.tabs` bottom-bar rule there). R100 first wrote this gate at 640px with a
+   comment claiming that was "the only place the unprefixed rule sits too";
+   that was simply wrong, and it cost prefixed-only Safari the blur across
+   641-899px — iPad portrait is 768px. A gated fallback has to cover the same
+   ground as the enhancement it stands in for, which is the whole point of the
+   pairs above. Found by the R101 live-bytes audit. */
+@media (max-width: 899px) {
   @supports (-webkit-backdrop-filter: blur(1px)) {
     .tabs { -webkit-backdrop-filter: blur(14px) saturate(1.4); }
   }

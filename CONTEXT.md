@@ -7748,6 +7748,124 @@ deploy-critical behaviour in the app has no test and happens to be correct.
 Every new test was break-verified, and t296/t297 were verified ORTHOGONALLY —
 each catches its own half of the fix and neither covers for the other.
 
+### R101 — the release, and the audit that measured the bytes it had just published
+
+Two prompts: "Push and deploy", then — after a session limit killed most of a
+verification fleet — "Make sure that all the workers are restored correctly and
+they complete their work correctly, which they had started."
+
+THE DEPLOY. Rehearsed first with `./deploy.sh --build-only`, because
+`deploy.sh --push` pushes main BEFORE it builds. Then `git push origin main`,
+which the `githooks/pre-push` hook turns into a build + gh-pages publish that
+ABORTS the push if the build fails — so the code can never land ahead of a
+broken site.
+
+  main       d7c14f6..d5d487e (3 commits)
+  gh-pages   0b48b8c  "deploy: d5d487e 2026-09-07T15:50:01Z"
+  live wasm  b3bec8ac285a3e57 -> e51eec517a26980f
+  served     within the first 15s poll
+  live_probe 10/10 over the real internet, incl. 79 real courses from cmi.ac.in
+
+TWO DEPLOY-MECHANICS FACTS WORTH KEEPING, both discovered here:
+
+* The published wasm hash was IDENTICAL to the rehearsal's, across three
+  separate builds. The hook's cargo build was fully cached ("Finished in
+  0.06s"), so `build.rs` never reran and `APP_BUILD_TIME` never changed. The
+  artifact that was gated is therefore byte-for-byte the artifact that shipped
+  — which is the strongest possible answer to R100's "measure the shipped
+  thing" lesson, but it also means `e2e/live_probe.py`'s docstring is wrong
+  where it says two builds of one commit always differ. They differ only when
+  build.rs actually reruns.
+* A CSS-ONLY DEPLOY CANNOT BE VERIFIED BY THE CURRENT CHECK. `deploy.sh`'s
+  `dist_fingerprint()` greps `*_bg.wasm`, and `verify_published` polls the live
+  page for that filename. A change that touches only `app/styles.css` leaves
+  the wasm hash untouched (confirmed: the styles fix in this round produced
+  `styles-c962a7bdade30bd4.css` with the wasm still at e51eec517a26980f), so
+  the check would pass instantly against a completely stale site. Anyone
+  shipping a CSS-only change must verify the CSS filename instead.
+
+THE FLEET DIED, AND THE PERSISTENCE RULE PAID FOR ITSELF. Six live-site
+verification agents plus refuters hit the session limit: 8 of 9 agents lost,
+one survived. Because every agent had been told to write findings to
+`.workagents/r101/findings/` AS IT WENT, almost nothing was actually lost —
+six findings `.md` files and a pile of raw measurement JSON were already on
+disk, including whole checks the agents never got to report. Restored with
+`Workflow({scriptPath, resumeFromRunId})` plus a per-dimension addendum naming
+the exact files each agent had left and telling it to FINISH, not restart, and
+to spot-check at least one recovered claim. The one completed agent's prompt
+was left byte-identical so it replayed from cache instead of re-running.
+
+WHAT THE AUDIT FOUND — three CSS findings, all confirmed in the shipped bytes,
+all downgraded by refutation, none of them a reason to roll back:
+
+1. Every width media query ships as MQ4 range syntax (`(width<=640px)`), which
+   Safari < 16.4 / Chrome < 104 cannot parse, so those browsers drop all 18
+   blocks. CONFIRMED, but NOT NEW — see §8.29, which also records that the
+   claim "the entire responsive layout is absent" is an overstatement I wrote
+   and the refutation corrected.
+2. `.tabs`' prefixed blur was gated at `max-width: 640px` while the unprefixed
+   twin it stands in for lives at `max-width: 899px`. FIXED this round.
+3. The print reset's prefixed neutraliser is stripped. Counting right,
+   consequence nil — §8.30.
+
+THE ONE FIX, AND IT WAS MINE TWICE OVER. R100 restored the prefixed blurs by
+wrapping them in `@supports`, and typed `640px` for `.tabs` under a comment
+asserting that was "the only place the unprefixed rule sits too". The bottom
+tab bar starts at 899px, so prefixed-only Safari lost the blur across 641-899px
+— iPad portrait is 768px. Worse, R100's OWN finding (`.workagents/r100/
+findings/a6.md` F7) proposed the patch with `max-width: 899px` and even named
+the line to copy the selector from; the shipped code deviated from the fix it
+was implementing and then wrote a comment asserting the opposite. There is no
+record anywhere of 640px being deliberate. Gate corrected to 899px, comment
+rewritten to state the fact and why it was wrong.
+
+Severity, honestly: polish. The un-blurred bar measures mean |delta| 1.67/255
+over the bar band and stays above every contrast floor, and the previously
+deployed build had NO `.tabs` blur at any width (the prefix was a duplicate
+declaration, which the minifier deletes), so this deploy was already a strict
+improvement that stopped 259px short. The durable defect was the COMMENT.
+
+`t303_a_prefixed_fallback_covers_the_same_ground_as_its_twin` — the third
+question nobody was asking. t298 asks "does a fallback EXIST" and "do the
+`dvh`/`vh` partners AGREE"; neither can see this bug, because the declaration
+is present and its value is identical. What was wrong is the CONDITION it sits
+under. The new test flattens the shipped sheet into (at-rule context, selector,
+declarations) with brace matching, then asserts every
+`-webkit-backdrop-filter` sits under the same `@media` set as the unprefixed
+declaration of the same value on the same selector. Break-verified against real
+artifacts rather than a fixture: RED (exactly one complaint) on the bytes the
+site served before the fix, GREEN on the bytes built after it.
+
+METHODOLOGY THAT EARNED ITS KEEP, for whoever audits a deploy next:
+
+* Prove the artifact before believing anything about it. The surviving agent
+  computed `sha384` of the sheet it downloaded and checked it against the
+  `integrity=` attribute in the live `index.html` — so its claims are about
+  bytes browsers actually execute, not a stale local build (the R99 trap).
+* "IS IT NEW?" IS A SEPARATE INVESTIGATION FROM "IS IT REAL?", and it needs the
+  PREVIOUS artifact, pulled from the host — not git. The refutation fetched the
+  prior gh-pages tree through `gh api` (`d4a86083`,
+  `styles-fa7eab251cdd3f9c.css`) and found the same rewrite, then dated the
+  cause to `bcaa385` (2026-08-15, ~6 deploys back). Reading `app/styles.css`
+  history could never have shown that, because the source was always correct.
+* FINDINGS CAN CONSTRAIN EACH OTHER. Because Safari < 16.4 drops the
+  `(width<=899px)` block wholesale (finding 1), it has no bottom bar to blur,
+  so finding 2 could only ever affect Safari 16.4-17.x. Fixing finding 1 would
+  WIDEN the audience of any prefix bug. Neither finding is assessable alone.
+* A CSSOM WALK CANNOT SEE A DECLARATION THE BROWSER DOES NOT SUPPORT. In
+  Chromium `CSS.supports('-webkit-backdrop-filter','blur(1px)')` is false and
+  the declaration is dropped at parse time, so a CSSOM walk finds only the
+  unprefixed rule. One sentence of the original report claimed a CSSOM walk
+  showed the prefixed rule; it does not reproduce. The raw bytes are the only
+  witness for anything the running browser does not implement.
+* The refuters were told to default to "refuted" and to attack their target,
+  and it worked in both directions: they confirmed the byte-level facts,
+  demolished the severity of two of the three, and caught an overstatement in
+  the entry that is now §8.29.
+
+Gates on the shipping tree: 213 native, clippy + fmt clean, and the e2e suite
+including the new t303.
+
 ## 8. Open bugs — found, confirmed, NOT fixed (do not delete)
 
 Rules for this section: entries stay until the bug is actually fixed and a
@@ -7782,6 +7900,141 @@ entry as the rules here require. 8.19 (a self-update landing on top of a
 live Undo offer, found by R72's screenshots) was fixed in R73 by removing every
 self-initiated reload — R73's §7 entry says what replaced it and which phase of
 t114 fails without it.
+
+### 8.29 The release minifier rewrites every width media query into syntax older browsers cannot parse — CONFIRMED, NOT NEW, NOT FIXED
+
+Severity: minor. Nothing is unreachable, no data is at risk, and this is NOT a
+reason to roll anything back. Read the impact section before acting on it.
+
+`app/styles.css` writes 18 width queries as `@media (max-width: 640px)` /
+`(min-width: 900px)`. The bytes GitHub Pages serves contain **zero**
+occurrences of `(max-width` or `(min-width` and 18 of Media Queries Level 4
+range syntax instead:
+
+```
+   10x  @media (width<=640px)          2x  @media (width>=900px)
+    1x  each of (width<=899px), (width<=560px), (width<=460px),
+             (width<=439px), (width<=380px)
+    1x  @media screen and (width>=1100px)
+```
+
+Range syntax is Chrome 104+, Firefox 102+, Safari/iOS 16.4+. A browser that
+cannot parse a media prelude drops the ENTIRE at-rule. Not rewritten, and
+therefore still applying everywhere: `(pointer: coarse)` x4,
+`(forced-colors: active)` x2, `(prefers-reduced-motion)`, `(prefers-contrast)`,
+`@media screen`, `@media print`.
+
+NOT NEW — established before assuming this deploy caused it. The previously
+deployed artifact was pulled from GitHub itself (gh-pages tree
+`d4a86083`, `styles-fa7eab251cdd3f9c.css`) and is identical in kind: 0x
+`(max-width`, 13x `width<=`, 3x `width>=`. `minify = "on_release"` landed in
+`app/Trunk.toml` at `bcaa385` (2026-08-15), so every published build since
+mid-August ships this. The rewrite rate is 100% in both builds — 16 of 16 in
+`d7c14f6`, 18 of 18 in `d5d487e` — and the count grew only because the sheet
+did.
+
+WHAT IT ACTUALLY COSTS, measured at 390/360/320 with the 18 blocks stripped
+(what a non-parsing UA sees), CDP device metrics + touch emulation so
+`(pointer: coarse)` is true:
+
+* `.header` 153.8px static -> 214.6/253.3/306.1px sticky; the tab strip becomes
+  a static top rail instead of the sticky bottom bar. It is a narrow-desktop
+  layout: legible and operable, not broken.
+* The "off-screen" tabs ARE REACHABLE. `.tabs` keeps `overflow-x: auto` from
+  its BASE rule (`app/styles.css:411`, outside every media query): measured
+  `scrollWidth` 492 vs `clientWidth` 390, scrollable, and the last tab was
+  scrolled in, hit-tested with `elementFromPoint` and CLICKED — `aria-selected`
+  moved to Halls and the view rendered. The R83 hazard where a clipped tab was
+  untappable does NOT apply, because that came from `touch-action: pan-y`,
+  which lives in the dropped `(max-width: 899px)` block and is dropped with it.
+* `documentElement.scrollWidth == innerWidth` in every state — the page never
+  scrolls sideways — and `.tabs .tab` measures 44px in every state.
+* THE RUNTIME RESPONSIVENESS IS UNAFFECTED, which is the correction that
+  matters most: `app/src/domx.rs:40,57`, `app/src/app.rs:809` and
+  `app/src/ui.rs:1036` call `window.matchMedia("(min-width: 900px)")` /
+  `("(max-width: 640px)")` from Rust. Those are wasm string literals the CSS
+  minifier never sees, so the phone day-strip, the swipe-between-tabs gesture
+  and the tab-rail keyboard model all keep working. What is absent is the CSS
+  CHROME, not the responsive behaviour. Do not repeat the first draft of this
+  entry, which said "the entire responsive layout is absent" — that is wrong.
+
+Two more source-absent constructs come from the same knob, both inert:
+`inset: auto .2rem -.3rem` sits inside `@media (width>=900px)`, so any UA too
+old for `inset` (Safari < 14.1) has already dropped that block; and
+`.seg { overflow: auto hidden }` (Safari 15+) fails only on browsers that lost
+all 18 blocks anyway.
+
+INTERACTION WITH 8.30 — worth knowing before either is worked on: because a
+Safari older than 16.4 never applies the `(width<=899px)` block at all, it has
+no bottom tab bar to blur, which is why the blur-gate bug fixed in R101 could
+only ever have affected Safari 16.4-17.x. These two defects constrain each
+other, and fixing this one WIDENS the audience of any prefix bug.
+
+WHY IT IS NOT FIXED — there is no knob, and the real fix costs a release-path
+change:
+
+* Trunk exposes no browser targets. Not in 0.21.14 and not on main: `strings`
+  on the binary gives 0 hits for `browserslist`, and
+  `src/processing/minify.rs` on trunk main calls
+  `css.minify(MinifyOptions::default())` and prints with
+  `PrinterOptions { minify: true, ..Default::default() }`. `Targets::default()`
+  is "no targets", which is exactly what licenses lightningcss to emit MQ4.
+  **A trunk version bump does not fix this** — do not try one and conclude the
+  problem is gone because the bytes moved for some other reason.
+* `minify = "never"` fixes every item at once and costs 4x on the wire:
+  measured 15,135 bytes gzip -9 minified vs 62,170 unminified (Pages serves
+  gzip; `content-length: 15633` today). The sheet is a third comments and they
+  do not compress away. Rejected on that number.
+* A custom minification step — a pre_build hook, or a small in-workspace binary
+  calling lightningcss with explicit `Targets` — keeps both the size and the
+  compatibility, and is the only real fix. NOTE the constraint that rules out
+  the obvious version: a post_build hook CANNOT do it, because Trunk stamps
+  Subresource Integrity into `index.html` BEFORE post_build hooks run, so a
+  rewritten .css fails SRI and the app never boots (the same reason the JS
+  minify warning in `app/Trunk.toml` is left alone).
+
+Found by the R101 post-deploy live-bytes audit, verified by hand, then
+adversarially refuted — the refutation is what established "not new", measured
+the tabs as reachable, and caught the overstatement above.
+
+### 8.30 The print reset's prefixed neutraliser is stripped from the shipped bytes — LATENT, not a defect today
+
+`app/styles.css:3982`, inside the `@media print` universal reset, writes
+`-webkit-backdrop-filter: none !important` beside `backdrop-filter: none
+!important`. The shipped bytes contain **0** occurrences of the prefixed form
+and 1 of the unprefixed: lightningcss strips the prefix as unnecessary for its
+default targets — the same no-targets knob as 8.29.
+
+NOT A DEFECT A STUDENT CAN MEET TODAY, established by measurement rather than
+by reading the CSS. Driving the live page with CDP
+`Emulation.setEmulatedMedia {media: "print"}` and reading computed styles:
+`.header` -> `display: none`, rect 0x0; `.tabs` -> `display: none`, rect 0x0;
+`.overlay` -> not in the DOM at all (it exists only while a modal is open, and
+is in the same `display: none` list). The shipped print block carries
+`.sr-only,.header,.tabs,.toolbar,.toasts,.banner,.tray,.overlay,.filterbar,
+.chip-info,.noprint{display:none!important}`. A `display: none` element
+generates no box and paints nothing, so a prefixed backdrop-filter on it is
+inert. The printed document is also `print.html`, which contains zero
+`.header`/`.tabs`/`.overlay` elements. Four independent live drives agreed.
+The 8-page / 835KB / 0-soft-mask print budget is untouched.
+
+WHY IT IS RECORDED ANYWAY: the reset is a universal `*` defence-in-depth rule,
+and its prefixed half is now permanently missing from what ships. The day
+someone adds a prefixed `backdrop-filter` to an element that IS printable, the
+print reset will silently fail to cancel it on prefixed-only Safari, and the
+rasterised layer the whole print budget exists to prevent comes back. The
+guard is gone; only the absence of anything to guard makes it harmless.
+
+Chronology, so nobody mis-attributes it: the neutraliser dates to `022ba44a`
+(2026-08-23) and its prefixed half has been stripped ever since, with nothing
+prefixed to strip. The three prefixed blurs it would have covered arrived in
+`d5d487e` (2026-09-07), so the PAIRING is new even though neither half is a
+defect. Fixing 8.29's root cause fixes this too, and is the only sane fix —
+wrapping the neutraliser in `@supports` would work but adds a gate to a print
+reset for no benefit anyone can observe today.
+
+Raised by the R101 live-bytes audit as a print regression, and correctly
+REFUTED as an impact: the counting was right, the consequence was not.
 
 ### 8.27 A drop may store a class shorter than the cell it was dropped in — PLAUSIBLE, not confirmed
 

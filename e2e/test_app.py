@@ -15916,6 +15916,125 @@ def t302_a_sync_never_claims_something_it_cannot_know(app):
     finally:
         stop_serving_cmi()
 
+
+def _css_rules_with_context(text):
+    """Flatten a stylesheet into (at_rule_context, selector, declarations).
+
+    `at_rule_context` is the tuple of enclosing at-rule preludes, outermost
+    first, e.g. ("@media (width<=899px)",
+                 "@supports ((-webkit-backdrop-filter:blur(1px)))").
+    Brace-matched, not regexed: a regex stops at the first inner '}' and every
+    nested at-rule in this sheet would be mis-scoped.
+    """
+    out, stack, i, n = [], [], 0, len(text)
+    buf = ""
+    while i < n:
+        c = text[i]
+        if c == "{":
+            head, buf = buf.strip(), ""
+            if head.startswith("@"):
+                stack.append(head)
+            else:
+                depth, j = 1, i + 1
+                while j < n and depth:
+                    if text[j] == "{":
+                        depth += 1
+                    elif text[j] == "}":
+                        depth -= 1
+                    j += 1
+                out.append((tuple(stack), head, text[i + 1:j - 1]))
+                i = j
+                continue
+        elif c == "}":
+            if stack:
+                stack.pop()
+            buf = ""
+        else:
+            buf += c
+        i += 1
+    return out
+
+
+def _css_decls(block):
+    d = {}
+    for part in block.split(";"):
+        if ":" in part:
+            k, v = part.split(":", 1)
+            d.setdefault(k.strip(), []).append(v.strip())
+    return d
+
+
+def t303_a_prefixed_fallback_covers_the_same_ground_as_its_twin(app):
+    """A gated fallback must apply everywhere the property it stands in for does.
+
+    R100 restored the `-webkit-backdrop-filter` declarations the minifier had
+    deleted (t298's subject) by wrapping them in `@supports`. It put `.tabs`
+    inside `@media (max-width: 640px)` under a comment claiming that was "the
+    only place the unprefixed rule sits too". It was not: the bottom tab bar
+    starts at `max-width: 899px`. So on every Safari that has only the
+    prefixed property, the bar lost its blur across 641-899px — iPad portrait
+    is 768px — while a modern browser blurred it.
+
+    t298 asks whether a fallback EXISTS and whether `dvh`/`vh` partners say
+    the same thing. Neither question can see this: the declaration is present
+    and its value is identical. The thing that was wrong is the CONDITION it
+    sits under, which is a third question, and this is it.
+
+    Verified red/green against real artifacts rather than a fixture: the bytes
+    the site served before the fix produce exactly one complaint here, and the
+    bytes built after it produce none.
+    """
+    app.boot("/", selection=["TOC"])
+    app.wait_css(".tabs .tab")
+    css = app.d.execute_async_script("""
+        const done = arguments[arguments.length - 1];
+        const link = [...document.querySelectorAll('link[rel=stylesheet]')]
+            .map((l) => l.href).find((h) => /styles-.*\\.css$/.test(h));
+        if (!link) { done({error: 'no hashed stylesheet link on the page'}); return; }
+        fetch(link).then((r) => r.text()).then((t) => done({text: t}))
+                   .catch((e) => done({error: String(e)}));
+    """)
+    assert not css.get("error"), css
+    text = css["text"]
+    assert len(text) > 20000, f"that is not the whole sheet: {len(text)} bytes"
+
+    def media_of(ctx):
+        return tuple(c for c in ctx if c.startswith("@media"))
+
+    prefixed, plain = {}, {}
+    for ctx, sel, block in _css_rules_with_context(text):
+        for name, vals in _css_decls(block).items():
+            for v in vals:
+                # `none` is a neutraliser (the print reset), not a fallback for
+                # an effect, so it has nothing to cover.
+                if v == "none":
+                    continue
+                key = (sel.strip(), v.replace(" ", ""))
+                if name == "-webkit-backdrop-filter":
+                    prefixed.setdefault(key, set()).add(media_of(ctx))
+                elif name == "backdrop-filter":
+                    plain.setdefault(key, set()).add(media_of(ctx))
+
+    assert prefixed, (
+        "no -webkit-backdrop-filter survived into the shipped stylesheet at "
+        "all — that is t298's bug back again, not this one's absence")
+
+    bad = []
+    for (sel, val), pmedia in sorted(prefixed.items()):
+        twin = plain.get((sel, val))
+        if twin is None:
+            bad.append(f"{sel} has -webkit-backdrop-filter:{val} with no "
+                       f"unprefixed twin of the same value — it stands in for "
+                       f"nothing")
+        elif pmedia != twin:
+            bad.append(f"{sel} {{-webkit-backdrop-filter:{val}}} is gated at "
+                       f"{sorted(pmedia)} but its unprefixed twin lives at "
+                       f"{sorted(twin)} — a prefixed-only browser loses the "
+                       f"effect wherever those two do not overlap")
+    assert not bad, (
+        "a prefixed fallback does not cover the same ground as the property "
+        "it stands in for:\n  " + "\n  ".join(bad))
+
 TESTS = [
     t01_header_sync_button_and_hidden_dev,
     t02_developer_endpoint_only,
@@ -16151,6 +16270,7 @@ TESTS = [
     t300_every_door_that_changes_your_courses_changes_this_tabs_copy,
     t301_a_short_window_never_hides_the_whole_week,
     t302_a_sync_never_claims_something_it_cannot_know,
+    t303_a_prefixed_fallback_covers_the_same_ground_as_its_twin,
 ]
 
 
