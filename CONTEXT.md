@@ -7863,8 +7863,92 @@ METHODOLOGY THAT EARNED ITS KEEP, for whoever audits a deploy next:
   demolished the severity of two of the three, and caught an overstatement in
   the entry that is now §8.29.
 
-Gates on the shipping tree: 213 native, clippy + fmt clean, and the e2e suite
-including the new t303.
+THE SECOND FIX — R92 M1's failure returning through the opposite door. The
+restored geometry worker found, and this round then reproduced independently to
+the pixel, that below ~265px of viewport height with notices up, a dialog's
+footer leaves the screen and nothing can scroll to it.
+
+  1280x260, four notices:  band 86px, overlay padding-top 108.2px,
+  dialog 192px -> a 300px box in a 260px window. `Close` at y245-281,
+  `document.elementFromPoint` at its centre -> nothing.
+  `.overlay` is `position: fixed` with `overflow-y: visible`
+  (scrollHeight 300 > clientHeight 260, and no scrolling mechanism), and
+  `body.modal-open` locks the page. Escape still closed the dialog 8/8, so
+  the reader was never trapped — but no mouse or touch could press the button.
+
+The cause is the guard, not the band. R92 M1 clamped `--toast-band` to a third
+of the window because an unclamped stack once reserved 713px inside a 617px
+viewport and pushed every dialog off the bottom. The second half of that fix
+was a FLOOR on the dialog's max-height, described in the stylesheet as
+"whatever the band says, a dialog keeps enough height to show a line of text
+and its buttons". **A floor cannot keep that promise, because it raises the
+bottom of the box without moving its top.** `padding-top + 12rem` simply passed
+the bottom of the screen — and the shorter the window, the worse the floor
+made it. The band was innocent: it was already 33vh-clamped at both ends
+(measured 139px at vh 420, 86px at vh 260 — exactly a third).
+
+So the RESERVATION now yields instead. Both copies of the rule — the plain
+`vh` fallback and the `dvh` enhancement, identical modulo the unit because
+t298 asserts it — gained a third term:
+
+```css
+padding-top: calc(min(var(--toast-band, 0px), 33vh,
+                      max(0px, calc(100vh - 12rem - 2.8rem))) + 1.4rem);
+max-height:  min(calc(100vh - min(var(--toast-band, 0px), 33vh,
+                      max(0px, calc(100vh - 12rem - 2.8rem))) - 2.8rem), 800px);
+```
+
+and the max-height floor is GONE, because with the reservation capped the
+floor is unreachable arithmetic: the space left is already >= 12rem wherever
+the window can afford it, and where it cannot, the dialog must simply fit.
+Measured after, at the same heights: 420 byte-identical to before (the control
+— it already worked), 300/265/260/240 all keep the full 192px dialog with the
+footer hit-testable and 22px to spare, and 200 shrinks the dialog to 155px,
+which is the only correct answer left. The notices overlap the dialog more on
+a very short window, which is precisely the outcome the rule above already
+names as recoverable rather than banishing.
+
+NOT a clamp-law violation, and the comment now says why: the write site in
+`ui::Toasts` still publishes the stack's real height clamped to a third of the
+window, which is the same rule at both ends. The new term is not a second
+opinion about the band's VALUE — it is how much of it the overlay agrees to
+spend, and the stack is meant to overlap rather than shrink when both cannot
+fit.
+
+`t304_a_dialogs_buttons_stay_on_screen_under_a_toast_band` pins it across five
+heights with 1280x420 as the control, asserting both that the footer button
+hit-tests as itself and that the box does not pass the fold. Break-verified by
+building the previous stylesheet into a throwaway dist: RED there — it fires
+at 1280x300, where the box already overflowed by 13px while the button was
+still hit-testable, which is a stricter catch than the one that started this —
+and GREEN after.
+
+THE SECOND-ORDER CHECK THE FIX DEMANDED, because making the reservation yield
+means the rail can now OVERLAP the dialog on a short window — and `.toasts` is
+`pointer-events: none` while every `.toast` inside it is `pointer-events: auto`.
+The stylesheet's own R93 R6 comment warns exactly here: an unbounded rail
+"overlapped the dialog it had just made room for, buried its title and its
+answer buttons, and — being on top — swallowed the clicks aimed at them". So
+overlap had to be proven harmless rather than assumed.
+
+Measured on the dialog where it would matter most — the CONFLICTS dialog, whose
+tick boxes sit near its top — at 420/300/260/240/200 with a real sync's notices
+up. At 240 the rail spans y13-92 and the dialog y26-218, so they really do
+overlap; at 200, y13-79 against y22-178. At every height: the box fits, and of
+six interactive targets none is taken by a notice — the overlapped region is
+the dialog's title and story text, and the tick boxes are below the dialog's
+own scroll fold, which is the normal path for a multi-conflict dialog. The
+share dialog measured the same way, 0 stolen at every height.
+
+t304 now asserts that too, so the property my own fix made possible is guarded
+rather than merely observed once: every control the reader can currently see
+must not have its click taken by a `.toast`. That assertion guards a
+REGRESSION DIRECTION rather than a past bug — it passes on the previous
+stylesheet as well, because there the dialog was pushed away from the rail
+instead of under it. Said plainly so nobody reads it as a second red/green.
+
+Gates on the shipping tree: 236 e2e (234 + t303 + t304), 213 native,
+clippy + fmt clean.
 
 ## 8. Open bugs — found, confirmed, NOT fixed (do not delete)
 

@@ -2333,24 +2333,43 @@ body.modal-open .toasts { top: 0.8rem; bottom: auto; }
    the overlay is fixed and the body's scroll is locked. A notice may take
    at most a third of the screen from a dialog; past that the notices
    overlap it, which is recoverable, instead of banishing it, which is not.
-   The floor is the second half of the same promise: whatever the band says,
-   a dialog keeps enough height to show a line of text and its buttons. */
+   The second half of the same promise — whatever the band says, a dialog
+   keeps enough height to show a line of text and its buttons — is kept by
+   the THIRD term of the min() below, not by a floor on the dialog's
+   max-height. R101 measured why the floor could not do it: a floor raises
+   the box without moving the top of it, so `padding-top + 12rem` simply
+   passed the bottom of the screen. At 1280x260 with four notices up, the
+   overlay reserved 108.2px and the floor made the dialog 192px — 300px of
+   box in a 260px window, with `Close` at y245–281 and
+   `elementFromPoint` returning nothing. Escape still closed it, so the
+   reader was not trapped, but no mouse or touch could reach the button, and
+   nothing could scroll to it: this overlay is `position: fixed` with
+   `overflow-y: visible` and the body's scroll is locked. That is R92 M1's
+   exact failure returning through the opposite door — not an unclamped
+   band, but the guard meant to protect against one.
+
+   So the reservation itself yields instead: it never takes so much that
+   fewer than 12rem are left. The notices then overlap the dialog on a very
+   short window, which the rule above already names as the recoverable
+   outcome, and the dialog keeps a readable height and reachable buttons.
+   Below ~237px of viewport there is no 12rem to keep, and the dialog simply
+   fits the screen, which is the only correct answer left.
+
+   NOTE for the clamp law: the fit cap belongs at THIS read site only. The
+   write site in `ui::Toasts` publishes the stack's real height clamped to a
+   third of the window, and that is still the same rule at both ends. This
+   third term is not a second opinion about the band's VALUE — it is how much
+   of it the overlay agrees to spend, and the stack is meant to overlap the
+   dialog rather than shrink when the two cannot both fit. */
 body.modal-open.toasts-live .overlay {
   align-items: flex-start;
-  padding-top: calc(min(var(--toast-band, 0px), 33vh) + 1.4rem);
+  padding-top: calc(min(var(--toast-band, 0px), 33vh, max(0px, calc(100vh - 12rem - 2.8rem))) + 1.4rem);
 }
 body.modal-open.toasts-live .dialog {
   /* Plain fallback here, `dvh` enhancement in the @supports block below
-     (R100) — a duplicate declaration is deleted by the release minifier. */
-  /* The floor belongs here too. The rule above this one calls it "the second
-     half of the same promise: whatever the band says, a dialog keeps enough
-     height to show a line of text and its buttons" — but only the `dvh`
-     version ever had it, so on the browsers this fallback exists FOR the
-     promise was not kept (R100). */
-  max-height: max(
-    12rem,
-    min(calc(100vh - min(var(--toast-band, 0px), 33vh) - 2.8rem), 800px)
-  );
+     (R100) — a duplicate declaration is deleted by the release minifier.
+     The two must say the same thing with vh for dvh; t298 asserts it. */
+  max-height: min(calc(100vh - min(var(--toast-band, 0px), 33vh, max(0px, calc(100vh - 12rem - 2.8rem))) - 2.8rem), 800px);
 }
 /* The fold marker (R93 R2): quieter than a notice, because it is a count and
    not a message — it must never be mistaken for the thing it is counting. */
@@ -3838,13 +3857,10 @@ label.field > input { width: 100%; }
   .dialog { max-height: min(85dvh, 800px); }
   .toasts { max-height: 33dvh; }
   body.modal-open.toasts-live .overlay {
-    padding-top: calc(min(var(--toast-band, 0px), 33dvh) + 1.4rem);
+    padding-top: calc(min(var(--toast-band, 0px), 33dvh, max(0px, calc(100dvh - 12rem - 2.8rem))) + 1.4rem);
   }
   body.modal-open.toasts-live .dialog {
-    max-height: max(
-      12rem,
-      min(calc(100dvh - min(var(--toast-band, 0px), 33dvh) - 2.8rem), 800px)
-    );
+    max-height: min(calc(100dvh - min(var(--toast-band, 0px), 33dvh, max(0px, calc(100dvh - 12rem - 2.8rem))) - 2.8rem), 800px);
   }
 }
 /* The prefixed blur, kept where the minifier cannot drop it.

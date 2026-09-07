@@ -16035,6 +16035,123 @@ def t303_a_prefixed_fallback_covers_the_same_ground_as_its_twin(app):
         "a prefixed fallback does not cover the same ground as the property "
         "it stands in for:\n  " + "\n  ".join(bad))
 
+
+JS_DIALOG_FOOTER_REACH = """
+const dlg = document.querySelector('.dialog');
+if (!dlg) return {error: 'no dialog'};
+const ov = document.querySelector('.overlay');
+const r = dlg.getBoundingClientRect();
+const act = dlg.querySelector('.actions') ||
+            [...dlg.querySelectorAll('div')].reverse().find(
+                (e) => e.querySelector('button'));
+const btn = act ? act.querySelector('button') : null;
+if (!btn) return {error: 'no footer button in the dialog'};
+const br = btn.getBoundingClientRect();
+const at = document.elementFromPoint(br.left + br.width / 2,
+                                     br.top + br.height / 2);
+return {
+  vh: window.innerHeight,
+  band: getComputedStyle(document.body).getPropertyValue('--toast-band').trim(),
+  padTop: getComputedStyle(ov).paddingTop,
+  dialogBottom: Math.round(r.bottom),
+  dialogHeight: Math.round(r.height),
+  btnText: btn.textContent.trim(),
+  btnTop: Math.round(br.top),
+  btnBottom: Math.round(br.bottom),
+  // null when the point is outside the viewport entirely
+  hits: at ? (at === btn || btn.contains(at) || at.contains(btn)) : false,
+  hitTag: at ? at.tagName + '.' + String(at.className).slice(0, 30) : 'OFFSCREEN',
+  overflowsBy: Math.round(r.bottom - window.innerHeight),
+  // The reservation yielding means the rail may now OVERLAP the dialog on a
+  // short window. `.toasts` is pointer-events:none but each `.toast` is
+  // pointer-events:auto, so ask whether any control the reader can currently
+  // see has had its click taken by a notice sitting on top of it.
+  stolen: [...dlg.querySelectorAll(
+      'button, input, label.timebox, summary, [tabindex]:not([tabindex="-1"])')]
+    .filter((e) => {
+      const b = e.getBoundingClientRect();
+      if (!b.width || !b.height) return false;
+      const y = b.top + b.height / 2;
+      if (y < 0 || y > window.innerHeight) return false;   // below the dialog's own fold
+      const hit = document.elementFromPoint(b.left + b.width / 2, y);
+      return hit && !(hit === e || e.contains(hit) || hit.contains(e)) &&
+             !!hit.closest('.toast');
+    })
+    .map((e) => (e.textContent || e.tagName).trim().replace(/\\s+/g, ' ').slice(0, 30)),
+};
+"""
+
+
+def t304_a_dialogs_buttons_stay_on_screen_under_a_toast_band(app):
+    """A reservation that leaves the dialog no room must yield, not banish it.
+
+    R92 M1 clamped `--toast-band` to a third of the window because an
+    unclamped stack reserved more room than the screen had and pushed every
+    dialog off the bottom. The guard against that was a FLOOR on the dialog's
+    max-height — "whatever the band says, a dialog keeps enough height to
+    show a line of text and its buttons".
+
+    A floor cannot keep that promise, because it raises the bottom of the box
+    without moving its top. R101 measured the same failure returning through
+    the opposite door: at 1280x260 with four notices up, the overlay reserved
+    108.2px and the floor made the dialog 192px — 300px of box in a 260px
+    window, `Close` at y245-281, `document.elementFromPoint` returning
+    nothing there. Escape still closed the dialog, so the reader was not
+    trapped, but no mouse or touch could press the button and nothing could
+    scroll to it: `.overlay` is `position: fixed` with `overflow-y: visible`
+    and `body.modal-open` locks the page.
+
+    So the fix is that the RESERVATION yields — it never spends so much that
+    fewer than 12rem remain — and the notices overlap the dialog instead,
+    which the stylesheet already names as the recoverable outcome.
+
+    Verified red before green: built against the previous stylesheet this
+    fails at 260 and 240 with `hits: false`, and passes at every height after.
+    1280x420 is the control — it already worked and must not change.
+    """
+    for height in (420, 300, 260, 240, 200):
+        app.d.execute_cdp_cmd("Emulation.setDeviceMetricsOverride",
+                              {"width": 1280, "height": height,
+                               "deviceScaleFactor": 1, "mobile": False})
+        try:
+            app.boot("/", selection=[])
+            app.wait_css(".tabs .tab")
+            # Four picks off the Master grid raise four notices, which is what
+            # makes a band big enough to matter. Chips that ADD a course are
+            # on the Master grid; the default tab has none.
+            app.open_tab("Master grid")
+            time.sleep(0.4)
+            for chip in app.css_all("td button.chip")[:4]:
+                app.d.execute_script("arguments[0].click()", chip)
+                time.sleep(0.12)
+            btn = app.xpath("//button[normalize-space()='Share or import']")
+            app.d.execute_script("arguments[0].click()", btn)
+            app.wait_css(".dialog", timeout=15)
+            time.sleep(0.5)
+            m = app.d.execute_script(JS_DIALOG_FOOTER_REACH)
+            assert not m.get("error"), (height, m)
+            assert m["hits"], (
+                f"at 1280x{height} the dialog's {m['btnText']!r} button is not "
+                f"reachable: the point at its centre resolves to {m['hitTag']}. "
+                f"band {m['band']}, overlay padding-top {m['padTop']}, dialog "
+                f"height {m['dialogHeight']}px ending at y{m['dialogBottom']} "
+                f"in a {m['vh']}px window (over by {m['overflowsBy']}px). "
+                f"Nothing can scroll to it — the overlay is fixed with "
+                f"overflow-y: visible and the body's scroll is locked.")
+            assert not m["stolen"], (
+                f"at 1280x{height} the toast rail overlaps the dialog and a "
+                f"notice is taking the clicks aimed at {m['stolen']}. Overlap "
+                f"itself is the intended, recoverable outcome on a window this "
+                f"short — a notice stealing a control is not. band {m['band']}, "
+                f"overlay padding-top {m['padTop']}.")
+            assert m["overflowsBy"] <= 0, (
+                f"at 1280x{height} the dialog box extends {m['overflowsBy']}px "
+                f"past the bottom of the window (height {m['dialogHeight']}px, "
+                f"overlay padding-top {m['padTop']}, band {m['band']}) — even "
+                f"with the button still hit-testable, the box must fit")
+        finally:
+            app.d.execute_cdp_cmd("Emulation.clearDeviceMetricsOverride", {})
+
 TESTS = [
     t01_header_sync_button_and_hidden_dev,
     t02_developer_endpoint_only,
@@ -16271,6 +16388,7 @@ TESTS = [
     t301_a_short_window_never_hides_the_whole_week,
     t302_a_sync_never_claims_something_it_cannot_know,
     t303_a_prefixed_fallback_covers_the_same_ground_as_its_twin,
+    t304_a_dialogs_buttons_stay_on_screen_under_a_toast_band,
 ]
 
 
