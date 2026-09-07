@@ -7863,20 +7863,65 @@ METHODOLOGY THAT EARNED ITS KEEP, for whoever audits a deploy next:
   demolished the severity of two of the three, and caught an overstatement in
   the entry that is now §8.29.
 
-THE SECOND FIX — R92 M1's failure returning through the opposite door. The
-restored geometry worker found, and this round then reproduced independently to
-the pixel, that below ~265px of viewport height with notices up, a dialog's
-footer leaves the screen and nothing can scroll to it.
+THE SECOND FIX — R92 M1's arithmetic returning through the opposite door,
+though NOT at the severity this section first claimed. THE FIRST DRAFT OF THIS
+ENTRY WAS WRONG and the adversarial refutation corrected it: it said a reader
+"cannot press Save or Close" and that "nothing can scroll to it". Both are
+false. The fix is still right; the alarm was not.
+
+The geometry reproduces exactly, measured twice independently (the restored
+geometry worker, then this session):
 
   1280x260, four notices:  band 86px, overlay padding-top 108.2px,
-  dialog 192px -> a 300px box in a 260px window. `Close` at y245-281,
-  `document.elementFromPoint` at its centre -> nothing.
-  `.overlay` is `position: fixed` with `overflow-y: visible`
-  (scrollHeight 300 > clientHeight 260, and no scrolling mechanism), and
-  `body.modal-open` locks the page. Escape still closed the dialog 8/8, so
-  the reader was never trapped — but no mouse or touch could press the button.
+  dialog 192px -> a 300px box in a 260px window, `Close` at y245-281,
+  i.e. its CENTRE 3px under the fold.
 
-The cause is the guard, not the band. R92 M1 clamped `--toast-band` to a third
+WHAT THE REFUTATION CORRECTED — and it corrected me as much as the reporter,
+because my own reproduction repeated the same mistake:
+
+* THE BUTTON IS PRESSABLE AT 260px. 14.86px of its 35.66px height — 42% — is
+  on screen, `elementFromPoint(cx, 253)` returns the button, and real
+  OS-level clicks via CDP `Input.dispatchMouseEvent` into that strip activate
+  it: Share's "Close" 2/2, the conflicts dialog's "Decide later" 2/2. Losing
+  the control entirely needs a viewport under ~239px tall, which no shipping
+  browser presents — only a synthetic 568x232 reaches it.
+* IT SELF-CLEARS IN ABOUT FOUR SECONDS with no input at all, because a toast
+  lives 6000ms (`app/src/state.rs:1477`). Left untouched, the band empties,
+  `toasts-live` drops, the dialog re-lays-out with its footer fully in view
+  and a centre click closes it. Both original measurements were taken inside
+  that window.
+* THERE ARE FOUR WORKING EXITS, not one: Escape (8/8), keyboard focus and
+  Enter, a scrim click, and the visible strip itself. "Nothing can scroll to
+  it" also contradicted the reporter's own recorded JSON, which had
+  `overlay.canScroll: true`.
+* NOT NEW for any browser with `dvh`: `d5d487e^:app/styles.css` already
+  carried the identical padding-top and floor, so the 1280x260 geometry is
+  byte-identical before and after this deploy. It IS new for pre-`dvh`
+  browsers, where the padding-top used to be dropped as invalid and the
+  dialog stayed centred — but what those browsers had instead was R93 R6, an
+  unbounded rail burying the dialog and swallowing its clicks, which is
+  strictly worse.
+
+THE METHODOLOGICAL LESSON, which is the durable part: HIT-TESTING A CONTROL'S
+CENTRE ANSWERS A DIFFERENT QUESTION FROM "CAN THE READER PRESS IT". The
+original probe and my own reproduction both mapped a null `elementFromPoint`
+at the centre to "OFFSCREEN" and concluded the control was unreachable, while
+42% of it was on screen and clickable. A reachability claim needs a real
+dispatched click, or at least the visible strip's height — never the centre
+alone. `t304` asserts the centre AND that the box fits, which is a stronger
+invariant than the one that was actually broken; that is deliberate, but the
+docstring must not claim the button was unpressable.
+
+SO WHAT IS ACTUALLY WRONG, and what the fix buys: between roughly 240 and
+265px of viewport height the footer shrinks to a 2-15px visible target, under
+every touch-target guideline, and below ~239px it is genuinely gone for up to
+six seconds. The stylesheet's own promise at `app/styles.css:2338` — "whatever
+the band says, a dialog keeps enough height to show a line of text and its
+buttons" — is therefore not literally kept, only kept at heights no shipping
+browser presents. Severity: polish. Never a rollback reason.
+
+The cause is still the guard, not the band, and that part survived refutation
+intact. R92 M1 clamped `--toast-band` to a third
 of the window because an unclamped stack once reserved 713px inside a 617px
 viewport and pushed every dialog off the bottom. The second half of that fix
 was a FLOOR on the dialog's max-height, described in the stylesheet as
@@ -7959,8 +8004,26 @@ tabs, the clamp law holding at the link, file, courses-file and storage doors;
 a cold first visit whose every freshness sentence was checked against what
 actually happened, including a 5-day-old snapshot offline and the recovery.
 
-Four defects came out of it. Two are fixed above. The other two are recorded
-because in both cases the obvious fix is the wrong one:
+Nine findings were reported and six survived adversarial refutation; every
+one of the six was reclassified DOWN, and not one was new in this deploy.
+That is the headline about the deploy itself: it introduced no defect. Three
+findings were refuted outright, including my own print-neutraliser claim and
+the short-window dialog alarm (see THE SECOND FIX above, where the refutation
+corrected me).
+
+THE THIRD FIX, small and unambiguous: pressing "Sync now" while offline posted
+the local-network-permission explainer — "Your browser may now ask whether
+this page can reach devices on your local network" — for six seconds, above a
+banner correctly saying the reader is offline. No such prompt can appear with
+no network. The rule was already in the file at the other end: the failure
+banner gates its own copy of that sentence on `direct_tried && online`
+(`app/src/fetch.rs`), and the pre-emptive toast did not. The two disagreeing
+was the whole bug, and the fix is to apply the same rule at both ends.
+`t305` pins it, red on the previous build with the offending sentence
+captured in the failure message, green after.
+
+The rest are recorded rather than patched, and in each case for a stated
+reason rather than for lack of time:
 
 * 8.31 — an override id of `u64::MAX - 1` poisons the counter and every later
   change the student makes is silently thrown away, permanently. The naive
@@ -7970,6 +8033,16 @@ because in both cases the obvious fix is the wrong one:
 * 8.32 — the conflict dialog promises "your timetable" for a course that has
   been removed from it. Fixing the sentences and not asking at all are both
   defensible, and the wording depends on which is chosen.
+* 8.33 — after a deploy, a bookmark visit can render a completely blank page
+  with no message. The one-line-looking fix is not one line: a `navigate`-mode
+  Request cannot be reconstructed without downgrading its mode, the 404 bounce
+  must keep passing through while 5xx must not, and the offline path runs
+  through the same function with only t74 standing over it. A worker that gets
+  this wrong blanks the app for EVERYONE, which is worse than the self-healing
+  ten-minute window it would fix, so it needs the changeover rig turned into a
+  repeatable test first.
+* 8.29 and 8.30 — the minifier's range syntax and the stripped print
+  neutraliser, both from the same missing lightningcss targets.
 
 One methodological note for the next fleet. Every restored worker was given
 the exact list of files its dead predecessor had left and told to FINISH, not
@@ -7981,7 +8054,7 @@ links-storage worker had already driven the whole clamp-law matrix
 one that says workers write findings AS THEY GO to a gitignored directory —
 without it this round would have re-run ~700k tokens of browser work.
 
-Gates on the shipping tree: 236 e2e (234 + t303 + t304), 213 native,
+Gates on the shipping tree: 237 e2e (234 + t303 + t304 + t305), 213 native,
 clippy + fmt clean.
 
 ## 8. Open bugs — found, confirmed, NOT fixed (do not delete)
@@ -8284,6 +8357,90 @@ is the trap.
 Found by the R101 live-site conflict-dialog worker after it was restored from
 a session limit; path 1 (no relay) reproduced twice, path 2 (one real sync
 through cors-get-proxy, the modal raising itself) once.
+
+### 8.33 After a deploy, a bookmark visit can render a COMPLETELY BLANK page — CONFIRMED, NOT NEW, NOT FIXED
+
+The worst thing a returning student can see, and it says nothing at all. Joins
+8.24 and 8.25 as the third and most severe member of the "a returning reader
+gets the previous build" family.
+
+Mechanism, and note that the service worker is only half of it:
+
+* GitHub Pages serves `index.html` with `cache-control: max-age=600`, so the
+  browser pins the shell for ten minutes. That happens with NO worker at all —
+  verified by unregistering the worker, deleting every cache, and navigating:
+  the response still came back `transferSize 0`. The app cannot change that
+  header.
+* `navigate()` (`app/hooks/sw-body.js:98`) forwards the navigation as
+  `fetch(request)` — the request's own cache mode — so a bookmark navigation
+  is answered from that pinned copy. A RELOAD is clean because a reload's
+  Request already carries cache mode `reload`.
+* Meanwhile the worker's cache-first branch means the hashed assets are never
+  revalidated, so they sit in the Cache API rather than the HTTP cache. When
+  the new worker activates it deletes the old cache generation, and gh-pages
+  has force-replaced the tree, so the OLD shell's assets are now 404
+  everywhere. **That asymmetry is the whole bug**: the shell is refreshed on
+  every visit, its assets never are.
+
+The result, reproduced with PURE Pages headers (max-age=600 on every file,
+ETag + 304, no `no-store` and no eviction modelling):
+
+```
+V3, V4, V5 bookmark navigations after the deploy:
+  document.body.innerHTML.length = 0     .tabs .tab count 0
+  window.wasmBindings = undefined        navigation transferSize = 0
+  three 404s: the old css + the old .js + the old _bg.wasm
+  caches.keys() = {cmitt-sw-6c42b25b28e9cd25: 7}  <- the NEW build, sitting
+                                                     right there, unused
+```
+
+No message of any kind, because the wasm never runs, so `update.rs` never runs
+either. The live shell is `<body><noscript>…</noscript></body>` — there is
+genuinely nothing on screen, not a selector artifact.
+
+WHAT KEEPS IT AT MINOR, all measured: it self-heals within <= 600s of the last
+revalidating visit (a later navigation booted clean on the new build with no
+4xx); ONE plain reload cures it instantly and permanently; nothing in
+localStorage is at risk; and it needs a deploy to land and then two further
+navigations inside that <=10-minute window. NOT NEW —
+`git log -S 'const network = fetch(request)' -- app/hooks/sw-body.js` gives
+`f986160`, 14 Aug 2026, and the previously live build shipped the same worker
+(`cmitt-sw-4a0b7187564cd1a3`), so rolling back does not fix it.
+
+THE FIX, which both the reporter and its refuter independently landed on:
+`fetch(new Request(request, { cache: 'no-cache' }))` in `navigate()` — the
+same reasoning the install handler already applies at `sw-body.js:43`
+(`new Request(url, { cache: 'reload' })`, commented "a CDN-stale copy of those
+is a real risk") to exactly the non-hashed entries. Failing that, an old shell
+whose assets 404 should fall back to the cached NEW shell rather than to
+nothing.
+
+WHY IT IS NOT FIXED TONIGHT — this is a fetch-path change in a service worker,
+and the Fetch spec makes it less of a one-liner than it looks:
+
+* A Request whose mode is `navigate` CANNOT be reconstructed: passing a
+  non-empty init to `new Request(navRequest, …)` downgrades mode to
+  `same-origin`, which also changes redirect handling. The alternative
+  (`fetch(request.url, { cache: 'no-cache' })`) discards navigation semantics
+  entirely.
+* The 404 bounce is load-bearing and deliberately shaped: `navigate()`'s
+  comment records that 5xx must lose to the cached shell while **4xx must pass
+  through**, because Pages' 404 answer is what carries deep links into the app.
+  Any rewrite has to preserve that asymmetry.
+* The offline path runs through the same function — `.catch(() => shell)` and
+  the 5s `NAV_TIMEOUT_MS` race — and t74 is the only test standing over it.
+  A worker that gets this wrong stalls or blanks the app for EVERY user, which
+  is far worse than a self-healing ten-minute window for some.
+
+So it needs the deploy-changeover rig turned into a repeatable test first —
+serve the old tree, install, force-replace, then navigate as a bookmark rather
+than a reload — and then the fix. The rig already exists in
+`.workagents/r101/` (`simserver.py`, `srv_pages.py`, `sim/old`, `sim/new`,
+`changeover4.py`, `refA.py`/`refB.py`) and should be the starting point.
+
+Found by the R101 offline-sw worker after it was restored from a session
+limit; its refuter could not break it and reproduced it more directly, on pure
+Pages headers with no crutch.
 
 ### 8.27 A drop may store a class shorter than the cell it was dropped in — PLAUSIBLE, not confirmed
 

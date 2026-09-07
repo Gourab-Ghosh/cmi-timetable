@@ -1251,13 +1251,24 @@ pub async fn run_update(app: App, manual: bool) {
         // dismissed on success: a browser that raised the permission prompt
         // holds the request open behind it, and the sentence explaining that
         // prompt has to outlive answering it.
-        asking_note = Some(app.toast_keeping_id(
-            "The app couldn't get the timetable the usual way, so it's asking \
-             cmi.ac.in directly. Your browser may now ask whether this page can \
-             reach devices on your local network — that question is about this \
-             fetch, and it's safe to allow. Saying no just means the app can't \
-             ask CMI directly.",
-        ));
+        // Only when there is a network to reach. With `navigator.onLine`
+        // false the browser cannot raise that permission prompt at all, so
+        // the sentence explaining it is a frightening irrelevance for
+        // someone whose only problem is that they are on a train — six
+        // seconds of "your browser may now ask…" above a banner that
+        // correctly says they are offline. The failure banner below already
+        // applies exactly this rule to its own version of this sentence
+        // (`direct_tried && online`); this is the same rule at the other
+        // end, and the two disagreeing is what produced the noise (R101).
+        asking_note = domx::window().navigator().on_line().then(|| {
+            app.toast_keeping_id(
+                "The app couldn't get the timetable the usual way, so it's \
+                     asking cmi.ac.in directly. Your browser may now ask whether \
+                     this page can reach devices on your local network — that \
+                     question is about this fetch, and it's safe to allow. \
+                     Saying no just means the app can't ask CMI directly.",
+            )
+        });
         match fetch_pages_tier(
             app,
             "direct".to_string(),

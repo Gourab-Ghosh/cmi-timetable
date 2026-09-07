@@ -16092,14 +16092,32 @@ def t304_a_dialogs_buttons_stay_on_screen_under_a_toast_band(app):
     show a line of text and its buttons".
 
     A floor cannot keep that promise, because it raises the bottom of the box
-    without moving its top. R101 measured the same failure returning through
-    the opposite door: at 1280x260 with four notices up, the overlay reserved
-    108.2px and the floor made the dialog 192px — 300px of box in a 260px
-    window, `Close` at y245-281, `document.elementFromPoint` returning
-    nothing there. Escape still closed the dialog, so the reader was not
-    trapped, but no mouse or touch could press the button and nothing could
-    scroll to it: `.overlay` is `position: fixed` with `overflow-y: visible`
-    and `body.modal-open` locks the page.
+    without moving its top. R101 measured the same arithmetic returning
+    through the opposite door: at 1280x260 with four notices up, the overlay
+    reserved 108.2px and the floor made the dialog 192px — 300px of box in a
+    260px window, with `Close` at y245-281, its centre 3px under the fold.
+
+    BE PRECISE ABOUT WHAT WAS BROKEN, because the first write-up of this was
+    not, and its own adversarial refutation corrected it. The button was NOT
+    unpressable at 260px: 42% of its height was still on screen and a real
+    dispatched click there activated it, and the whole state self-cleared in
+    about four seconds when the 6s toasts expired. Losing the control outright
+    needs a viewport under ~239px, which no shipping browser presents. What is
+    genuinely wrong is narrower: between ~240 and ~265px the footer shrinks to
+    a 2-15px visible target, under every touch-target guideline, and below
+    ~239px it is gone for up to six seconds — so the stylesheet's promise is
+    kept only at heights nobody has.
+
+    The lesson that produced that error is worth more than the bug: hit-testing
+    a control's CENTRE answers a different question from "can the reader press
+    it". Both the original probe and its reproduction mapped a null
+    `elementFromPoint` at the centre to "unreachable" while 42% of the button
+    was clickable.
+
+    This test therefore asserts a STRONGER invariant than the one that was
+    broken — the centre hit-tests as the button AND the box does not pass the
+    fold — deliberately, because "the box fits the window" is the property the
+    stylesheet actually promises and it is cheap to hold.
 
     So the fix is that the RESERVATION yields — it never spends so much that
     fewer than 12rem remain — and the notices overlap the dialog instead,
@@ -16151,6 +16169,54 @@ def t304_a_dialogs_buttons_stay_on_screen_under_a_toast_band(app):
                 f"with the button still hit-testable, the box must fit")
         finally:
             app.d.execute_cdp_cmd("Emulation.clearDeviceMetricsOverride", {})
+
+
+def t305_offline_is_not_told_about_a_permission_prompt_that_cannot_happen(app):
+    """A sentence about a browser prompt must not be shown when no prompt can appear.
+
+    The direct tier posts an explainer BEFORE it runs, because the request to
+    cmi.ac.in can make the browser ask whether the page may reach devices on
+    the local network, and that question deserves explaining by the app that
+    caused it rather than being looked up afterwards by a worried student.
+
+    With `navigator.onLine` false there is no network to reach, so the browser
+    cannot raise that prompt at all — and the reader gets six seconds of "Your
+    browser may now ask whether this page can reach devices on your local
+    network" sitting above a banner that correctly tells them they are
+    offline. Frightening, and about nothing, for someone whose only problem is
+    that they are on a train.
+
+    The rule was already in the file, applied at the other end: the failure
+    banner gates its own version of this sentence on `direct_tried && online`
+    (app/src/fetch.rs). The pre-emptive toast did not, and the two disagreeing
+    is the whole bug. Found on the live build by the R101 first-visit worker.
+    """
+    app.boot("/", selection=["TOC"])
+    app.wait_css(".tabs .tab")
+    d = app.d
+    try:
+        d.set_network_conditions(offline=True, latency=0, throughput=0)
+        assert d.execute_script("return navigator.onLine === false;"), (
+            "the browser must actually report itself offline, or this test "
+            "is measuring the online path")
+        btn = app.xpath("//button[normalize-space()='Sync now']")
+        d.execute_script("arguments[0].click()", btn)
+        # Let every tier fail: the relays are blackholed by the driver's
+        # host-resolver rules, then the direct tier is where the note lives.
+        WebDriverWait(d, 40).until(
+            lambda _: "offline" in app.toasts_text().lower()
+            or "offline" in d.find_element(By.TAG_NAME, "body").text.lower(),
+            message=f"expected the app to say it is offline; "
+                    f"toasts: {app.toasts_text()!r}",
+        )
+        said = app.toasts_text() + " " + d.find_element(By.TAG_NAME, "body").text
+        assert "local network" not in said.lower(), (
+            "the app told an OFFLINE reader that their browser may ask about "
+            "reaching devices on the local network. No such prompt can appear "
+            "with no network, and the banner beside it says they are offline. "
+            f"What was on screen: {said[:400]!r}")
+    finally:
+        d.delete_network_conditions()
 
 TESTS = [
     t01_header_sync_button_and_hidden_dev,
@@ -16389,6 +16455,7 @@ TESTS = [
     t302_a_sync_never_claims_something_it_cannot_know,
     t303_a_prefixed_fallback_covers_the_same_ground_as_its_twin,
     t304_a_dialogs_buttons_stay_on_screen_under_a_toast_band,
+    t305_offline_is_not_told_about_a_permission_prompt_that_cannot_happen,
 ]
 
 
