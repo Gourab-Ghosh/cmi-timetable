@@ -7947,6 +7947,40 @@ REGRESSION DIRECTION rather than a past bug — it passes on the previous
 stylesheet as well, because there the dialog was pushed away from the rail
 instead of under it. Said plainly so nobody reads it as a second red/green.
 
+WHAT THE RESTORED WORKERS FOUND, once they finished rather than restarted.
+Almost all of it was PASS, and the passes are worth as much as the findings
+because they were measured on the published build over the real internet:
+the conflict dialog answered end to end (ticking both keeps both, "Decide
+later" changes nothing, the R100 re-anchor is live, every outcome sentence
+checked against each tick state); offline reload with `transferSize 0` on
+every subresource and the wasm actually running; hash routes, the 404 bounce
+carrying subpath + query + hash, share links per-tab and not leaking between
+tabs, the clamp law holding at the link, file, courses-file and storage doors;
+a cold first visit whose every freshness sentence was checked against what
+actually happened, including a 5-day-old snapshot offline and the recovery.
+
+Four defects came out of it. Two are fixed above. The other two are recorded
+because in both cases the obvious fix is the wrong one:
+
+* 8.31 — an override id of `u64::MAX - 1` poisons the counter and every later
+  change the student makes is silently thrown away, permanently. The naive
+  fix (reject `MAX - 1` too) was PROVEN at the unit level to move the cliff by
+  one rather than close it, because the door and the mint disagree about what
+  a legal id is.
+* 8.32 — the conflict dialog promises "your timetable" for a course that has
+  been removed from it. Fixing the sentences and not asking at all are both
+  defensible, and the wording depends on which is chosen.
+
+One methodological note for the next fleet. Every restored worker was given
+the exact list of files its dead predecessor had left and told to FINISH, not
+restart, and to spot-check at least one recovered claim. That turned a session
+limit from a total loss into a partial one: the geometry worker had already
+taken 60+ screenshots and six raw JSON runs it never got to interpret, and the
+links-storage worker had already driven the whole clamp-law matrix
+(L1-L13, S1-S7) and written the results to disk. The rule that saved it is the
+one that says workers write findings AS THEY GO to a gitignored directory —
+without it this round would have re-run ~700k tokens of browser work.
+
 Gates on the shipping tree: 236 e2e (234 + t303 + t304), 213 native,
 clippy + fmt clean.
 
@@ -8119,6 +8153,137 @@ reset for no benefit anyone can observe today.
 
 Raised by the R101 live-bytes audit as a print regression, and correctly
 REFUTED as an impact: the counting was right, the consequence was not.
+
+### 8.31 An override id of `u64::MAX - 1` poisons the counter, and every later change is silently thrown away — CONFIRMED, NOT FIXED
+
+The worst-behaving bug on this list. Not reachable by using the app, but one
+click on a crafted link arms it permanently.
+
+`MeetingOverride::is_sane` (`core/src/model.rs:732`) rejects only
+`id == u64::MAX`, so `u64::MAX - 1` walks through every door.
+`bump_next_id` then moves the counter past every id — and past `MAX - 1` is
+exactly `u64::MAX`, the one value its own R100 comment says must never be
+reachable ("the COUNTER has to stay a number `add` can count past"). **The
+repair produces the poison.** Proven at the unit level, not argued:
+
+```
+MAX-1 through the door: dropped=0, next_id now == u64::MAX? true
+  add() PANICKED at core/src/model.rs:805 "attempt to add with overflow"
+        (debug; the shipped release profile has overflow-checks off and
+         wraps to 0 instead)
+```
+
+The lived consequence, driven end to end on the live site by the R101
+links-storage worker:
+
+1. Boot with a seeded store — no banner. Correct: the entry really is usable.
+2. The student edits a class and presses Save changes. The toast says
+   "Saved your changes to AAT". The change is minted with `id: u64::MAX` and
+   the counter wraps to 0.
+3. One reload and the change is GONE, with a banner blaming the data:
+   "1 of the changes saved in this browser named a class time or a credit
+   count this app can't use … so they were set aside." The time was fine. What
+   was unusable was the id THE APP ITSELF handed out one action earlier.
+4. It is sticky, not a one-off: the counter re-bumps past the `MAX - 1` item
+   on every boot, so the next change is minted `u64::MAX` again, and dies the
+   same way, forever. The planner can never keep a new meeting change again.
+
+Even a save that changes nothing persists the poisoned counter. Through the
+LINK door specifically: a hand-made `?s=` whose override carries
+`"id": 18446744073709551614` opens with no banner and no toast — by the app's
+own rule nothing odd arrived — writes `next_id: 18446744073709551615`
+immediately, and two further reloads do not heal it.
+
+WHY IT IS NOT FIXED TONIGHT, and this is the part worth reading: **the obvious
+fix is wrong, and measurably so.** Rejecting `id >= u64::MAX - 1` at the door
+moves the cliff by one instead of closing it —
+
+```
+naive fix (reject MAX-1): largest still-admitted id is MAX-2,
+  next_id lands on MAX-1  -> the next mint IS MAX-1, which that same rule
+  then rejects on reload, and the counter reaches MAX again.
+```
+
+— because the door and the MINT disagree about what a legal id is. Any rule
+that only filters incoming ids reproduces this at its own boundary. The fix
+has to make the ALLOCATOR and the door agree, which is the clamp law applied
+to id minting rather than to values, and it cannot be done by renumbering:
+`merge::Conflict::override_id` points into these items and
+`merge::resolve_conflict` acts on them by id, so renumbering silently re-aims a
+deferred "Use CMI's new time" at a different change (the reason the existing
+`bump_next_id` comment gives for not renumbering, and it still holds).
+
+The shape that does work, for whoever takes it: ids are minted by counting up
+from 0, one per edit, so any id within astronomical distance of `u64::MAX` is
+hostile by construction. Pull the ceiling far down — `u64::MAX / 2` leaves
+~9.2e18 edits of headroom, unreachable by counting — reject above it at the
+door AND refuse to mint above it, so the two rules are the same rule. Then
+`add`'s `next_id += 1` can never overflow and can never mint an id the door
+would later reject. Write the test for the BOUNDARY (mint at the ceiling, then
+reload) and not only for the reported value, because the boundary is where the
+naive fix dies.
+
+This is the third round of this same bug — R93 S8 fixed the item ids, R100
+fixed the counter's `u64::MAX` case, and this is the gap between them — which
+is precisely why it should not be patched in a hurry at the end of a long
+session. It wants its own sitting.
+
+Found by the R101 live-site links-storage worker after it was restored from a
+session limit, and confirmed here against `core/src/model.rs` directly.
+
+### 8.32 The conflict dialog promises "your timetable" for a course that is not on it — CONFIRMED, NOT FIXED (two candidate fixes disagree)
+
+An honesty-law violation: every sentence in the dialog talks about a timetable
+the course is not on. Measured on the live build, both paths reproduced.
+
+"Remove" keeps a course's edits ON PURPOSE — its own aria-label promises it:
+"Take this course off your timetable — its times stay if you add it back" —
+and `merge_overrides` (`core/src/merge.rs:281`) walks `overrides.items` with
+the selection used only for `removed_selected`. So an override belonging to a
+removed course still raises a conflict, and the modal is shown for a course
+with zero chips on the week.
+
+What the reader is told, with `selection = []` and 0 chips anywhere:
+
+```
+lead      "Tick every time you want on your timetable — CMI's, your own, or both."
+outcome   "Both times go on your timetable — Tue 09:10-10:25 and Wed 17:00-18:15."
+untouched "TOC also runs Thu 09:10-10:25, which this question does not change."
+toast     "Your timetable now uses the times you picked."
+```
+
+and after Save: week for TOC = [], total chips on the My-timetable grid = 0,
+My timetable reads "Nothing on your timetable yet."
+
+NOT A DATA BUG — the overrides written are correct and do take effect if the
+course is added back. `app/src/ui.rs:7255,7260` are the sentences; note the
+irony that `conflict_outcome`'s own R100 comment says it is "Scoped to THIS
+CLASS, never to 'your timetable'", which fixed the claim about the COURSE's
+other meetings while leaving the words "your timetable" in place — true when
+the course is on it, false when it is not.
+
+WHY IT IS NOT FIXED: the two candidate fixes disagree about what correct
+means, and picking the wrong one wastes the careful wording the other needs.
+
+* Fix the COPY and keep asking — thread "is this course on the timetable"
+  into `conflict_outcome`, the lead and the toast, and say something like
+  "these times are saved for when you add TOC back". Contained, but it
+  commits to interrupting a reader about a course they have removed.
+* Do not ASK until the course comes back — leave the override untouched and
+  the question queued, and raise it when the course is re-added. This makes
+  the copy true by making the situation not arise, and matches "the modal
+  interrupts to ask a question that cannot change the week". But it changes
+  conflict lifecycle, which R100 spent a whole round getting right (a
+  postponed question surviving a sync, and being re-anchored rather than
+  going stale), so it is not a small change.
+
+Whoever takes it should settle THAT question first and then write the copy,
+exactly as 8.27 says for the drop-grid mismatch. Writing the sentences first
+is the trap.
+
+Found by the R101 live-site conflict-dialog worker after it was restored from
+a session limit; path 1 (no relay) reproduced twice, path 2 (one real sync
+through cors-get-proxy, the modal raising itself) once.
 
 ### 8.27 A drop may store a class shorter than the cell it was dropped in — PLAUSIBLE, not confirmed
 
