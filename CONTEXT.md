@@ -8056,6 +8056,52 @@ without it this round would have re-run ~700k tokens of browser work.
 
 Gates on the shipping tree: 237 e2e (234 + t303 + t304 + t305), 213 native,
 clippy + fmt clean.
+THE SECOND DEPLOY, and a build fact proved rather than assumed. The four
+commits above were pushed and published:
+
+  main       d5d487e..6240744
+  gh-pages   b6d592b  "deploy: 6240744 2026-09-07T20:51:36Z"
+  live       cmi-timetable-app-b56ac6b36990f7ad_bg.wasm
+             styles-49aaaa6c9af62fe5.css
+  live_probe 10/10 again, real cmi.ac.in sync included
+
+Every fix was checked IN THE ARTIFACT before the push and again in the bytes
+the site serves: the blur gate reads `@media (width<=899px)`, the fit cap
+appears 4 times (twice per copy) with the old unbounded floor at 0
+occurrences, and the `dvh` and `vh` twins are identical modulo the unit.
+
+THE WASM FILENAME IS A REAL CONTENT FINGERPRINT — proved, because R101 §7
+above asserts it and an assertion about the build deserved better than
+inference. Touching `app/build.rs` to force it to re-run changed the emitted
+name from `b56ac6b36990f7ad` to `738ef1864cebc57b` with no source edit at all,
+and the wasm carried the new `APP_BUILD_TIME` (2026-09-07T20:54:39). Two
+consecutive builds with build.rs NOT re-running reproduced byte-identically
+(`cmitt-sw-f59938a02b515461` twice). So: the name changes when and only when
+the content does, `deploy.sh`'s wasm-based `verify_published` is meaningful
+for any build that touches Rust, and `live_probe.py`'s docstring remains wrong
+where it says two builds of one commit always differ — they differ only when
+build.rs actually re-runs.
+
+ONE UNEXPLAINED DIFFERENCE, recorded so nobody rediscovers it as alarming. The
+FIRST build after the `fetch.rs` change reported `cmitt-sw-79b7656c002a918a`
+while the two that followed both reported `cmitt-sw-f59938a02b515461` — with
+the SAME wasm name and the SAME css name in all three. `gen-sw.sh` hashes
+every precached file's name AND bytes, so something differed; since the wasm
+and css are content-named and matched, it can only have been the wasm-bindgen
+glue `.js` (whose name is derived from the wasm's hash, not its own bytes) or
+`index.html`'s SRI over that glue. Harmless — a new cache generation is
+exactly what a deploy wants, and `activate` deletes the old one — but it means
+the glue `.js` is the one shipped file whose NAME does not fingerprint its
+CONTENT. Do not treat a matching `.js` filename as proof of matching bytes.
+
+Because of that, the third fix was verified against the DEPLOYED wasm rather
+than trusting the local test build: `t305` proved it on a dist built with
+public_url "/" and a different APP_BUILD_TIME (`8e514ad6ff9f880a`), which is
+not the shipped artifact. `.workagents/r101/live_offline_explainer.py` drives
+the real site — build confirmed `b56ac6b36990f7ad`, `navigator.onLine` false,
+Sync now pressed, the app says it is offline and the local-network explainer
+does NOT appear.
+
 
 ## 8. Open bugs — found, confirmed, NOT fixed (do not delete)
 
